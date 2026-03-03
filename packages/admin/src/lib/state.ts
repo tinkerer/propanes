@@ -1,6 +1,7 @@
 import { signal, computed } from '@preact/signals';
 import { api } from './api.js';
 import { timed, bindRouteSignal } from './perf.js';
+import { isolatedComponent } from './isolate.js';
 
 // Embed mode detection
 const params = new URLSearchParams(window.location.search);
@@ -13,6 +14,9 @@ if (isEmbedded.value) {
 }
 if (isCompanion.value) {
   document.body.classList.add('pw-companion');
+}
+if (isolatedComponent.value) {
+  document.body.classList.add('pw-isolate');
 }
 
 export const isAuthenticated = signal(!!localStorage.getItem('pw-admin-token'));

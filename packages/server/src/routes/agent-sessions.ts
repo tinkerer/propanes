@@ -1,11 +1,13 @@
 import { Hono } from 'hono';
 import { eq, desc, ne, and } from 'drizzle-orm';
 import { homedir } from 'node:os';
+import { resolve, dirname, normalize, isAbsolute } from 'node:path';
 import { existsSync, readFileSync, readdirSync, openSync, readSync, closeSync } from 'node:fs';
 import { db, schema } from '../db/index.js';
 import { killSession } from '../agent-sessions.js';
-import { resumeAgentSession, dispatchTerminalSession } from '../dispatch.js';
+import { resumeAgentSession, dispatchTerminalSession, transferSession, getTransfer } from '../dispatch.js';
 import { getSessionLiveStates } from '../session-service-client.js';
+import { getLauncher } from '../launcher-registry.js';
 
 function computeJsonlPath(projectDir: string | null, claudeSessionId: string | null): string | null {
   if (!projectDir || !claudeSessionId) return null;
@@ -106,7 +108,84 @@ function readJsonlWithSubagents(filePath: string, out: string[]): void {
   }
 }
 
+export function extractArtifactPaths(jsonlContent: string, projectDir: string): string[] {
+  const paths = new Set<string>();
+
+  for (const line of jsonlContent.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const obj = JSON.parse(line);
+
+      // Look for tool_use blocks in assistant messages
+      let toolUses: any[] = [];
+      if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
+        toolUses = obj.message.content.filter((b: any) => b.type === 'tool_use');
+      }
+
+      for (const tu of toolUses) {
+        const toolName = tu.name;
+        const input = tu.input;
+        if (!input) continue;
+
+        let filePath: string | undefined;
+        if (toolName === 'Write' || toolName === 'Edit') {
+          filePath = input.file_path;
+        } else if (toolName === 'NotebookEdit') {
+          filePath = input.notebook_path;
+        }
+
+        if (!filePath || typeof filePath !== 'string') continue;
+
+        // Convert absolute path to relative
+        let rel: string;
+        if (isAbsolute(filePath)) {
+          if (!filePath.startsWith(projectDir)) continue;
+          rel = filePath.slice(projectDir.length).replace(/^\//, '');
+        } else {
+          rel = filePath;
+        }
+
+        const normalized = normalize(rel);
+        if (normalized.startsWith('..')) continue;
+        paths.add(normalized);
+      }
+    } catch { /* skip unparseable */ }
+  }
+
+  // Also include .claude/plans files
+  const plansDir = resolve(projectDir, '.claude', 'plans');
+  if (existsSync(plansDir)) {
+    try {
+      for (const f of readdirSync(plansDir)) {
+        if (f.endsWith('.md')) {
+          paths.add(`.claude/plans/${f}`);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  return Array.from(paths);
+}
+
 export const agentSessionRoutes = new Hono();
+
+// Transfer status route — must be before /:id to avoid being caught by the param
+agentSessionRoutes.get('/transfers/:transferId', async (c) => {
+  const transferId = c.req.param('transferId');
+  const transfer = getTransfer(transferId);
+
+  if (!transfer) {
+    return c.json({ error: 'Transfer not found' }, 404);
+  }
+
+  return c.json({
+    transferId: transfer.id,
+    status: transfer.status,
+    sessionId: transfer.sessionId,
+    parentSessionId: transfer.parentSessionId,
+    error: transfer.error,
+  });
+});
 
 agentSessionRoutes.get('/', async (c) => {
   const feedbackId = c.req.query('feedbackId');
@@ -149,6 +228,42 @@ agentSessionRoutes.get('/', async (c) => {
 
   const sessions = rows.map((r) => {
     const live = liveStates[r.session.id];
+
+    // Enrich with launcher/machine/harness metadata
+    let launcherName: string | null = null;
+    let launcherHostname: string | null = null;
+    let machineName: string | null = null;
+    let harnessName: string | null = null;
+    let isRemote = false;
+    let isHarness = false;
+
+    if (r.session.launcherId) {
+      const launcher = getLauncher(r.session.launcherId);
+      if (launcher) {
+        launcherName = launcher.name;
+        launcherHostname = launcher.hostname;
+        isRemote = !launcher.isLocal;
+        isHarness = !!launcher.harness;
+        if (launcher.machineId) {
+          const machine = db.select().from(schema.machines)
+            .where(eq(schema.machines.id, launcher.machineId)).get();
+          if (machine) machineName = machine.name;
+        }
+        if (launcher.harnessConfigId) {
+          const harness = db.select().from(schema.harnessConfigs)
+            .where(eq(schema.harnessConfigs.id, launcher.harnessConfigId)).get();
+          if (harness) harnessName = harness.name;
+        }
+      } else {
+        // Launcher disconnected — try to resolve from DB
+        if (r.session.machineId) {
+          const machine = db.select().from(schema.machines)
+            .where(eq(schema.machines.id, r.session.machineId)).get();
+          if (machine) { machineName = machine.name; isRemote = machine.type !== 'local'; }
+        }
+      }
+    }
+
     return {
       ...r.session,
       feedbackTitle: r.feedbackTitle || null,
@@ -159,6 +274,12 @@ agentSessionRoutes.get('/', async (c) => {
       paneCommand: live?.paneCommand || null,
       panePath: live?.panePath || null,
       jsonlPath: computeJsonlPath(r.appProjectDir || null, r.session.claudeSessionId),
+      launcherName,
+      launcherHostname,
+      machineName,
+      harnessName,
+      isRemote,
+      isHarness,
     };
   });
 
@@ -193,8 +314,10 @@ agentSessionRoutes.post('/:id/kill', async (c) => {
 
 agentSessionRoutes.post('/:id/resume', async (c) => {
   const id = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const targetLauncherId = body.launcherId || undefined;
   try {
-    const { sessionId } = await resumeAgentSession(id);
+    const { sessionId } = await resumeAgentSession(id, targetLauncherId);
     return c.json({ sessionId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Resume failed';
@@ -320,6 +443,135 @@ agentSessionRoutes.post('/:id/tail-jsonl', async (c) => {
   }
 
   return c.json({ sessionId, jsonlPath });
+});
+
+agentSessionRoutes.post('/:id/transfer', async (c) => {
+  const id = c.req.param('id');
+  const session = db
+    .select()
+    .from(schema.agentSessions)
+    .where(eq(schema.agentSessions.id, id))
+    .get();
+
+  if (!session) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+
+  if (session.status === 'running' || session.status === 'pending') {
+    return c.json({ error: 'Cannot transfer an active session' }, 400);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const targetLauncherId = body.targetLauncherId || null;
+  const targetCwd = body.targetCwd || undefined;
+
+  try {
+    const transferId = await transferSession(id, targetLauncherId, targetCwd);
+    return c.json({ transferId, status: 'pending' });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Transfer failed';
+    return c.json({ error: msg }, 400);
+  }
+});
+
+agentSessionRoutes.get('/:id/export-context', async (c) => {
+  const id = c.req.param('id');
+  const row = db
+    .select({
+      session: schema.agentSessions,
+      appProjectDir: schema.applications.projectDir,
+    })
+    .from(schema.agentSessions)
+    .leftJoin(schema.feedbackItems, eq(schema.agentSessions.feedbackId, schema.feedbackItems.id))
+    .leftJoin(schema.applications, eq(schema.feedbackItems.appId, schema.applications.id))
+    .where(eq(schema.agentSessions.id, id))
+    .get();
+
+  if (!row) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+
+  const projectDir = row.appProjectDir || null;
+  const claudeSessionId = row.session.claudeSessionId;
+  if (!projectDir || !claudeSessionId) {
+    return c.json({ error: 'Missing projectDir or claudeSessionId' }, 400);
+  }
+
+  const jsonlPath = computeJsonlPath(projectDir, claudeSessionId);
+  if (!jsonlPath || !existsSync(jsonlPath)) {
+    return c.json({ error: 'JSONL file not found' }, 404);
+  }
+
+  // Collect all JSONL content
+  const allLines: string[] = [];
+  const continuations = findContinuationJsonls(jsonlPath);
+  const jsonlPaths = [jsonlPath, ...continuations];
+
+  const jsonlFiles: Array<{ relativePath: string; content: string }> = [];
+  const sanitized = projectDir.replaceAll('/', '-').replaceAll('.', '-');
+  const jsonlDir = `${homedir()}/.claude/projects/${sanitized}`;
+
+  // Main JSONL
+  jsonlFiles.push({
+    relativePath: `${claudeSessionId}.jsonl`,
+    content: readFileSync(jsonlPath, 'utf-8'),
+  });
+
+  // Continuations
+  for (const cont of continuations) {
+    const relPath = cont.startsWith(jsonlDir) ? cont.slice(jsonlDir.length + 1) : cont.split('/').pop()!;
+    jsonlFiles.push({
+      relativePath: relPath,
+      content: readFileSync(cont, 'utf-8'),
+    });
+  }
+
+  // Subagent files
+  const subagentDir = jsonlPath.replace(/\.jsonl$/, '') + '/subagents';
+  if (existsSync(subagentDir)) {
+    try {
+      for (const file of readdirSync(subagentDir).filter(f => f.endsWith('.jsonl'))) {
+        jsonlFiles.push({
+          relativePath: `${claudeSessionId}/subagents/${file}`,
+          content: readFileSync(`${subagentDir}/${file}`, 'utf-8'),
+        });
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Extract artifact paths from all JSONL content
+  const allJsonlContent = jsonlFiles.map(f => f.content).join('\n');
+  readJsonlWithSubagents(jsonlPath, allLines);
+  const artifactPaths = extractArtifactPaths(allJsonlContent, projectDir);
+
+  // Read artifact files from disk
+  const artifactFiles: Array<{ path: string; content: string }> = [];
+  for (const relPath of artifactPaths) {
+    const full = resolve(projectDir, relPath);
+    if (!full.startsWith(projectDir)) continue;
+    if (existsSync(full)) {
+      try {
+        artifactFiles.push({ path: relPath, content: readFileSync(full, 'utf-8') });
+      } catch { /* skip binary/unreadable */ }
+    }
+  }
+
+  return c.json({
+    claudeSessionId,
+    projectDir,
+    sanitizedProjectDir: sanitized,
+    jsonlFiles,
+    artifactFiles,
+    sessionMetadata: {
+      id: row.session.id,
+      status: row.session.status,
+      feedbackId: row.session.feedbackId,
+      agentEndpointId: row.session.agentEndpointId,
+      parentSessionId: row.session.parentSessionId,
+      launcherId: row.session.launcherId,
+      permissionProfile: row.session.permissionProfile,
+    },
+  });
 });
 
 agentSessionRoutes.delete('/:id', async (c) => {

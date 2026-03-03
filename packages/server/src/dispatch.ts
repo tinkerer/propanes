@@ -1,10 +1,23 @@
 import { ulid } from 'ulidx';
 import { eq, and, sql } from 'drizzle-orm';
-import type { FeedbackItem, PermissionProfile, LaunchSession, LaunchHarnessSession } from '@prompt-widget/shared';
+import { homedir } from 'node:os';
+import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import type {
+  FeedbackItem,
+  PermissionProfile,
+  LaunchSession,
+  LaunchHarnessSession,
+  ImportSessionFiles,
+  ImportSessionFilesResult,
+  ExportSessionFiles,
+  ExportSessionFilesResult,
+} from '@prompt-widget/shared';
 import { db, schema } from './db/index.js';
 import { spawnAgentSession } from './agent-sessions.js';
-import { getLauncher, addSessionToLauncher } from './launcher-registry.js';
+import { getLauncher, addSessionToLauncher, sendAndWait } from './launcher-registry.js';
 import { feedbackEvents } from './events.js';
+import { extractArtifactPaths } from './routes/agent-sessions.js';
 
 export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, tags: string[], screenshots: (typeof schema.feedbackScreenshots.$inferSelect)[]): FeedbackItem {
   return {
@@ -496,7 +509,7 @@ export async function dispatchTmuxAttachSession(params: {
   return { sessionId };
 }
 
-export async function resumeAgentSession(parentSessionId: string): Promise<{ sessionId: string }> {
+export async function resumeAgentSession(parentSessionId: string, targetLauncherId?: string | null): Promise<{ sessionId: string }> {
   const parent = db
     .select()
     .from(schema.agentSessions)
@@ -554,6 +567,30 @@ export async function resumeAgentSession(parentSessionId: string): Promise<{ ses
     if (appRow?.projectDir) cwd = appRow.projectDir;
   }
 
+  // Resolve target launcher: explicit param > agent preference > harness config > same as parent > local
+  let resolvedLauncherId = targetLauncherId || null;
+  if (!resolvedLauncherId) {
+    if (agent.preferredLauncherId) {
+      resolvedLauncherId = agent.preferredLauncherId;
+    }
+    if (!resolvedLauncherId && agent.harnessConfigId) {
+      const harnessConfig = db
+        .select()
+        .from(schema.harnessConfigs)
+        .where(eq(schema.harnessConfigs.id, agent.harnessConfigId))
+        .get();
+      if (harnessConfig?.launcherId) {
+        resolvedLauncherId = harnessConfig.launcherId;
+      }
+    }
+    // Fall back to same launcher as parent session
+    if (!resolvedLauncherId && parent.launcherId) {
+      resolvedLauncherId = parent.launcherId;
+    }
+  }
+
+  const launcher = resolvedLauncherId ? getLauncher(resolvedLauncherId) : undefined;
+
   const sessionId = ulid();
   const now = new Date().toISOString();
 
@@ -562,7 +599,6 @@ export async function resumeAgentSession(parentSessionId: string): Promise<{ ses
 
   // If parent has a Claude session ID, use --resume for full context restoration
   if (parent.claudeSessionId) {
-    // Reuse parent's claudeSessionId since --resume continues the same conversation
     db.insert(schema.agentSessions)
       .values({
         id: sessionId,
@@ -573,16 +609,43 @@ export async function resumeAgentSession(parentSessionId: string): Promise<{ ses
         status: 'pending',
         outputBytes: 0,
         claudeSessionId: parent.claudeSessionId,
+        launcherId: launcher ? launcher.id : null,
         createdAt: now,
       })
       .run();
 
-    await spawnLocal(sessionId, {
-      prompt: '',
-      cwd,
-      permissionProfile,
-      resumeSessionId: parent.claudeSessionId,
-    });
+    if (launcher && launcher.ws.readyState === 1) {
+      const msg: LaunchSession = {
+        type: 'launch_session',
+        sessionId,
+        prompt: '',
+        cwd,
+        permissionProfile,
+        resumeSessionId: parent.claudeSessionId,
+        cols: 120,
+        rows: 40,
+      };
+      try {
+        launcher.ws.send(JSON.stringify(msg));
+        addSessionToLauncher(launcher.id, sessionId);
+        console.log(`[dispatch] Sent resume session ${sessionId} to launcher ${launcher.id}`);
+      } catch (err) {
+        console.error(`[dispatch] Failed to send resume to launcher, falling back to local:`, err);
+        await spawnLocal(sessionId, {
+          prompt: '',
+          cwd,
+          permissionProfile,
+          resumeSessionId: parent.claudeSessionId,
+        });
+      }
+    } else {
+      await spawnLocal(sessionId, {
+        prompt: '',
+        cwd,
+        permissionProfile,
+        resumeSessionId: parent.claudeSessionId,
+      });
+    }
 
     return { sessionId };
   }
@@ -618,16 +681,32 @@ IMPORTANT: The previous session may have made partial progress. Check the curren
       status: 'pending',
       outputBytes: 0,
       claudeSessionId,
+      launcherId: launcher ? launcher.id : null,
       createdAt: now,
     })
     .run();
 
-  await spawnLocal(sessionId, {
-    prompt: resumePrompt,
-    cwd,
-    permissionProfile,
-    claudeSessionId,
-  });
+  if (launcher && launcher.ws.readyState === 1) {
+    const msg: LaunchSession = {
+      type: 'launch_session',
+      sessionId,
+      prompt: resumePrompt,
+      cwd,
+      permissionProfile,
+      claudeSessionId,
+      cols: 120,
+      rows: 40,
+    };
+    try {
+      launcher.ws.send(JSON.stringify(msg));
+      addSessionToLauncher(launcher.id, sessionId);
+    } catch (err) {
+      console.error(`[dispatch] Failed to send to launcher, falling back to local:`, err);
+      await spawnLocal(sessionId, { prompt: resumePrompt, cwd, permissionProfile, claudeSessionId });
+    }
+  } else {
+    await spawnLocal(sessionId, { prompt: resumePrompt, cwd, permissionProfile, claudeSessionId });
+  }
 
   return { sessionId };
 }
@@ -687,4 +766,252 @@ export async function dispatchHarnessSession(params: {
   }
 
   return { sessionId };
+}
+
+// --- Session transfer across machines ---
+
+export type TransferStatus = 'pending' | 'exporting' | 'importing' | 'launching' | 'completed' | 'failed';
+
+export interface TransferState {
+  id: string;
+  status: TransferStatus;
+  parentSessionId: string;
+  targetLauncherId: string | null;
+  sessionId: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
+const activeTransfers = new Map<string, TransferState>();
+
+export function getTransfer(transferId: string): TransferState | undefined {
+  return activeTransfers.get(transferId);
+}
+
+function computeLocalJsonlPath(projectDir: string, claudeSessionId: string): string {
+  const sanitized = projectDir.replaceAll('/', '-').replaceAll('.', '-');
+  return `${homedir()}/.claude/projects/${sanitized}/${claudeSessionId}.jsonl`;
+}
+
+export async function transferSession(
+  parentSessionId: string,
+  targetLauncherId: string | null,
+  targetCwd?: string,
+): Promise<string> {
+  const transferId = ulid();
+  const transfer: TransferState = {
+    id: transferId,
+    status: 'pending',
+    parentSessionId,
+    targetLauncherId,
+    sessionId: null,
+    error: null,
+    createdAt: new Date().toISOString(),
+  };
+  activeTransfers.set(transferId, transfer);
+
+  // Run async — caller polls for status
+  doTransfer(transfer, targetCwd).catch((err) => {
+    transfer.status = 'failed';
+    transfer.error = err.message;
+  });
+
+  return transferId;
+}
+
+async function doTransfer(transfer: TransferState, targetCwd?: string): Promise<void> {
+  const parent = db
+    .select()
+    .from(schema.agentSessions)
+    .where(eq(schema.agentSessions.id, transfer.parentSessionId))
+    .get();
+
+  if (!parent) throw new Error('Parent session not found');
+  if (parent.status === 'running' || parent.status === 'pending') {
+    throw new Error('Cannot transfer an active session');
+  }
+  if (!parent.claudeSessionId) throw new Error('Parent session has no claudeSessionId');
+
+  // Resolve project dir
+  let projectDir: string | null = null;
+  if (parent.feedbackId) {
+    const feedbackRow = db.select().from(schema.feedbackItems)
+      .where(eq(schema.feedbackItems.id, parent.feedbackId)).get();
+    if (feedbackRow?.appId) {
+      const app = db.select().from(schema.applications)
+        .where(eq(schema.applications.id, feedbackRow.appId)).get();
+      if (app?.projectDir) projectDir = app.projectDir;
+    }
+  }
+  if (!projectDir) throw new Error('Cannot determine project directory');
+
+  const cwd = targetCwd || projectDir;
+  const claudeSessionId = parent.claudeSessionId;
+  const sourceLauncherId = parent.launcherId;
+
+  // --- EXPORT phase ---
+  transfer.status = 'exporting';
+
+  let jsonlFiles: Array<{ relativePath: string; content: string }>;
+  let artifactFiles: Array<{ path: string; content: string }>;
+
+  if (sourceLauncherId) {
+    // Source is remote — ask launcher to export
+    const sourceLauncher = getLauncher(sourceLauncherId);
+    if (!sourceLauncher || sourceLauncher.ws.readyState !== 1) {
+      throw new Error(`Source launcher ${sourceLauncherId} is not connected`);
+    }
+
+    // First export just JSONL files (no artifact paths yet)
+    const exportMsg: ExportSessionFiles = {
+      type: 'export_session_files',
+      sessionId: transfer.parentSessionId,
+      claudeSessionId,
+      projectDir,
+      artifactPaths: [],
+    };
+
+    const exportResult = await sendAndWait(
+      sourceLauncherId,
+      exportMsg,
+      'export_session_files_result',
+      120_000,
+    ) as ExportSessionFilesResult;
+
+    if (!exportResult.ok) throw new Error(`Export failed: ${exportResult.error}`);
+
+    jsonlFiles = exportResult.jsonlFiles || [];
+    artifactFiles = exportResult.artifactFiles || [];
+
+    // Parse JSONL for artifact paths and re-export with them
+    const allContent = jsonlFiles.map(f => f.content).join('\n');
+    const paths = extractArtifactPaths(allContent, projectDir);
+    if (paths.length > 0) {
+      const exportMsg2: ExportSessionFiles = {
+        type: 'export_session_files',
+        sessionId: transfer.parentSessionId,
+        claudeSessionId,
+        projectDir,
+        artifactPaths: paths,
+      };
+      const exportResult2 = await sendAndWait(
+        sourceLauncherId,
+        exportMsg2,
+        'export_session_files_result',
+        120_000,
+      ) as ExportSessionFilesResult;
+      if (exportResult2.ok && exportResult2.artifactFiles) {
+        artifactFiles = exportResult2.artifactFiles;
+      }
+    }
+  } else {
+    // Source is local — read from disk
+    const jsonlPath = computeLocalJsonlPath(projectDir, claudeSessionId);
+    jsonlFiles = [];
+
+    if (existsSync(jsonlPath)) {
+      jsonlFiles.push({
+        relativePath: `${claudeSessionId}.jsonl`,
+        content: readFileSync(jsonlPath, 'utf-8'),
+      });
+    }
+
+    // Subagent files
+    const subagentDir = jsonlPath.replace(/\.jsonl$/, '') + '/subagents';
+    if (existsSync(subagentDir)) {
+      for (const file of readdirSync(subagentDir).filter(f => f.endsWith('.jsonl'))) {
+        jsonlFiles.push({
+          relativePath: `${claudeSessionId}/subagents/${file}`,
+          content: readFileSync(`${subagentDir}/${file}`, 'utf-8'),
+        });
+      }
+    }
+
+    // Continuations — other .jsonl files in same dir
+    const sanitized = projectDir.replaceAll('/', '-').replaceAll('.', '-');
+    const jsonlDir = `${homedir()}/.claude/projects/${sanitized}`;
+    if (existsSync(jsonlDir)) {
+      for (const file of readdirSync(jsonlDir)) {
+        if (!file.endsWith('.jsonl') || file === `${claudeSessionId}.jsonl`) continue;
+        jsonlFiles.push({
+          relativePath: file,
+          content: readFileSync(`${jsonlDir}/${file}`, 'utf-8'),
+        });
+      }
+    }
+
+    // Extract artifact paths from JSONL
+    const allContent = jsonlFiles.map(f => f.content).join('\n');
+    const paths = extractArtifactPaths(allContent, projectDir);
+    artifactFiles = [];
+    for (const relPath of paths) {
+      const full = resolve(projectDir, relPath);
+      if (!full.startsWith(projectDir)) continue;
+      if (existsSync(full)) {
+        try {
+          artifactFiles.push({ path: relPath, content: readFileSync(full, 'utf-8') });
+        } catch { /* skip */ }
+      }
+    }
+  }
+
+  if (jsonlFiles.length === 0) {
+    throw new Error('No JSONL files found for session');
+  }
+
+  // --- IMPORT phase ---
+  transfer.status = 'importing';
+
+  const targetLauncher = transfer.targetLauncherId ? getLauncher(transfer.targetLauncherId) : undefined;
+
+  if (targetLauncher && targetLauncher.ws.readyState === 1) {
+    // Target is remote — send files to launcher
+    const importMsg: ImportSessionFiles = {
+      type: 'import_session_files',
+      sessionId: transfer.parentSessionId,
+      claudeSessionId,
+      projectDir: cwd,
+      jsonlFiles,
+      artifactFiles,
+    };
+
+    const importResult = await sendAndWait(
+      transfer.targetLauncherId!,
+      importMsg,
+      'import_session_files_result',
+      120_000,
+    ) as ImportSessionFilesResult;
+
+    if (!importResult.ok) throw new Error(`Import failed: ${importResult.error}`);
+    console.log(`[transfer] Imported ${importResult.jsonlFilesWritten} JSONL + ${importResult.artifactFilesWritten} artifacts to ${transfer.targetLauncherId}`);
+  } else if (!transfer.targetLauncherId) {
+    // Target is local — write files to disk
+    const sanitized = cwd.replaceAll('/', '-').replaceAll('.', '-');
+    const jsonlDir = `${homedir()}/.claude/projects/${sanitized}`;
+
+    for (const f of jsonlFiles) {
+      const target = resolve(jsonlDir, f.relativePath);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, f.content, 'utf-8');
+    }
+
+    for (const f of artifactFiles) {
+      const target = resolve(cwd, f.path);
+      if (!target.startsWith(cwd)) continue;
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, f.content, 'utf-8');
+    }
+
+    console.log(`[transfer] Wrote ${jsonlFiles.length} JSONL + ${artifactFiles.length} artifacts locally`);
+  } else {
+    throw new Error(`Target launcher ${transfer.targetLauncherId} is not connected`);
+  }
+
+  // --- LAUNCH phase ---
+  transfer.status = 'launching';
+
+  const { sessionId } = await resumeAgentSession(transfer.parentSessionId, transfer.targetLauncherId);
+  transfer.sessionId = sessionId;
+  transfer.status = 'completed';
+  console.log(`[transfer] Transfer ${transfer.id} completed — new session ${sessionId}`);
 }

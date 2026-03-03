@@ -459,6 +459,21 @@ export class SessionBridge {
           break;
         }
 
+        case 'appendFeedback': {
+          if (!window.promptWidget) {
+            this.respondError(requestId, 'Widget not initialized');
+            break;
+          }
+          const feedbackId = params.feedbackId as string;
+          if (!feedbackId) {
+            this.respondError(requestId, 'Missing feedbackId');
+            break;
+          }
+          window.promptWidget.appendToFeedback(feedbackId);
+          this.respond(requestId, { appendMode: true, feedbackId });
+          break;
+        }
+
         default:
           this.respondError(requestId, `Unknown command: ${command}`);
       }

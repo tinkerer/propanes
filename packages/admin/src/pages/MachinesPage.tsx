@@ -202,6 +202,12 @@ export function MachinesPage() {
                   </span>
                 </div>
                 <div style="display:flex;gap:6px;align-items:center">
+                  {(() => {
+                    const target = cachedTargets.value.find(t => t.machineId === m.id && !t.isHarness);
+                    return target ? (
+                      <button class="btn btn-sm" onClick={() => spawnTerminal(selectedAppId.value, target.launcherId)} title={`Open terminal on ${m.name}`}>Terminal</button>
+                    ) : null;
+                  })()}
                   <SetupAssistButton entityType="machine" entityId={m.id} entityLabel={m.name} />
                   <button class="btn btn-sm" onClick={() => openEdit(m)}>Edit</button>
                   <button class="btn btn-sm btn-danger" onClick={() => handleDelete(m.id, m.name)}>Delete</button>

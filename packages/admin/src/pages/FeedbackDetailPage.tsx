@@ -260,6 +260,17 @@ async function enrichConsole(sessionId: string) {
   }
 }
 
+async function triggerAppendMode(sessionId: string) {
+  const fb = feedback.value;
+  if (!fb) return;
+  enrichLoading.value = `append-${sessionId}`;
+  try {
+    await api.triggerAppendMode(sessionId, fb.id);
+  } finally {
+    enrichLoading.value = null;
+  }
+}
+
 async function enrichNetwork(sessionId: string) {
   const fb = feedback.value;
   if (!fb) return;
@@ -767,6 +778,13 @@ export function FeedbackDetailPage({ id, appId }: { id: string; appId: string | 
                         onClick={() => enrichNetwork(conn.sessionId)}
                       >
                         {enrichLoading.value === `network-${conn.sessionId}` ? 'Fetching...' : 'Network Errors'}
+                      </button>
+                      <button
+                        class="btn btn-sm btn-primary"
+                        disabled={enrichLoading.value === `append-${conn.sessionId}`}
+                        onClick={() => triggerAppendMode(conn.sessionId)}
+                      >
+                        {enrichLoading.value === `append-${conn.sessionId}` ? 'Opening...' : 'Enrich with Widget'}
                       </button>
                     </div>
                   </div>

@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import type { LauncherCapabilities, HarnessMetadata } from '@prompt-widget/shared';
+import type { LauncherCapabilities, HarnessMetadata, ServerToLauncherMessage, LauncherToServerMessage } from '@prompt-widget/shared';
 import { eq } from 'drizzle-orm';
 import { db, schema } from './db/index.js';
 
@@ -171,4 +171,51 @@ export function serializeLauncher(l: LauncherInfo) {
 
 export function listHarnesses(): LauncherInfo[] {
   return Array.from(launchers.values()).filter(l => !!l.harness);
+}
+
+// --- Request/response mechanism for launcher messages ---
+
+interface PendingLauncherRequest {
+  resolve: (msg: LauncherToServerMessage) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+// Key: `${sessionId}:${expectedResponseType}`
+const pendingRequests = new Map<string, PendingLauncherRequest>();
+
+export function sendAndWait(
+  launcherId: string,
+  message: ServerToLauncherMessage & { sessionId: string },
+  responseType: string,
+  timeoutMs = 60_000,
+): Promise<LauncherToServerMessage> {
+  const launcher = launchers.get(launcherId);
+  if (!launcher || launcher.ws.readyState !== 1) {
+    return Promise.reject(new Error(`Launcher ${launcherId} not connected`));
+  }
+
+  const key = `${message.sessionId}:${responseType}`;
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingRequests.delete(key);
+      reject(new Error(`Timeout waiting for ${responseType} from launcher ${launcherId}`));
+    }, timeoutMs);
+
+    pendingRequests.set(key, { resolve, reject, timer });
+    launcher.ws.send(JSON.stringify(message));
+  });
+}
+
+export function resolveLauncherResponse(msg: LauncherToServerMessage & { sessionId?: string }): boolean {
+  if (!msg.sessionId) return false;
+  const key = `${msg.sessionId}:${msg.type}`;
+  const pending = pendingRequests.get(key);
+  if (!pending) return false;
+
+  clearTimeout(pending.timer);
+  pendingRequests.delete(key);
+  pending.resolve(msg);
+  return true;
 }

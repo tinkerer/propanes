@@ -97,7 +97,7 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  spawnTerminal: (data?: { cwd?: string; appId?: string; launcherId?: string }) =>
+  spawnTerminal: (data?: { cwd?: string; appId?: string; launcherId?: string; harnessConfigId?: string }) =>
     request<{ sessionId: string }>('/admin/terminal', {
       method: 'POST',
       body: JSON.stringify(data || {}),
@@ -295,6 +295,7 @@ export const api = {
       appId: string | null;
       name: string | null;
       tags: string[];
+      activityLog: { ts: string; command: string; category: string; ok: boolean; durationMs: number }[];
     }[]>('/agent/sessions'),
 
   // Tmux config (legacy)
@@ -425,6 +426,12 @@ export const api = {
 
   deleteScreenshot: (id: string) =>
     request<{ id: string; deleted: boolean }>(`/images/${id}`, { method: 'DELETE' }),
+
+  triggerAppendMode: (sessionId: string, feedbackId: string) =>
+    request<{ appendMode: boolean; feedbackId: string }>(
+      `/agent/sessions/${sessionId}/append-feedback`,
+      { method: 'POST', body: JSON.stringify({ feedbackId }) }
+    ),
 
   captureSessionScreenshot: (sessionId: string) =>
     request<{ dataUrl: string }>(`/agent/sessions/${sessionId}/screenshot`, { method: 'POST' }),

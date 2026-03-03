@@ -1047,6 +1047,28 @@ export const WIDGET_CSS = `
   line-height: 1;
 }
 
+.pw-append-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 14px 14px 0 0;
+}
+.pw-append-cancel {
+  background: none;
+  border: none;
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  opacity: 0.7;
+}
+.pw-append-cancel:hover { opacity: 1; }
+
 .pw-session-id-row {
   display: flex;
   align-items: center;

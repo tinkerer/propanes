@@ -52,6 +52,7 @@ export class PromptWidgetElement {
   private dispatchMode: 'off' | 'once' | 'auto' = 'off';
   private annotatorOpen = false;
   private adminAlwaysShow = false;
+  private appendTargetId: string | null = null;
   private escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && this.isOpen) {
       // Let sub-overlays (annotator, element picker) handle Escape first
@@ -822,6 +823,26 @@ export class PromptWidgetElement {
       <div id="pw-error" class="pw-error pw-hidden"></div>
     `;
 
+    // Append mode banner
+    if (this.appendTargetId) {
+      const banner = document.createElement('div');
+      banner.className = 'pw-append-banner';
+      const label = document.createElement('span');
+      label.textContent = `Adding to #${this.appendTargetId.slice(-6)}`;
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'pw-append-cancel';
+      cancelBtn.textContent = '\u00d7';
+      cancelBtn.addEventListener('click', () => this.exitAppendMode());
+      banner.append(label, cancelBtn);
+      panel.insertBefore(banner, panel.firstChild);
+
+      const textarea = panel.querySelector('#pw-chat-input') as HTMLTextAreaElement;
+      if (textarea) textarea.placeholder = 'Add notes, select elements, capture screenshots...';
+
+      const send = panel.querySelector('#pw-send-btn') as HTMLButtonElement;
+      if (send) send.title = 'Append to feedback';
+    }
+
     this.shadow.appendChild(panel);
 
     const input = panel.querySelector('#pw-chat-input') as HTMLTextAreaElement;
@@ -1112,6 +1133,24 @@ export class PromptWidgetElement {
     errorEl.classList.add('pw-hidden');
     input.disabled = true;
 
+    if (this.appendTargetId) {
+      try {
+        await this.submitAppend(this.appendTargetId, description);
+        this.pendingScreenshots = [];
+        this.selectedElements = [];
+        input.value = '';
+        this.savedDraft = '';
+        this.appendTargetId = null;
+        this.showFlash(undefined, 'Appended');
+      } catch (err) {
+        errorEl.textContent = err instanceof Error ? err.message : 'Append failed';
+        errorEl.classList.remove('pw-hidden');
+        input.disabled = false;
+        input.focus();
+      }
+      return;
+    }
+
     const shouldDispatch = this.dispatchMode === 'auto' || this.dispatchMode === 'once';
     if (this.dispatchMode === 'once') {
       this.dispatchMode = 'off';
@@ -1145,14 +1184,15 @@ export class PromptWidgetElement {
     }
   }
 
-  private showFlash(feedbackUrl?: string) {
+  private showFlash(feedbackUrl?: string, label?: string) {
     const panel = this.shadow.querySelector('.pw-panel');
     if (!panel) return;
 
     const flash = document.createElement('div');
     flash.className = 'pw-flash';
-    if (feedbackUrl) {
-      flash.innerHTML = `<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg><span class="pw-flash-label">Link copied</span>`;
+    const flashLabel = label || (feedbackUrl ? 'Link copied' : '');
+    if (flashLabel) {
+      flash.innerHTML = `<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg><span class="pw-flash-label">${flashLabel}</span>`;
     } else {
       flash.innerHTML = `<svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>`;
     }
@@ -1207,6 +1247,53 @@ export class PromptWidgetElement {
         body: JSON.stringify(feedbackPayload),
       });
 
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      return res.json();
+    }
+  }
+
+  private async submitAppend(feedbackId: string, description: string) {
+    const context = collectContext(this.getCheckedCollectors());
+    const payload: Record<string, unknown> = {
+      description,
+      context,
+      sourceUrl: location.href,
+      userAgent: navigator.userAgent,
+      viewport: `${window.innerWidth}x${window.innerHeight}`,
+      sessionId: this.getSessionId(),
+      userId: this.identity?.id,
+    };
+    if (this.selectedElements.length > 0) {
+      payload.data = { selectedElements: this.selectedElements };
+    }
+
+    const url = this.config.endpoint.replace(/\/?$/, '') + '/' + feedbackId + '/append';
+
+    if (this.pendingScreenshots.length > 0) {
+      const formData = new FormData();
+      formData.append('feedback', JSON.stringify(payload));
+      for (const blob of this.pendingScreenshots) {
+        formData.append('screenshots', blob, `screenshot-${Date.now()}.png`);
+      }
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: this.apiHeaders(),
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      return res.json();
+    } else {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
+        body: JSON.stringify(payload),
+      });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Unknown error' }));
         throw new Error(err.error || `HTTP ${res.status}`);
@@ -1286,6 +1373,19 @@ export class PromptWidgetElement {
     this.historyIndex = -1;
     this.renderPanel();
     document.addEventListener('keydown', this.escHandler, true);
+  }
+
+  appendToFeedback(feedbackId: string) {
+    this.appendTargetId = feedbackId;
+    this.pendingScreenshots = [];
+    this.selectedElements = [];
+    if (!this.isOpen) this.open();
+    else this.renderPanel();
+  }
+
+  exitAppendMode() {
+    this.appendTargetId = null;
+    if (this.isOpen) this.renderPanel();
   }
 
   close() {

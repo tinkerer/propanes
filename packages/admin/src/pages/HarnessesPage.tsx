@@ -181,6 +181,17 @@ async function handleLaunchSession(id: string) {
   }
 }
 
+async function handleSpawnTerminal(harnessConfigId: string, launcherId: string) {
+  try {
+    const result = await api.spawnTerminal({ harnessConfigId, launcherId });
+    if (result.sessionId) {
+      window.location.hash = '#/sessions';
+    }
+  } catch (err: any) {
+    error.value = err.message;
+  }
+}
+
 function getAppName(appId: string | null): string {
   if (!appId) return '';
   const app = applications.value.find(a => a.id === appId);
@@ -352,6 +363,7 @@ export function HarnessesPage() {
                   ) : (
                     <>
                       <button class="btn btn-sm" onClick={() => handleLaunchSession(h.id)} title="Launch Claude session in container">Session</button>
+                      {h.launcherId && <button class="btn btn-sm" onClick={() => handleSpawnTerminal(h.id, h.launcherId)} title="Open plain terminal in container">Terminal</button>}
                       <button class="btn btn-sm" onClick={() => handleStop(h.id)}>Stop</button>
                     </>
                   )}

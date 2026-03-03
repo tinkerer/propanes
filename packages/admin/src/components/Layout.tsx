@@ -16,7 +16,6 @@ import { RequestPanel } from './RequestPanel.js';
 import { ControlBar } from './ControlBar.js';
 import { registerShortcut, ctrlShiftHeld } from '../lib/shortcuts.js';
 import { toggleTheme, showTabs, arrowTabSwitching, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel } from '../lib/settings.js';
-import { cachedTargets, ensureTargetsLoaded } from './DispatchTargetSelect.js';
 import {
   openTabs,
   activeTabId,
@@ -47,7 +46,6 @@ import {
   setTerminalsHeight,
   setSidebarWidth,
   spawnTerminal,
-  attachTmuxSession,
   handleTabDigit0to9,
   togglePopOutActive,
   pendingFirstDigit,
@@ -86,6 +84,7 @@ import {
   resolveSession,
   activePanelId,
   bringToFront,
+  termPickerOpen,
 } from '../lib/sessions.js';
 
 interface LiveConnection {
@@ -146,25 +145,6 @@ async function pollLiveConnections() {
   }
 }
 
-const tmuxMenuOpen = signal<{ x: number; y: number; btnTop: number } | null>(null);
-const tmuxSessions = signal<{ name: string; windows: number; created: string; attached: boolean }[]>([]);
-const tmuxMenuLoading = signal(false);
-
-async function openTmuxMenu(e: MouseEvent, appId?: string | null) {
-  e.stopPropagation();
-  const btn = e.currentTarget as HTMLElement;
-  const rect = btn.getBoundingClientRect();
-  tmuxMenuOpen.value = { x: rect.left, y: rect.bottom + 4, btnTop: rect.top };
-  tmuxMenuLoading.value = true;
-  ensureTargetsLoaded();
-  try {
-    const result = await api.listTmuxSessions();
-    tmuxSessions.value = result.sessions;
-  } catch {
-    tmuxSessions.value = [];
-  }
-  tmuxMenuLoading.value = false;
-}
 
 function SidebarTabBadge({ tabNum }: { tabNum: number }) {
   const pending = pendingFirstDigit.value;
@@ -227,13 +207,6 @@ export function Layout({ children }: { children: ComponentChildren }) {
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, [sidebarItemMenu.value]);
-
-  useEffect(() => {
-    if (!tmuxMenuOpen.value) return;
-    const close = () => { tmuxMenuOpen.value = null; };
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [tmuxMenuOpen.value]);
 
   useEffect(() => {
     if (!autoJumpMenuOpen.value) return;
@@ -609,6 +582,20 @@ export function Layout({ children }: { children: ComponentChildren }) {
     return () => cleanups.forEach((fn) => fn());
   }, []);
 
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      if (e.data?.type !== 'pw-companion-shortcut') return;
+      if (e.data.key === 'cmd+k' || e.data.key === 'ctrl+shift+space') {
+        setShowSpotlight((v) => !v);
+      } else if (e.data.key === 'escape') {
+        setShowShortcutHelp(false);
+        setShowSpotlight(false);
+      }
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+
   const sessions = allSessions.value;
   const tabs = openTabs.value;
   const tabSet = new Set(tabs);
@@ -744,12 +731,19 @@ export function Layout({ children }: { children: ComponentChildren }) {
       ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s.paneTitle || s.id.slice(-6)}`
       : (s.paneTitle || s.id.slice(-6));
     const customLabel = getSessionLabel(s.id);
-    const raw = customLabel || (isPlain ? `\u{1F5A5}\uFE0F ${plainLabel}` : (s.feedbackTitle || s.agentName || `Session ${s.id.slice(-6)}`));
-    const tooltip = isPlain
+    const locationPrefix = s.isHarness ? '\u{1F4E6}' : s.isRemote ? '\u{1F310}' : '';
+    const raw = customLabel || (isPlain ? `${locationPrefix || '\u{1F5A5}\uFE0F'} ${plainLabel}` : `${locationPrefix ? locationPrefix + ' ' : ''}${s.feedbackTitle || s.agentName || `Session ${s.id.slice(-6)}`}`);
+    const tooltipParts: string[] = [];
+    if (s.isHarness) tooltipParts.push(`Harness: ${s.harnessName || 'unknown'}`);
+    else if (s.isRemote) tooltipParts.push(`Remote: ${s.machineName || s.launcherHostname || 'unknown'}`);
+    if (s.paneCommand) tooltipParts.push(`Process: ${s.paneCommand}`);
+    if (s.panePath) tooltipParts.push(`Path: ${s.panePath}`);
+    tooltipParts.push(isPlain
       ? `Terminal \u2014 ${s.status}`
       : s.feedbackTitle
         ? `${s.feedbackTitle} \u2014 ${s.status}`
-        : `${s.agentName || 'Session'} \u2014 ${s.status}`;
+        : `${s.agentName || 'Session'} \u2014 ${s.status}`);
+    const tooltip = tooltipParts.join('\n');
     const globalIdx = globalSessions.indexOf(s.id);
     const globalNum = globalIdx >= 0 ? globalIdx + 1 : null;
     const showPausedPopup = autoJumpPaused.value && pendingAutoJump.value === s.id && autoJumpShowPopup.value;
@@ -1080,7 +1074,7 @@ export function Layout({ children }: { children: ComponentChildren }) {
                   </div>
                 <button
                   class="sidebar-new-terminal-btn"
-                  onClick={(e) => openTmuxMenu(e, selAppId)}
+                  onClick={() => { termPickerOpen.value = { kind: 'new' }; }}
                   title="New terminal (g t)"
                 >+</button>
               </div>
@@ -1163,7 +1157,7 @@ export function Layout({ children }: { children: ComponentChildren }) {
                 Terminals ({terminals.length})
                 <button
                   class="sidebar-new-terminal-btn"
-                  onClick={(e) => openTmuxMenu(e, selAppId)}
+                  onClick={() => { termPickerOpen.value = { kind: 'new' }; }}
                   title="New terminal (g t)"
                 >+</button>
               </div>
@@ -1276,71 +1270,6 @@ export function Layout({ children }: { children: ComponentChildren }) {
               api.openSessionInTerminal(menuSid).catch((err: any) => console.error('Open in terminal failed:', err.message));
             }}>Open in Terminal.app</button>
             <button onClick={() => { sidebarItemMenu.value = null; enableSplit(menuSid); }}>Split pane</button>
-          </div>
-        );
-      })()}
-      {tmuxMenuOpen.value && (() => {
-        const pos = tmuxMenuOpen.value!;
-        const sessions = tmuxSessions.value;
-        const loading = tmuxMenuLoading.value;
-        const targets = cachedTargets.value;
-        const remoteMachines = targets.filter(t => !t.isHarness);
-        const remoteHarnesses = targets.filter(t => t.isHarness);
-        const menuHeight = 36 + (remoteMachines.length > 0 ? 20 + remoteMachines.length * 30 + 9 : 0) + (remoteHarnesses.length > 0 ? 20 + remoteHarnesses.length * 30 + 9 : 0) + (loading ? 28 : 0) + (sessions.length > 0 ? 20 : 0) + sessions.length * 30 + (sessions.length > 0 || loading ? 9 : 0);
-        const flipUp = pos.y + menuHeight > window.innerHeight;
-        const menuStyle = flipUp
-          ? { left: `${pos.x}px`, bottom: `${window.innerHeight - pos.btnTop + 4}px` }
-          : { left: `${pos.x}px`, top: `${pos.y}px` };
-        return (
-          <div
-            class="status-dot-menu tmux-session-menu"
-            style={menuStyle}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button onClick={() => { tmuxMenuOpen.value = null; spawnTerminal(selAppId); }}>
-              Local terminal
-            </button>
-            {remoteMachines.length > 0 && (
-              <>
-                <div class="id-dropdown-separator" />
-                <div class="tmux-menu-label">Remote machines</div>
-                {remoteMachines.map(t => (
-                  <button key={t.launcherId} onClick={() => { tmuxMenuOpen.value = null; spawnTerminal(selAppId, t.launcherId); }}>
-                    {t.machineName || t.name}
-                    <span class="tmux-session-meta">{t.activeSessions}/{t.maxSessions}</span>
-                  </button>
-                ))}
-              </>
-            )}
-            {remoteHarnesses.length > 0 && (
-              <>
-                <div class="id-dropdown-separator" />
-                <div class="tmux-menu-label">Harnesses</div>
-                {remoteHarnesses.map(t => (
-                  <button key={t.launcherId} onClick={() => { tmuxMenuOpen.value = null; spawnTerminal(selAppId, t.launcherId); }}>
-                    {t.name}
-                    <span class="tmux-session-meta">{t.activeSessions}/{t.maxSessions}</span>
-                  </button>
-                ))}
-              </>
-            )}
-            {(loading || sessions.length > 0) && <div class="id-dropdown-separator" />}
-            {loading && <div class="tmux-menu-loading">Loading tmux sessions...</div>}
-            {!loading && sessions.length > 0 && (
-              <div class="tmux-menu-label">Attach tmux session</div>
-            )}
-            {!loading && sessions.map((s) => (
-              <button
-                key={s.name}
-                onClick={() => { tmuxMenuOpen.value = null; attachTmuxSession(s.name, selAppId); }}
-                title={`${s.windows} window${s.windows !== 1 ? 's' : ''}${s.attached ? ', attached' : ''}`}
-              >
-                {s.name}
-                <span class="tmux-session-meta">
-                  {s.windows}w{s.attached ? ' \u2022' : ''}
-                </span>
-              </button>
-            ))}
           </div>
         );
       })()}

@@ -68,13 +68,33 @@ export interface HarnessStatusUpdate {
   errorMessage?: string;
 }
 
+export interface ImportSessionFilesResult {
+  type: 'import_session_files_result';
+  sessionId: string;
+  ok: boolean;
+  jsonlFilesWritten: number;
+  artifactFilesWritten: number;
+  error?: string;
+}
+
+export interface ExportSessionFilesResult {
+  type: 'export_session_files_result';
+  sessionId: string;
+  ok: boolean;
+  jsonlFiles?: Array<{ relativePath: string; content: string }>;
+  artifactFiles?: Array<{ path: string; content: string }>;
+  error?: string;
+}
+
 export type LauncherToServerMessage =
   | LauncherRegister
   | LauncherHeartbeat
   | LauncherSessionStarted
   | LauncherSessionOutput
   | LauncherSessionEnded
-  | HarnessStatusUpdate;
+  | HarnessStatusUpdate
+  | ImportSessionFilesResult
+  | ExportSessionFilesResult;
 
 // --- Server → Launcher messages ---
 
@@ -146,6 +166,23 @@ export interface LaunchHarnessSession {
   rows: number;
 }
 
+export interface ImportSessionFiles {
+  type: 'import_session_files';
+  sessionId: string;
+  claudeSessionId: string;
+  projectDir: string;
+  jsonlFiles: Array<{ relativePath: string; content: string }>;
+  artifactFiles: Array<{ path: string; content: string }>;
+}
+
+export interface ExportSessionFiles {
+  type: 'export_session_files';
+  sessionId: string;
+  claudeSessionId: string;
+  projectDir: string;
+  artifactPaths: string[];
+}
+
 export type ServerToLauncherMessage =
   | LauncherRegistered
   | LaunchSession
@@ -154,7 +191,9 @@ export type ServerToLauncherMessage =
   | InputToSession
   | StartHarness
   | StopHarness
-  | LaunchHarnessSession;
+  | LaunchHarnessSession
+  | ImportSessionFiles
+  | ExportSessionFiles;
 
 // --- Combined ---
 

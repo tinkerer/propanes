@@ -61,6 +61,7 @@ import { api } from '../lib/api.js';
 import { JsonlView } from './JsonlView.js';
 import { FeedbackCompanionView } from './FeedbackCompanionView.js';
 import { IframeCompanionView } from './IframeCompanionView.js';
+import { IsolateCompanionView } from './IsolateCompanionView.js';
 import { TerminalCompanionView } from './TerminalCompanionView.js';
 
 export const popoutIdMenuOpen = signal<string | null>(null);
@@ -211,13 +212,16 @@ function renderPanelTabContent(
   const isFeedback = sid.startsWith('feedback:');
   const isIframe = sid.startsWith('iframe:');
   const isTerminal = sid.startsWith('terminal:');
-  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal;
+  const isIsolate = sid.startsWith('isolate:');
+  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate;
   const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
-  const sess = sessionMap.get(realSid);
+  const sess = isIsolate ? null : sessionMap.get(realSid);
 
   return (
     <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0 }}>
-      {isJsonl ? (
+      {isIsolate ? (
+        <IsolateCompanionView componentName={realSid} />
+      ) : isJsonl ? (
         <JsonlView sessionId={realSid} />
       ) : isFeedback ? (
         sess?.feedbackId ? <FeedbackCompanionView feedbackId={sess.feedbackId} /> : <div class="companion-error">No feedback linked</div>
@@ -462,15 +466,17 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
     const isFeedback = sid.startsWith('feedback:');
     const isIframe = sid.startsWith('iframe:');
     const isTerminal = sid.startsWith('terminal:');
-    const isCompanion = isJsonl || isFeedback || isIframe || isTerminal;
+    const isIsolate = sid.startsWith('isolate:');
+    const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate;
     const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
     const custom = getSessionLabel(sid);
     if (custom) return custom;
-    const s = sessionMap.get(realSid);
+    const s = isIsolate ? null : sessionMap.get(realSid);
     if (isJsonl) return `JSONL: ${s?.feedbackTitle || s?.agentName || realSid.slice(-6)}`;
     if (isFeedback) return `FB: ${s?.feedbackTitle || realSid.slice(-6)}`;
     if (isIframe) return `Page: ${realSid.slice(-6)}`;
     if (isTerminal) { const ts = getTerminalCompanion(realSid); const tSess = ts ? sessionMap.get(ts) : null; return `Term: ${tSess?.paneTitle || ts?.slice(-6) || realSid.slice(-6)}`; }
+    if (isIsolate) return `Isolate: ${realSid}`;
     const isPlainSess = s?.permissionProfile === 'plain';
     const plainLabel = s?.paneCommand
       ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s?.paneTitle || sid.slice(-6)}`
@@ -520,7 +526,8 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
             const gn = globalNum(sid);
             const tabSess = sessionMap.get(sid);
             const tabExited = exitedSessions.value.has(sid);
-            const tabInputState = !tabExited ? (sessionInputStates.value.get(sid) || null) : null;
+            const tabIsCompanion = sid.startsWith('jsonl:') || sid.startsWith('feedback:') || sid.startsWith('iframe:') || sid.startsWith('terminal:');
+            const tabInputState = !tabExited && !tabIsCompanion ? (sessionInputStates.value.get(sid) || null) : null;
             const tabIsPlain = tabSess?.permissionProfile === 'plain';
             const isActiveTab = sid === activeId;
             return (
@@ -557,7 +564,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
                   renamingSessionId.value = sid;
                 }}
               >
-                <span
+                {!tabIsCompanion && <span
                   class={`status-dot${tabExited ? ' exited' : ''}${tabIsPlain ? ' plain' : ''}${tabInputState ? ` ${tabInputState}` : ''}`}
                   onClick={(e) => {
                     e.stopPropagation();
@@ -566,7 +573,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
                   }}
                 >
                   {ctrlShiftHeld.value && gn !== null && <PanelTabBadge tabNum={gn} />}
-                </span>
+                </span>}
                 {renamingSessionId.value === sid ? (
                   <input
                     type="text"

@@ -4,6 +4,9 @@ import { autoNavigateToFeedback, autoJumpWaiting, autoJumpInterrupt, autoJumpDel
 import { navigate, selectedAppId } from './state.js';
 import { timed } from './perf.js';
 import type { ViewMode } from '../components/SessionViewToggle.js';
+import type { TerminalPickerMode } from '../components/TerminalPicker.js';
+
+export const termPickerOpen = signal<TerminalPickerMode | null>(null);
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
@@ -1327,11 +1330,12 @@ export async function resumeSession(sessionId: string): Promise<string | null> {
   }
 }
 
-export async function spawnTerminal(appId?: string | null, launcherId?: string) {
+export async function spawnTerminal(appId?: string | null, launcherId?: string, harnessConfigId?: string) {
   try {
-    const data: { appId?: string; launcherId?: string } = {};
+    const data: { appId?: string; launcherId?: string; harnessConfigId?: string } = {};
     if (appId && appId !== '__unlinked__') data.appId = appId;
     if (launcherId) data.launcherId = launcherId;
+    if (harnessConfigId) data.harnessConfigId = harnessConfigId;
     const { sessionId } = await api.spawnTerminal(data);
     openSession(sessionId);
     loadAllSessions();
@@ -1590,6 +1594,13 @@ export function activateSessionInPlace(sessionId: string) {
   openSession(sessionId);
 }
 
+function isAutojumpPanelFocused(): boolean {
+  const el = document.activeElement;
+  if (!el) return false;
+  const panelEl = document.querySelector(`[data-panel-id="${AUTOJUMP_PANEL_ID}"]`);
+  return !!panelEl?.contains(el);
+}
+
 export function syncAutoJumpPanel() {
   const existing = popoutPanels.value.find((p) => p.id === AUTOJUMP_PANEL_ID);
 
@@ -1597,6 +1608,9 @@ export function syncAutoJumpPanel() {
     (s: any) => s.status === 'running' && sessionInputStates.value.get(s.id) === 'waiting'
   );
   const waitingIds = waiting.map((s: any) => s.id);
+
+  // Don't close or prune the autojump panel while the user is typing in it
+  if (existing && isAutojumpPanelFocused()) return;
 
   // Always prune non-waiting sessions from the autojump panel
   if (existing) {
@@ -1797,7 +1811,7 @@ export function handleTabDigit0to9(digit: number) {
 
 // --- Companion Pane System ---
 
-export type CompanionType = 'jsonl' | 'feedback' | 'iframe' | 'terminal';
+export type CompanionType = 'jsonl' | 'feedback' | 'iframe' | 'terminal' | 'isolate';
 
 // Terminal companion: maps parent session ID → terminal session ID
 export const terminalCompanionMap = signal<Record<string, string>>(
@@ -1860,7 +1874,7 @@ function extractCompanionType(tabId: string): CompanionType | null {
   const idx = tabId.indexOf(':');
   if (idx < 0) return null;
   const prefix = tabId.slice(0, idx);
-  if (prefix === 'jsonl' || prefix === 'feedback' || prefix === 'iframe' || prefix === 'terminal') return prefix;
+  if (prefix === 'jsonl' || prefix === 'feedback' || prefix === 'iframe' || prefix === 'terminal' || prefix === 'isolate') return prefix;
   return null;
 }
 
@@ -1918,6 +1932,14 @@ export function toggleCompanion(sessionId: string, type: CompanionType) {
     }
     openSessionInRightPane(tabId);
   }
+}
+
+export function openIsolateCompanion(componentName: string) {
+  const tabId = `isolate:${componentName}`;
+  if (!openTabs.value.includes(tabId)) {
+    openTabs.value = [...openTabs.value, tabId];
+  }
+  openSessionInRightPane(tabId);
 }
 
 export function syncCompanionsToRightPane(newSessionId: string, oldSessionId?: string | null) {

@@ -19,6 +19,7 @@ import {
   dispatchTmuxAttachSession,
   dispatchAgentSession,
   dispatchCompanionTerminal,
+  dispatchHarnessSession,
   hydrateFeedback,
   DEFAULT_PROMPT_TEMPLATE,
   dispatchFeedbackToAgent,
@@ -1310,7 +1311,25 @@ function buildNewEntityPrompt(
 // Plain terminal session (no agent, no feedback)
 adminRoutes.post('/terminal', async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const { cwd, appId, launcherId } = body as { cwd?: string; appId?: string; launcherId?: string };
+  const { cwd, appId, launcherId, harnessConfigId } = body as { cwd?: string; appId?: string; launcherId?: string; harnessConfigId?: string };
+  // Harness terminal: exec into the container
+  if (harnessConfigId && launcherId) {
+    try {
+      const hc = db.select().from(schema.harnessConfigs).where(eq(schema.harnessConfigs.id, harnessConfigId)).get();
+      const { sessionId } = await dispatchHarnessSession({
+        harnessConfigId,
+        launcherId,
+        prompt: '',
+        composeDir: hc?.composeDir || undefined,
+        serviceName: 'pw-server',
+        permissionProfile: 'plain',
+      });
+      return c.json({ sessionId });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      return c.json({ error: errorMsg }, 500);
+    }
+  }
 
   let resolvedCwd = cwd || process.cwd();
   if (!cwd && appId) {

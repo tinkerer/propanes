@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import * as os from 'node:os';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import * as path from 'node:path';
 import * as pty from 'node-pty';
 import { execSync } from 'node:child_process';
 import type {
@@ -15,6 +16,10 @@ import type {
   SequencedOutput,
   SessionOutputData,
   LaunchHarnessSession,
+  ImportSessionFiles,
+  ImportSessionFilesResult,
+  ExportSessionFiles,
+  ExportSessionFilesResult,
 } from '@prompt-widget/shared';
 import {
   isTmuxAvailable,
@@ -212,6 +217,139 @@ function spawnSession(params: {
 
 }
 
+function computeJsonlDir(projectDir: string): string {
+  const sanitized = projectDir.replaceAll('/', '-').replaceAll('.', '-');
+  return path.join(os.homedir(), '.claude', 'projects', sanitized);
+}
+
+function handleImportSessionFiles(msg: ImportSessionFiles): void {
+  const { sessionId, claudeSessionId, projectDir, jsonlFiles, artifactFiles } = msg;
+  try {
+    const jsonlDir = computeJsonlDir(projectDir);
+    let jsonlWritten = 0;
+    for (const f of jsonlFiles) {
+      const target = path.join(jsonlDir, f.relativePath);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, f.content, 'utf-8');
+      jsonlWritten++;
+    }
+
+    let artifactWritten = 0;
+    // Resolve cwd — same as spawnSession logic
+    let cwd = projectDir;
+    if (cwd === '~' || cwd.startsWith('~/')) {
+      cwd = cwd === '~' ? os.homedir() : cwd.replace(/^~/, os.homedir());
+    }
+    for (const f of artifactFiles) {
+      const normalized = path.normalize(f.path);
+      if (normalized.startsWith('..') || path.isAbsolute(normalized)) continue;
+      const target = path.join(cwd, normalized);
+      if (!target.startsWith(cwd)) continue;
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, f.content, 'utf-8');
+      artifactWritten++;
+    }
+
+    const result: ImportSessionFilesResult = {
+      type: 'import_session_files_result',
+      sessionId,
+      ok: true,
+      jsonlFilesWritten: jsonlWritten,
+      artifactFilesWritten: artifactWritten,
+    };
+    sendToServer(result);
+    console.log(`[launcher] Imported ${jsonlWritten} JSONL + ${artifactWritten} artifact files for session ${sessionId}`);
+  } catch (err: any) {
+    const result: ImportSessionFilesResult = {
+      type: 'import_session_files_result',
+      sessionId,
+      ok: false,
+      jsonlFilesWritten: 0,
+      artifactFilesWritten: 0,
+      error: err.message,
+    };
+    sendToServer(result);
+  }
+}
+
+function handleExportSessionFiles(msg: ExportSessionFiles): void {
+  const { sessionId, claudeSessionId, projectDir, artifactPaths } = msg;
+  try {
+    const jsonlDir = computeJsonlDir(projectDir);
+    const mainJsonl = path.join(jsonlDir, `${claudeSessionId}.jsonl`);
+
+    const jsonlFiles: Array<{ relativePath: string; content: string }> = [];
+
+    // Read main JSONL
+    if (existsSync(mainJsonl)) {
+      jsonlFiles.push({
+        relativePath: `${claudeSessionId}.jsonl`,
+        content: readFileSync(mainJsonl, 'utf-8'),
+      });
+    }
+
+    // Read continuation files (same directory, other .jsonl files with matching timestamps)
+    // Simple approach: include all .jsonl files in the directory since they may be continuations
+    if (existsSync(jsonlDir)) {
+      for (const file of readdirSync(jsonlDir)) {
+        if (!file.endsWith('.jsonl') || file === `${claudeSessionId}.jsonl`) continue;
+        jsonlFiles.push({
+          relativePath: file,
+          content: readFileSync(path.join(jsonlDir, file), 'utf-8'),
+        });
+      }
+    }
+
+    // Read subagent files
+    const subagentDir = path.join(jsonlDir, claudeSessionId, 'subagents');
+    if (existsSync(subagentDir)) {
+      for (const file of readdirSync(subagentDir)) {
+        if (!file.endsWith('.jsonl')) continue;
+        jsonlFiles.push({
+          relativePath: path.join(claudeSessionId, 'subagents', file),
+          content: readFileSync(path.join(subagentDir, file), 'utf-8'),
+        });
+      }
+    }
+
+    // Read artifact files
+    let cwd = projectDir;
+    if (cwd === '~' || cwd.startsWith('~/')) {
+      cwd = cwd === '~' ? os.homedir() : cwd.replace(/^~/, os.homedir());
+    }
+    const artifactFilesOut: Array<{ path: string; content: string }> = [];
+    for (const relPath of artifactPaths) {
+      const normalized = path.normalize(relPath);
+      if (normalized.startsWith('..') || path.isAbsolute(normalized)) continue;
+      const full = path.join(cwd, normalized);
+      if (!full.startsWith(cwd)) continue;
+      if (existsSync(full)) {
+        try {
+          artifactFilesOut.push({ path: relPath, content: readFileSync(full, 'utf-8') });
+        } catch { /* skip binary/unreadable */ }
+      }
+    }
+
+    const result: ExportSessionFilesResult = {
+      type: 'export_session_files_result',
+      sessionId,
+      ok: true,
+      jsonlFiles,
+      artifactFiles: artifactFilesOut,
+    };
+    sendToServer(result);
+    console.log(`[launcher] Exported ${jsonlFiles.length} JSONL + ${artifactFilesOut.length} artifact files for session ${sessionId}`);
+  } catch (err: any) {
+    const result: ExportSessionFilesResult = {
+      type: 'export_session_files_result',
+      sessionId,
+      ok: false,
+      error: err.message,
+    };
+    sendToServer(result);
+  }
+}
+
 function handleServerMessage(msg: ServerToLauncherMessage): void {
   switch (msg.type) {
     case 'launcher_registered':
@@ -288,7 +426,7 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
         if (msg.targetAppUrl) env.TARGET_APP_URL = msg.targetAppUrl;
         env.HARNESS_CONFIG_ID = msg.harnessConfigId;
 
-        env.COMPOSE_PROJECT_NAME = `pw-${msg.harnessConfigId}`;
+        env.COMPOSE_PROJECT_NAME = `pw-${msg.harnessConfigId}`.toLowerCase();
         const envStr = Object.entries(env).map(([k, v]) => `${k}=${v}`).join(' ');
         const cwd = msg.composeDir || undefined;
         execSync(`${envStr} docker compose up -d`, { stdio: 'pipe', timeout: 300_000, cwd });
@@ -316,7 +454,7 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
       console.log(`[launcher] Stopping harness ${msg.harnessConfigId}`);
       try {
         const cwd = msg.composeDir || undefined;
-        const projectName = `pw-${msg.harnessConfigId}`;
+        const projectName = `pw-${msg.harnessConfigId}`.toLowerCase();
         execSync(`docker compose -p ${projectName} down`, { stdio: 'pipe', timeout: 60_000, cwd });
         const status: HarnessStatusUpdate = {
           type: 'harness_status',
@@ -330,30 +468,48 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
       break;
     }
 
+    case 'import_session_files':
+      handleImportSessionFiles(msg);
+      break;
+
+    case 'export_session_files':
+      handleExportSessionFiles(msg);
+      break;
+
     case 'launch_harness_session': {
       const { sessionId, harnessConfigId, prompt, composeDir, serviceName, permissionProfile, cols, rows } = msg;
-      const projectName = `pw-${harnessConfigId}`;
       const svc = serviceName || 'pw-server';
 
-      console.log(`[launcher] Launching harness session ${sessionId} in ${projectName}/${svc}`);
+      console.log(`[launcher] Launching harness session ${sessionId} in ${composeDir || harnessConfigId}/${svc}`);
 
       if (sessions.has(sessionId)) {
         console.log(`[launcher] Session ${sessionId} already running`);
         break;
       }
 
-      const { args: claudeArgs } = buildClaudeArgs(prompt, permissionProfile);
-      const dockerArgs = ['compose', '-p', projectName, 'exec', '-T', svc, 'claude', ...claudeArgs];
-      if (composeDir) {
-        dockerArgs.splice(1, 0, '--project-directory', composeDir);
-      }
+      const { command: innerCmd, args: innerArgs } = buildClaudeArgs(prompt, permissionProfile);
+      // Use -T (no TTY from docker) when tmux provides the TTY; omit when spawning directly via pty
+      const useTmux = isTmuxAvailable();
+      const execFlags = useTmux ? ['-T'] : [];
+      const dockerArgs = composeDir
+        ? ['compose', '--project-directory', composeDir, 'exec', ...execFlags, svc, innerCmd, ...innerArgs]
+        : ['compose', '-p', `pw-${harnessConfigId}`.toLowerCase(), 'exec', ...execFlags, svc, innerCmd, ...innerArgs];
 
-      const ptyProcess = pty.spawn('docker', dockerArgs, {
-        name: 'xterm-256color',
-        cols,
-        rows,
-        env: { ...process.env, TERM: 'xterm-256color' } as Record<string, string>,
-      });
+      let ptyProcess: pty.IPty;
+      let tmuxSessionName: string | undefined;
+
+      if (useTmux) {
+        const result = spawnInTmux({ sessionId, command: 'docker', args: dockerArgs, cwd: composeDir || os.homedir(), cols, rows });
+        ptyProcess = result.ptyProcess;
+        tmuxSessionName = result.tmuxSessionName;
+      } else {
+        ptyProcess = pty.spawn('docker', dockerArgs, {
+          name: 'xterm-256color',
+          cols,
+          rows,
+          env: { ...process.env, TERM: 'xterm-256color' } as Record<string, string>,
+        });
+      }
 
       const session: LocalSession = {
         sessionId,
@@ -369,6 +525,7 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
         type: 'launcher_session_started',
         sessionId,
         pid: ptyProcess.pid,
+        tmuxSessionName,
       };
       sendToServer(started);
 

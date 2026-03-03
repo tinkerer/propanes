@@ -458,6 +458,20 @@ agentRoutes.post('/sessions/:id/widget/close', async (c) => {
   }
 });
 
+agentRoutes.post('/sessions/:id/append-feedback', async (c) => {
+  const body = await c.req.json();
+  const { feedbackId } = body;
+  if (!feedbackId || typeof feedbackId !== 'string') {
+    return c.json({ error: 'feedbackId is required' }, 400);
+  }
+  try {
+    const result = await sendCommand(resolveId(c), 'appendFeedback', { feedbackId });
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 504);
+  }
+});
+
 agentRoutes.post('/sessions/:id/widget/submit', async (c) => {
   const body = await c.req.json();
   try {

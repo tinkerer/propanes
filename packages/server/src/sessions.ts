@@ -7,6 +7,47 @@ interface PendingRequest {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+export interface ActivityEntry {
+  ts: string;
+  command: string;
+  category: string;
+  ok: boolean;
+  durationMs: number;
+}
+
+const COMMAND_CATEGORIES: Record<string, string> = {
+  screenshot: 'screenshot',
+  execute: 'script',
+  navigate: 'navigation',
+  click: 'interaction',
+  type: 'interaction',
+  getDom: 'inspect',
+  getConsole: 'inspect',
+  getNetwork: 'inspect',
+  getEnvironment: 'inspect',
+  getPerformance: 'inspect',
+  moveMouse: 'mouse',
+  clickAt: 'mouse',
+  hover: 'mouse',
+  drag: 'mouse',
+  mouseDown: 'mouse',
+  mouseUp: 'mouse',
+  pressKey: 'keyboard',
+  keyDown: 'keyboard',
+  keyUp: 'keyboard',
+  typeText: 'keyboard',
+  waitFor: 'interaction',
+  openAdmin: 'widget',
+  closeAdmin: 'widget',
+  widgetSubmit: 'widget',
+};
+
+function categorize(command: string): string {
+  return COMMAND_CATEGORIES[command] || 'other';
+}
+
+const MAX_ACTIVITY_LOG = 200;
+
 export interface SessionInfo {
   sessionId: string;
   ws: WebSocket;
@@ -20,6 +61,7 @@ export interface SessionInfo {
   name: string | null;
   tags: string[];
   pendingRequests: Map<string, PendingRequest>;
+  activityLog: ActivityEntry[];
 }
 
 const sessions = new Map<string, SessionInfo>();
@@ -66,6 +108,7 @@ export function registerSession(sessionId: string, ws: WebSocket, meta: { userAg
     name: null,
     tags: [],
     pendingRequests: new Map(),
+    activityLog: [],
   };
 
   sessions.set(sessionId, session);
@@ -136,6 +179,11 @@ export function listSessions(): Omit<SessionInfo, 'ws' | 'pendingRequests'>[] {
   return result;
 }
 
+export function getSessionActivityLog(sessionId: string): ActivityEntry[] {
+  const session = getSession(sessionId);
+  return session?.activityLog ?? [];
+}
+
 export function sendCommand(sessionId: string, command: string, params: Record<string, unknown> = {}, timeoutMs?: number): Promise<unknown> {
   const session = getSession(sessionId);
   if (!session) {
@@ -143,14 +191,34 @@ export function sendCommand(sessionId: string, command: string, params: Record<s
   }
 
   const requestId = ulid();
+  const startTime = Date.now();
 
   return new Promise((resolve, reject) => {
+    const logActivity = (ok: boolean) => {
+      const entry: ActivityEntry = {
+        ts: new Date().toISOString(),
+        command,
+        category: categorize(command),
+        ok,
+        durationMs: Date.now() - startTime,
+      };
+      session.activityLog.push(entry);
+      if (session.activityLog.length > MAX_ACTIVITY_LOG) {
+        session.activityLog.splice(0, session.activityLog.length - MAX_ACTIVITY_LOG);
+      }
+    };
+
     const timeout = setTimeout(() => {
       session.pendingRequests.delete(requestId);
+      logActivity(false);
       reject(new Error('Request timed out'));
     }, timeoutMs ?? REQUEST_TIMEOUT);
 
-    session.pendingRequests.set(requestId, { resolve, reject, timeout });
+    session.pendingRequests.set(requestId, {
+      resolve: (value) => { logActivity(true); resolve(value); },
+      reject: (reason) => { logActivity(false); reject(reason); },
+      timeout,
+    });
 
     session.ws.send(JSON.stringify({
       type: 'command',

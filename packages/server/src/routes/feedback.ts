@@ -126,6 +126,124 @@ feedbackRoutes.post('/', async (c) => {
   return c.json({ id, appId, status: 'new', createdAt: now }, 201);
 });
 
+feedbackRoutes.post('/:id/append', async (c) => {
+  const feedbackId = c.req.param('id');
+  const existing = db
+    .select()
+    .from(schema.feedbackItems)
+    .where(eq(schema.feedbackItems.id, feedbackId))
+    .get();
+
+  if (!existing) {
+    return c.json({ error: 'Feedback not found' }, 404);
+  }
+
+  const contentType = c.req.header('content-type') || '';
+  let appendData: Record<string, unknown>;
+  const imageFiles: { data: ArrayBuffer; name: string; type: string }[] = [];
+
+  if (contentType.includes('multipart/form-data')) {
+    const formData = await c.req.formData();
+    const jsonStr = formData.get('feedback');
+    if (!jsonStr || typeof jsonStr !== 'string') {
+      return c.json({ error: 'Missing feedback field in form data' }, 400);
+    }
+    appendData = JSON.parse(jsonStr);
+    const files = formData.getAll('screenshots');
+    for (const file of files) {
+      if (file instanceof File) {
+        imageFiles.push({
+          data: await file.arrayBuffer(),
+          name: file.name,
+          type: file.type || 'image/png',
+        });
+      }
+    }
+  } else {
+    appendData = await c.req.json();
+  }
+
+  const apiKey = c.req.header('x-api-key');
+  const sessionId = appendData.sessionId as string | undefined;
+  const appId = resolveAppId(apiKey, sessionId, appendData.appId as string | undefined);
+  if (!appId || appId !== existing.appId) {
+    return c.json({ error: 'App mismatch or could not resolve application' }, 403);
+  }
+
+  const now = new Date().toISOString();
+  const updates: Record<string, unknown> = { updatedAt: now };
+
+  // Append description
+  const newDesc = (appendData.description as string || '').trim();
+  if (newDesc) {
+    const timestamp = new Date().toLocaleString();
+    const separator = `\n\n---\n**Note** (${timestamp}):\n`;
+    updates.description = (existing.description || '') + separator + newDesc;
+  }
+
+  // Merge data.selectedElements
+  const existingData = existing.data ? JSON.parse(existing.data as string) : {};
+  const appendSelectedElements = (appendData.data as any)?.selectedElements;
+  if (appendSelectedElements?.length) {
+    existingData.selectedElements = [
+      ...(existingData.selectedElements || []),
+      ...appendSelectedElements,
+    ];
+    updates.data = JSON.stringify(existingData);
+  }
+
+  // Merge context
+  const existingContext = existing.context ? JSON.parse(existing.context as string) : {};
+  const appendContext = appendData.context as Record<string, unknown> | undefined;
+  if (appendContext) {
+    if (appendContext.consoleLogs && Array.isArray(appendContext.consoleLogs)) {
+      existingContext.consoleLogs = [
+        ...(existingContext.consoleLogs || []),
+        ...appendContext.consoleLogs,
+      ];
+    }
+    if (appendContext.networkErrors && Array.isArray(appendContext.networkErrors)) {
+      existingContext.networkErrors = [
+        ...(existingContext.networkErrors || []),
+        ...appendContext.networkErrors,
+      ];
+    }
+    if (appendContext.performanceTiming) {
+      existingContext.performanceTiming = appendContext.performanceTiming;
+    }
+    if (appendContext.environment) {
+      existingContext.environment = appendContext.environment;
+    }
+    updates.context = JSON.stringify(existingContext);
+  }
+
+  await db.update(schema.feedbackItems)
+    .set(updates)
+    .where(eq(schema.feedbackItems.id, feedbackId))
+    .run();
+
+  // Handle screenshots
+  if (imageFiles.length > 0) {
+    await mkdir(UPLOAD_DIR, { recursive: true });
+    for (const file of imageFiles) {
+      const screenshotId = ulid();
+      const ext = file.type.split('/')[1] || 'png';
+      const filename = `${screenshotId}.${ext}`;
+      await writeFile(join(UPLOAD_DIR, filename), Buffer.from(file.data));
+      await db.insert(schema.feedbackScreenshots).values({
+        id: screenshotId,
+        feedbackId,
+        filename,
+        mimeType: file.type,
+        size: file.data.byteLength,
+        createdAt: now,
+      });
+    }
+  }
+
+  return c.json({ id: feedbackId, appended: true });
+});
+
 feedbackRoutes.post('/programmatic', async (c) => {
   const body = await c.req.json();
   const parsed = feedbackSubmitSchema.safeParse(body);

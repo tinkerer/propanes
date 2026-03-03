@@ -20,6 +20,7 @@ import {
   removeSessionFromLauncher,
   startPruneTimer,
   stopPruneTimer,
+  resolveLauncherResponse,
 } from './launcher-registry.js';
 import type { LauncherToServerMessage, LauncherRegistered } from '@prompt-widget/shared';
 import { registerAutoDispatch } from './auto-dispatch.js';
@@ -170,6 +171,9 @@ launcherWss.on('connection', (ws, req) => {
   ws.on('message', (raw) => {
     try {
       const msg: LauncherToServerMessage = JSON.parse(raw.toString());
+
+      // Check if this is a response to a pending sendAndWait request
+      if (resolveLauncherResponse(msg)) return;
 
       switch (msg.type) {
         case 'launcher_register': {
