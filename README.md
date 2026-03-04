@@ -119,6 +119,43 @@ Preact SPA at `/admin/`. Pages:
 - **Applications** — register apps with project directories, server URLs, hooks, API key management
 - **Live connections** — real-time view of active widget WebSocket sessions
 
+### Companion tabs
+
+Session terminals support companion tabs that render alongside agent output. Open companions from the session context menu or keyboard shortcuts.
+
+| Type | What it shows |
+|------|---------------|
+| **JSONL** | Conversation viewer — parsed Claude JSONL with message grouping, tool rendering, token usage |
+| **Feedback** | Feedback detail view for the dispatched item |
+| **Page iframe** | Live iframe of the session's target URL |
+| **Terminal** | Dedicated terminal companion for a session |
+| **Isolate** | Isolated component rendered in an iframe |
+| **URL iframe** | Arbitrary URL loaded in an iframe tab |
+
+Companions follow session focus — switching sessions in the left pane auto-switches associated companions in the right pane.
+
+### Structured JSONL viewer
+
+The JSONL companion renders Claude agent conversations as formatted, interactive message flows:
+
+- **Three view modes** — Terminal (raw PTY output), Structured (parsed messages), Split (55/45 side-by-side)
+- **Message grouping** — consecutive assistant/tool_use/tool_result messages bundle into collapsible groups showing model name, tool count, and token usage (input/output/cache)
+- **15+ tool renderers** — Bash (command + description), Edit (color-coded diff), Write/Read (syntax-highlighted), Glob/Grep (pattern + path), WebFetch/WebSearch, Task management, AskUserQuestion (with answer tracking), and more
+- **Tool result modes** — toggle between Code (syntax-highlighted), Markdown (rendered), and Raw views
+- **JSONL file browser** — dropdown to view individual files (main session, continuations, subagents) or merged view
+- **Subagent tracking** — system markers for multi-agent workflows with parent/child relationships
+- **Thinking blocks** — expandable extended reasoning sections
+- **Auto-scroll** — follows latest output; scrolling up disables auto-scroll
+
+### Live connections
+
+The Live Connections page (`/admin/#/live`) shows all active widget WebSocket sessions in real-time:
+
+- **Connection table** — status (active/idle), URL, browser type, viewport, user ID, connected duration, last activity time
+- **Activity tracking** — each session logs commands by category (screenshots, scripts, mouse, keyboard, navigation, inspections, widget interactions)
+- **Expandable rows** — click to see the last 50 commands with timestamp, duration, and success/failure status
+- **5-second polling** — connections update automatically; idle = no activity for 30+ seconds
+
 ### Sidebar session management
 
 The sidebar has a resizable sessions drawer with search and quick archive. Each session tab shows a status dot that opens a context menu with **Kill**, **Resolve** (marks feedback resolved and closes the session), **Resume**, **Close tab**, and **Archive** actions. Tabs can be numbered — hold `Ctrl+Shift` to see numbers and press `Ctrl+Shift+N` to jump.
@@ -192,16 +229,68 @@ Agent sessions run as PTY processes managed by the session service. Features:
 - **Copy tmux attach** — copy the `tmux attach` command to clipboard for manual reattachment
 - **Short ID lookup** — sessions and feedback can be referenced by short ID prefix
 
-## Distributed launchers
+## Remote machines and launchers
 
-For running agent sessions on remote machines:
+### Machine registry
+
+Register compute nodes (local, cloud, GPU boxes) via the admin UI or API. Each machine tracks:
+
+- **Capabilities** — Docker, tmux, Claude CLI support
+- **Tags** — for organization and filtering
+- **Online status** — computed live from connected launchers
+
+```
+GET/POST/PATCH/DELETE  /api/v1/admin/machines
+```
+
+### Distributed launchers
+
+Launchers are daemon processes that run on each machine, connecting to the server via WebSocket:
 
 ```bash
 # On the remote machine
-LAUNCHER_NAME=gpu-box MAX_SESSIONS=4 npm run start:launcher
+SERVER_WS_URL=ws://your-server:3001/ws/launcher \
+LAUNCHER_ID=gpu-box \
+MACHINE_ID=machine-uuid \
+MAX_SESSIONS=5 \
+npm run start:launcher
 ```
 
-The launcher connects via WebSocket to the server, registers its capabilities, and receives `spawn_session` commands. Output streams back through the WebSocket. Multiple launchers can connect; the server selects by availability.
+Each launcher:
+- Registers with the server on connect (capabilities, hostname, machine ID)
+- Spawns Claude CLI sessions as PTY processes when the server sends `spawn_session`
+- Streams output back via WebSocket with sequence-numbered packets
+- Heartbeats every 30s; server prunes stale launchers after 90s
+- Manages concurrent load (`MAX_SESSIONS`, default 5)
+
+Multiple launchers can connect. The server selects by availability via `findAvailableLauncher()`. Sessions on remote machines can be opened in a local Terminal.app window via SSH.
+
+```
+GET  /api/v1/launchers              List connected launchers with session counts
+```
+
+### Session transfer
+
+Completed sessions can be transferred between launchers. The server exports JSONL files (including continuations and subagents) plus artifact files (edited source files, plan files), then imports them on the target machine. This enables workflows where an agent starts on one machine and continues on another.
+
+### Harnesses (Docker containerized testing)
+
+Harnesses run isolated Docker Compose stacks with a browser, app, and pw-server for agent testing:
+
+```
+GET/POST/PATCH/DELETE  /api/v1/admin/harness-configs
+POST  /api/v1/admin/harness-configs/:id/start     Start Docker Compose stack
+POST  /api/v1/admin/harness-configs/:id/stop      Stop Docker Compose stack
+POST  /api/v1/admin/harness-configs/:id/session   Launch agent session inside container
+```
+
+Each harness config specifies:
+- **Machine** — which registered machine to deploy on
+- **App image** — Docker image for the application under test
+- **Ports/env** — container port mappings and environment variables
+- **Compose dir** — path to `docker-compose.yml` on the target machine
+
+When an agent endpoint has a `harnessConfigId`, dispatch automatically routes sessions to that harness's launcher. The admin UI shows managed configs and live unmanaged harnesses with start/stop/launch controls.
 
 ## REST API
 

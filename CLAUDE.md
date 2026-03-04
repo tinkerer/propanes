@@ -201,6 +201,72 @@ To open companions programmatically from admin code:
 
 Companion types are defined in `CompanionType` union in `packages/admin/src/lib/sessions.ts`. When adding a new companion type, update: `CompanionType`, `extractCompanionType()`, `renderTabContent()` in GlobalTerminalPanel, `PaneHeader`, `PaneTabBar`, `PopoutPanel.renderPanelTabContent()`, and `PopoutPanel.tabLabel()`.
 
+## Structured JSONL Viewer
+
+The JSONL companion tab renders Claude conversations as interactive message flows. Three view modes: Terminal (raw), Structured (parsed), Split (side-by-side). Key components:
+
+- `packages/admin/src/components/StructuredView.tsx` — message grouping (assistant groups with tool count/token usage, user inputs, standalone system messages)
+- `packages/admin/src/components/MessageRenderer.tsx` — 15+ tool renderers (Bash, Edit with diff, Write/Read with syntax highlighting, Glob/Grep, WebFetch/WebSearch, Task, AskUserQuestion, etc.)
+- `packages/admin/src/components/JsonlView.tsx` — JSONL data loading with incremental parsing, file filter support, 3s polling
+- `packages/admin/src/lib/output-parser.ts` — two parsers: `JsonOutputParser` (structured JSON from `--output-format stream-json`) and `TerminalOutputParser` (heuristic state machine for CLI output)
+- `packages/admin/src/components/SessionViewToggle.tsx` — view mode switching
+
+Tool results support three display modes: Code (syntax-highlighted), Markdown (rendered), Raw. Auto-truncates long output with expand button. Detects base64/URL images and renders thumbnails with lightbox.
+
+## Live Connections
+
+The Live Connections page (`/admin/#/live`) shows active widget WebSocket sessions. Source: `packages/admin/src/pages/LiveConnectionsPage.tsx`.
+
+- Polls `GET /api/v1/agent/sessions` every 5s
+- Shows status (active/idle), URL, browser, viewport, user, connected duration, last activity
+- Expandable rows show last 50 commands with timing, category, and success/failure
+- Activity auto-categorized into: screenshot, script, mouse, keyboard, interaction, navigation, inspect, widget, other
+- Backend tracking in `packages/server/src/sessions.ts` (in-memory registry, 200-entry activity log cap per session)
+
+## Remote Machines & Launchers
+
+### Machine registry
+Machines are registered compute nodes. Schema: `packages/server/src/db/schema.ts` (`machines` table). Routes: `packages/server/src/routes/machines.ts`.
+
+```bash
+# CRUD
+curl -s 'http://localhost:3001/api/v1/admin/machines' | python3 -m json.tool
+```
+
+### Launchers
+Daemon processes on remote machines. Source: `packages/server/src/launcher-daemon.ts` (daemon), `packages/server/src/launcher-registry.ts` (server-side registry).
+
+```bash
+# Start launcher on remote machine
+SERVER_WS_URL=ws://server:3001/ws/launcher LAUNCHER_ID=gpu-box MACHINE_ID=uuid MAX_SESSIONS=5 npm run start:launcher
+
+# List connected launchers
+curl -s 'http://localhost:3001/api/v1/launchers' | python3 -m json.tool
+```
+
+Launchers connect via WebSocket, spawn PTY sessions, stream output with seq-numbered packets, heartbeat every 30s.
+
+### Session transfer
+Sessions can be transferred between launchers via `transferSession()` in `packages/server/src/dispatch.ts`. Exports JSONL files (main + continuations + subagents) and artifact files, imports on target machine.
+
+## Harnesses (Docker Testing)
+
+Harness configs define Docker Compose stacks for isolated agent testing. Schema: `harnessConfigs` table. Routes: `packages/server/src/routes/harness.ts`.
+
+```bash
+# List harness configs
+curl -s 'http://localhost:3001/api/v1/admin/harness-configs' | python3 -m json.tool
+
+# Start/stop harness
+curl -s -X POST 'http://localhost:3001/api/v1/admin/harness-configs/CONFIG_ID/start'
+curl -s -X POST 'http://localhost:3001/api/v1/admin/harness-configs/CONFIG_ID/stop'
+
+# Launch session inside harness
+curl -s -X POST 'http://localhost:3001/api/v1/admin/harness-configs/CONFIG_ID/session'
+```
+
+Each config specifies machine, app image, ports, env vars, compose dir. When an agent endpoint has `harnessConfigId`, dispatch routes to that harness's launcher. Start/stop sends `StartHarness`/`StopHarness` to the launcher which runs `docker compose up -d`/`docker compose down`.
+
 ## Key Directories
 
 - `packages/server/src/routes/` — API route handlers (feedback, admin, aggregate, agent-sessions)
