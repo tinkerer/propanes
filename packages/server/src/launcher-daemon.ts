@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import * as path from 'node:path';
 import * as pty from 'node-pty';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import type {
   LauncherRegister,
   LauncherHeartbeat,
@@ -20,6 +20,14 @@ import type {
   ImportSessionFilesResult,
   ExportSessionFiles,
   ExportSessionFilesResult,
+  SyncCodebase,
+  SyncCodebaseResult,
+  ListTmuxSessionsResult,
+  CheckClaudeAuthResult,
+  CheckContainerClaudeResult,
+  LauncherHealthCheckResult,
+  SendKeysResult,
+  CapturePaneResult,
 } from '@prompt-widget/shared';
 import {
   isTmuxAvailable,
@@ -29,6 +37,8 @@ import {
   killTmuxSession,
   captureTmuxPane,
   listPwTmuxSessions,
+  listDefaultTmuxSessions,
+  attachDefaultTmuxSession,
   detachTmuxClients,
 } from './tmux-pty.js';
 import {
@@ -43,6 +53,7 @@ const LAUNCHER_NAME = process.env.LAUNCHER_NAME || os.hostname();
 const LAUNCHER_AUTH_TOKEN = process.env.LAUNCHER_AUTH_TOKEN || '';
 const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || '5', 10);
 const MACHINE_ID = process.env.MACHINE_ID || undefined;
+const LAUNCHER_VERSION = (globalThis as any).__LAUNCHER_VERSION__ || '0.1.0';
 
 const MAX_OUTPUT_LOG = 500 * 1024;
 
@@ -140,10 +151,11 @@ function spawnSession(params: {
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
+  tmuxTarget?: string;
   cols: number;
   rows: number;
 }): void {
-  const { sessionId, prompt, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, cols, rows } = params;
+  const { sessionId, prompt, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, tmuxTarget, cols, rows } = params;
   // Resolve ~ to actual home directory, and fall back to home if cwd doesn't exist
   let cwd = params.cwd;
   if (cwd === '~' || cwd.startsWith('~/')) {
@@ -153,6 +165,58 @@ function spawnSession(params: {
 
   if (sessions.has(sessionId)) {
     console.log(`[launcher] Session ${sessionId} already running`);
+    return;
+  }
+
+  // Attach to an existing tmux session on the default server
+  if (tmuxTarget) {
+    console.log(`[launcher] Attaching session ${sessionId} to tmux target ${tmuxTarget}`);
+    const result = attachDefaultTmuxSession({ sessionId, tmuxTarget, cols, rows });
+    const ptyProcess = result.ptyProcess;
+    const tmuxSessionName = result.tmuxSessionName;
+
+    const session: LocalSession = {
+      sessionId,
+      ptyProcess,
+      outputBuffer: '',
+      totalBytes: 0,
+      outputSeq: 0,
+      status: 'running',
+    };
+    sessions.set(sessionId, session);
+
+    const started: LauncherSessionStarted = {
+      type: 'launcher_session_started',
+      sessionId,
+      pid: ptyProcess.pid,
+      tmuxSessionName,
+    };
+    sendToServer(started);
+
+    ptyProcess.onData((data: string) => {
+      session.outputBuffer += data;
+      session.totalBytes += Buffer.byteLength(data);
+      if (session.outputBuffer.length > MAX_OUTPUT_LOG) {
+        session.outputBuffer = session.outputBuffer.slice(-MAX_OUTPUT_LOG);
+      }
+      sendSequenced(session, { kind: 'output', data });
+    });
+
+    ptyProcess.onExit(({ exitCode }) => {
+      session.status = exitCode === 0 ? 'completed' : 'failed';
+      sendSequenced(session, { kind: 'exit', exitCode, status: session.status });
+
+      const ended: LauncherSessionEnded = {
+        type: 'launcher_session_ended',
+        sessionId,
+        exitCode,
+        status: session.status,
+        outputLog: session.outputBuffer.slice(-MAX_OUTPUT_LOG),
+      };
+      sendToServer(ended);
+      sessions.delete(sessionId);
+    });
+
     return;
   }
 
@@ -322,6 +386,35 @@ function handleExportSessionFiles(msg: ExportSessionFiles): void {
   }
 }
 
+function handleSyncCodebase(msg: SyncCodebase): void {
+  const { sessionId, branch, projectDir, gitRemoteUrl } = msg;
+  try {
+    let cwd = projectDir;
+    if (cwd === '~' || cwd.startsWith('~/')) {
+      cwd = cwd === '~' ? os.homedir() : cwd.replace(/^~/, os.homedir());
+    }
+    if (!existsSync(cwd)) {
+      throw new Error(`Project directory ${cwd} does not exist`);
+    }
+
+    execSync(`git fetch "${gitRemoteUrl}" "${branch}"`, { cwd, stdio: 'pipe', timeout: 120_000 });
+    execSync(`git checkout FETCH_HEAD --force`, { cwd, stdio: 'pipe', timeout: 30_000 });
+
+    const result: SyncCodebaseResult = { type: 'sync_codebase_result', sessionId, ok: true };
+    sendToServer(result);
+    console.log(`[launcher] Synced codebase for session ${sessionId}: branch=${branch}`);
+  } catch (err: any) {
+    const result: SyncCodebaseResult = {
+      type: 'sync_codebase_result',
+      sessionId,
+      ok: false,
+      error: err.message?.slice(0, 500),
+    };
+    sendToServer(result);
+    console.error(`[launcher] Failed to sync codebase for session ${sessionId}:`, err.message);
+  }
+}
+
 function handleServerMessage(msg: ServerToLauncherMessage): void {
   switch (msg.type) {
     case 'launcher_registered':
@@ -341,6 +434,7 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
         allowedTools: msg.allowedTools,
         claudeSessionId: msg.claudeSessionId,
         resumeSessionId: msg.resumeSessionId,
+        tmuxTarget: msg.tmuxTarget,
         cols: msg.cols,
         rows: msg.rows,
       });
@@ -398,10 +492,25 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
         if (msg.targetAppUrl) env.TARGET_APP_URL = msg.targetAppUrl;
         env.HARNESS_CONFIG_ID = msg.harnessConfigId;
 
-        env.COMPOSE_PROJECT_NAME = `pw-${msg.harnessConfigId}`.toLowerCase();
+        const claudeHome = msg.claudeHomePath || path.join(os.homedir(), '.claude');
+        if (existsSync(claudeHome)) {
+          env.CLAUDE_HOME = claudeHome;
+        }
+        if (msg.anthropicApiKey) {
+          env.ANTHROPIC_API_KEY = msg.anthropicApiKey;
+        }
+
+        const projectName = `pw-${msg.harnessConfigId}`.toLowerCase();
+        env.COMPOSE_PROJECT_NAME = projectName;
         const envStr = Object.entries(env).map(([k, v]) => `${k}=${v}`).join(' ');
         const cwd = msg.composeDir || undefined;
-        execSync(`${envStr} docker compose up -d`, { stdio: 'pipe', timeout: 300_000, cwd });
+
+        // Tear down any leftover containers/ports from a previous run
+        try {
+          execSync(`docker compose -p ${projectName} down --remove-orphans`, { stdio: 'pipe', timeout: 60_000, cwd });
+        } catch {}
+
+        execSync(`${envStr} docker compose up -d --remove-orphans`, { stdio: 'pipe', timeout: 300_000, cwd });
 
         const status: HarnessStatusUpdate = {
           type: 'harness_status',
@@ -427,7 +536,7 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
       try {
         const cwd = msg.composeDir || undefined;
         const projectName = `pw-${msg.harnessConfigId}`.toLowerCase();
-        execSync(`docker compose -p ${projectName} down`, { stdio: 'pipe', timeout: 60_000, cwd });
+        execSync(`docker compose -p ${projectName} down --remove-orphans`, { stdio: 'pipe', timeout: 60_000, cwd });
         const status: HarnessStatusUpdate = {
           type: 'harness_status',
           harnessConfigId: msg.harnessConfigId,
@@ -436,6 +545,13 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
         sendToServer(status);
       } catch (err: any) {
         console.error(`[launcher] Failed to stop harness:`, err.message);
+        const status: HarnessStatusUpdate = {
+          type: 'harness_status',
+          harnessConfigId: msg.harnessConfigId,
+          status: 'error',
+          errorMessage: `Stop failed: ${err.message?.slice(0, 500)}`,
+        };
+        sendToServer(status);
       }
       break;
     }
@@ -447,6 +563,138 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
     case 'export_session_files':
       handleExportSessionFiles(msg);
       break;
+
+    case 'sync_codebase':
+      handleSyncCodebase(msg);
+      break;
+
+    case 'list_tmux_sessions': {
+      const tmuxSessions = listDefaultTmuxSessions();
+      const result: ListTmuxSessionsResult = {
+        type: 'list_tmux_sessions_result',
+        sessionId: msg.sessionId,
+        sessions: tmuxSessions,
+      };
+      sendToServer(result);
+      break;
+    }
+
+    case 'restart_launcher': {
+      console.log('[launcher] Restart requested, exiting for systemd restart...');
+      shutdown();
+      break;
+    }
+
+    case 'check_claude_auth': {
+      const claudeHome = msg.claudeHomePath || path.join(os.homedir(), '.claude');
+      const result: CheckClaudeAuthResult = {
+        type: 'check_claude_auth_result',
+        sessionId: msg.sessionId,
+        hasClaudeDir: false,
+        hasCredentials: false,
+      };
+      try {
+        result.hasClaudeDir = existsSync(claudeHome);
+        if (result.hasClaudeDir) {
+          const credFiles = ['.credentials.json', 'credentials.json', 'auth.json'];
+          result.hasCredentials = credFiles.some(f => existsSync(path.join(claudeHome, f)));
+        }
+        try {
+          result.claudeVersion = execSync('claude --version', { stdio: 'pipe', timeout: 10_000 }).toString().trim();
+        } catch {}
+      } catch (err: any) {
+        result.error = err.message;
+      }
+      sendToServer(result);
+      break;
+    }
+
+    case 'check_container_claude': {
+      const projectName = `pw-${msg.harnessConfigId}`.toLowerCase();
+      const svc = msg.serviceName || 'pw-server';
+      const cwd = msg.composeDir || undefined;
+      const result: CheckContainerClaudeResult = {
+        type: 'check_container_claude_result',
+        sessionId: msg.sessionId,
+        hasClaudeCli: false,
+        hasCredentials: false,
+      };
+      try {
+        const versionOut = execSync(
+          `docker compose -p ${projectName} exec -T ${svc} claude --version`,
+          { stdio: 'pipe', timeout: 15_000, cwd },
+        ).toString().trim();
+        result.hasClaudeCli = true;
+        result.claudeVersion = versionOut;
+      } catch {}
+      try {
+        const credCheck = execSync(
+          `docker compose -p ${projectName} exec -T ${svc} sh -c 'test -f /root/.claude/.credentials.json || test -f /root/.claude/credentials.json || test -f /root/.claude/auth.json'`,
+          { stdio: 'pipe', timeout: 10_000, cwd },
+        );
+        result.hasCredentials = true;
+      } catch {}
+      sendToServer(result);
+      break;
+    }
+
+    case 'health_check': {
+      const result: LauncherHealthCheckResult = {
+        type: 'health_check_result',
+        sessionId: msg.sessionId,
+        uptime: process.uptime(),
+        nodeVersion: process.version,
+        launcherVersion: LAUNCHER_VERSION,
+        platform: os.platform(),
+        arch: os.arch(),
+        memory: { total: os.totalmem(), free: os.freemem() },
+        activeSessions: sessions.size,
+        capabilities: {
+          maxSessions: MAX_SESSIONS,
+          hasTmux: isTmuxAvailable(),
+          hasClaudeCli: false,
+          hasDocker: false,
+        },
+        claudeHomeExists: existsSync(path.join(os.homedir(), '.claude')),
+      };
+      try { execSync('claude --version', { stdio: 'pipe', timeout: 5_000 }); result.capabilities.hasClaudeCli = true; result.claudeCliVersion = execSync('claude --version', { stdio: 'pipe', timeout: 5_000 }).toString().trim(); } catch {}
+      try { result.dockerVersion = execSync('docker --version', { stdio: 'pipe', timeout: 5_000 }).toString().trim(); result.capabilities.hasDocker = true; } catch {}
+      try { result.tmuxVersion = execSync('tmux -V', { stdio: 'pipe', timeout: 5_000 }).toString().trim(); } catch {}
+      sendToServer(result);
+      break;
+    }
+
+    case 'send_keys': {
+      const targetId = msg.tmuxTarget || msg.targetSessionId;
+      const tmuxName = targetId.startsWith('pw-') ? targetId : `pw-${targetId}`;
+      try {
+        const args = ['-L', 'prompt-widget', 'send-keys', '-t', tmuxName, msg.keys];
+        if (msg.enter !== false) args.push('Enter');
+        execFileSync('tmux', args, { stdio: 'pipe', timeout: 10_000 });
+        const result: SendKeysResult = { type: 'send_keys_result', sessionId: msg.sessionId, ok: true };
+        sendToServer(result);
+      } catch (err: any) {
+        const result: SendKeysResult = { type: 'send_keys_result', sessionId: msg.sessionId, ok: false, error: err.message?.slice(0, 500) };
+        sendToServer(result);
+      }
+      break;
+    }
+
+    case 'capture_pane': {
+      const targetId = msg.tmuxTarget || msg.targetSessionId;
+      const tmuxName = targetId.startsWith('pw-') ? targetId : `pw-${targetId}`;
+      try {
+        const args = ['-L', 'prompt-widget', 'capture-pane', '-t', tmuxName, '-p'];
+        if (msg.lastN) args.push('-S', String(-msg.lastN));
+        const content = execFileSync('tmux', args, { stdio: 'pipe', timeout: 10_000 }).toString();
+        const result: CapturePaneResult = { type: 'capture_pane_result', sessionId: msg.sessionId, ok: true, content };
+        sendToServer(result);
+      } catch (err: any) {
+        const result: CapturePaneResult = { type: 'capture_pane_result', sessionId: msg.sessionId, ok: false, error: err.message?.slice(0, 500) };
+        sendToServer(result);
+      }
+      break;
+    }
 
     case 'launch_harness_session': {
       const { sessionId, harnessConfigId, prompt, composeDir, serviceName, permissionProfile, cols, rows } = msg;
@@ -561,6 +809,7 @@ function connect(): void {
       authToken: LAUNCHER_AUTH_TOKEN,
       capabilities: caps,
       machineId: MACHINE_ID,
+      version: LAUNCHER_VERSION,
     };
     sendToServer(reg);
 

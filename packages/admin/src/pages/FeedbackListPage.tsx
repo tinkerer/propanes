@@ -2,7 +2,8 @@ import { signal, effect } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import { api } from '../lib/api.js';
 import { navigate, currentRoute } from '../lib/state.js';
-import { quickDispatch, quickDispatchState, batchQuickDispatch, openSession, sessionInputStates, startSessionPolling } from '../lib/sessions.js';
+import { openSession, sessionInputStates, startSessionPolling } from '../lib/sessions.js';
+import { openDispatchDialog, dispatchDialogResult } from '../components/DispatchDialog.js';
 import { copyWithTooltip } from '../lib/clipboard.js';
 import { DeletedItemsPanel, trackDeletion } from '../components/DeletedItemsPanel.js';
 
@@ -98,6 +99,14 @@ effect(() => {
   void currentRoute.value;
   void sortMode.value;
   loadFeedback();
+});
+
+effect(() => {
+  if (dispatchDialogResult.value === 'dispatched') {
+    loadFeedback();
+    selected.value = new Set();
+    dispatchDialogResult.value = 'idle';
+  }
 });
 
 function toggleSelect(id: string) {
@@ -217,8 +226,6 @@ function ActionCell({ item }: { item: any }) {
   const sessionStatus = item.latestSessionStatus;
   const isRunning = hasSession && sessionStatus === 'running';
   const isCompleted = hasSession && !isRunning;
-  const dispatchState = quickDispatchState.value[item.id] || 'idle';
-
   if (isRunning) {
     return (
       <div class="action-cell-group">
@@ -249,18 +256,12 @@ function ActionCell({ item }: { item: any }) {
         <button
           class="btn-dispatch-mini"
           title="Re-dispatch to agent"
-          disabled={dispatchState === 'loading'}
-          onClick={async (e) => {
+          onClick={(e) => {
             e.stopPropagation();
-            await quickDispatch(item.id, currentAppId.value);
-            if (quickDispatchState.value[item.id] === 'success') {
-              items.value = items.value.map((i) =>
-                i.id === item.id ? { ...i, status: 'dispatched' } : i
-              );
-            }
+            openDispatchDialog([item.id], currentAppId.value);
           }}
         >
-          {dispatchState === 'loading' ? <span class="spinner-sm" /> : '↻'}
+          ↻
         </button>
       </div>
     );
@@ -269,22 +270,13 @@ function ActionCell({ item }: { item: any }) {
   return (
     <button
       class="btn-dispatch-quick"
-      disabled={dispatchState === 'loading'}
-      onClick={async (e) => {
+      onClick={(e) => {
         e.stopPropagation();
-        await quickDispatch(item.id, currentAppId.value);
-        if (quickDispatchState.value[item.id] === 'success') {
-          items.value = items.value.map((i) =>
-            i.id === item.id ? { ...i, status: 'dispatched' } : i
-          );
-        }
+        openDispatchDialog([item.id], currentAppId.value);
       }}
       title="Dispatch to agent"
     >
-      {dispatchState === 'loading' && <span class="spinner-sm" />}
-      {dispatchState === 'success' && <span style="color:#22c55e">&#10003;</span>}
-      {dispatchState === 'error' && <span style="color:#ef4444">&#10005;</span>}
-      {dispatchState === 'idle' && <span>→</span>}
+      <span>→</span>
     </button>
   );
 }
@@ -483,9 +475,8 @@ export function FeedbackListPage({ appId }: { appId: string }) {
               <>
                 <button
                   class="btn btn-sm btn-primary"
-                  onClick={async () => {
-                    await batchQuickDispatch(Array.from(selected.value), currentAppId.value);
-                    loadFeedback();
+                  onClick={() => {
+                    openDispatchDialog(Array.from(selected.value), currentAppId.value);
                   }}
                 >
                   Dispatch

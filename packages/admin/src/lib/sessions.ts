@@ -1,6 +1,6 @@
 import { signal, effect } from '@preact/signals';
 import { api } from './api.js';
-import { autoNavigateToFeedback, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpLogs, autoCloseWaitingPanel } from './settings.js';
+import { autoNavigateToFeedback, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce } from './settings.js';
 import { navigate, selectedAppId } from './state.js';
 import { timed } from './perf.js';
 import type { ViewMode } from '../components/SessionViewToggle.js';
@@ -11,7 +11,7 @@ export const termPickerOpen = signal<TerminalPickerMode | null>(null);
 export function buildTmuxAttachCmd(sessionId: string, session?: { isRemote?: boolean; launcherHostname?: string }): string {
   const base = `TMUX= tmux -L prompt-widget attach-session -t pw-${sessionId}`;
   if (session?.isRemote && session?.launcherHostname) {
-    return `ssh ${session.launcherHostname} '${base}'`;
+    return `ssh -t ${session.launcherHostname} '${base}'`;
   }
   return base;
 }
@@ -46,6 +46,17 @@ export function toggleControlBarMinimized() {
 }
 
 export const AUTOJUMP_PANEL_ID = 'p-autojump';
+
+/** Set when user manually closes the autojump panel; prevents auto-reopen until user clicks handle */
+export const autoJumpDismissed = signal(false);
+/** Incremented to trigger a bounce animation on the autojump panel grab handle */
+export const handleBounceCounter = signal(0);
+
+export function triggerHandleBounce() {
+  if (autoJumpHandleBounce.value) {
+    handleBounceCounter.value++;
+  }
+}
 
 export interface AutoJumpSessionDims {
   docked: boolean;
@@ -740,6 +751,33 @@ export function removePanel(panelId: string) {
   popoutPanels.value = popoutPanels.value.filter((p) => p.id !== panelId);
 }
 
+export function swapDockedPanels(panelIdA: string, panelIdB: string) {
+  const panels = [...popoutPanels.value];
+  const idxA = panels.findIndex((p) => p.id === panelIdA);
+  const idxB = panels.findIndex((p) => p.id === panelIdB);
+  if (idxA === -1 || idxB === -1) return;
+  [panels[idxA], panels[idxB]] = [panels[idxB], panels[idxA]];
+  popoutPanels.value = panels;
+}
+
+export function reorderDockedPanel(panelId: string, beforePanelId: string | null) {
+  const panels = [...popoutPanels.value];
+  const idx = panels.findIndex((p) => p.id === panelId);
+  if (idx < 0) return;
+  const [panel] = panels.splice(idx, 1);
+  if (beforePanelId === null) {
+    panels.push(panel);
+  } else {
+    const targetIdx = panels.findIndex((p) => p.id === beforePanelId);
+    if (targetIdx < 0) {
+      panels.push(panel);
+    } else {
+      panels.splice(targetIdx, 0, panel);
+    }
+  }
+  popoutPanels.value = panels;
+}
+
 export function getDockedPanels(): PopoutPanelState[] {
   return popoutPanels.value.filter((p) => p.docked && p.visible);
 }
@@ -1055,7 +1093,10 @@ export function setTerminalsHeight(h: number) {
   localStorage.setItem('pw-terminals-height', JSON.stringify(clamped));
 }
 
-export async function loadAllSessions(includeDeleted = false) {
+export async function loadAllSessions(includeDeleted = false, isAutoPoll = false) {
+  if (isAutoPoll && lastTerminalInput.value > 0 && Date.now() - lastTerminalInput.value < 2000) {
+    return;
+  }
   sessionsLoading.value = true;
   try {
     const tabs = [...openTabs.value];
@@ -1065,7 +1106,18 @@ export async function loadAllSessions(includeDeleted = false) {
       }
     }
     const sessions = await timed('sessions:list', () => api.getAgentSessions(undefined, tabs.length > 0 ? tabs : undefined, includeDeleted));
-    allSessions.value = sessions;
+
+    // Only update the signal if something actually changed — avoids unnecessary
+    // Preact re-renders that cause keyboard lag during 5s polling.
+    const prevSessions = allSessions.value;
+    const sessionsChanged = sessions.length !== prevSessions.length || sessions.some((s, i) => {
+      const p = prevSessions[i];
+      return !p || s.id !== p.id || s.status !== p.status || s.inputState !== p.inputState
+        || s.paneTitle !== p.paneTitle || s.paneCommand !== p.paneCommand;
+    });
+    if (sessionsChanged) {
+      allSessions.value = sessions;
+    }
 
     // Update input states from API for all sessions
     const prev = sessionInputStates.value;
@@ -1090,10 +1142,28 @@ export async function loadAllSessions(includeDeleted = false) {
 
 export const includeDeletedInPolling = signal(false);
 
+/** Updated by AgentTerminal on each keystroke; polling skips when recent. */
+export const lastTerminalInput = signal(0);
+
 export function startSessionPolling(): () => void {
   loadAllSessions(includeDeletedInPolling.value);
-  const id = setInterval(() => loadAllSessions(includeDeletedInPolling.value), 5000);
-  return () => clearInterval(id);
+  let id = setInterval(() => loadAllSessions(includeDeletedInPolling.value, true), 5000);
+
+  function onVisibilityChange() {
+    clearInterval(id);
+    if (document.hidden) {
+      id = setInterval(() => loadAllSessions(includeDeletedInPolling.value, true), 30000);
+    } else {
+      loadAllSessions(includeDeletedInPolling.value);
+      id = setInterval(() => loadAllSessions(includeDeletedInPolling.value, true), 5000);
+    }
+  }
+  document.addEventListener('visibilitychange', onVisibilityChange);
+
+  return () => {
+    clearInterval(id);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
+  };
 }
 
 export function goToPreviousTab() {
@@ -1159,7 +1229,7 @@ export function openSession(sessionId: string) {
 }
 
 export function focusOrDockSession(sessionId: string) {
-  // 1. Already in a panel → activate + focus it there
+  // 1. Already in a popout panel → activate + focus it there
   const panel = findPanelForSession(sessionId);
   if (panel) {
     if (panel.activeSessionId === sessionId && panel.visible) {
@@ -1174,7 +1244,20 @@ export function focusOrDockSession(sessionId: string) {
     focusSessionTerminal(sessionId);
     return;
   }
-  // 2. Dock into the sidebar panel
+  // 2. Already visible in split right pane → activate there
+  if (splitEnabled.value && rightPaneTabs.value.includes(sessionId)) {
+    rightPaneActiveId.value = sessionId;
+    persistSplitState();
+    focusSessionTerminal(sessionId);
+    return;
+  }
+  // 3. Already open in main panel → activate there
+  if (openTabs.value.includes(sessionId)) {
+    openSession(sessionId);
+    focusSessionTerminal(sessionId);
+    return;
+  }
+  // 4. Dock into the sidebar panel
   const ajPanel = popoutPanels.value.find((p) => p.id === AUTOJUMP_PANEL_ID);
   if (ajPanel) {
     const ids = ajPanel.sessionIds.includes(sessionId)
@@ -1339,7 +1422,7 @@ export async function resumeSession(sessionId: string): Promise<string | null> {
   }
 }
 
-export async function spawnTerminal(appId?: string | null, launcherId?: string, harnessConfigId?: string, permissionProfile?: string) {
+export async function spawnTerminal(appId?: string | null, launcherId?: string, harnessConfigId?: string, permissionProfile?: string, skipOpen?: boolean) {
   try {
     const data: { appId?: string; launcherId?: string; harnessConfigId?: string; permissionProfile?: string } = {};
     if (appId && appId !== '__unlinked__') data.appId = appId;
@@ -1347,7 +1430,7 @@ export async function spawnTerminal(appId?: string | null, launcherId?: string, 
     if (harnessConfigId) data.harnessConfigId = harnessConfigId;
     if (permissionProfile) data.permissionProfile = permissionProfile;
     const { sessionId } = await api.spawnTerminal(data);
-    openSession(sessionId);
+    if (!skipOpen) openSession(sessionId);
     loadAllSessions();
     return sessionId;
   } catch (err: any) {
@@ -1356,12 +1439,12 @@ export async function spawnTerminal(appId?: string | null, launcherId?: string, 
   }
 }
 
-export async function attachTmuxSession(tmuxTarget: string, appId?: string | null) {
+export async function attachTmuxSession(tmuxTarget: string, appId?: string | null, skipOpen?: boolean) {
   try {
     const data: { tmuxTarget: string; appId?: string } = { tmuxTarget };
     if (appId && appId !== '__unlinked__') data.appId = appId;
     const { sessionId } = await api.attachTmuxSession(data);
-    openSession(sessionId);
+    if (!skipOpen) openSession(sessionId);
     loadAllSessions();
     return sessionId;
   } catch (err: any) {
@@ -1629,6 +1712,7 @@ export function syncAutoJumpPanel() {
       saveAutoJumpDimsForActiveSession();
       const activeSession = existing.activeSessionId;
       removePanel(AUTOJUMP_PANEL_ID);
+      autoJumpDismissed.value = false;
       if (activeSession && openTabs.value.includes(activeSession)) {
         transferAutoJumpToGlobalPanel(activeSession);
       }
@@ -1658,7 +1742,18 @@ export function syncAutoJumpPanel() {
   }
 
   // Only auto-add waiting sessions when auto-jump is enabled
-  if (!autoJumpWaiting.value) return;
+  if (!autoJumpWaiting.value) {
+    // Even with auto-jump off, bounce the handle if the panel exists and has new waiting sessions
+    if (existing && waitingIds.length > 0) {
+      const newWaiting = waitingIds.filter((id) => !existing.sessionIds.includes(id));
+      if (newWaiting.length > 0) {
+        updatePanel(AUTOJUMP_PANEL_ID, { sessionIds: [...new Set([...existing.sessionIds, ...newWaiting])] });
+        persistPopoutState();
+        if (!existing.visible) triggerHandleBounce();
+      }
+    }
+    return;
+  }
 
   if (waitingIds.length === 0) return;
 
@@ -1666,13 +1761,14 @@ export function syncAutoJumpPanel() {
     // Don't create the panel if all waiting sessions are already visible in tabs
     const allInTabs = waitingIds.every((id) => id === activeTabId.value);
     if (allInTabs) return;
+    const dismissed = autoJumpDismissed.value;
     const saved = autoJumpSessionDims.value[waitingIds[0]];
     const panel: PopoutPanelState = {
       id: AUTOJUMP_PANEL_ID,
       sessionIds: waitingIds,
       activeSessionId: waitingIds[0],
       docked: saved?.docked ?? true,
-      visible: true,
+      visible: !dismissed,
       floatingRect: saved?.floatingRect ?? { x: 200, y: 100, w: 500, h: 500 },
       dockedHeight: saved?.dockedHeight ?? 500,
       dockedWidth: saved?.dockedWidth ?? 500,
@@ -1685,7 +1781,8 @@ export function syncAutoJumpPanel() {
       autoOpened: true,
     };
     popoutPanels.value = [panel, ...popoutPanels.value];
-    queueMicrotask(() => bringToFront(AUTOJUMP_PANEL_ID));
+    if (!dismissed) queueMicrotask(() => bringToFront(AUTOJUMP_PANEL_ID));
+    if (dismissed) queueMicrotask(() => triggerHandleBounce());
     persistPopoutState();
     return;
   }
@@ -1704,18 +1801,26 @@ export function syncAutoJumpPanel() {
   const allVisibleElsewhere = visibleInTab && waitingIds.length === 1;
   const shouldShow = !existing.visible && !allVisibleElsewhere;
 
-  if (idsChanged || shouldShow) {
+  // If user dismissed the panel, don't reopen — bounce the handle instead
+  const wantShow = shouldShow && !autoJumpDismissed.value;
+  const wantBounce = shouldShow && autoJumpDismissed.value;
+
+  if (idsChanged || wantShow) {
     const newActive = activeStillPresent ? existing.activeSessionId : merged[0];
     const activeChanged = newActive !== existing.activeSessionId;
     if (activeChanged) saveAutoJumpDimsForActiveSession();
     updatePanel(AUTOJUMP_PANEL_ID, {
       sessionIds: merged,
       activeSessionId: newActive,
-      ...(shouldShow ? { visible: true, autoOpened: true } : {}),
+      ...(wantShow ? { visible: true, autoOpened: true } : {}),
     });
     if (activeChanged) applyAutoJumpDimsForSession(newActive);
-    if (shouldShow) queueMicrotask(() => bringToFront(AUTOJUMP_PANEL_ID));
+    if (wantShow) queueMicrotask(() => bringToFront(AUTOJUMP_PANEL_ID));
     persistPopoutState();
+  }
+
+  if (wantBounce) {
+    triggerHandleBounce();
   }
 }
 
@@ -1723,6 +1828,8 @@ export function toggleAutoJumpPanel() {
   const existing = popoutPanels.value.find((p) => p.id === AUTOJUMP_PANEL_ID);
   if (existing) {
     const nowVisible = !existing.visible;
+    if (nowVisible) autoJumpDismissed.value = false;
+    else autoJumpDismissed.value = true;
     updatePanel(AUTOJUMP_PANEL_ID, { visible: nowVisible, ...(nowVisible ? { autoOpened: false } : {}) });
     persistPopoutState();
   }
@@ -1839,11 +1946,6 @@ export function getTerminalCompanion(sessionId: string): string | undefined {
 export function setTerminalCompanion(parentSessionId: string, termSessionId: string) {
   terminalCompanionMap.value = { ...terminalCompanionMap.value, [parentSessionId]: termSessionId };
   persistTerminalCompanionMap();
-  // Ensure the terminal session is in the sidebar (openTabs)
-  if (!openTabs.value.includes(termSessionId)) {
-    openTabs.value = [...openTabs.value, termSessionId];
-    persistTabs();
-  }
 }
 
 /** Store mapping + open companion in the global (bottom) panel right pane */
@@ -1855,6 +1957,11 @@ export function setTerminalCompanionAndOpen(parentSessionId: string, termSession
     persistCompanions();
   }
   openSessionInRightPane(companionTabId(parentSessionId, 'terminal'));
+  // Keep the parent session as the active left-pane tab
+  if (activeTabId.value !== parentSessionId) {
+    activeTabId.value = parentSessionId;
+    persistTabs();
+  }
 }
 
 export function removeTerminalCompanion(sessionId: string) {
@@ -1953,7 +2060,11 @@ export function openIsolateCompanion(componentName: string) {
 }
 
 export function openUrlCompanion(url: string) {
-  const tabId = `url:${url}`;
+  let normalized = url.trim();
+  if (normalized && !/^https?:\/\//i.test(normalized)) {
+    normalized = `http://${normalized}`;
+  }
+  const tabId = `url:${normalized}`;
   if (!openTabs.value.includes(tabId)) {
     openTabs.value = [...openTabs.value, tabId];
   }

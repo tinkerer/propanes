@@ -153,6 +153,12 @@ export function runMigrations() {
     `ALTER TABLE agent_sessions ADD COLUMN companion_session_id TEXT`,
     `ALTER TABLE harness_configs ADD COLUMN compose_dir TEXT`,
     `ALTER TABLE machines ADD COLUMN default_cwd TEXT`,
+    `ALTER TABLE harness_configs ADD COLUMN host_terminal_access INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE harness_configs ADD COLUMN claude_home_path TEXT`,
+    `ALTER TABLE harness_configs ADD COLUMN anthropic_api_key TEXT`,
+    `ALTER TABLE agent_endpoints ADD COLUMN sprite_config_id TEXT`,
+    `ALTER TABLE agent_sessions ADD COLUMN sprite_config_id TEXT`,
+    `ALTER TABLE agent_sessions ADD COLUMN sprite_exec_session_id TEXT`,
   ];
 
   for (const stmt of alterStatements) {
@@ -298,6 +304,28 @@ export function runMigrations() {
 
     CREATE INDEX IF NOT EXISTS idx_harness_configs_app ON harness_configs(app_id);
     CREATE INDEX IF NOT EXISTS idx_harness_configs_machine ON harness_configs(machine_id);
+  `);
+
+  // Sprite configs table
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS sprite_configs (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      sprite_name TEXT NOT NULL,
+      token TEXT,
+      status TEXT NOT NULL DEFAULT 'unknown',
+      sprite_url TEXT,
+      sprite_id TEXT,
+      max_sessions INTEGER NOT NULL DEFAULT 3,
+      default_cwd TEXT,
+      app_id TEXT REFERENCES applications(id) ON DELETE SET NULL,
+      last_checked_at TEXT,
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sprite_configs_app ON sprite_configs(app_id);
   `);
 
   // JSONL continuation tracking

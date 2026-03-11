@@ -102,7 +102,7 @@ export function MachinesPage() {
   useEffect(() => {
     loadMachines();
     ensureTargetsLoaded();
-    const interval = setInterval(loadMachines, 10_000);
+    const interval = setInterval(() => { loadMachines(); ensureTargetsLoaded(); }, 10_000);
     return () => clearInterval(interval);
   }, []);
 

@@ -8,7 +8,7 @@ services:
       - "${SERVER_PORT:-3001}:3001"
     volumes:
       - pw-data:/data
-      - pw-claude-config:/root/.claude
+      - ${CLAUDE_HOME:-pw-claude-config}:/root/.claude
     environment:
       - PORT=3001
       - DB_PATH=/data/prompt-widget.db
@@ -16,9 +16,10 @@ services:
       - HARNESS_ID=${HARNESS_ID:-docker-harness}
       - HARNESS_NAME=${HARNESS_NAME:-Docker Harness}
       - TARGET_APP_URL=${TARGET_APP_URL:-http://pw-app:80}
-      - BROWSER_MCP_URL=${BROWSER_MCP_URL:-http://pw-browser:8931/mcp}
+      - BROWSER_MCP_URL=${BROWSER_MCP_URL:-http://pw-browser:8931/sse}
       - APP_IMAGE=${APP_IMAGE:-}
       - APP_PORT=${APP_PORT:-8080}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     networks:
       - pw-net
     healthcheck:

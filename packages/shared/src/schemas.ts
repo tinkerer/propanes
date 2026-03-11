@@ -58,6 +58,7 @@ export const feedbackSubmitSchema = z.object({
   tags: z.array(z.string().max(50)).max(20).optional(),
   autoDispatch: z.boolean().optional(),
   appId: z.string().optional(),
+  launcherId: z.string().optional(),
 });
 
 export type FeedbackSubmitInput = z.infer<typeof feedbackSubmitSchema>;

@@ -5,7 +5,7 @@ import { navigate } from '../lib/state.js';
 import { openSession, resumeSession } from '../lib/sessions.js';
 import { copyWithTooltip } from '../lib/clipboard.js';
 import { CropEditor } from '../components/CropEditor.js';
-import { DispatchTargetSelect } from '../components/DispatchTargetSelect.js';
+import { DispatchTargetButton } from '../components/DispatchPicker.js';
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -388,7 +388,7 @@ export function FeedbackDetailPage({ id, appId }: { id: string; appId: string | 
               onInput={(e) => (dispatchInstructions.value = (e.target as HTMLInputElement).value)}
               onKeyDown={(e) => { if (e.key === 'Enter') doDispatch(); }}
             />
-            <DispatchTargetSelect
+            <DispatchTargetButton
               value={dispatchTarget.value}
               onChange={(id) => { dispatchTarget.value = id || ''; }}
             />

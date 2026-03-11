@@ -97,7 +97,7 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  spawnTerminal: (data?: { cwd?: string; appId?: string; launcherId?: string; harnessConfigId?: string; permissionProfile?: string }) =>
+  spawnTerminal: (data?: { cwd?: string; appId?: string; launcherId?: string; harnessConfigId?: string; permissionProfile?: string; tmuxTarget?: string }) =>
     request<{ sessionId: string }>('/admin/terminal', {
       method: 'POST',
       body: JSON.stringify(data || {}),
@@ -114,6 +114,7 @@ export const api = {
       harnessConfigId: string | null;
       activeSessions: number;
       maxSessions: number;
+      online: boolean;
     }> }>('/admin/dispatch-targets'),
 
   listTmuxSessions: () =>
@@ -162,7 +163,7 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  setupAssist: (data: { request: string; entityType: 'machine' | 'harness' | 'agent'; entityId?: string }) =>
+  setupAssist: (data: { request: string; entityType: 'machine' | 'harness' | 'agent' | 'sprite'; entityId?: string }) =>
     request<{ sessionId: string; feedbackId: string; companionSessionId?: string }>('/admin/setup-assist', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -186,6 +187,41 @@ export const api = {
     }),
 
   // Agent sessions
+  searchSessionContent: (data: { query?: string; errorsOnly?: boolean; limit?: number }) =>
+    request<{
+      results: Array<{
+        sessionId: string;
+        feedbackTitle: string | null;
+        agentName: string | null;
+        status: string;
+        createdAt: string | null;
+        errorCount: number;
+        matches: Array<{ line: number; content: string; isError: boolean; toolName?: string }>;
+      }>;
+      total: number;
+    }>('/admin/agent-sessions/search-content', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  getSessionErrorSummary: () =>
+    request<{
+      sessions: Array<{
+        sessionId: string;
+        feedbackTitle: string | null;
+        agentName: string | null;
+        status: string;
+        errorCount: number;
+        errors: Array<{ content: string; toolName?: string }>;
+      }>;
+      totalErrorSessions: number;
+      consoleErrors?: Array<{
+        widgetSessionId: string;
+        url: string | null;
+        errors: Array<{ level: string; message: string; source?: string }>;
+      }>;
+    }>('/admin/agent-sessions/error-summary'),
+
   getAgentSessions: (feedbackId?: string, includeIds?: string[], includeDeleted?: boolean) => {
     const params = new URLSearchParams();
     if (feedbackId) params.set('feedbackId', feedbackId);
@@ -250,6 +286,18 @@ export const api = {
   tailJsonl: (id: string) =>
     request<{ sessionId: string; jsonlPath: string }>(`/admin/agent-sessions/${id}/tail-jsonl`, {
       method: 'POST',
+    }),
+
+  sendKeys: (id: string, data: { keys: string; enter?: boolean; tmuxTarget?: string }) =>
+    request<{ ok: boolean; error?: string }>(`/admin/agent-sessions/${id}/send-keys`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  capturePane: (id: string, data?: { lastN?: number; tmuxTarget?: string }) =>
+    request<{ ok: boolean; content?: string; error?: string }>(`/admin/agent-sessions/${id}/capture-pane`, {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
     }),
 
   // Aggregate / clustering
@@ -367,6 +415,34 @@ export const api = {
   deleteLauncher: (id: string) =>
     request<{ ok: boolean; id: string }>(`/admin/launchers/${id}`, { method: 'DELETE' }),
 
+  restartLauncher: (id: string) =>
+    request<{ ok: boolean }>(`/admin/launchers/${id}/restart`, { method: 'POST' }),
+
+  getSystemdTemplate: async (id: string): Promise<string> => {
+    const token = getToken();
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetch(`${BASE}/admin/launchers/${id}/systemd-template`, { headers });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  },
+
+  getLauncherHealth: (id: string) =>
+    request<{
+      uptime: number;
+      nodeVersion: string;
+      launcherVersion: string;
+      platform: string;
+      arch: string;
+      memory: { total: number; free: number };
+      activeSessions: number;
+      capabilities: { maxSessions: number; hasTmux: boolean; hasClaudeCli: boolean; hasDocker?: boolean };
+      claudeCliVersion?: string;
+      dockerVersion?: string;
+      tmuxVersion?: string;
+      claudeHomeExists: boolean;
+    }>(`/admin/launchers/${id}/health`),
+
   // Machines
   getMachines: () => request<any[]>('/admin/machines'),
 
@@ -414,6 +490,61 @@ export const api = {
 
   launchHarnessSession: (id: string, data?: { prompt?: string; permissionProfile?: string; serviceName?: string }) =>
     request<{ ok: boolean; sessionId: string }>(`/admin/harness-configs/${id}/session`, {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    }),
+
+  checkClaudeAuth: (harnessConfigId: string) =>
+    request<{
+      hasClaudeDir: boolean;
+      hasCredentials: boolean;
+      claudeVersion?: string;
+      error?: string;
+    }>(`/admin/harness-configs/${harnessConfigId}/check-auth`, { method: 'POST' }),
+
+  checkContainerClaude: (harnessConfigId: string) =>
+    request<{
+      hasClaudeCli: boolean;
+      claudeVersion?: string;
+      hasCredentials: boolean;
+      error?: string;
+    }>(`/admin/harness-configs/${harnessConfigId}/check-container-claude`, { method: 'POST' }),
+
+  listHostTmuxSessions: (harnessConfigId: string) =>
+    request<{ sessions: Array<{ name: string; windows: number; created: string; attached: boolean }> }>(`/admin/harness-configs/${harnessConfigId}/host-tmux-sessions`),
+
+  // Sprite configs
+  getSpriteConfigs: (appId?: string) => {
+    const qs = appId ? `?appId=${encodeURIComponent(appId)}` : '';
+    return request<any[]>(`/admin/sprite-configs${qs}`);
+  },
+
+  createSpriteConfig: (data: Record<string, unknown>) =>
+    request<any>('/admin/sprite-configs', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateSpriteConfig: (id: string, data: Record<string, unknown>) =>
+    request<any>(`/admin/sprite-configs/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  deleteSpriteConfig: (id: string) =>
+    request<{ ok: boolean; id: string }>(`/admin/sprite-configs/${id}`, { method: 'DELETE' }),
+
+  provisionSprite: (id: string) =>
+    request<{ ok: boolean; status: string; spriteId?: string }>(`/admin/sprite-configs/${id}/provision`, { method: 'POST' }),
+
+  destroySprite: (id: string) =>
+    request<{ ok: boolean; status: string }>(`/admin/sprite-configs/${id}/destroy`, { method: 'POST' }),
+
+  checkSpriteStatus: (id: string) =>
+    request<{ ok: boolean; status: string; spriteId?: string }>(`/admin/sprite-configs/${id}/status`, { method: 'POST' }),
+
+  launchSpriteSession: (id: string, data?: { prompt?: string; permissionProfile?: string }) =>
+    request<{ ok: boolean; sessionId: string }>(`/admin/sprite-configs/${id}/session`, {
       method: 'POST',
       body: JSON.stringify(data || {}),
     }),

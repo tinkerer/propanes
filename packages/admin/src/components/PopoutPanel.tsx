@@ -46,13 +46,15 @@ import {
   toggleAlwaysOnTop,
   switchAutoJumpActiveSession,
   getTerminalCompanion,
-  setTerminalCompanion,
   terminalCompanionMap,
-  spawnTerminal,
-  attachTmuxSession,
-  loadAllSessions,
   focusSessionTerminal,
   buildTmuxAttachCmd,
+  openUrlCompanion,
+  autoJumpDismissed,
+  handleBounceCounter,
+  reorderDockedPanel,
+  swapDockedPanels,
+  termPickerOpen,
 } from '../lib/sessions.js';
 import { startTabDrag } from '../lib/tab-drag.js';
 import { ctrlShiftHeld } from '../lib/shortcuts.js';
@@ -66,14 +68,13 @@ import { IsolateCompanionView } from './IsolateCompanionView.js';
 import { TerminalCompanionView } from './TerminalCompanionView.js';
 
 export const popoutIdMenuOpen = signal<string | null>(null);
-const popoutTermPickerSessionId = signal<string | null>(null);
-const popoutTermPickerTmux = signal<{ name: string; windows: number; created: string; attached: boolean }[]>([]);
-const popoutTermPickerLoading = signal(false);
 const popoutStatusMenuOpen = signal<{ sessionId: string; panelId: string; x: number; y: number } | null>(null);
 const popoutHotkeyMenuOpen = signal<{ sessionId: string; panelId: string; x: number; y: number } | null>(null);
 export const popoutWindowMenuOpen = signal<string | null>(null);
 const renamingSessionId = signal<string | null>(null);
 const renameValue = signal('');
+const reorderDragOffset = signal<{ panelId: string; offsetY: number } | null>(null);
+const companionMenuOpen = signal<string | null>(null);
 
 const SNAP_THRESHOLD = 20;
 const UNDOCK_THRESHOLD = 40;
@@ -136,73 +137,6 @@ function PanelTabBadge({ tabNum }: { tabNum: number }) {
   return <span class="tab-number-badge">{tabNum}</span>;
 }
 
-function PopoutTerminalCompanionPicker({ sessionId, panelId, sessionMap, onClose }: { sessionId: string; panelId: string; sessionMap: Map<string, any>; onClose: () => void }) {
-  const loading = popoutTermPickerLoading.value;
-  const tmuxSessions = popoutTermPickerTmux.value;
-  const sessions = allSessions.value;
-  const existingTerminals = sessions.filter((s: any) => s.permissionProfile === 'plain' && s.id !== sessionId && s.status !== 'failed');
-
-  async function pickExisting(termSessionId: string) {
-    setTerminalCompanion(sessionId, termSessionId);
-    togglePanelCompanion(panelId, sessionId, 'terminal');
-    onClose();
-  }
-
-  async function pickNew() {
-    const newId = await spawnTerminal(null);
-    if (newId) {
-      await loadAllSessions();
-      setTerminalCompanion(sessionId, newId);
-      togglePanelCompanion(panelId, sessionId, 'terminal');
-    }
-    onClose();
-  }
-
-  async function pickTmux(tmuxName: string) {
-    const newId = await attachTmuxSession(tmuxName);
-    if (newId) {
-      await loadAllSessions();
-      setTerminalCompanion(sessionId, newId);
-      togglePanelCompanion(panelId, sessionId, 'terminal');
-    }
-    onClose();
-  }
-
-  return (
-    <div class="id-dropdown-menu term-picker-menu" style="top:100%;left:0;min-width:200px" onClick={(e: any) => e.stopPropagation()}>
-      <button onClick={pickNew}>New terminal</button>
-      {existingTerminals.length > 0 && (
-        <>
-          <div class="id-dropdown-separator" />
-          <div style="font-size:10px;color:var(--pw-text-muted);padding:2px 8px">Open terminals</div>
-          {existingTerminals.map((s: any) => {
-            const label = s.paneCommand
-              ? `${s.paneCommand}:${s.panePath || ''}`
-              : (s.paneTitle || `pw-${s.id.slice(-6)}`);
-            return (
-              <button key={s.id} onClick={() => pickExisting(s.id)} title={s.id}>
-                {label}
-              </button>
-            );
-          })}
-        </>
-      )}
-      {(loading || tmuxSessions.length > 0) && <div class="id-dropdown-separator" />}
-      {loading && <div style="font-size:10px;color:var(--pw-text-muted);padding:2px 8px">Loading tmux sessions...</div>}
-      {!loading && tmuxSessions.length > 0 && (
-        <>
-          <div style="font-size:10px;color:var(--pw-text-muted);padding:2px 8px">Attach tmux session</div>
-          {tmuxSessions.map((s: any) => (
-            <button key={s.name} onClick={() => pickTmux(s.name)} title={`${s.windows} window${s.windows !== 1 ? 's' : ''}${s.attached ? ', attached' : ''}`}>
-              {s.name}
-              <span style="float:right;opacity:0.5;font-size:10px">{s.windows}w{s.attached ? ' \u2022' : ''}</span>
-            </button>
-          ))}
-        </>
-      )}
-    </div>
-  );
-}
 
 function renderPanelTabContent(
   sid: string,
@@ -234,7 +168,9 @@ function renderPanelTabContent(
       ) : isTerminal ? (
         (() => {
           const termSid = getTerminalCompanion(realSid);
-          return termSid ? <TerminalCompanionView companionSessionId={termSid} /> : <div class="companion-error">No companion terminal</div>;
+          return termSid === '__loading__'
+            ? <div class="companion-loading">Starting terminal...</div>
+            : termSid ? <TerminalCompanionView companionSessionId={termSid} /> : <div class="companion-error">No companion terminal</div>;
         })()
       ) : (
         <SessionViewToggle
@@ -306,6 +242,9 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
         : { position: 'fixed' as const, right: 0, top: panelTop, width: panel.dockedWidth, height: panel.dockedHeight, zIndex: panelZIdx }
     : { position: 'fixed' as const, left: panel.floatingRect.x, top: panel.floatingRect.y, width: panel.floatingRect.w, height: isMinimized ? 34 : panel.floatingRect.h, zIndex: panelZIdx };
 
+  const dragOff = reorderDragOffset.value;
+  const isReorderDragging = docked && dragOff?.panelId === panel.id;
+
   const onHeaderDragStart = useCallback((e: MouseEvent) => {
     if ((e.target as HTMLElement).closest('button, select, a, .id-dropdown-wrapper, .session-status-dot')) return;
     e.preventDefault();
@@ -315,7 +254,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
     const cp = popoutPanels.value.find((p) => p.id === panel.id);
     if (!cp) return;
     const fr = cp.floatingRect;
-    startPos.current = { mx: e.clientX, my: e.clientY, x: fr.x, y: fr.y, w: fr.w, h: fr.h, dockedHeight: cp.dockedHeight, dockedTopOffset: 0, dockedBaseTop: 0 };
+    startPos.current = { mx: e.clientX, my: e.clientY, x: fr.x, y: fr.y, w: fr.w, h: fr.h, dockedHeight: cp.dockedHeight, dockedTopOffset: 0, dockedBaseTop: cp.docked ? (e.clientY - getDockedPanelTop(panel.id)) : 0 };
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current) return;
       const dx = ev.clientX - startPos.current.mx;
@@ -334,6 +273,35 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
             floatingRect: { x: ev.clientX - w / 2, y: ev.clientY - 16, w, h },
           });
           startPos.current = { ...startPos.current, mx: ev.clientX, my: ev.clientY, x: ev.clientX - w / 2, y: ev.clientY - 16, w, h, dockedHeight: h };
+          reorderDragOffset.value = null;
+          document.body.classList.remove('panel-reorder-active');
+        } else {
+          // Vertical reorder: move panel up/down among docked siblings
+          document.body.classList.add('panel-reorder-active');
+          const side = currentPanel.dockedSide || 'right';
+          const dockedOnSide = popoutPanels.value.filter(p => p.docked && (p.dockedSide || 'right') === side);
+          const currentIdx = dockedOnSide.findIndex(p => p.id === panel.id);
+          // Use mouse position directly for swap checks (not panel center)
+          if (currentIdx > 0) {
+            const above = dockedOnSide[currentIdx - 1];
+            const aboveTop = getDockedPanelTop(above.id);
+            const aboveH = above.visible ? above.dockedHeight : 48;
+            if (ev.clientY < aboveTop + aboveH / 2) {
+              swapDockedPanels(panel.id, above.id);
+            }
+          }
+          if (currentIdx >= 0 && currentIdx < dockedOnSide.length - 1) {
+            const below = dockedOnSide[currentIdx + 1];
+            const belowTop = getDockedPanelTop(below.id);
+            const belowH = below.visible ? below.dockedHeight : 48;
+            if (ev.clientY > belowTop + belowH / 2) {
+              swapDockedPanels(panel.id, below.id);
+            }
+          }
+          // dockedBaseTop stores mouseGrabOffset (constant), getDockedPanelTop auto-updates after swap
+          const mouseGrabOffset = startPos.current.dockedBaseTop;
+          const currentTop = getDockedPanelTop(panel.id);
+          reorderDragOffset.value = { panelId: panel.id, offsetY: ev.clientY - mouseGrabOffset - currentTop };
         }
       } else {
         const rawX = Math.max(0, Math.min(startPos.current.x + dx, window.innerWidth - 100));
@@ -366,6 +334,8 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
     const onUp = () => {
       dragging.current = false;
       wrapperRef.current?.classList.remove('popout-dragging');
+      reorderDragOffset.value = null;
+      document.body.classList.remove('panel-reorder-active');
       snapGuides.value = [];
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
@@ -480,7 +450,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
     if (isJsonl) return `JSONL: ${s?.feedbackTitle || s?.agentName || realSid.slice(-6)}`;
     if (isFeedback) return `FB: ${s?.feedbackTitle || realSid.slice(-6)}`;
     if (isIframe) return `Page: ${realSid.slice(-6)}`;
-    if (isTerminal) { const ts = getTerminalCompanion(realSid); const tSess = ts ? sessionMap.get(ts) : null; return `Term: ${tSess?.paneTitle || ts?.slice(-6) || realSid.slice(-6)}`; }
+    if (isTerminal) { const ts = getTerminalCompanion(realSid); if (ts === '__loading__') return 'Term: loading...'; const tSess = ts ? sessionMap.get(ts) : null; return `Term: ${tSess?.paneTitle || ts?.slice(-6) || realSid.slice(-6)}`; }
     if (isIsolate) return `Isolate: ${realSid}`;
     if (isUrl) { try { return `Iframe: ${new URL(realSid).hostname}`; } catch { return `Iframe: ${realSid.slice(0, 30)}`; } }
     const isPlainSess = s?.permissionProfile === 'plain';
@@ -488,6 +458,18 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
       ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s?.paneTitle || sid.slice(-6)}`
       : (s?.paneTitle || sid.slice(-6));
     return isPlainSess ? `\u{1F5A5}\uFE0F ${plainLabel}` : (s?.feedbackTitle || s?.agentName || `Session ${sid.slice(-6)}`);
+  }
+
+  function companionCopyId(sid: string): string | null {
+    if (sid.startsWith('terminal:')) {
+      const realSid = sid.slice(sid.indexOf(':') + 1);
+      const ts = getTerminalCompanion(realSid);
+      return ts && ts !== '__loading__' ? ts : null;
+    }
+    if (sid.startsWith('jsonl:') || sid.startsWith('feedback:') || sid.startsWith('iframe:')) {
+      return sid.slice(sid.indexOf(':') + 1);
+    }
+    return null;
   }
 
   function globalNum(sid: string): number | null {
@@ -516,8 +498,8 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
       )}
       <div
         ref={wrapperRef}
-        class={`${docked ? `popout-docked${isLeftDocked ? ' docked-left' : ''}` : 'popout-floating'}${isMinimized ? ' minimized' : ''}${isFocused ? ' panel-focused' : ''}${isActive ? ' panel-active' : ''}${panel.alwaysOnTop ? ' always-on-top' : ''}`}
-        style={panelStyle}
+        class={`${docked ? `popout-docked${isLeftDocked ? ' docked-left' : ''}` : 'popout-floating'}${isMinimized ? ' minimized' : ''}${isFocused ? ' panel-focused' : ''}${isActive ? ' panel-active' : ''}${panel.alwaysOnTop ? ' always-on-top' : ''}${isReorderDragging ? ' panel-reorder-dragging' : ''}`}
+        style={isReorderDragging ? { ...panelStyle, top: ((panelStyle as any).top || 0) + dragOff!.offsetY, zIndex: 9999 } : panelStyle}
         data-panel-id={panel.id}
         onMouseDown={() => { activePanelId.value = panel.id; bringToFront(panel.id); if (panel.activeSessionId) focusSessionTerminal(panel.activeSessionId); }}
       >
@@ -744,20 +726,26 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
                   return (
                     <button onClick={(e: any) => {
                       e.stopPropagation();
+                      popoutIdMenuOpen.value = null;
                       if (termActive) {
-                        popoutIdMenuOpen.value = null;
                         togglePanelCompanion(panel.id, activeId, 'terminal');
                       } else {
-                        popoutIdMenuOpen.value = null;
-                        popoutTermPickerSessionId.value = activeId;
-                        popoutTermPickerLoading.value = true;
-                        api.listTmuxSessions().then((r: any) => { popoutTermPickerTmux.value = r.sessions; }).catch(() => { popoutTermPickerTmux.value = []; }).finally(() => { popoutTermPickerLoading.value = false; });
+                        termPickerOpen.value = { kind: 'companion', sessionId: activeId, panelId: panel.id };
                       }
                     }}>
                       {termActive ? '\u2713 ' : ''}Terminal companion <kbd>M</kbd>
                     </button>
                   );
                 })()}
+                {session?.isHarness && session?.harnessAppPort && (
+                  <button onClick={() => {
+                    const host = session.isRemote && session.launcherHostname ? session.launcherHostname : 'localhost';
+                    openUrlCompanion(`http://${host}:${session.harnessAppPort}`);
+                    popoutIdMenuOpen.value = null;
+                  }}>
+                    Open App <kbd>O</kbd>
+                  </button>
+                )}
                 <div class="id-dropdown-separator" />
                 <button onClick={() => { popoutIdMenuOpen.value = null; popBackIn(activeId); }}>Pop back to tab bar <kbd>P</kbd></button>
                 <button onClick={() => { popoutIdMenuOpen.value = null; window.open(`#/session/${activeId}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no'); }}>Open in window <kbd>W</kbd></button>
@@ -766,14 +754,6 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
                   <button onClick={() => { popoutIdMenuOpen.value = null; api.openSessionInTerminal(activeId).catch(() => {}); }}>Open in Terminal.app <kbd>A</kbd></button>
                 )}
               </div>
-            )}
-            {popoutTermPickerSessionId.value === activeId && (
-              <PopoutTerminalCompanionPicker
-                sessionId={activeId}
-                panelId={panel.id}
-                sessionMap={sessionMap}
-                onClose={() => { popoutTermPickerSessionId.value = null; popoutIdMenuOpen.value = null; }}
-              />
             )}
           </div>
         )}
@@ -862,47 +842,59 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
             data-popout-split-pane={`${panel.id}:right`}
             style={{ flex: 1 - (panel.splitRatio ?? 0.5) }}
           >
-            {panelRightTabs.length > 1 && (
-              <div class="split-pane-tab-bar">
-                <div class="popout-tab-scroll">
-                  {panelRightTabs.map((sid) => (
-                    <button
-                      key={sid}
-                      class={`popout-tab ${sid === panelRightActive ? 'active' : ''}`}
-                      onClick={() => {
-                        updatePanel(panel.id, { rightPaneActiveId: sid });
-                        persistPopoutState();
-                      }}
-                    >
-                      <span class="popout-tab-label">{tabLabel(sid)}</span>
-                    </button>
-                  ))}
+            {(() => {
+              const activeSid = panelRightActive || panelRightTabs[0];
+              const activeTermId = activeSid ? companionCopyId(activeSid) : null;
+              const showCompMenu = companionMenuOpen.value === activeSid;
+              const termSess = activeTermId ? sessionMap.get(activeTermId) : null;
+              return (
+                <div class="split-pane-tab-bar">
+                  <div class="popout-tab-scroll">
+                    {panelRightTabs.map((sid) => {
+                      const isActive = sid === activeSid;
+                      const hasCopyId = !!companionCopyId(sid);
+                      return (
+                        <button
+                          key={sid}
+                          class={`popout-tab ${isActive ? 'active' : ''}`}
+                          onClick={() => {
+                            if (isActive && hasCopyId) {
+                              companionMenuOpen.value = showCompMenu ? null : sid;
+                            } else {
+                              companionMenuOpen.value = null;
+                              updatePanel(panel.id, { rightPaneActiveId: sid });
+                              persistPopoutState();
+                            }
+                          }}
+                        >
+                          <span class="popout-tab-label">{tabLabel(sid)}{hasCopyId && isActive ? ` ${'\u25BE'}` : ''}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {showCompMenu && activeTermId && (
+                    <div class="id-dropdown-menu companion-dropdown" onClick={() => { companionMenuOpen.value = null; }}>
+                      <button onClick={(e: any) => { e.stopPropagation(); companionMenuOpen.value = null; copyWithTooltip(activeTermId, e); }}>
+                        Copy ID: {activeTermId.slice(-8)}
+                      </button>
+                      <button onClick={(e: any) => { e.stopPropagation(); companionMenuOpen.value = null; copyWithTooltip(buildTmuxAttachCmd(activeTermId, termSess), e); }}>
+                        Copy tmux command
+                      </button>
+                      <button onClick={() => { companionMenuOpen.value = null; api.openSessionInTerminal(activeTermId).catch(() => {}); }}>
+                        Open in Terminal.app
+                      </button>
+                    </div>
+                  )}
+                  <button
+                    class="split-pane-unsplit-btn"
+                    onClick={() => disablePanelSplit(panel.id)}
+                    title="Close split pane"
+                  >
+                    &times;
+                  </button>
                 </div>
-                <button
-                  class="split-pane-unsplit-btn"
-                  onClick={() => disablePanelSplit(panel.id)}
-                  title="Close split pane"
-                >
-                  &times;
-                </button>
-              </div>
-            )}
-            {panelRightTabs.length === 1 && (
-              <div class="split-pane-tab-bar">
-                <div class="popout-tab-scroll">
-                  <span class="popout-tab active">
-                    <span class="popout-tab-label">{tabLabel(panelRightTabs[0])}</span>
-                  </span>
-                </div>
-                <button
-                  class="split-pane-unsplit-btn"
-                  onClick={() => disablePanelSplit(panel.id)}
-                  title="Close split pane"
-                >
-                  &times;
-                </button>
-              </div>
-            )}
+              );
+            })()}
             <div class="popout-body">
               {panelRightTabs.map((sid) => renderPanelTabContent(sid, sid === panelRightActive, sessionMap))}
             </div>
@@ -913,10 +905,19 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
         <>
           <div class="popout-resize-n" onMouseDown={(e) => onResizeStart('n', e)} />
           <div class="popout-resize-s" onMouseDown={(e) => onResizeStart('s', e)} />
-          {isLeftDocked
-            ? <div class="popout-resize-e" onMouseDown={(e) => onResizeStart('e', e)} />
-            : <div class="popout-resize-w" onMouseDown={(e) => onResizeStart('w', e)} />
-          }
+          {isLeftDocked ? (
+            <>
+              <div class="popout-resize-e" onMouseDown={(e) => onResizeStart('e', e)} />
+              <div class="popout-resize-ne" onMouseDown={(e) => onResizeStart('ne', e)} />
+              <div class="popout-resize-se" onMouseDown={(e) => onResizeStart('se', e)} />
+            </>
+          ) : (
+            <>
+              <div class="popout-resize-w" onMouseDown={(e) => onResizeStart('w', e)} />
+              <div class="popout-resize-nw" onMouseDown={(e) => onResizeStart('nw', e)} />
+              <div class="popout-resize-sw" onMouseDown={(e) => onResizeStart('sw', e)} />
+            </>
+          )}
         </>
       ) : (
         <>
@@ -938,7 +939,24 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
 function DockedPanelGrabHandle({ panel }: { panel: PopoutPanelState }) {
   const grabStart = useRef({ mx: 0, my: 0, grabY: 0, time: 0 });
   const grabMoved = useRef(false);
+  const grabRef = useRef<HTMLDivElement>(null);
+  const lastBounce = useRef(0);
   const orientation = dockedOrientation.value;
+
+  // Watch for bounce triggers on the autojump panel handle
+  const bounceCount = handleBounceCounter.value;
+  useEffect(() => {
+    if (panel.id !== AUTOJUMP_PANEL_ID || bounceCount === 0) return;
+    if (bounceCount === lastBounce.current) return;
+    lastBounce.current = bounceCount;
+    const el = grabRef.current;
+    if (!el) return;
+    el.classList.remove('grab-bounce');
+    void el.offsetWidth; // force reflow
+    el.classList.add('grab-bounce');
+    const onEnd = () => el.classList.remove('grab-bounce');
+    el.addEventListener('animationend', onEnd, { once: true });
+  }, [bounceCount, panel.id]);
 
   const isLeft = panel.dockedSide === 'left';
 
@@ -1007,7 +1025,11 @@ function DockedPanelGrabHandle({ panel }: { panel: PopoutPanelState }) {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
       if (!grabMoved.current && Date.now() - grabStart.current.time < 200) {
-        updatePanel(panel.id, { visible: !panel.visible });
+        const nowVisible = !panel.visible;
+        updatePanel(panel.id, { visible: nowVisible });
+        if (panel.id === AUTOJUMP_PANEL_ID) {
+          autoJumpDismissed.value = !nowVisible;
+        }
       }
       persistPopoutState();
     };
@@ -1021,6 +1043,7 @@ function DockedPanelGrabHandle({ panel }: { panel: PopoutPanelState }) {
   const globalIdx = globalSessions.indexOf(activeId);
   const rawGrabY = panel.grabY ?? 0;
   const grabY = panel.visible ? Math.max(0, Math.min(rawGrabY, panel.dockedHeight - GRAB_HANDLE_H)) : rawGrabY;
+  const reorderY = reorderDragOffset.value?.panelId === panel.id ? reorderDragOffset.value.offsetY : 0;
   const _zOrders = panelZOrders.value;  // subscribe to signal
   const grabZIndex = getPanelZIndex(panel) + 1;
 
@@ -1029,11 +1052,12 @@ function DockedPanelGrabHandle({ panel }: { panel: PopoutPanelState }) {
     const panelTop = getDockedPanelTop(panel.id);
     return (
       <div
+        ref={grabRef}
         class="popout-grab-tab popout-grab-tab-left"
         style={{
           left: leftPos,
           right: 'auto',
-          top: panelTop + grabY,
+          top: panelTop + grabY + reorderY,
           height: GRAB_HANDLE_H,
           zIndex: grabZIndex,
         }}
@@ -1061,10 +1085,11 @@ function DockedPanelGrabHandle({ panel }: { panel: PopoutPanelState }) {
 
     return (
       <div
+        ref={grabRef}
         class="popout-grab-tab popout-grab-tab-horiz"
         style={{
           right: rightPos,
-          top: panelTopH + grabY,
+          top: panelTopH + grabY + reorderY,
           height: GRAB_HANDLE_H,
           zIndex: grabZIndex,
         }}
@@ -1084,10 +1109,11 @@ function DockedPanelGrabHandle({ panel }: { panel: PopoutPanelState }) {
 
   return (
     <div
+      ref={grabRef}
       class="popout-grab-tab"
       style={{
         right: rightPos,
-        top: panelTop + grabY,
+        top: panelTop + grabY + reorderY,
         height: GRAB_HANDLE_H,
         zIndex: grabZIndex,
       }}
@@ -1123,6 +1149,13 @@ export function PopoutPanel() {
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, [popoutStatusMenuOpen.value]);
+
+  useEffect(() => {
+    if (!companionMenuOpen.value) return;
+    const close = () => { companionMenuOpen.value = null; };
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [companionMenuOpen.value]);
 
   useEffect(() => {
     if (!popoutWindowMenuOpen.value) return;
@@ -1180,9 +1213,7 @@ export function PopoutPanel() {
           if (termActive) {
             togglePanelCompanion(ownerPanel.id, menuSessionId, 'terminal');
           } else {
-            popoutTermPickerSessionId.value = menuSessionId;
-            popoutTermPickerLoading.value = true;
-            api.listTmuxSessions().then((r: any) => { popoutTermPickerTmux.value = r.sessions; }).catch(() => { popoutTermPickerTmux.value = []; }).finally(() => { popoutTermPickerLoading.value = false; });
+            termPickerOpen.value = { kind: 'companion', sessionId: menuSessionId, panelId: ownerPanel.id };
           }
         }
       } else if (key === 'escape') {

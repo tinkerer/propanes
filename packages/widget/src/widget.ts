@@ -41,7 +41,7 @@ export class PromptWidgetElement {
   private overlayManager: OverlayPanelManager;
   private appId: string;
   private savedDraft = '';
-  private savedCollectors = new Set(['console', 'environment', 'network', 'performance']);
+  private savedCollectors = new Set<string>();
   private pickerMultiSelect = false;
   private pickerExcludeWidget = true;
   private excludeWidget = true;
@@ -209,6 +209,44 @@ export class PromptWidgetElement {
     const divider = document.createElement('div');
     divider.className = 'pw-send-menu-divider';
     menu.appendChild(divider);
+
+    // Dispatch target selector
+    const targetRow = document.createElement('div');
+    targetRow.className = 'pw-send-menu-target';
+    const targetLabel = document.createElement('span');
+    targetLabel.textContent = 'Target:';
+    targetLabel.style.cssText = 'font-size:11px;color:#94a3b8;flex-shrink:0';
+    const targetSel = document.createElement('select');
+    targetSel.className = 'pw-send-menu-target-select';
+    targetSel.innerHTML = '<option value="">Local</option>';
+    targetSel.value = localStorage.getItem('pw-dispatch-target') || '';
+    targetSel.addEventListener('change', () => {
+      if (targetSel.value) localStorage.setItem('pw-dispatch-target', targetSel.value);
+      else localStorage.removeItem('pw-dispatch-target');
+    });
+    targetRow.append(targetLabel, targetSel);
+    menu.appendChild(targetRow);
+
+    // Populate targets from API
+    const origin = new URL(this.config.endpoint, window.location.origin).origin;
+    fetch(`${origin}/api/v1/admin/dispatch-targets`)
+      .then(r => r.json())
+      .then((data: any) => {
+        if (!data.targets?.length) return;
+        for (const t of data.targets) {
+          const opt = document.createElement('option');
+          opt.value = t.launcherId;
+          opt.disabled = !t.online;
+          opt.textContent = `${t.isHarness ? '\u{1F9EA}' : '\u{1F5A5}'} ${t.machineName || t.name}${t.online ? '' : ' (offline)'}`;
+          targetSel.appendChild(opt);
+        }
+        targetSel.value = localStorage.getItem('pw-dispatch-target') || '';
+      })
+      .catch(() => {});
+
+    const divider2 = document.createElement('div');
+    divider2.className = 'pw-send-menu-divider';
+    menu.appendChild(divider2);
 
     const label = document.createElement('label');
     label.className = 'pw-send-menu-item pw-send-menu-checkbox';
@@ -558,8 +596,8 @@ export class PromptWidgetElement {
       btn.classList.add('pw-trigger-peek');
       btn.style.left = 'auto';
       btn.style.top = 'auto';
-      btn.style.right = '5px';
-      btn.style.bottom = '5px';
+      btn.style.right = '-15px';
+      btn.style.bottom = '-15px';
     };
 
     const unpeek = () => {
@@ -1217,6 +1255,10 @@ export class PromptWidgetElement {
     };
     if (opts.autoDispatch) {
       feedbackPayload.autoDispatch = true;
+      const dispatchTarget = localStorage.getItem('pw-dispatch-target');
+      if (dispatchTarget) {
+        feedbackPayload.launcherId = dispatchTarget;
+      }
     }
     if (this.selectedElements.length > 0) {
       feedbackPayload.data = { selectedElements: this.selectedElements };

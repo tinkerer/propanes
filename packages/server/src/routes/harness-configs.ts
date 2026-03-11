@@ -2,9 +2,9 @@ import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
 import { ulid } from 'ulidx';
 import { db, schema } from '../db/index.js';
-import { listLaunchers, getLauncher } from '../launcher-registry.js';
+import { listLaunchers, getLauncher, sendAndWait } from '../launcher-registry.js';
 import { dispatchHarnessSession } from '../dispatch.js';
-import type { StartHarness, StopHarness, PermissionProfile } from '@prompt-widget/shared';
+import type { StartHarness, StopHarness, PermissionProfile, ListTmuxSessions, ListTmuxSessionsResult, CheckClaudeAuth, CheckClaudeAuthResult, CheckContainerClaude, CheckContainerClaudeResult } from '@prompt-widget/shared';
 
 const app = new Hono();
 
@@ -46,6 +46,9 @@ app.post('/', async (c) => {
       targetAppUrl: body.targetAppUrl || null,
       composeDir: body.composeDir || null,
       envVars: body.envVars ? JSON.stringify(body.envVars) : null,
+      hostTerminalAccess: body.hostTerminalAccess ?? false,
+      claudeHomePath: body.claudeHomePath || null,
+      anthropicApiKey: body.anthropicApiKey || null,
       createdAt: now,
       updatedAt: now,
     })
@@ -81,6 +84,9 @@ app.patch('/:id', async (c) => {
   if (body.targetAppUrl !== undefined) updates.targetAppUrl = body.targetAppUrl;
   if (body.composeDir !== undefined) updates.composeDir = body.composeDir;
   if (body.envVars !== undefined) updates.envVars = body.envVars ? JSON.stringify(body.envVars) : null;
+  if (body.hostTerminalAccess !== undefined) updates.hostTerminalAccess = body.hostTerminalAccess;
+  if (body.claudeHomePath !== undefined) updates.claudeHomePath = body.claudeHomePath;
+  if (body.anthropicApiKey !== undefined) updates.anthropicApiKey = body.anthropicApiKey;
 
   db.update(schema.harnessConfigs).set(updates).where(eq(schema.harnessConfigs.id, id)).run();
   const row = db.select().from(schema.harnessConfigs).where(eq(schema.harnessConfigs.id, id)).get();
@@ -123,6 +129,8 @@ app.post('/:id/start', (c) => {
     targetAppUrl: config.targetAppUrl || undefined,
     composeDir: config.composeDir || undefined,
     envVars: config.envVars ? JSON.parse(config.envVars) : undefined,
+    claudeHomePath: config.claudeHomePath || undefined,
+    anthropicApiKey: config.anthropicApiKey || undefined,
   };
 
   try {
@@ -168,11 +176,11 @@ app.post('/:id/stop', (c) => {
 
   const now = new Date().toISOString();
   db.update(schema.harnessConfigs)
-    .set({ status: 'stopped', launcherId: null, lastStoppedAt: now, updatedAt: now })
+    .set({ status: 'stopping', updatedAt: now })
     .where(eq(schema.harnessConfigs.id, id))
     .run();
 
-  return c.json({ ok: true, status: 'stopped' });
+  return c.json({ ok: true, status: 'stopping' });
 });
 
 app.post('/:id/session', async (c) => {
@@ -212,6 +220,102 @@ app.post('/:id/session', async (c) => {
       permissionProfile,
     });
     return c.json({ ok: true, sessionId });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+app.post('/:id/check-auth', async (c) => {
+  const id = c.req.param('id');
+  const config = db.select().from(schema.harnessConfigs).where(eq(schema.harnessConfigs.id, id)).get();
+  if (!config) return c.json({ error: 'Harness config not found' }, 404);
+
+  let targetLauncher;
+  if (config.launcherId) targetLauncher = getLauncher(config.launcherId);
+  if (!targetLauncher && config.machineId) {
+    const launchers = listLaunchers();
+    targetLauncher = launchers.find(l => l.machineId === config.machineId && l.ws?.readyState === 1);
+  }
+  if (!targetLauncher || targetLauncher.ws?.readyState !== 1) {
+    return c.json({ error: 'No connected launcher for this harness' }, 400);
+  }
+
+  try {
+    const sessionId = ulid();
+    const msg: CheckClaudeAuth = {
+      type: 'check_claude_auth',
+      sessionId,
+      claudeHomePath: config.claudeHomePath || undefined,
+    };
+    const result = await sendAndWait(targetLauncher.id, msg as any, 'check_claude_auth_result', 15_000) as CheckClaudeAuthResult;
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+app.post('/:id/check-container-claude', async (c) => {
+  const id = c.req.param('id');
+  const config = db.select().from(schema.harnessConfigs).where(eq(schema.harnessConfigs.id, id)).get();
+  if (!config) return c.json({ error: 'Harness config not found' }, 404);
+  if (config.status !== 'running') return c.json({ error: 'Harness is not running' }, 400);
+
+  let targetLauncher;
+  if (config.launcherId) targetLauncher = getLauncher(config.launcherId);
+  if (!targetLauncher && config.machineId) {
+    const launchers = listLaunchers();
+    targetLauncher = launchers.find(l => l.machineId === config.machineId && l.ws?.readyState === 1);
+  }
+  if (!targetLauncher || targetLauncher.ws?.readyState !== 1) {
+    return c.json({ error: 'No connected launcher for this harness' }, 400);
+  }
+
+  try {
+    const sessionId = ulid();
+    const msg: CheckContainerClaude = {
+      type: 'check_container_claude',
+      sessionId,
+      harnessConfigId: id,
+      composeDir: config.composeDir || undefined,
+    };
+    const result = await sendAndWait(targetLauncher.id, msg as any, 'check_container_claude_result', 20_000) as CheckContainerClaudeResult;
+    return c.json(result);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+app.get('/:id/host-tmux-sessions', async (c) => {
+  const id = c.req.param('id');
+  const config = db.select().from(schema.harnessConfigs).where(eq(schema.harnessConfigs.id, id)).get();
+  if (!config) return c.json({ error: 'Harness config not found' }, 404);
+
+  if (!config.hostTerminalAccess) {
+    return c.json({ error: 'Host terminal access is not enabled for this harness' }, 400);
+  }
+
+  // Find the launcher for the machine
+  let targetLauncher;
+  if (config.launcherId) {
+    targetLauncher = getLauncher(config.launcherId);
+  }
+  if (!targetLauncher && config.machineId) {
+    const launchers = listLaunchers();
+    targetLauncher = launchers.find(l => l.machineId === config.machineId && l.ws?.readyState === 1);
+  }
+
+  if (!targetLauncher || targetLauncher.ws?.readyState !== 1) {
+    return c.json({ error: 'No connected launcher for this harness' }, 400);
+  }
+
+  try {
+    const sessionId = ulid();
+    const msg: ListTmuxSessions = {
+      type: 'list_tmux_sessions',
+      sessionId,
+    };
+    const result = await sendAndWait(targetLauncher.id, msg, 'list_tmux_sessions_result', 10_000) as ListTmuxSessionsResult;
+    return c.json({ sessions: result.sessions });
   } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }

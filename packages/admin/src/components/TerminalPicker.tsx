@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { allSessions, paneMruHistory, spawnTerminal, attachTmuxSession, setTerminalCompanionAndOpen, loadAllSessions, openSession, openIsolateCompanion, openUrlCompanion } from '../lib/sessions.js';
+import { allSessions, paneMruHistory, spawnTerminal, attachTmuxSession, setTerminalCompanionAndOpen, setTerminalCompanion, togglePanelCompanion, loadAllSessions, openSession, openIsolateCompanion, openUrlCompanion } from '../lib/sessions.js';
 import { selectedAppId } from '../lib/state.js';
 import { getIsolateNames, getIsolateEntry } from '../lib/isolate.js';
 import { cachedTargets, ensureTargetsLoaded } from './DispatchTargetSelect.js';
 import { api } from '../lib/api.js';
 
 export type TerminalPickerMode =
-  | { kind: 'companion'; sessionId: string }
+  | { kind: 'companion'; sessionId: string; panelId?: string }
   | { kind: 'new' }
   | { kind: 'claude' }
   | { kind: 'url' };
@@ -23,6 +23,7 @@ interface PickerItem {
   title: string;
   subtitle?: string;
   action: () => Promise<void> | void;
+  disabled?: boolean;
 }
 
 function looksLikeUrl(s: string): boolean {
@@ -54,35 +55,51 @@ export function TerminalPicker({ mode, onClose }: Props) {
   }, []);
 
   const parentSessionId = mode.kind === 'companion' ? mode.sessionId : null;
+  const panelId = mode.kind === 'companion' ? mode.panelId : undefined;
   const appId = selectedAppId.value;
 
   const isClaudeMode = mode.kind === 'claude';
 
+  /** Open the companion split pane immediately (with whatever is in the companion map) */
+  function openCompanionPane(termSessionId: string) {
+    if (!parentSessionId) return;
+    setTerminalCompanion(parentSessionId, termSessionId);
+    if (panelId) {
+      togglePanelCompanion(panelId, parentSessionId, 'terminal');
+    } else {
+      setTerminalCompanionAndOpen(parentSessionId, termSessionId);
+    }
+  }
+
   async function pickNew(launcherId?: string, harnessConfigId?: string) {
-    const newId = await spawnTerminal(appId, launcherId, harnessConfigId, isClaudeMode ? 'interactive' : undefined);
+    onClose();
+    const isCompanion = !!parentSessionId;
+    if (isCompanion) openCompanionPane('__loading__');
+    const newId = await spawnTerminal(appId, launcherId, harnessConfigId, isClaudeMode ? 'interactive' : undefined, isCompanion);
     if (newId && parentSessionId) {
       await loadAllSessions();
-      setTerminalCompanionAndOpen(parentSessionId, newId);
+      setTerminalCompanion(parentSessionId, newId);
     }
-    onClose();
   }
 
   async function pickExisting(termSessionId: string) {
+    onClose();
     if (parentSessionId) {
-      setTerminalCompanionAndOpen(parentSessionId, termSessionId);
+      openCompanionPane(termSessionId);
     } else {
       openSession(termSessionId);
     }
-    onClose();
   }
 
   async function pickTmux(tmuxName: string) {
-    const newId = await attachTmuxSession(tmuxName, appId ?? undefined);
+    onClose();
+    const isCompanion = !!parentSessionId;
+    if (isCompanion) openCompanionPane('__loading__');
+    const newId = await attachTmuxSession(tmuxName, appId ?? undefined, isCompanion);
     if (newId && parentSessionId) {
       await loadAllSessions();
-      setTerminalCompanionAndOpen(parentSessionId, newId);
+      setTerminalCompanion(parentSessionId, newId);
     }
-    onClose();
   }
 
   function submitUrl(url: string) {
@@ -137,8 +154,9 @@ export function TerminalPicker({ mode, onClose }: Props) {
   // Build items
   const items: PickerItem[] = [];
   const targets = cachedTargets.value;
-  const machines = targets.filter(t => !t.isHarness);
+  const machines = targets.filter(t => !t.isHarness && !t.isSprite);
   const harnesses = targets.filter(t => t.isHarness);
+  const sprites = targets.filter(t => t.isSprite);
   const sessions = allSessions.value;
   const existingTerminals = sessions.filter(
     (s) => s.permissionProfile === 'plain' && s.id !== parentSessionId && s.status !== 'failed'
@@ -154,7 +172,52 @@ export function TerminalPicker({ mode, onClose }: Props) {
     action: () => pickNew(),
   });
 
-  // 2. Recent — terminals from MRU that are still alive
+  // 2. Remote machines
+  for (const t of machines) {
+    items.push({
+      id: `machine:${t.launcherId}`,
+      category: 'Remote Machines',
+      icon: '\u{1F5A5}\uFE0F',
+      title: t.machineName || t.name,
+      subtitle: t.online
+        ? `${t.activeSessions}/${t.maxSessions} sessions`
+        : 'offline',
+      action: t.online ? () => pickNew(t.launcherId) : () => {},
+      disabled: !t.online,
+    });
+  }
+
+  // 3. Harnesses
+  for (const t of harnesses) {
+    items.push({
+      id: `harness:${t.harnessConfigId || t.launcherId}`,
+      category: 'Harnesses',
+      icon: '\u{1F9EA}',
+      title: t.name,
+      subtitle: t.online
+        ? `${t.activeSessions}/${t.maxSessions} sessions`
+        : 'offline',
+      action: t.online ? () => pickNew(t.launcherId, t.harnessConfigId || undefined) : () => {},
+      disabled: !t.online,
+    });
+  }
+
+  // 4. Sprites
+  for (const t of sprites) {
+    items.push({
+      id: `sprite:${t.spriteConfigId || t.launcherId}`,
+      category: 'Sprites',
+      icon: '\u{2601}\uFE0F',
+      title: t.name,
+      subtitle: t.online
+        ? `${t.hostname} \u00b7 ${t.activeSessions}/${t.maxSessions} sessions`
+        : `${t.hostname} \u00b7 offline`,
+      action: t.online ? () => pickNew(t.launcherId) : () => {},
+      disabled: !t.online,
+    });
+  }
+
+  // 5. Recent — terminals from MRU that are still alive
   {
     const mru = paneMruHistory.value;
     const aliveIds = new Set(existingTerminals.map(s => s.id));
@@ -167,9 +230,9 @@ export function TerminalPicker({ mode, onClose }: Props) {
     for (const rid of recentIds) {
       const s = sessions.find(x => x.id === rid);
       if (!s) continue;
-      const label = s.paneCommand
+      const label = s.feedbackTitle || (s.paneCommand
         ? `${s.paneCommand}:${s.panePath || ''}`
-        : (s.paneTitle || `pw-${s.id.slice(-6)}`);
+        : (s.paneTitle || `pw-${s.id.slice(-6)}`));
       items.push({
         id: `recent:${rid}`,
         category: 'Recent',
@@ -181,38 +244,14 @@ export function TerminalPicker({ mode, onClose }: Props) {
     }
   }
 
-  // 3. Remote machines
-  for (const t of machines) {
-    items.push({
-      id: `machine:${t.launcherId}`,
-      category: 'Remote Machines',
-      icon: '\u{1F5A5}\uFE0F',
-      title: t.machineName || t.name,
-      subtitle: `${t.activeSessions}/${t.maxSessions} sessions`,
-      action: () => pickNew(t.launcherId),
-    });
-  }
-
-  // 4. Harnesses
-  for (const t of harnesses) {
-    items.push({
-      id: `harness:${t.harnessConfigId || t.launcherId}`,
-      category: 'Harnesses',
-      icon: '\u{1F9EA}',
-      title: t.name,
-      subtitle: `${t.activeSessions}/${t.maxSessions} sessions`,
-      action: () => pickNew(t.launcherId, t.harnessConfigId || undefined),
-    });
-  }
-
-  // 5. Open terminals (excludes parent in companion mode)
+  // 6. Open terminals (excludes parent in companion mode)
   {
     const recentSet = new Set(items.filter(i => i.category === 'Recent').map(i => i.id.replace('recent:', '')));
     for (const s of existingTerminals) {
       if (recentSet.has(s.id)) continue;
-      const label = s.paneCommand
+      const label = s.feedbackTitle || (s.paneCommand
         ? `${s.paneCommand}:${s.panePath || ''}`
-        : (s.paneTitle || `pw-${s.id.slice(-6)}`);
+        : (s.paneTitle || `pw-${s.id.slice(-6)}`));
       items.push({
         id: `open:${s.id}`,
         category: 'Open Terminals',
@@ -224,7 +263,7 @@ export function TerminalPicker({ mode, onClose }: Props) {
     }
   }
 
-  // 6. Tmux sessions
+  // 7. Tmux sessions
   for (const s of tmuxSessions) {
     items.push({
       id: `tmux:${s.name}`,
@@ -279,7 +318,7 @@ export function TerminalPicker({ mode, onClose }: Props) {
   // Group by category
   const grouped: [string, PickerItem[]][] = [];
   if (urlItem) grouped.push(['Iframe', [urlItem]]);
-  const categoryOrder = ['New', 'Recent', 'Remote Machines', 'Harnesses', 'Open Terminals', 'Tmux Sessions', 'Isolated Components', 'Iframe'];
+  const categoryOrder = ['New', 'Remote Machines', 'Harnesses', 'Sprites', 'Recent', 'Open Terminals', 'Tmux Sessions', 'Isolated Components', 'Iframe'];
   for (const cat of categoryOrder) {
     if (cat === 'Iframe' && urlItem) continue;
     const catItems = filtered.filter(i => i.category === cat);
@@ -346,12 +385,16 @@ export function TerminalPicker({ mode, onClose }: Props) {
                     <div
                       key={item.id}
                       class={`spotlight-result ${globalIdx === selectedIndex ? 'selected' : ''}`}
+                      style={item.disabled ? 'opacity:0.5;cursor:default' : undefined}
                       onClick={() => item.action()}
                       onMouseEnter={() => setSelectedIndex(globalIdx)}
                     >
                       <span class="spotlight-result-icon">{item.icon}</span>
                       <div class="spotlight-result-text">
-                        <span class="spotlight-result-title">{item.title}</span>
+                        <span class="spotlight-result-title">
+                          {item.title}
+                          {item.disabled && <span style="margin-left:6px;color:var(--pw-text-muted);font-size:11px">(offline)</span>}
+                        </span>
                         {item.subtitle && <span class="spotlight-result-subtitle">{item.subtitle}</span>}
                       </div>
                     </div>

@@ -24,6 +24,7 @@ export interface LauncherRegister {
   harness?: HarnessMetadata;
   machineId?: string;
   harnessConfigId?: string;
+  version?: string;
 }
 
 export interface LauncherCapabilities {
@@ -86,6 +87,69 @@ export interface ExportSessionFilesResult {
   error?: string;
 }
 
+export interface SyncCodebaseResult {
+  type: 'sync_codebase_result';
+  sessionId: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface ListTmuxSessionsResult {
+  type: 'list_tmux_sessions_result';
+  sessionId: string;
+  sessions: Array<{ name: string; windows: number; created: string; attached: boolean }>;
+}
+
+export interface CheckClaudeAuthResult {
+  type: 'check_claude_auth_result';
+  sessionId: string;
+  hasClaudeDir: boolean;
+  hasCredentials: boolean;
+  claudeVersion?: string;
+  error?: string;
+}
+
+export interface CheckContainerClaudeResult {
+  type: 'check_container_claude_result';
+  sessionId: string;
+  hasClaudeCli: boolean;
+  claudeVersion?: string;
+  hasCredentials: boolean;
+  error?: string;
+}
+
+export interface LauncherHealthCheckResult {
+  type: 'health_check_result';
+  sessionId: string;
+  uptime: number;
+  nodeVersion: string;
+  launcherVersion: string;
+  platform: string;
+  arch: string;
+  memory: { total: number; free: number };
+  activeSessions: number;
+  capabilities: LauncherCapabilities;
+  claudeCliVersion?: string;
+  dockerVersion?: string;
+  tmuxVersion?: string;
+  claudeHomeExists: boolean;
+}
+
+export interface SendKeysResult {
+  type: 'send_keys_result';
+  sessionId: string;
+  ok: boolean;
+  error?: string;
+}
+
+export interface CapturePaneResult {
+  type: 'capture_pane_result';
+  sessionId: string;
+  ok: boolean;
+  content?: string;
+  error?: string;
+}
+
 export type LauncherToServerMessage =
   | LauncherRegister
   | LauncherHeartbeat
@@ -94,7 +158,14 @@ export type LauncherToServerMessage =
   | LauncherSessionEnded
   | HarnessStatusUpdate
   | ImportSessionFilesResult
-  | ExportSessionFilesResult;
+  | ExportSessionFilesResult
+  | SyncCodebaseResult
+  | ListTmuxSessionsResult
+  | CheckClaudeAuthResult
+  | CheckContainerClaudeResult
+  | LauncherHealthCheckResult
+  | SendKeysResult
+  | CapturePaneResult;
 
 // --- Server → Launcher messages ---
 
@@ -113,6 +184,7 @@ export interface LaunchSession {
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
+  tmuxTarget?: string;
   cols: number;
   rows: number;
 }
@@ -146,6 +218,8 @@ export interface StartHarness {
   targetAppUrl?: string;
   composeDir?: string;
   envVars?: Record<string, string>;
+  claudeHomePath?: string;
+  anthropicApiKey?: string;
 }
 
 export interface StopHarness {
@@ -183,6 +257,59 @@ export interface ExportSessionFiles {
   artifactPaths: string[];
 }
 
+export interface SyncCodebase {
+  type: 'sync_codebase';
+  sessionId: string;
+  branch: string;
+  projectDir: string;
+  gitRemoteUrl: string;
+}
+
+export interface ListTmuxSessions {
+  type: 'list_tmux_sessions';
+  sessionId: string;
+}
+
+export interface RestartLauncher {
+  type: 'restart_launcher';
+}
+
+export interface CheckClaudeAuth {
+  type: 'check_claude_auth';
+  sessionId: string;
+  claudeHomePath?: string;
+}
+
+export interface CheckContainerClaude {
+  type: 'check_container_claude';
+  sessionId: string;
+  harnessConfigId: string;
+  composeDir?: string;
+  serviceName?: string;
+}
+
+export interface LauncherHealthCheck {
+  type: 'health_check';
+  sessionId: string;
+}
+
+export interface SendKeys {
+  type: 'send_keys';
+  sessionId: string;
+  targetSessionId: string;
+  keys: string;
+  enter?: boolean;
+  tmuxTarget?: string;
+}
+
+export interface CapturePane {
+  type: 'capture_pane';
+  sessionId: string;
+  targetSessionId: string;
+  lastN?: number;
+  tmuxTarget?: string;
+}
+
 export type ServerToLauncherMessage =
   | LauncherRegistered
   | LaunchSession
@@ -193,7 +320,15 @@ export type ServerToLauncherMessage =
   | StopHarness
   | LaunchHarnessSession
   | ImportSessionFiles
-  | ExportSessionFiles;
+  | ExportSessionFiles
+  | SyncCodebase
+  | ListTmuxSessions
+  | RestartLauncher
+  | CheckClaudeAuth
+  | CheckContainerClaude
+  | LauncherHealthCheck
+  | SendKeys
+  | CapturePane;
 
 // --- Combined ---
 

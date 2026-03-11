@@ -1,8 +1,9 @@
 import { ulid } from 'ulidx';
 import { eq, and, sql } from 'drizzle-orm';
 import { homedir } from 'node:os';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
+import { execSync } from 'node:child_process';
 import type {
   FeedbackItem,
   PermissionProfile,
@@ -12,12 +13,15 @@ import type {
   ImportSessionFilesResult,
   ExportSessionFiles,
   ExportSessionFilesResult,
+  SyncCodebase,
+  SyncCodebaseResult,
 } from '@prompt-widget/shared';
 import { db, schema } from './db/index.js';
 import { spawnAgentSession } from './agent-sessions.js';
 import { getLauncher, addSessionToLauncher, sendAndWait } from './launcher-registry.js';
 import { feedbackEvents } from './events.js';
 import { extractArtifactPaths, exportSessionFiles } from './jsonl-utils.js';
+import { launchSpriteSession } from './sprite-sessions.js';
 
 export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, tags: string[], screenshots: (typeof schema.feedbackScreenshots.$inferSelect)[]): FeedbackItem {
   return {
@@ -200,7 +204,9 @@ export async function dispatchFeedbackToAgent(params: {
     };
   } else {
     const cwd = app?.projectDir || process.cwd();
-    const permissionProfile = (agent.permissionProfile || 'interactive') as PermissionProfile;
+    const isHarness = !!agent.harnessConfigId;
+    const defaultProfile: PermissionProfile = isHarness ? 'yolo' : 'interactive';
+    const permissionProfile = (agent.permissionProfile || defaultProfile) as PermissionProfile;
 
     const template = agent.promptTemplate || DEFAULT_PROMPT_TEMPLATE;
     const prompt = renderPromptTemplate(template, hydratedFeedback, app, instructions);
@@ -256,6 +262,93 @@ export async function dispatchWebhook(
   return { status: response.status, response: responseText };
 }
 
+// --- Code sync: push local changes to a temp branch, have remote launcher fetch ---
+
+function isGitRepo(dir: string): boolean {
+  try {
+    execSync('git rev-parse --is-inside-work-tree', { cwd: dir, stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getGitRemoteUrl(dir: string): string | null {
+  try {
+    return execSync('git remote get-url origin', { cwd: dir, stdio: 'pipe' }).toString().trim();
+  } catch {
+    return null;
+  }
+}
+
+export function pushSyncBranch(projectDir: string, sessionId: string): { branch: string; remoteUrl: string } {
+  const branch = `pw-sync/${sessionId}`;
+  const remoteUrl = getGitRemoteUrl(projectDir);
+  if (!remoteUrl) throw new Error('No git remote "origin" configured');
+
+  // Create a temporary index to snapshot all files (including uncommitted/untracked)
+  // without touching the user's working tree or index
+  const tmpIdx = execSync('mktemp', { stdio: 'pipe' }).toString().trim();
+  try {
+    execSync(`cp .git/index "${tmpIdx}"`, { cwd: projectDir, stdio: 'pipe' });
+
+    const env = { ...process.env, GIT_INDEX_FILE: tmpIdx };
+    execSync('git add -A', { cwd: projectDir, stdio: 'pipe', env });
+    const tree = execSync('git write-tree', { cwd: projectDir, stdio: 'pipe', env }).toString().trim();
+
+    const head = execSync('git rev-parse HEAD', { cwd: projectDir, stdio: 'pipe' }).toString().trim();
+    const commit = execSync(
+      `git commit-tree ${tree} -p ${head} -m "pw-sync: auto-sync for dispatch ${sessionId}"`,
+      { cwd: projectDir, stdio: 'pipe' }
+    ).toString().trim();
+
+    execSync(`git push origin "${commit}:refs/heads/${branch}" --force`, {
+      cwd: projectDir,
+      stdio: 'pipe',
+      timeout: 120_000,
+    });
+
+    return { branch, remoteUrl };
+  } finally {
+    try { execSync(`rm -f "${tmpIdx}"`, { stdio: 'pipe' }); } catch {}
+  }
+}
+
+export async function syncCodebaseToLauncher(
+  launcherId: string,
+  sessionId: string,
+  branch: string,
+  projectDir: string,
+  gitRemoteUrl: string,
+): Promise<void> {
+  const msg: SyncCodebase & { sessionId: string } = {
+    type: 'sync_codebase',
+    sessionId,
+    branch,
+    projectDir,
+    gitRemoteUrl,
+  };
+
+  const result = await sendAndWait(launcherId, msg, 'sync_codebase_result', 120_000) as SyncCodebaseResult;
+  if (!result.ok) {
+    throw new Error(`Code sync failed on launcher ${launcherId}: ${result.error}`);
+  }
+}
+
+export function cleanupSyncBranch(projectDir: string, sessionId: string): void {
+  const branch = `pw-sync/${sessionId}`;
+  try {
+    execSync(`git push origin --delete "${branch}"`, {
+      cwd: projectDir,
+      stdio: 'pipe',
+      timeout: 30_000,
+    });
+    console.log(`[dispatch] Cleaned up sync branch ${branch}`);
+  } catch (err: any) {
+    console.warn(`[dispatch] Failed to cleanup sync branch ${branch}: ${err.message}`);
+  }
+}
+
 export async function dispatchAgentSession(params: {
   feedbackId: string;
   agentEndpointId: string;
@@ -268,6 +361,31 @@ export async function dispatchAgentSession(params: {
   const sessionId = ulid();
   const now = new Date().toISOString();
   const claudeSessionId = crypto.randomUUID();
+
+  // Check if explicit launcherId is a sprite target
+  if (params.launcherId?.startsWith('sprite:')) {
+    const spriteConfigId = params.launcherId.slice('sprite:'.length);
+    const spriteConfig = db
+      .select()
+      .from(schema.spriteConfigs)
+      .where(eq(schema.spriteConfigs.id, spriteConfigId))
+      .get();
+    if (spriteConfig) {
+      return dispatchSpriteSession({
+        sessionId,
+        feedbackId: params.feedbackId,
+        agentEndpointId: params.agentEndpointId,
+        spriteConfigId,
+        spriteName: spriteConfig.spriteName,
+        token: spriteConfig.token,
+        prompt: params.prompt,
+        cwd: spriteConfig.defaultCwd || params.cwd,
+        permissionProfile: params.permissionProfile,
+        allowedTools: params.allowedTools,
+        claudeSessionId,
+      });
+    }
+  }
 
   // Resolve launcher: explicit param > agent endpoint preference > harnessConfigId > local
   let targetLauncherId = params.launcherId || null;
@@ -291,6 +409,30 @@ export async function dispatchAgentSession(params: {
         targetLauncherId = harnessConfig.launcherId;
       }
     }
+
+    // Try spriteConfigId — dispatch to sprite instead of launcher
+    if (!targetLauncherId && agent?.spriteConfigId) {
+      const spriteConfig = db
+        .select()
+        .from(schema.spriteConfigs)
+        .where(eq(schema.spriteConfigs.id, agent.spriteConfigId))
+        .get();
+      if (spriteConfig) {
+        return dispatchSpriteSession({
+          sessionId,
+          feedbackId: params.feedbackId,
+          agentEndpointId: params.agentEndpointId,
+          spriteConfigId: agent.spriteConfigId,
+          spriteName: spriteConfig.spriteName,
+          token: spriteConfig.token,
+          prompt: params.prompt,
+          cwd: spriteConfig.defaultCwd || params.cwd,
+          permissionProfile: params.permissionProfile,
+          allowedTools: params.allowedTools,
+          claudeSessionId,
+        });
+      }
+    }
   }
 
   const launcher = targetLauncherId ? getLauncher(targetLauncherId) : undefined;
@@ -309,30 +451,47 @@ export async function dispatchAgentSession(params: {
     })
     .run();
 
+  // Fire-and-forget: return sessionId immediately so UI can open the tab.
+  // The session is already in 'pending' status in the DB.
   if (launcher && launcher.ws.readyState === 1) {
-    // Route to remote launcher
-    const msg: LaunchSession = {
-      type: 'launch_session',
-      sessionId,
-      prompt: params.prompt,
-      cwd: params.cwd,
-      permissionProfile: params.permissionProfile,
-      allowedTools: params.allowedTools,
-      claudeSessionId,
-      cols: 120,
-      rows: 40,
-    };
-    try {
-      launcher.ws.send(JSON.stringify(msg));
-      addSessionToLauncher(launcher.id, sessionId);
-      console.log(`[dispatch] Sent session ${sessionId} to launcher ${launcher.id}`);
-    } catch (err) {
-      console.error(`[dispatch] Failed to send to launcher, falling back to local:`, err);
-      await spawnLocal(sessionId, { ...params, claudeSessionId });
-    }
+    (async () => {
+      // Sync codebase to remote before launching
+      if (isGitRepo(params.cwd)) {
+        try {
+          const { branch, remoteUrl } = pushSyncBranch(params.cwd, sessionId);
+          await syncCodebaseToLauncher(launcher.id, sessionId, branch, params.cwd, remoteUrl);
+          console.log(`[dispatch] Synced codebase to launcher ${launcher.id} via branch ${branch}`);
+        } catch (err: any) {
+          console.warn(`[dispatch] Code sync failed, proceeding without sync: ${err.message}`);
+        }
+      }
+
+      // Route to remote launcher
+      const msg: LaunchSession = {
+        type: 'launch_session',
+        sessionId,
+        prompt: params.prompt,
+        cwd: params.cwd,
+        permissionProfile: params.permissionProfile,
+        allowedTools: params.allowedTools,
+        claudeSessionId,
+        cols: 120,
+        rows: 40,
+      };
+      try {
+        launcher.ws.send(JSON.stringify(msg));
+        addSessionToLauncher(launcher.id, sessionId);
+        console.log(`[dispatch] Sent session ${sessionId} to launcher ${launcher.id}`);
+      } catch (err) {
+        console.error(`[dispatch] Failed to send to launcher, falling back to local:`, err);
+        spawnLocal(sessionId, { ...params, claudeSessionId }).catch(() => {});
+      }
+    })().catch((err) => {
+      console.error(`[dispatch] Async remote launch failed for ${sessionId}:`, err);
+    });
   } else {
-    // Local spawn — await so errors propagate to the caller
-    await spawnLocal(sessionId, { ...params, claudeSessionId });
+    // Local spawn — fire-and-forget, errors are handled in spawnLocal
+    spawnLocal(sessionId, { ...params, claudeSessionId }).catch(() => {});
   }
 
   return { sessionId };
@@ -371,6 +530,7 @@ export async function dispatchTerminalSession(params: {
   appId?: string | null;
   launcherId?: string | null;
   permissionProfile?: PermissionProfile;
+  tmuxTarget?: string;
 }): Promise<{ sessionId: string }> {
   const sessionId = ulid();
   const now = new Date().toISOString();
@@ -391,6 +551,7 @@ export async function dispatchTerminalSession(params: {
     })
     .run();
 
+  // Fire-and-forget: return sessionId immediately so UI can open the tab
   if (launcher && launcher.ws.readyState === 1) {
     // Look up machine's defaultCwd for the remote launcher
     let remoteCwd = '~';
@@ -405,6 +566,7 @@ export async function dispatchTerminalSession(params: {
       prompt: '',
       cwd: remoteCwd,
       permissionProfile: profile,
+      tmuxTarget: params.tmuxTarget,
       cols: 120,
       rows: 40,
     };
@@ -414,23 +576,10 @@ export async function dispatchTerminalSession(params: {
       console.log(`[dispatch] Sent terminal session ${sessionId} to launcher ${launcher.id} (profile=${profile})`);
     } catch (err) {
       console.error(`[dispatch] Failed to send terminal to launcher, falling back to local:`, err);
-      await spawnLocal(sessionId, { cwd: params.cwd, permissionProfile: profile });
+      spawnLocal(sessionId, { cwd: params.cwd, permissionProfile: profile }).catch(() => {});
     }
   } else {
-    try {
-      await spawnAgentSession({
-        sessionId,
-        cwd: params.cwd,
-        permissionProfile: profile,
-      });
-    } catch (err) {
-      console.error(`Failed to spawn terminal session ${sessionId}:`, err);
-      db.update(schema.agentSessions)
-        .set({ status: 'failed', completedAt: new Date().toISOString() })
-        .where(eq(schema.agentSessions.id, sessionId))
-        .run();
-      throw err;
-    }
+    spawnLocal(sessionId, { cwd: params.cwd, permissionProfile: profile }).catch(() => {});
   }
 
   return { sessionId };
@@ -456,20 +605,7 @@ export async function dispatchCompanionTerminal(params: {
     })
     .run();
 
-  try {
-    await spawnAgentSession({
-      sessionId,
-      cwd: params.cwd,
-      permissionProfile: 'plain',
-    });
-  } catch (err) {
-    console.error(`Failed to spawn companion terminal ${sessionId}:`, err);
-    db.update(schema.agentSessions)
-      .set({ status: 'failed', completedAt: new Date().toISOString() })
-      .where(eq(schema.agentSessions.id, sessionId))
-      .run();
-    throw err;
-  }
+  spawnLocal(sessionId, { cwd: params.cwd, permissionProfile: 'plain' }).catch(() => {});
 
   return { sessionId };
 }
@@ -493,20 +629,7 @@ export async function dispatchTmuxAttachSession(params: {
     })
     .run();
 
-  try {
-    await spawnAgentSession({
-      sessionId,
-      cwd: process.cwd(),
-      permissionProfile: 'plain',
-    });
-  } catch (err) {
-    console.error(`Failed to attach tmux session ${sessionId}:`, err);
-    db.update(schema.agentSessions)
-      .set({ status: 'failed', completedAt: new Date().toISOString() })
-      .where(eq(schema.agentSessions.id, sessionId))
-      .run();
-    throw err;
-  }
+  spawnLocal(sessionId, { cwd: process.cwd(), permissionProfile: 'plain' }).catch(() => {});
 
   return { sessionId };
 }
@@ -633,20 +756,20 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
         console.log(`[dispatch] Sent resume session ${sessionId} to launcher ${launcher.id}`);
       } catch (err) {
         console.error(`[dispatch] Failed to send resume to launcher, falling back to local:`, err);
-        await spawnLocal(sessionId, {
+        spawnLocal(sessionId, {
           prompt: '',
           cwd,
           permissionProfile,
           resumeSessionId: parent.claudeSessionId,
-        });
+        }).catch(() => {});
       }
     } else {
-      await spawnLocal(sessionId, {
+      spawnLocal(sessionId, {
         prompt: '',
         cwd,
         permissionProfile,
         resumeSessionId: parent.claudeSessionId,
-      });
+      }).catch(() => {});
     }
 
     return { sessionId };
@@ -704,10 +827,10 @@ IMPORTANT: The previous session may have made partial progress. Check the curren
       addSessionToLauncher(launcher.id, sessionId);
     } catch (err) {
       console.error(`[dispatch] Failed to send to launcher, falling back to local:`, err);
-      await spawnLocal(sessionId, { prompt: resumePrompt, cwd, permissionProfile, claudeSessionId });
+      spawnLocal(sessionId, { prompt: resumePrompt, cwd, permissionProfile, claudeSessionId }).catch(() => {});
     }
   } else {
-    await spawnLocal(sessionId, { prompt: resumePrompt, cwd, permissionProfile, claudeSessionId });
+    spawnLocal(sessionId, { prompt: resumePrompt, cwd, permissionProfile, claudeSessionId }).catch(() => {});
   }
 
   return { sessionId };
@@ -967,4 +1090,124 @@ async function doTransfer(transfer: TransferState, targetCwd?: string): Promise<
   transfer.sessionId = sessionId;
   transfer.status = 'completed';
   console.log(`[transfer] Transfer ${transfer.id} completed — new session ${sessionId}`);
+}
+
+// --- Sprite dispatch ---
+
+async function dispatchSpriteSession(params: {
+  sessionId: string;
+  feedbackId: string;
+  agentEndpointId: string;
+  spriteConfigId: string;
+  spriteName: string;
+  token: string | null;
+  prompt: string;
+  cwd: string;
+  permissionProfile: PermissionProfile;
+  allowedTools?: string | null;
+  claudeSessionId: string;
+}): Promise<{ sessionId: string }> {
+  const now = new Date().toISOString();
+
+  db.insert(schema.agentSessions)
+    .values({
+      id: params.sessionId,
+      feedbackId: params.feedbackId,
+      agentEndpointId: params.agentEndpointId,
+      permissionProfile: params.permissionProfile,
+      status: 'pending',
+      outputBytes: 0,
+      claudeSessionId: params.claudeSessionId,
+      spriteConfigId: params.spriteConfigId,
+      createdAt: now,
+    })
+    .run();
+
+  // Build claude command
+  const cmdArgs = ['claude'];
+  if (params.permissionProfile === 'yolo') {
+    cmdArgs.push('--dangerously-skip-permissions');
+  }
+  if (params.prompt) {
+    cmdArgs.push('-p', params.prompt);
+  }
+  if (params.cwd) {
+    cmdArgs.push('--cwd', params.cwd);
+  }
+
+  try {
+    launchSpriteSession({
+      sessionId: params.sessionId,
+      spriteConfigId: params.spriteConfigId,
+      spriteName: params.spriteName,
+      token: params.token,
+      cmdArgs,
+    });
+    console.log(`[dispatch] Launched sprite session ${params.sessionId} on sprite ${params.spriteName}`);
+  } catch (err) {
+    console.error(`[dispatch] Failed to launch sprite session:`, err);
+    db.update(schema.agentSessions)
+      .set({ status: 'failed', completedAt: new Date().toISOString() })
+      .where(eq(schema.agentSessions.id, params.sessionId))
+      .run();
+    throw err;
+  }
+
+  return { sessionId: params.sessionId };
+}
+
+export async function dispatchDirectSpriteSession(params: {
+  spriteConfigId: string;
+  prompt?: string;
+  permissionProfile?: PermissionProfile;
+}): Promise<{ sessionId: string }> {
+  const config = db.select().from(schema.spriteConfigs)
+    .where(eq(schema.spriteConfigs.id, params.spriteConfigId)).get();
+  if (!config) throw new Error('Sprite config not found');
+
+  const sessionId = ulid();
+  const now = new Date().toISOString();
+  const profile = params.permissionProfile || 'interactive';
+
+  db.insert(schema.agentSessions)
+    .values({
+      id: sessionId,
+      feedbackId: null,
+      agentEndpointId: null,
+      permissionProfile: profile,
+      status: 'pending',
+      outputBytes: 0,
+      spriteConfigId: params.spriteConfigId,
+      createdAt: now,
+    })
+    .run();
+
+  const cmdArgs = ['claude'];
+  if (profile === 'yolo') {
+    cmdArgs.push('--dangerously-skip-permissions');
+  }
+  if (params.prompt) {
+    cmdArgs.push('-p', params.prompt);
+  }
+  if (config.defaultCwd) {
+    cmdArgs.push('--cwd', config.defaultCwd);
+  }
+
+  try {
+    launchSpriteSession({
+      sessionId,
+      spriteConfigId: params.spriteConfigId,
+      spriteName: config.spriteName,
+      token: config.token,
+      cmdArgs,
+    });
+  } catch (err) {
+    db.update(schema.agentSessions)
+      .set({ status: 'failed', completedAt: new Date().toISOString() })
+      .where(eq(schema.agentSessions.id, sessionId))
+      .run();
+    throw err;
+  }
+
+  return { sessionId };
 }

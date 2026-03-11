@@ -25,6 +25,7 @@ export const autoJumpDelay = signal<boolean>(loadSetting('pw-auto-jump-delay', f
 export const autoJumpShowPopup = signal<boolean>(loadSetting('pw-auto-jump-show-popup', true));
 export const autoJumpLogs = signal<boolean>(loadSetting('pw-auto-jump-logs', false));
 export const autoCloseWaitingPanel = signal<boolean>(loadSetting('pw-auto-close-waiting-panel', false));
+export const autoJumpHandleBounce = signal<boolean>(loadSetting('pw-auto-jump-handle-bounce', true));
 
 export interface RecentResult {
   type: 'application' | 'feedback' | 'session';
@@ -123,6 +124,10 @@ effect(() => {
 
 effect(() => {
   localStorage.setItem('pw-auto-close-waiting-panel', JSON.stringify(autoCloseWaitingPanel.value));
+});
+
+effect(() => {
+  localStorage.setItem('pw-auto-jump-handle-bounce', JSON.stringify(autoJumpHandleBounce.value));
 });
 
 effect(() => {

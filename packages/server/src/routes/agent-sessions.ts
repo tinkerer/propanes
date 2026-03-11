@@ -1,13 +1,16 @@
 import { Hono } from 'hono';
 import { eq, desc, ne, and } from 'drizzle-orm';
 import { existsSync, readFileSync } from 'node:fs';
+import { basename } from 'node:path';
 import { db, schema } from '../db/index.js';
 import { killSession } from '../agent-sessions.js';
 import { resumeAgentSession, dispatchTerminalSession, transferSession, getTransfer } from '../dispatch.js';
 import { getSessionLiveStates } from '../session-service-client.js';
-import { getLauncher } from '../launcher-registry.js';
+import { getLauncher, sendAndWait } from '../launcher-registry.js';
+import { listSessions, sendCommand } from '../sessions.js';
 import {
   computeJsonlPath as computeJsonlPathFull,
+  computeJsonlDir,
   findContinuationJsonlsCached,
   readJsonlWithSubagents,
   filterJsonlLines,
@@ -39,6 +42,235 @@ agentSessionRoutes.get('/transfers/:transferId', async (c) => {
     parentSessionId: transfer.parentSessionId,
     error: transfer.error,
   });
+});
+
+// Search JSONL content across all sessions
+agentSessionRoutes.post('/search-content', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const { query, errorsOnly, limit: rawLimit } = body as {
+    query?: string;
+    errorsOnly?: boolean;
+    limit?: number;
+  };
+
+  const maxResults = Math.min(rawLimit || 20, 50);
+
+  // Get recent non-deleted sessions
+  const rows = db
+    .select({
+      session: schema.agentSessions,
+      feedbackTitle: schema.feedbackItems.title,
+      feedbackAppId: schema.feedbackItems.appId,
+      agentName: schema.agentEndpoints.name,
+      appProjectDir: schema.applications.projectDir,
+    })
+    .from(schema.agentSessions)
+    .leftJoin(schema.feedbackItems, eq(schema.agentSessions.feedbackId, schema.feedbackItems.id))
+    .leftJoin(schema.agentEndpoints, eq(schema.agentSessions.agentEndpointId, schema.agentEndpoints.id))
+    .leftJoin(schema.applications, eq(schema.feedbackItems.appId, schema.applications.id))
+    .where(ne(schema.agentSessions.status, 'deleted'))
+    .orderBy(desc(schema.agentSessions.createdAt))
+    .limit(100)
+    .all();
+
+  const results: Array<{
+    sessionId: string;
+    feedbackTitle: string | null;
+    agentName: string | null;
+    status: string;
+    createdAt: string | null;
+    errorCount: number;
+    matches: Array<{ line: number; content: string; isError: boolean; toolName?: string }>;
+  }> = [];
+
+  const queryLower = query?.toLowerCase();
+
+  for (const row of rows) {
+    const projectDir = row.appProjectDir || process.cwd();
+    const jsonlPath = computeJsonlPath(projectDir, row.session.claudeSessionId);
+    if (!jsonlPath || !existsSync(jsonlPath)) continue;
+
+    const allLines: string[] = [];
+    try {
+      const continuations = findContinuationJsonlsCached(jsonlPath);
+      for (const fp of [jsonlPath, ...continuations]) {
+        readJsonlWithSubagents(fp, allLines);
+      }
+    } catch { continue; }
+
+    const matches: Array<{ line: number; content: string; isError: boolean; toolName?: string }> = [];
+    let errorCount = 0;
+
+    for (let i = 0; i < allLines.length; i++) {
+      try {
+        const obj = JSON.parse(allLines[i]);
+        const isError = !!obj.is_error || obj.subtype === 'error_message';
+
+        if (isError) errorCount++;
+
+        // Extract readable content for matching
+        let content = '';
+        let toolName: string | undefined;
+
+        if (obj.type === 'assistant' && obj.message?.content) {
+          for (const block of obj.message.content) {
+            if (block.type === 'tool_use') {
+              toolName = block.name;
+            } else if (block.type === 'text') {
+              content += block.text + '\n';
+            }
+          }
+        } else if (obj.type === 'result') {
+          if (typeof obj.result === 'string') content = obj.result;
+          else if (obj.result?.content) {
+            for (const b of obj.result.content) {
+              if (b.type === 'text') content += b.text + '\n';
+            }
+          }
+          if (obj.tool_name) toolName = obj.tool_name;
+        }
+
+        const shouldInclude = errorsOnly
+          ? isError
+          : (queryLower ? content.toLowerCase().includes(queryLower) || (toolName?.toLowerCase().includes(queryLower) ?? false) : isError);
+
+        if (shouldInclude && content.trim()) {
+          matches.push({
+            line: i,
+            content: content.slice(0, 500),
+            isError,
+            toolName,
+          });
+        }
+      } catch { /* skip unparseable */ }
+    }
+
+    if (matches.length > 0 || (errorsOnly && errorCount > 0)) {
+      results.push({
+        sessionId: row.session.id,
+        feedbackTitle: row.feedbackTitle || null,
+        agentName: row.agentName || null,
+        status: row.session.status,
+        createdAt: row.session.createdAt,
+        errorCount,
+        matches: matches.slice(0, 10),
+      });
+    }
+
+    if (results.length >= maxResults) break;
+  }
+
+  // Sort by error count descending
+  results.sort((a, b) => b.errorCount - a.errorCount);
+
+  return c.json({ results, total: results.length });
+});
+
+// Get error summary across all sessions
+agentSessionRoutes.get('/error-summary', async (c) => {
+  const rows = db
+    .select({
+      session: schema.agentSessions,
+      feedbackTitle: schema.feedbackItems.title,
+      agentName: schema.agentEndpoints.name,
+      appProjectDir: schema.applications.projectDir,
+    })
+    .from(schema.agentSessions)
+    .leftJoin(schema.feedbackItems, eq(schema.agentSessions.feedbackId, schema.feedbackItems.id))
+    .leftJoin(schema.agentEndpoints, eq(schema.agentSessions.agentEndpointId, schema.agentEndpoints.id))
+    .leftJoin(schema.applications, eq(schema.feedbackItems.appId, schema.applications.id))
+    .where(ne(schema.agentSessions.status, 'deleted'))
+    .orderBy(desc(schema.agentSessions.createdAt))
+    .limit(50)
+    .all();
+
+  const sessions: Array<{
+    sessionId: string;
+    feedbackTitle: string | null;
+    agentName: string | null;
+    status: string;
+    errorCount: number;
+    errors: Array<{ content: string; toolName?: string }>;
+  }> = [];
+
+  for (const row of rows) {
+    const projectDir = row.appProjectDir || process.cwd();
+    const jsonlPath = computeJsonlPath(projectDir, row.session.claudeSessionId);
+    if (!jsonlPath || !existsSync(jsonlPath)) continue;
+
+    const allLines: string[] = [];
+    try {
+      const continuations = findContinuationJsonlsCached(jsonlPath);
+      for (const fp of [jsonlPath, ...continuations]) {
+        readJsonlWithSubagents(fp, allLines);
+      }
+    } catch { continue; }
+
+    const errors: Array<{ content: string; toolName?: string }> = [];
+
+    for (const line of allLines) {
+      try {
+        const obj = JSON.parse(line);
+        if (!obj.is_error && obj.subtype !== 'error_message') continue;
+
+        let content = '';
+        let toolName: string | undefined;
+
+        if (obj.type === 'result') {
+          if (typeof obj.result === 'string') content = obj.result;
+          else if (obj.result?.content) {
+            for (const b of obj.result.content) {
+              if (b.type === 'text') content += b.text + '\n';
+            }
+          }
+          if (obj.tool_name) toolName = obj.tool_name;
+        } else if (obj.type === 'assistant' && obj.message?.content) {
+          for (const block of obj.message.content) {
+            if (block.type === 'text') content += block.text + '\n';
+          }
+        }
+
+        if (content.trim()) {
+          errors.push({ content: content.slice(0, 300), toolName });
+        }
+      } catch { /* skip */ }
+    }
+
+    if (errors.length > 0) {
+      sessions.push({
+        sessionId: row.session.id,
+        feedbackTitle: row.feedbackTitle || null,
+        agentName: row.agentName || null,
+        status: row.session.status,
+        errorCount: errors.length,
+        errors: errors.slice(0, 5),
+      });
+    }
+  }
+
+  sessions.sort((a, b) => b.errorCount - a.errorCount);
+
+  // Also gather console errors from live widget sessions
+  const consoleErrors: Array<{ widgetSessionId: string; url: string | null; errors: Array<{ level: string; message: string; source?: string }> }> = [];
+  try {
+    const liveSessions = listSessions();
+    const errorPromises = liveSessions.map(async (ls) => {
+      try {
+        const result = await sendCommand(ls.sessionId, 'getConsole', {}, 3000) as { logs?: Array<{ level: string; message: string; source?: string }> };
+        const errorLogs = (result?.logs || []).filter((l: any) => l.level === 'error' || l.level === 'warn');
+        if (errorLogs.length > 0) {
+          consoleErrors.push({
+            widgetSessionId: ls.sessionId,
+            url: ls.url || null,
+            errors: errorLogs.slice(0, 10),
+          });
+        }
+      } catch { /* session may not respond */ }
+    });
+    await Promise.allSettled(errorPromises);
+  } catch { /* ignore */ }
+
+  return c.json({ sessions, totalErrorSessions: sessions.length, consoleErrors });
 });
 
 agentSessionRoutes.get('/', async (c) => {
@@ -88,6 +320,7 @@ agentSessionRoutes.get('/', async (c) => {
     let launcherHostname: string | null = null;
     let machineName: string | null = null;
     let harnessName: string | null = null;
+    let harnessAppPort: number | null = null;
     let isRemote = false;
     let isHarness = false;
 
@@ -98,6 +331,7 @@ agentSessionRoutes.get('/', async (c) => {
         launcherHostname = launcher.hostname;
         isRemote = !launcher.isLocal;
         isHarness = !!launcher.harness;
+        if (launcher.harness?.appPort) harnessAppPort = launcher.harness.appPort;
         if (launcher.machineId) {
           const machine = db.select().from(schema.machines)
             .where(eq(schema.machines.id, launcher.machineId)).get();
@@ -106,7 +340,10 @@ agentSessionRoutes.get('/', async (c) => {
         if (launcher.harnessConfigId) {
           const harness = db.select().from(schema.harnessConfigs)
             .where(eq(schema.harnessConfigs.id, launcher.harnessConfigId)).get();
-          if (harness) harnessName = harness.name;
+          if (harness) {
+            harnessName = harness.name;
+            if (!harnessAppPort && harness.appPort) harnessAppPort = harness.appPort;
+          }
         }
       } else {
         // Launcher disconnected — try to resolve from DB
@@ -127,13 +364,14 @@ agentSessionRoutes.get('/', async (c) => {
       paneTitle: live?.paneTitle || null,
       paneCommand: live?.paneCommand || null,
       panePath: live?.panePath || null,
-      jsonlPath: computeJsonlPath(r.appProjectDir || null, r.session.claudeSessionId),
+      jsonlPath: computeJsonlPath(r.appProjectDir || process.cwd(), r.session.claudeSessionId),
       launcherName,
       launcherHostname,
       machineName,
       harnessName,
       isRemote,
       isHarness,
+      harnessAppPort,
     };
   });
 
@@ -228,7 +466,7 @@ agentSessionRoutes.post('/:id/open-terminal', async (c) => {
     try {
       const tmpDir = mkdtempSync('/tmp/pw-open-');
       const tmpFile = resolve(tmpDir, 'open.command');
-      const cmd = `ssh ${hostname} 'TMUX= tmux -L prompt-widget attach-session -t ${tmuxName}'\nrm -rf "${tmpDir}"\n`;
+      const cmd = `ssh -t ${hostname} 'TMUX= tmux -L prompt-widget attach-session -t ${tmuxName}'\nrm -rf "${tmpDir}"\n`;
       writeFileSync(tmpFile, cmd);
       chmodSync(tmpFile, 0o755);
       execFileSync('open', ['-a', 'Terminal', '-e', tmpFile], { stdio: 'pipe' });
@@ -253,6 +491,92 @@ agentSessionRoutes.post('/:id/open-terminal', async (c) => {
   }
 });
 
+agentSessionRoutes.post('/:id/send-keys', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const { keys, enter, tmuxTarget } = body as { keys?: string; enter?: boolean; tmuxTarget?: string };
+  if (!keys) return c.json({ error: 'keys is required' }, 400);
+
+  const session = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, id)).get();
+  if (!session) return c.json({ error: 'Session not found' }, 404);
+
+  const tmuxName = tmuxTarget || `pw-${id}`;
+
+  if (session.launcherId) {
+    const launcher = getLauncher(session.launcherId);
+    if (launcher && !launcher.isLocal) {
+      try {
+        const { ulid } = await import('ulidx');
+        const reqId = ulid();
+        const result = await sendAndWait(session.launcherId, {
+          type: 'send_keys' as const,
+          sessionId: reqId,
+          targetSessionId: id,
+          keys,
+          enter,
+          tmuxTarget,
+        }, 'send_keys_result', 10_000) as any;
+        return c.json({ ok: result.ok, error: result.error });
+      } catch (err: any) {
+        return c.json({ ok: false, error: err.message }, 500);
+      }
+    }
+  }
+
+  // Local
+  try {
+    const { execFileSync } = await import('node:child_process');
+    const args = ['-L', 'prompt-widget', 'send-keys', '-t', tmuxName, keys];
+    if (enter !== false) args.push('Enter');
+    execFileSync('tmux', args, { stdio: 'pipe', timeout: 10_000 });
+    return c.json({ ok: true });
+  } catch (err: any) {
+    return c.json({ ok: false, error: err.message }, 500);
+  }
+});
+
+agentSessionRoutes.post('/:id/capture-pane', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const { lastN, tmuxTarget } = body as { lastN?: number; tmuxTarget?: string };
+
+  const session = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, id)).get();
+  if (!session) return c.json({ error: 'Session not found' }, 404);
+
+  const tmuxName = tmuxTarget || `pw-${id}`;
+
+  if (session.launcherId) {
+    const launcher = getLauncher(session.launcherId);
+    if (launcher && !launcher.isLocal) {
+      try {
+        const { ulid } = await import('ulidx');
+        const reqId = ulid();
+        const result = await sendAndWait(session.launcherId, {
+          type: 'capture_pane' as const,
+          sessionId: reqId,
+          targetSessionId: id,
+          lastN,
+          tmuxTarget,
+        }, 'capture_pane_result', 10_000) as any;
+        return c.json({ ok: result.ok, content: result.content, error: result.error });
+      } catch (err: any) {
+        return c.json({ ok: false, error: err.message }, 500);
+      }
+    }
+  }
+
+  // Local
+  try {
+    const { execFileSync } = await import('node:child_process');
+    const args = ['-L', 'prompt-widget', 'capture-pane', '-t', tmuxName, '-p'];
+    if (lastN) args.push('-S', String(-lastN));
+    const content = execFileSync('tmux', args, { stdio: 'pipe', timeout: 10_000 }).toString();
+    return c.json({ ok: true, content });
+  } catch (err: any) {
+    return c.json({ ok: false, error: err.message }, 500);
+  }
+});
+
 agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
   const id = c.req.param('id');
   const row = db
@@ -270,7 +594,7 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
     return c.json({ error: 'Session not found' }, 404);
   }
 
-  const jsonlPath = computeJsonlPath(row.appProjectDir || null, row.claudeSessionId);
+  const jsonlPath = computeJsonlPath(row.appProjectDir || process.cwd(), row.claudeSessionId);
   if (!jsonlPath) {
     return c.json({ error: 'No JSONL path available' }, 400);
   }
@@ -308,7 +632,7 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
     return c.json({ error: 'Session not found' }, 404);
   }
 
-  const jsonlPath = computeJsonlPath(row.appProjectDir || null, row.claudeSessionId);
+  const jsonlPath = computeJsonlPath(row.appProjectDir || process.cwd(), row.claudeSessionId);
   if (!jsonlPath) {
     return c.json({ error: 'No JSONL path available' }, 400);
   }
@@ -361,7 +685,7 @@ agentSessionRoutes.post('/:id/tail-jsonl', async (c) => {
     return c.json({ error: 'Session not found' }, 404);
   }
 
-  const jsonlPath = computeJsonlPath(row.appProjectDir || null, row.claudeSessionId);
+  const jsonlPath = computeJsonlPath(row.appProjectDir || process.cwd(), row.claudeSessionId);
   if (!jsonlPath) {
     return c.json({ error: 'No JSONL path available (missing projectDir or claudeSessionId)' }, 400);
   }
@@ -428,7 +752,7 @@ agentSessionRoutes.get('/:id/export-context', async (c) => {
     return c.json({ error: 'Session not found' }, 404);
   }
 
-  const projectDir = row.appProjectDir || null;
+  const projectDir = row.appProjectDir || process.cwd();
   const claudeSessionId = row.session.claudeSessionId;
   if (!projectDir || !claudeSessionId) {
     return c.json({ error: 'Missing projectDir or claudeSessionId' }, 400);

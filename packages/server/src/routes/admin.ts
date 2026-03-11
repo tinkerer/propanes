@@ -29,6 +29,7 @@ import { killSession } from '../agent-sessions.js';
 import { feedbackEvents } from '../events.js';
 import { verifyAdminToken } from '../auth.js';
 import { listLaunchers } from '../launcher-registry.js';
+import { countActiveSpriteSessions } from '../sprite-sessions.js';
 
 const PW_TMUX_CONF = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'tmux-pw.conf');
 
@@ -601,10 +602,10 @@ adminRoutes.delete('/agents/:id', async (c) => {
   return c.json({ id, deleted: true });
 });
 
-// Dispatch targets (connected remote launchers + running harness configs)
+// Dispatch targets (connected remote launchers + running harness configs + DB-sourced offline targets)
 adminRoutes.get('/dispatch-targets', (c) => {
   const launchers = listLaunchers();
-  const launcherTargets = launchers
+  const launcherTargets: Array<Record<string, unknown>> = launchers
     .filter(l => !l.isLocal && l.ws?.readyState === 1)
     .map(l => {
       let machineName: string | null = null;
@@ -628,6 +629,7 @@ adminRoutes.get('/dispatch-targets', (c) => {
         harnessConfigId: l.harnessConfigId || null,
         activeSessions: l.activeSessions.size,
         maxSessions: l.capabilities.maxSessions,
+        online: true,
       };
     });
 
@@ -658,6 +660,68 @@ adminRoutes.get('/dispatch-targets', (c) => {
       harnessConfigId: hc.id,
       activeSessions: launcher.activeSessions.size,
       maxSessions: launcher.capabilities.maxSessions,
+      online: true,
+    });
+  }
+
+  // Include DB-sourced machines with status='online' that don't already have a connected launcher
+  const connectedMachineIds = new Set(launcherTargets.filter(t => !t.isHarness && t.machineId).map(t => t.machineId));
+  const dbMachines = db.select().from(schema.machines)
+    .where(eq(schema.machines.status, 'online'))
+    .all();
+  for (const m of dbMachines) {
+    if (connectedMachineIds.has(m.id)) continue;
+    launcherTargets.push({
+      launcherId: `db-machine:${m.id}`,
+      name: m.name,
+      hostname: m.hostname || m.address || '',
+      machineName: m.name,
+      machineId: m.id,
+      defaultCwd: m.defaultCwd || null,
+      isHarness: false,
+      harnessConfigId: null,
+      activeSessions: 0,
+      maxSessions: 0,
+      online: false,
+    });
+  }
+
+  // Include DB-sourced harness configs with status='running' that don't already have a target
+  const existingHarnessIds = new Set(launcherTargets.filter(t => t.isHarness && t.harnessConfigId).map(t => t.harnessConfigId));
+  for (const hc of harnessConfigs) {
+    if (existingHarnessIds.has(hc.id)) continue;
+    launcherTargets.push({
+      launcherId: `db-harness:${hc.id}`,
+      name: hc.name || `harness-${hc.id.slice(-6)}`,
+      hostname: '',
+      machineName: null,
+      machineId: hc.machineId || null,
+      defaultCwd: null,
+      isHarness: true,
+      harnessConfigId: hc.id,
+      activeSessions: 0,
+      maxSessions: 0,
+      online: false,
+    });
+  }
+
+  // Include sprite configs as targets
+  const spriteConfigs = db.select().from(schema.spriteConfigs).all();
+  for (const sc of spriteConfigs) {
+    launcherTargets.push({
+      launcherId: `sprite:${sc.id}`,
+      name: sc.name,
+      hostname: `${sc.spriteName}.sprites.app`,
+      machineName: null,
+      machineId: null,
+      defaultCwd: sc.defaultCwd || null,
+      isHarness: false,
+      isSprite: true,
+      spriteConfigId: sc.id,
+      harnessConfigId: null,
+      activeSessions: countActiveSpriteSessions(sc.id),
+      maxSessions: sc.maxSessions,
+      online: sc.status !== 'error' && sc.status !== 'destroyed',
     });
   }
 
@@ -958,7 +1022,7 @@ adminRoutes.post('/setup-assist', async (c) => {
   const body = await c.req.json();
   const { request, entityType, entityId } = body as {
     request?: string;
-    entityType?: 'machine' | 'harness' | 'agent';
+    entityType?: 'machine' | 'harness' | 'agent' | 'sprite';
     entityId?: string;
   };
 
@@ -986,6 +1050,10 @@ adminRoutes.post('/setup-assist', async (c) => {
       const row = db.select().from(schema.agentEndpoints).where(eq(schema.agentEndpoints.id, entityId)).get();
       if (!row) return c.json({ error: 'Agent endpoint not found' }, 404);
       entity = { ...row };
+    } else if (entityType === 'sprite') {
+      const row = db.select().from(schema.spriteConfigs).where(eq(schema.spriteConfigs.id, entityId)).get();
+      if (!row) return c.json({ error: 'Sprite config not found' }, 404);
+      entity = { ...row };
     }
   }
 
@@ -1009,10 +1077,10 @@ adminRoutes.post('/setup-assist', async (c) => {
   const proto = c.req.header('x-forwarded-proto') || 'http';
   const baseUrl = `${proto}://${host}`;
 
-  // Spawn companion terminal for machine entities that have a hostname/address
+  // Spawn companion terminal for all machine entities (existing or new)
   let companionSessionId: string | null = null;
   let companionTmuxName: string | null = null;
-  if (entityType === 'machine' && entity && ((entity as any).hostname || (entity as any).address)) {
+  if (entityType === 'machine') {
     try {
       const companion = await dispatchCompanionTerminal({
         parentSessionId: '', // will link after agent session is created
@@ -1026,8 +1094,13 @@ adminRoutes.post('/setup-assist', async (c) => {
   }
 
   const prompt = entity
-    ? buildSetupPrompt(entityType as 'machine' | 'harness' | 'agent', entity, machine, request.trim(), baseUrl, companionTmuxName)
-    : buildNewEntityPrompt(entityType, request.trim(), baseUrl);
+    ? buildSetupPrompt(entityType as 'machine' | 'harness' | 'agent' | 'sprite', entity, machine, request.trim(), baseUrl, companionTmuxName)
+    : buildNewEntityPrompt(entityType, request.trim(), baseUrl, companionTmuxName);
+
+  // Find the app whose projectDir matches this server's cwd (for linking feedback + JSONL)
+  const serverCwd = process.cwd();
+  const adminApp = db.select().from(schema.applications)
+    .where(eq(schema.applications.projectDir, serverCwd)).get();
 
   // Create feedback item
   const feedbackId = ulid();
@@ -1037,8 +1110,9 @@ adminRoutes.post('/setup-assist', async (c) => {
     id: feedbackId,
     type: 'request',
     status: 'dispatched',
-    title: `[Setup Assist] ${entityLabel}: ${request.trim().slice(0, 60)}`,
+    title: `[Admin Assist] ${entityLabel}: ${request.trim().slice(0, 60)}`,
     description: request.trim(),
+    appId: adminApp?.id || null,
     dispatchedTo: agentRow.name,
     dispatchedAt: now,
     dispatchStatus: 'dispatched',
@@ -1077,7 +1151,7 @@ adminRoutes.post('/setup-assist', async (c) => {
 });
 
 function buildSetupPrompt(
-  entityType: 'machine' | 'harness' | 'agent',
+  entityType: 'machine' | 'harness' | 'agent' | 'sprite',
   entity: Record<string, unknown>,
   machine: Record<string, unknown> | null,
   request: string,
@@ -1085,7 +1159,7 @@ function buildSetupPrompt(
   companionTmuxName?: string | null,
 ): string {
   const parts: string[] = [];
-  const typeLabel = entityType === 'machine' ? 'Machine' : entityType === 'harness' ? 'Harness' : 'Agent';
+  const typeLabel = entityType === 'machine' ? 'Machine' : entityType === 'harness' ? 'Harness' : entityType === 'sprite' ? 'Sprite' : 'Agent';
   parts.push(`# Setup Assistant — ${typeLabel} Configuration`);
   parts.push('');
 
@@ -1122,16 +1196,54 @@ function buildSetupPrompt(
     parts.push(`PATCH ${baseUrl}/api/v1/admin/machines/${m.id}`);
     parts.push('Fields: name, hostname, address, type, capabilities (object with hasDocker, hasTmux, hasClaudeCli booleans), tags (string array), authToken');
     parts.push('');
-    parts.push('## Setup Steps');
-    parts.push('1. If the machine has an address, verify SSH connectivity: `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new <address> "echo ok"`');
-    parts.push('2. Check for Docker: `ssh <address> "docker --version" 2>&1`');
-    parts.push('3. Check for tmux: `ssh <address> "tmux -V" 2>&1`');
-    parts.push('4. Check for Claude CLI: `ssh <address> "which claude" 2>&1`');
-    parts.push('5. Update capabilities via the PATCH API: `curl -s -X PATCH ' + baseUrl + '/api/v1/admin/machines/' + m.id + ' -H "Content-Type: application/json" -d \'{"capabilities":{"hasDocker":true,"hasTmux":true,"hasClaudeCli":false}}\'`');
-    parts.push('6. Help configure auth token for launcher daemon if requested');
+    const wsUrl = baseUrl.replace(/^http/, 'ws');
+    parts.push('## Setup Phases');
     parts.push('');
-    parts.push('Note: The admin UI auto-refreshes every 10 seconds, so updates via PATCH will appear automatically.');
-  } else {
+    parts.push('### Phase 1: SSH & Prerequisites');
+    parts.push('1. Verify SSH connectivity: `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new ' + (m.address || '<address>') + ' "echo ok"`');
+    parts.push('2. Install tmux if missing: `ssh ' + (m.address || '<address>') + ' "which tmux || (sudo apt-get update && sudo apt-get install -y tmux)"`');
+    parts.push('3. Check Node.js (v18+): `ssh ' + (m.address || '<address>') + ' "node --version"`');
+    parts.push('4. Update capabilities: `curl -s -X PATCH ' + baseUrl + '/api/v1/admin/machines/' + m.id + ' -H "Content-Type: application/json" -d \'{"capabilities":{"hasTmux":true}}\'`');
+    parts.push('');
+    parts.push('### Phase 2: Deploy Launcher Daemon');
+    parts.push('1. Build the launcher bundle locally: `cd ' + process.cwd() + ' && node esbuild-launcher.mjs`');
+    parts.push('2. SCP the bundle to the remote machine: `scp ' + process.cwd() + '/dist/launcher-bundle.mjs ' + (m.address || '<address>') + ':~/launcher-bundle.mjs`');
+    parts.push('3. Install node-pty on the remote machine: `ssh ' + (m.address || '<address>') + ' "cd ~ && npm install node-pty"`');
+    parts.push('4. Start the launcher daemon on the remote machine (in a tmux session so it persists):');
+    parts.push('   ```');
+    parts.push('   ssh ' + (m.address || '<address>') + ' "tmux new-session -d -s pw-launcher \'SERVER_WS_URL=' + wsUrl + '/ws/launcher LAUNCHER_ID=' + (m.hostname || m.name || 'launcher') + ' MACHINE_ID=' + m.id + ' MAX_SESSIONS=5 node ~/launcher-bundle.mjs\'"');
+    parts.push('   ```');
+    parts.push('5. Verify the launcher connects — poll until it appears: `curl -s ' + baseUrl + '/api/v1/launchers | python3 -c "import sys,json; launchers=json.load(sys.stdin); print([l for l in launchers if l.get(\'machineId\')==\'' + m.id + '\'])"`');
+    parts.push('');
+    parts.push('### Phase 3: Launch a Terminal Session');
+    parts.push('Once the launcher is connected, launch a terminal session through the server API to prove it works:');
+    parts.push('1. Get the launcher ID from the launchers list above');
+    parts.push('2. Launch a terminal: `curl -s -X POST ' + baseUrl + '/api/v1/admin/terminal -H "Content-Type: application/json" -d \'{"launcherId":"<LAUNCHER_ID>"}\'`');
+    parts.push('3. Verify the session was created and is active');
+    parts.push('');
+    parts.push('### Phase 4: Install Claude CLI');
+    parts.push('Check if Claude CLI is installed on the remote machine. If not, install it:');
+    parts.push('1. Check: `ssh ' + (m.address || '<address>') + ' "which claude"`');
+    parts.push('2. Install if missing: `ssh ' + (m.address || '<address>') + ' "curl -fsSL https://claude.ai/install.sh | bash"`');
+    parts.push('3. Verify: `ssh ' + (m.address || '<address>') + ' "claude --version"`');
+    parts.push('4. Update capabilities: `curl -s -X PATCH ' + baseUrl + '/api/v1/admin/machines/' + m.id + ' -H "Content-Type: application/json" -d \'{"capabilities":{"hasClaudeCli":true}}\'`');
+    parts.push('');
+    parts.push('### Phase 5: Hardware Investigation');
+    parts.push('Launch a Claude agent session on the remote machine to investigate hardware:');
+    parts.push('1. SSH into the machine and run claude with a hardware investigation prompt:');
+    parts.push('   ```');
+    parts.push('   ssh ' + (m.address || '<address>') + ' "claude -p \'Investigate this machine hardware and output a JSON object with: cpu (model, cores, threads), memory (total_gb), gpus (array of {name, vram_gb, pcie_gen, pcie_lanes}), pcie_devices (array of {slot, device, driver}), disks (array of {device, size, type, mount}), os (name, version, kernel), network (array of {interface, speed}). Only output the JSON, no other text.\' --output-format json"');
+    parts.push('   ```');
+    parts.push('2. Capture the JSON output');
+    parts.push('');
+    parts.push('### Phase 6: Tag Machine');
+    parts.push('Parse the hardware investigation results and update the machine with tags:');
+    parts.push('1. Extract tags from the JSON: CPU model, RAM amount, GPU names, OS');
+    parts.push('2. Example tags: `["cpu:AMD EPYC 7513", "ram:256GB", "gpu:RTX 4090 x2", "os:Ubuntu 22.04"]`');
+    parts.push('3. Update: `curl -s -X PATCH ' + baseUrl + '/api/v1/admin/machines/' + m.id + ' -H "Content-Type: application/json" -d \'{"tags":["tag1","tag2",...]}\'`');
+    parts.push('');
+    parts.push('Note: You can skip phases if they are already done (e.g., launcher already connected, Claude CLI already installed). The admin UI auto-refreshes every 10 seconds.');
+  } else if (entityType === 'harness') {
     const h = entity as any;
     parts.push('## Current Harness Configuration');
     parts.push(`- **ID**: ${h.id}`);
@@ -1167,6 +1279,29 @@ function buildSetupPrompt(
     parts.push('5. Update config via the PATCH API: `curl -s -X PATCH ' + baseUrl + '/api/v1/admin/harness-configs/' + h.id + ' -H "Content-Type: application/json" -d \'{"appPort":8080}\'`');
     parts.push('');
     parts.push('Note: The admin UI auto-refreshes every 10 seconds, so updates via PATCH will appear automatically.');
+  } else if (entityType === 'sprite') {
+    const s = entity as any;
+    parts.push('## Current Sprite Configuration');
+    parts.push(`- **ID**: ${s.id}`);
+    parts.push(`- **Name**: ${s.name}`);
+    parts.push(`- **Sprite Name**: ${s.spriteName}`);
+    parts.push(`- **Status**: ${s.status}`);
+    parts.push(`- **Max Sessions**: ${s.maxSessions}`);
+    parts.push(`- **Default CWD**: ${s.defaultCwd || '(not set)'}`);
+    parts.push(`- **App ID**: ${s.appId || '(none)'}`);
+    parts.push(`- **Token**: ${s.token ? '(set)' : '(not set — using SPRITES_TOKEN env)'}`);
+    if (s.spriteUrl) parts.push(`- **Sprite URL**: ${s.spriteUrl}`);
+    if (s.spriteId) parts.push(`- **Sprite ID**: ${s.spriteId}`);
+    if (s.errorMessage) parts.push(`- **Error**: ${s.errorMessage}`);
+    parts.push('');
+    parts.push('## Sprite Management APIs');
+    parts.push(`- Update config: \`PATCH ${baseUrl}/api/v1/admin/sprite-configs/${s.id}\``);
+    parts.push(`  Fields: name, spriteName, token, maxSessions, defaultCwd, appId`);
+    parts.push(`- Provision: \`POST ${baseUrl}/api/v1/admin/sprite-configs/${s.id}/provision\``);
+    parts.push(`- Destroy: \`POST ${baseUrl}/api/v1/admin/sprite-configs/${s.id}/destroy\``);
+    parts.push(`- Check status: \`POST ${baseUrl}/api/v1/admin/sprite-configs/${s.id}/status\``);
+    parts.push(`- Launch session: \`POST ${baseUrl}/api/v1/admin/sprite-configs/${s.id}/session\``);
+    parts.push('');
   }
 
   if (companionTmuxName) {
@@ -1176,6 +1311,14 @@ function buildSetupPrompt(
     parts.push(`Use \`tmux send-keys -t ${companionTmuxName} "command" Enter\` to run commands.`);
     parts.push(`Use \`tmux capture-pane -t ${companionTmuxName} -p\` to read output.`);
     parts.push('Use the companion terminal for SSH connectivity checks, capability detection, and any shell commands needed for setup.');
+    parts.push('');
+    parts.push('### Remote Terminal API (for any session)');
+    parts.push('You can also interact with any agent session\'s tmux pane via HTTP:');
+    parts.push(`- Send keys: \`curl -s -X POST ${baseUrl}/api/v1/admin/agent-sessions/SESSION_ID/send-keys -H 'Content-Type: application/json' -d '{"keys":"echo hello"}'\``);
+    parts.push(`- Send keys without Enter: \`curl -s -X POST ${baseUrl}/api/v1/admin/agent-sessions/SESSION_ID/send-keys -H 'Content-Type: application/json' -d '{"keys":"text","enter":false}'\``);
+    parts.push(`- Capture pane output: \`curl -s -X POST ${baseUrl}/api/v1/admin/agent-sessions/SESSION_ID/capture-pane -H 'Content-Type: application/json' -d '{}'\``);
+    parts.push(`- Capture last N lines: \`curl -s -X POST ${baseUrl}/api/v1/admin/agent-sessions/SESSION_ID/capture-pane -H 'Content-Type: application/json' -d '{"lastN":30}'\``);
+    parts.push('These work for both local and remote sessions — the server routes to the correct launcher automatically.');
   }
 
   parts.push('');
@@ -1188,18 +1331,20 @@ function buildSetupPrompt(
   parts.push('- Show the user what you find and what you plan to update before making changes');
   if (companionTmuxName) {
     parts.push('- Use the companion terminal for running shell commands instead of trying to execute them directly');
+    parts.push('- For interacting with remote session terminals, use the send-keys/capture-pane HTTP API');
   }
 
   return parts.join('\n');
 }
 
 function buildNewEntityPrompt(
-  entityType: 'machine' | 'harness' | 'agent',
+  entityType: 'machine' | 'harness' | 'agent' | 'sprite',
   request: string,
   baseUrl: string,
+  companionTmuxName?: string | null,
 ): string {
   const parts: string[] = [];
-  const typeLabel = entityType === 'machine' ? 'Machine' : entityType === 'harness' ? 'Harness' : 'Agent';
+  const typeLabel = entityType === 'machine' ? 'Machine' : entityType === 'harness' ? 'Harness' : entityType === 'sprite' ? 'Sprite' : 'Agent';
   parts.push(`# Setup Assistant — Create New ${typeLabel}`);
   parts.push('');
 
@@ -1217,12 +1362,58 @@ function buildNewEntityPrompt(
     parts.push(`POST ${baseUrl}/api/v1/admin/machines`);
     parts.push('Fields: name (required), hostname, address, type (local|remote|cloud), capabilities (object with hasDocker, hasTmux, hasClaudeCli booleans), tags (string array)');
     parts.push('');
+    const wsUrl = baseUrl.replace(/^http/, 'ws');
     parts.push('## Workflow');
-    parts.push('1. Ask the user for the machine details (name, hostname/address, type)');
-    parts.push('2. Create the machine via POST API');
-    parts.push('3. If the machine has an address, verify SSH connectivity');
-    parts.push('4. Detect capabilities (Docker, tmux, Claude CLI)');
-    parts.push('5. Update capabilities via PATCH API');
+    parts.push('');
+    parts.push('### Step 0: Create Machine');
+    parts.push('1. Ask the user for machine details (name, hostname/address, type)');
+    parts.push('2. Create via POST: `curl -s -X POST ' + baseUrl + '/api/v1/admin/machines -H "Content-Type: application/json" -d \'{"name":"<name>","hostname":"<hostname>","address":"<address>","type":"remote"}\'`');
+    parts.push('3. Note the machine ID from the response');
+    parts.push('');
+    parts.push('### Phase 1: SSH & Prerequisites');
+    parts.push('1. Verify SSH: `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new <address> "echo ok"`');
+    parts.push('2. Install tmux if missing: `ssh <address> "which tmux || (sudo apt-get update && sudo apt-get install -y tmux)"`');
+    parts.push('3. Check Node.js (v18+): `ssh <address> "node --version"`');
+    parts.push('');
+    parts.push('### Phase 2: Deploy Launcher Daemon');
+    parts.push('1. Build launcher bundle: `cd ' + process.cwd() + ' && node esbuild-launcher.mjs`');
+    parts.push('2. SCP bundle: `scp ' + process.cwd() + '/dist/launcher-bundle.mjs <address>:~/launcher-bundle.mjs`');
+    parts.push('3. Install node-pty: `ssh <address> "cd ~ && npm install node-pty"`');
+    parts.push('4. Start launcher: `ssh <address> "tmux new-session -d -s pw-launcher \'SERVER_WS_URL=' + wsUrl + '/ws/launcher LAUNCHER_ID=<hostname> MACHINE_ID=<machine-id> MAX_SESSIONS=5 node ~/launcher-bundle.mjs\'"`');
+    parts.push('5. Verify connected: `curl -s ' + baseUrl + '/api/v1/launchers`');
+    parts.push('');
+    parts.push('### Phase 3: Launch Terminal Session');
+    parts.push('1. Launch terminal through server: `curl -s -X POST ' + baseUrl + '/api/v1/admin/terminal -H "Content-Type: application/json" -d \'{"launcherId":"<LAUNCHER_ID>"}\'`');
+    parts.push('');
+    parts.push('### Phase 4: Install Claude CLI');
+    parts.push('1. Check: `ssh <address> "which claude"`');
+    parts.push('2. Install if missing: `ssh <address> "curl -fsSL https://claude.ai/install.sh | bash"`');
+    parts.push('3. Update capabilities: `curl -s -X PATCH ' + baseUrl + '/api/v1/admin/machines/<machine-id> -H "Content-Type: application/json" -d \'{"capabilities":{"hasClaudeCli":true}}\'`');
+    parts.push('');
+    parts.push('### Phase 5: Hardware Investigation');
+    parts.push('1. Run claude on the remote machine to investigate hardware:');
+    parts.push('   `ssh <address> "claude -p \'Investigate this machine hardware and output a JSON object with: cpu, memory, gpus, pcie_devices, disks, os, network. Only output the JSON.\' --output-format json"`');
+    parts.push('');
+    parts.push('### Phase 6: Tag Machine');
+    parts.push('1. Parse the hardware JSON and create tags (e.g., `["cpu:AMD EPYC 7513", "ram:256GB", "gpu:RTX 4090 x2"]`)');
+    parts.push('2. Update: `curl -s -X PATCH ' + baseUrl + '/api/v1/admin/machines/<machine-id> -H "Content-Type: application/json" -d \'{"tags":[...]}\'`');
+    parts.push('');
+    parts.push('Note: Skip phases already done. The admin UI auto-refreshes.');
+    if (companionTmuxName) {
+      parts.push('');
+      parts.push('## Companion Terminal');
+      parts.push(`You have a companion terminal at tmux session \`${companionTmuxName}\`.`);
+      parts.push(`Use \`tmux send-keys -t ${companionTmuxName} "command" Enter\` to run commands.`);
+      parts.push(`Use \`tmux capture-pane -t ${companionTmuxName} -p\` to read output.`);
+      parts.push('Use the companion terminal for SSH connectivity checks, capability detection, and any shell commands needed for setup.');
+      parts.push('');
+      parts.push('### Remote Terminal API (for any session)');
+      parts.push('You can also interact with any agent session\'s tmux pane via HTTP:');
+      parts.push(`- Send keys: \`curl -s -X POST ${baseUrl}/api/v1/admin/agent-sessions/SESSION_ID/send-keys -H 'Content-Type: application/json' -d '{"keys":"echo hello"}'\``);
+      parts.push(`- Capture pane: \`curl -s -X POST ${baseUrl}/api/v1/admin/agent-sessions/SESSION_ID/capture-pane -H 'Content-Type: application/json' -d '{}'\``);
+      parts.push(`- Capture last N lines: \`curl -s -X POST ${baseUrl}/api/v1/admin/agent-sessions/SESSION_ID/capture-pane -H 'Content-Type: application/json' -d '{"lastN":30}'\``);
+      parts.push('These work for both local and remote sessions.');
+    }
   } else if (entityType === 'harness') {
     const existing = db.select().from(schema.harnessConfigs).all();
     const machineList = db.select().from(schema.machines).all();
@@ -1257,6 +1448,32 @@ function buildNewEntityPrompt(
     parts.push('2. Help choose Docker image and configure ports');
     parts.push('3. Create the harness config via POST API');
     parts.push('4. Suggest starting the harness if ready');
+  } else if (entityType === 'sprite') {
+    const existing = db.select().from(schema.spriteConfigs).all();
+    const appList = db.select().from(schema.applications).all();
+    if (existing.length > 0) {
+      parts.push('## Existing Sprites');
+      for (const s of existing) {
+        parts.push(`- ${s.name} (${s.status}) — sprite: ${s.spriteName}`);
+      }
+      parts.push('');
+    }
+    if (appList.length > 0) {
+      parts.push('## Available Applications');
+      for (const a of appList) {
+        parts.push(`- ${a.name} (id: ${a.id})`);
+      }
+      parts.push('');
+    }
+    parts.push('## Create API');
+    parts.push(`POST ${baseUrl}/api/v1/admin/sprite-configs`);
+    parts.push('Fields: name (required), spriteName (auto-generated if omitted), token (optional, falls back to SPRITES_TOKEN env), maxSessions (default 3), defaultCwd, appId, provisionNow (boolean)');
+    parts.push('');
+    parts.push('## Workflow');
+    parts.push('1. Ask the user for a display name and any preferences');
+    parts.push('2. Create the sprite config via POST API (with provisionNow=true to provision immediately)');
+    parts.push('3. Check status to verify provisioning succeeded');
+    parts.push('4. Optionally launch a test session to verify it works');
   } else {
     const existing = db.select().from(schema.agentEndpoints).all();
     const appList = db.select().from(schema.applications).all();
@@ -1311,7 +1528,7 @@ function buildNewEntityPrompt(
 // Plain terminal session (no agent, no feedback)
 adminRoutes.post('/terminal', async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const { cwd, appId, launcherId, harnessConfigId, permissionProfile } = body as { cwd?: string; appId?: string; launcherId?: string; harnessConfigId?: string; permissionProfile?: string };
+  const { cwd, appId, launcherId, harnessConfigId, permissionProfile, tmuxTarget } = body as { cwd?: string; appId?: string; launcherId?: string; harnessConfigId?: string; permissionProfile?: string; tmuxTarget?: string };
   // Harness terminal: exec into the container
   if (harnessConfigId && launcherId) {
     try {
@@ -1340,7 +1557,7 @@ adminRoutes.post('/terminal', async (c) => {
   }
 
   try {
-    const { sessionId } = await dispatchTerminalSession({ cwd: resolvedCwd, appId, launcherId, permissionProfile: (permissionProfile || 'plain') as any });
+    const { sessionId } = await dispatchTerminalSession({ cwd: resolvedCwd, appId, launcherId, permissionProfile: (permissionProfile || 'plain') as any, tmuxTarget });
     return c.json({ sessionId });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';

@@ -12,6 +12,7 @@ import { getLauncher, listLaunchers } from './launcher-registry.js';
 import { tmuxSessionExists, isTmuxAvailable } from './tmux-pty.js';
 import { updateFeedbackOnSessionEnd } from './feedback-status.js';
 import { detectAndStoreJsonlContinuations } from './jsonl-utils.js';
+import { sendInputToSprite, killSpriteSession, isSpriteSession } from './sprite-sessions.js';
 
 // Maps admin WS → upstream target (either session-service WS or launcher info)
 interface LocalBridge {
@@ -25,7 +26,12 @@ interface LauncherBridge {
   sessionId: string;
 }
 
-type Bridge = LocalBridge | LauncherBridge;
+interface SpriteBridge {
+  kind: 'sprite';
+  sessionId: string;
+}
+
+type Bridge = LocalBridge | LauncherBridge | SpriteBridge;
 
 const adminBridges = new Map<WsWebSocket, Bridge>();
 
@@ -52,6 +58,25 @@ export function attachAdmin(sessionId: string, ws: WsWebSocket): boolean {
     .where(eq(schema.agentSessions.id, sessionId))
     .get();
 
+  // Sprite session — bridge input via sprite-sessions module
+  if (session?.spriteConfigId && isSpriteSession(sessionId)) {
+    adminBridges.set(ws, { kind: 'sprite', sessionId });
+    if (!launcherSessionAdmins.has(sessionId)) {
+      launcherSessionAdmins.set(sessionId, new Set());
+    }
+    launcherSessionAdmins.get(sessionId)!.add(ws);
+
+    if (session.outputLog) {
+      ws.send(JSON.stringify({ type: 'history', data: session.outputLog }));
+    } else {
+      ws.send(JSON.stringify({ type: 'history', data: '' }));
+    }
+    if (session.status !== 'pending' && session.status !== 'running') {
+      ws.send(JSON.stringify({ type: 'exit', exitCode: session.exitCode, status: session.status }));
+    }
+    return true;
+  }
+
   if (session?.launcherId) {
     const launcher = getLauncher(session.launcherId);
     if (launcher && launcher.ws.readyState === 1) {
@@ -75,15 +100,28 @@ export function attachAdmin(sessionId: string, ws: WsWebSocket): boolean {
     // Launcher offline — fall through to DB-only path below
   }
 
-  // Local session: bridge to session-service
+  // Local session: send DB history immediately (same as launcher path) so the
+  // admin sees content right away instead of waiting for the service WS to connect.
+  if (session?.outputLog) {
+    ws.send(JSON.stringify({ type: 'history', data: session.outputLog }));
+  }
+  if (session && session.status !== 'pending' && session.status !== 'running') {
+    ws.send(JSON.stringify({ type: 'exit', exitCode: session?.exitCode, status: session?.status }));
+    return true;
+  }
+
+  // Bridge to session-service for live output
   const serviceWsUrl = getSessionServiceWsUrl(sessionId);
   const serviceWs = new WsWebSocket(serviceWsUrl);
+
+  // Register bridge immediately so forwardToService can find it;
+  // the readyState check in forwardToService handles the not-yet-open case.
+  adminBridges.set(ws, { kind: 'local', serviceWs });
 
   let connected = false;
 
   serviceWs.on('open', () => {
     connected = true;
-    adminBridges.set(ws, { kind: 'local', serviceWs });
   });
 
   serviceWs.on('message', (raw) => {
@@ -135,6 +173,7 @@ export function detachAdmin(sessionId: string, ws: WsWebSocket): void {
   if (bridge.kind === 'local') {
     bridge.serviceWs.close();
   } else {
+    // launcher or sprite — both use launcherSessionAdmins
     const admins = launcherSessionAdmins.get(sessionId);
     if (admins) {
       admins.delete(ws);
@@ -147,6 +186,18 @@ export function detachAdmin(sessionId: string, ws: WsWebSocket): void {
 export function forwardToService(ws: WsWebSocket, data: string): void {
   const bridge = adminBridges.get(ws);
   if (!bridge) return;
+
+  if (bridge.kind === 'sprite') {
+    try {
+      const parsed = JSON.parse(data);
+      if (parsed.type === 'input' && parsed.data) {
+        sendInputToSprite(bridge.sessionId, parsed.data);
+      } else if (parsed.type === 'resize') {
+        // resize handled separately if needed
+      }
+    } catch {}
+    return;
+  }
 
   if (bridge.kind === 'local') {
     if (bridge.serviceWs.readyState === WsWebSocket.OPEN) {
@@ -192,6 +243,17 @@ export async function killSession(sessionId: string): Promise<boolean> {
 
   if (!session || (session.status !== 'running' && session.status !== 'pending')) {
     return false;
+  }
+
+  // If session is on a sprite, kill via sprite-sessions
+  if (session.spriteConfigId && isSpriteSession(sessionId)) {
+    killSpriteSession(sessionId);
+    db.update(schema.agentSessions)
+      .set({ status: 'killed', completedAt: new Date().toISOString() })
+      .where(eq(schema.agentSessions.id, sessionId))
+      .run();
+    updateFeedbackOnSessionEnd(sessionId, 'killed');
+    return true;
   }
 
   // If session is on a launcher, send kill to launcher
@@ -266,6 +328,8 @@ export async function cleanupOrphanedSessions(): Promise<void> {
   for (const session of runningSessions) {
     // Session-service confirms it's alive
     if (activeSvcSessions?.has(session.id)) continue;
+    // Sprite session still active
+    if (isSpriteSession(session.id)) continue;
     // Launcher confirms it's alive
     if (session.launcherId && launcherSessions.has(session.id)) continue;
     // Tmux session still exists — don't mark as failed

@@ -81,7 +81,7 @@ export function JsonlView({ sessionId }: Props) {
 
   const groups = groupMessages(messages);
 
-  // Detect pending tool approval: last message is tool_use with no following tool_result
+  // Detect running tool: last message is tool_use with no following tool_result
   const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
   const pendingTool = lastMsg?.role === 'tool_use' ? lastMsg : null;
 
@@ -102,9 +102,9 @@ export function JsonlView({ sessionId }: Props) {
       ))}
       {pendingTool && (
         <div class="sm-pending-approval">
-          <span class="sm-pending-icon">⏳</span>
+          <span class="sm-pending-icon">⚙️</span>
           <span class="sm-pending-text">
-            Waiting for approval: <strong>{pendingTool.toolName || 'tool call'}</strong>
+            Running: <strong>{pendingTool.toolName || 'tool call'}</strong>
           </span>
         </div>
       )}

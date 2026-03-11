@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { lastTerminalInput } from '../lib/sessions.js';
 import type { InputState } from '../lib/sessions.js';
 
 const MAX_RECONNECT_ATTEMPTS = 10;
@@ -71,7 +72,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
     fitRef.current = fit;
 
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let reconnectDelay = 1000;
+    let reconnectDelay = 200;
     let reconnectAttempts = 0;
     let gotFirstOutput = false;
     let waitingDots: ReturnType<typeof setInterval> | null = null;
@@ -168,6 +169,8 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
 
     function onContextMenu(e: Event) {
       e.preventDefault();
+      const me = e as MouseEvent;
+      if (me.ctrlKey) showCtxMenu(me);
     }
 
     const xtermScreen = containerRef.current.querySelector('.xterm-screen');
@@ -221,7 +224,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
       wsRef.current = ws;
 
       ws.onopen = () => {
-        reconnectDelay = 1000;
+        reconnectDelay = 200;
         reconnectAttempts = 0;
         sendReplayRequest();
         resendPendingInputs();
@@ -275,13 +278,13 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
                 term.clear();
                 term.write(msg.data);
               } else if (!gotFirstOutput) {
-                term.write('\r\x1b[2K\x1b[90mWaiting for agent to start (this can take 1-2 min)...\x1b[0m');
+                term.write('\r\x1b[2K\x1b[90mStarting session...\x1b[0m');
                 let dots = 0;
                 waitingDots = setInterval(() => {
                   if (gotFirstOutput || cleanedUp.current) { clearInterval(waitingDots!); waitingDots = null; return; }
                   dots = (dots + 1) % 4;
-                  term.write('\r\x1b[2K\x1b[90mWaiting for agent to start' + '.'.repeat(dots + 1) + '\x1b[0m');
-                }, 2000);
+                  term.write('\r\x1b[2K\x1b[90mStarting session' + '.'.repeat(dots + 1) + '\x1b[0m');
+                }, 500);
               }
               break;
             case 'output':
@@ -320,7 +323,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
           const retryHandler = term.onData(() => {
             retryHandler.dispose();
             reconnectAttempts = 0;
-            reconnectDelay = 1000;
+            reconnectDelay = 200;
             term.write('\x1b[90mReconnecting...\x1b[0m\r\n');
             connect();
           });
@@ -343,13 +346,14 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
     // tmux infers capabilities from TERM=xterm-256color so these are unnecessary.
     const TERMINAL_RESPONSE_RE = /\x1b\[\?[\d;]*c|\x1b\[>[\d;]*c|\x1b\[\d+;\d+R/g;
 
-    term.onData((data: string) => {
-      const filtered = data.replace(TERMINAL_RESPONSE_RE, '');
-      if (!filtered) return;
-      // Keyboard input means any open menu was dismissed
-      if (suppressMotion && !filtered.startsWith('\x1b[M') && !filtered.startsWith('\x1b[<')) {
-        suppressMotion = false;
-      }
+    let inputBuffer = '';
+    let inputFlushRaf = 0;
+
+    function flushInputBuffer() {
+      inputFlushRaf = 0;
+      if (!inputBuffer) return;
+      const data = inputBuffer;
+      inputBuffer = '';
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
         inputSeq++;
@@ -357,11 +361,24 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
           type: 'sequenced_input',
           sessionId,
           seq: inputSeq,
-          content: { kind: 'input', data: filtered },
+          content: { kind: 'input', data },
           timestamp: new Date().toISOString(),
         });
         pendingInputs.set(inputSeq, msg);
         ws.send(msg);
+      }
+    }
+
+    term.onData((data: string) => {
+      const filtered = data.replace(TERMINAL_RESPONSE_RE, '');
+      if (!filtered) return;
+      lastTerminalInput.value = Date.now();
+      if (suppressMotion && !filtered.startsWith('\x1b[M') && !filtered.startsWith('\x1b[<')) {
+        suppressMotion = false;
+      }
+      inputBuffer += filtered;
+      if (!inputFlushRaf) {
+        inputFlushRaf = requestAnimationFrame(flushInputBuffer);
       }
     });
 
@@ -401,7 +418,20 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
 
     safeFitAndResizeRef.current = safeFitAndResize;
 
-    const observer = new ResizeObserver(() => safeFitAndResize());
+    let resizeLastFired = 0;
+    let resizeRaf = 0;
+    const RESIZE_THROTTLE_MS = 100;
+    const observer = new ResizeObserver(() => {
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0;
+        const now = performance.now();
+        if (now - resizeLastFired >= RESIZE_THROTTLE_MS) {
+          resizeLastFired = now;
+          safeFitAndResize();
+        }
+      });
+    });
     observer.observe(containerRef.current);
 
     // Bounce resize when terminal gets focus (click into it, tab into it, etc.)
@@ -432,6 +462,8 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
       term.textarea?.removeEventListener('focus', onTermFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('focus', onWindowFocus);
+      if (inputFlushRaf) { cancelAnimationFrame(inputFlushRaf); flushInputBuffer(); }
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
       observer.disconnect();
       wsRef.current?.close();
       term.dispose();

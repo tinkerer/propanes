@@ -8,9 +8,12 @@ export interface DispatchTarget {
   machineName: string | null;
   machineId: string | null;
   isHarness: boolean;
+  isSprite?: boolean;
   harnessConfigId: string | null;
+  spriteConfigId?: string | null;
   activeSessions: number;
   maxSessions: number;
+  online: boolean;
 }
 
 export const cachedTargets = signal<DispatchTarget[]>([]);
@@ -47,8 +50,9 @@ export function DispatchTargetSelect({
 
   if (targets.length === 0) return null;
 
-  const machines = targets.filter(t => !t.isHarness);
+  const machines = targets.filter(t => !t.isHarness && !t.isSprite);
   const harnesses = targets.filter(t => t.isHarness);
+  const sprites = targets.filter(t => t.isSprite);
 
   return (
     <select
@@ -64,8 +68,8 @@ export function DispatchTargetSelect({
       {machines.length > 0 && (
         <optgroup label="Machines">
           {machines.map(t => (
-            <option key={t.launcherId} value={t.launcherId}>
-              {t.machineName || t.name} ({t.activeSessions}/{t.maxSessions})
+            <option key={t.launcherId} value={t.launcherId} disabled={!t.online}>
+              {t.machineName || t.name}{t.online ? ` (${t.activeSessions}/${t.maxSessions})` : ' (offline)'}
             </option>
           ))}
         </optgroup>
@@ -73,8 +77,17 @@ export function DispatchTargetSelect({
       {harnesses.length > 0 && (
         <optgroup label="Harnesses">
           {harnesses.map(t => (
-            <option key={t.launcherId} value={t.launcherId}>
-              {t.name} ({t.activeSessions}/{t.maxSessions})
+            <option key={t.launcherId} value={t.launcherId} disabled={!t.online}>
+              {t.name}{t.online ? ` (${t.activeSessions}/${t.maxSessions})` : ' (offline)'}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {sprites.length > 0 && (
+        <optgroup label="Sprites">
+          {sprites.map(t => (
+            <option key={t.launcherId} value={t.launcherId} disabled={!t.online}>
+              {t.name}{t.online ? ` (${t.activeSessions}/${t.maxSessions})` : ' (offline)'}
             </option>
           ))}
         </optgroup>

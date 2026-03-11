@@ -294,7 +294,9 @@ export interface HarnessConfig {
   serverPort: number | null;
   browserMcpPort: number | null;
   targetAppUrl: string | null;
+  composeDir: string | null;
   envVars: Record<string, string> | null;
+  hostTerminalAccess: boolean;
   launcherId: string | null;
   lastStartedAt: string | null;
   lastStoppedAt: string | null;

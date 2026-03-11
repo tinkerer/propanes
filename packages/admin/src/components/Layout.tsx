@@ -15,7 +15,7 @@ import { AddAppModal } from './AddAppModal.js';
 import { RequestPanel } from './RequestPanel.js';
 import { ControlBar } from './ControlBar.js';
 import { registerShortcut, ctrlShiftHeld } from '../lib/shortcuts.js';
-import { toggleTheme, showTabs, arrowTabSwitching, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel } from '../lib/settings.js';
+import { toggleTheme, showTabs, arrowTabSwitching, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce } from '../lib/settings.js';
 import {
   openTabs,
   activeTabId,
@@ -663,7 +663,7 @@ export function Layout({ children }: { children: ComponentChildren }) {
   }
 
   const appSubTabs = ['feedback', 'aggregate', 'sessions', 'live', 'settings'];
-  const settingsTabs = ['/settings/agents', '/settings/machines', '/settings/harnesses', '/settings/getting-started', '/settings/preferences'];
+  const settingsTabs = ['/settings/agents', '/settings/machines', '/settings/harnesses', '/settings/sprites', '/settings/getting-started', '/settings/preferences'];
 
   function cycleNav(dir: number) {
     const r = currentRoute.value;
@@ -833,6 +833,7 @@ export function Layout({ children }: { children: ComponentChildren }) {
     { path: '/settings/agents', label: 'Agents', icon: '\u{1F916}' },
     { path: '/settings/machines', label: 'Machines', icon: '\u{1F5A5}' },
     { path: '/settings/harnesses', label: 'Harnesses', icon: '\u{1F433}' },
+    { path: '/settings/sprites', label: 'Sprites', icon: '\u{2601}\uFE0F' },
     { path: '/settings/getting-started', label: 'Getting Started', icon: '\u{1F4D6}' },
     { path: '/settings/preferences', label: 'Preferences', icon: '\u2699' },
   ];
@@ -1074,6 +1075,14 @@ export function Layout({ children }: { children: ComponentChildren }) {
                             onChange={(e) => { autoCloseWaitingPanel.value = (e.target as HTMLInputElement).checked; }}
                           />
                           Auto-close panel
+                        </label>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={autoJumpHandleBounce.value}
+                            onChange={(e) => { autoJumpHandleBounce.value = (e.target as HTMLInputElement).checked; }}
+                          />
+                          Handle bounce
                         </label>
                         <div class="id-dropdown-separator" />
                         <label>

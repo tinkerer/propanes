@@ -50,6 +50,7 @@ RUN apt-get update && \
     npm install -g @anthropic-ai/claude-code && \
     apt-get purge -y python3 make g++ && \
     apt-get autoremove -y && \
+    apt-get install -y --no-install-recommends tmux && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy built artifacts from build stage
@@ -62,6 +63,9 @@ COPY --from=build /app/packages/server/dist packages/server/dist
 COPY --from=build /app/packages/server/public packages/server/public
 COPY --from=build /app/packages/server/tmux-pw.conf packages/server/tmux-pw.conf
 
+COPY packages/harness/scripts/pw-server-entrypoint.sh /scripts/pw-server-entrypoint.sh
+RUN chmod +x /scripts/pw-server-entrypoint.sh
+
 ENV NODE_ENV=production
 ENV PORT=3001
 ENV DB_PATH=/data/prompt-widget.db
@@ -71,5 +75,6 @@ EXPOSE 3001
 # serveStatic paths are relative to cwd (e.g. ../admin/dist/, ../widget/dist/)
 WORKDIR /app/packages/server
 
-# Run only the main server (skip session-service for v1 harness)
+ENTRYPOINT ["/scripts/pw-server-entrypoint.sh"]
+# Main server as PID 1; session-service started in entrypoint
 CMD ["node", "dist/index.js"]

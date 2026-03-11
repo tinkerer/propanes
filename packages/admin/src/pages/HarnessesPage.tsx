@@ -8,8 +8,15 @@ const harnessConfigs = signal<any[]>([]);
 const liveHarnesses = signal<any[]>([]);
 const machines = signal<any[]>([]);
 const applications = signal<any[]>([]);
+const launchers = signal<any[]>([]);
 const loading = signal(true);
 const error = signal('');
+const healthResults = signal<Record<string, any>>({});
+const authCheckResults = signal<Record<string, any>>({});
+const containerCheckResults = signal<Record<string, any>>({});
+const containerCheckLoading = signal<Record<string, boolean>>({});
+const expandedHealth = signal<string | null>(null);
+const expandedSetupWizard = signal<string | null>(null);
 const showForm = signal(false);
 const editingId = signal<string | null>(null);
 const formName = signal('');
@@ -23,6 +30,9 @@ const formBrowserMcpPort = signal('');
 const formTargetAppUrl = signal('');
 const formComposeDir = signal('');
 const formEnvVars = signal('');
+const formHostTerminalAccess = signal(false);
+const formClaudeHomePath = signal('');
+const formAnthropicApiKey = signal('');
 const formLoading = signal(false);
 const formError = signal('');
 
@@ -30,16 +40,18 @@ async function loadAll() {
   loading.value = true;
   error.value = '';
   try {
-    const [configs, live, machineList, appList] = await Promise.all([
+    const [configs, live, machineList, appList, launcherList] = await Promise.all([
       api.getHarnessConfigs(),
       api.getHarnesses().then(r => r.harnesses).catch(() => []),
       api.getMachines().catch(() => []),
       api.getApplications().catch(() => []),
+      api.getLaunchers().then(r => r.launchers).catch(() => []),
     ]);
     harnessConfigs.value = configs;
     liveHarnesses.value = live;
     machines.value = machineList;
     applications.value = appList;
+    launchers.value = launcherList;
   } catch (err: any) {
     error.value = err.message;
   } finally {
@@ -59,6 +71,9 @@ function resetForm() {
   formTargetAppUrl.value = '';
   formComposeDir.value = '';
   formEnvVars.value = '';
+  formHostTerminalAccess.value = false;
+  formClaudeHomePath.value = '';
+  formAnthropicApiKey.value = '';
   formError.value = '';
   editingId.value = null;
 }
@@ -81,6 +96,9 @@ function openEdit(h: any) {
   formTargetAppUrl.value = h.targetAppUrl || '';
   formComposeDir.value = h.composeDir || '';
   formEnvVars.value = h.envVars ? JSON.stringify(h.envVars, null, 2) : '';
+  formHostTerminalAccess.value = h.hostTerminalAccess ?? false;
+  formClaudeHomePath.value = h.claudeHomePath || '';
+  formAnthropicApiKey.value = h.anthropicApiKey || '';
   formError.value = '';
   showForm.value = true;
 }
@@ -109,6 +127,9 @@ async function handleSubmit() {
       targetAppUrl: formTargetAppUrl.value.trim() || null,
       composeDir: formComposeDir.value.trim() || null,
       envVars,
+      hostTerminalAccess: formHostTerminalAccess.value,
+      claudeHomePath: formClaudeHomePath.value.trim() || null,
+      anthropicApiKey: formAnthropicApiKey.value.trim() || null,
     };
     if (editingId.value) {
       await api.updateHarnessConfig(editingId.value, data);
@@ -190,6 +211,76 @@ async function handleSpawnTerminal(harnessConfigId: string, launcherId: string) 
   } catch (err: any) {
     error.value = err.message;
   }
+}
+
+async function handleSpawnHostTerminal(launcherId: string) {
+  try {
+    const result = await api.spawnTerminal({ launcherId });
+    if (result.sessionId) {
+      window.location.hash = '#/sessions';
+    }
+  } catch (err: any) {
+    error.value = err.message;
+  }
+}
+
+function getLauncherForHarness(h: any): any | null {
+  if (h.launcherId) return launchers.value.find(l => l.id === h.launcherId) || null;
+  if (h.machineId) return launchers.value.find(l => l.machineId === h.machineId && l.online) || null;
+  return null;
+}
+
+async function handleRestartLauncher(launcherId: string) {
+  try {
+    await api.restartLauncher(launcherId);
+    error.value = '';
+  } catch (err: any) {
+    error.value = err.message;
+  }
+}
+
+async function handleHealthCheck(launcherId: string, harnessId: string) {
+  try {
+    const result = await api.getLauncherHealth(launcherId);
+    healthResults.value = { ...healthResults.value, [harnessId]: result };
+    expandedHealth.value = harnessId;
+  } catch (err: any) {
+    healthResults.value = { ...healthResults.value, [harnessId]: { error: err.message } };
+    expandedHealth.value = harnessId;
+  }
+}
+
+async function handleCheckContainerClaude(harnessId: string) {
+  containerCheckLoading.value = { ...containerCheckLoading.value, [harnessId]: true };
+  try {
+    const result = await api.checkContainerClaude(harnessId);
+    containerCheckResults.value = { ...containerCheckResults.value, [harnessId]: result };
+  } catch (err: any) {
+    containerCheckResults.value = { ...containerCheckResults.value, [harnessId]: { error: err.message } };
+  } finally {
+    containerCheckLoading.value = { ...containerCheckLoading.value, [harnessId]: false };
+  }
+}
+
+async function handleCheckAuth(harnessId: string) {
+  try {
+    const result = await api.checkClaudeAuth(harnessId);
+    authCheckResults.value = { ...authCheckResults.value, [harnessId]: result };
+  } catch (err: any) {
+    authCheckResults.value = { ...authCheckResults.value, [harnessId]: { error: err.message } };
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+function formatUptime(seconds: number): string {
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`;
 }
 
 function getAppName(appId: string | null): string {
@@ -330,6 +421,41 @@ export function HarnessesPage() {
               style="font-family:monospace;font-size:12px"
             />
           </div>
+          <div style="margin-top:12px;padding:10px;border:1px solid var(--pw-border);border-radius:6px">
+            <div style="font-weight:600;font-size:12px;margin-bottom:8px;color:var(--pw-text-muted)">Claude Auth</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div class="form-group">
+                <label>Claude Home Path</label>
+                <input
+                  class="form-input"
+                  value={formClaudeHomePath.value}
+                  onInput={(e) => formClaudeHomePath.value = (e.target as HTMLInputElement).value}
+                  placeholder="~/.claude"
+                />
+              </div>
+              <div class="form-group">
+                <label>Anthropic API Key</label>
+                <input
+                  class="form-input"
+                  type="password"
+                  value={formAnthropicApiKey.value}
+                  onInput={(e) => formAnthropicApiKey.value = (e.target as HTMLInputElement).value}
+                  placeholder="sk-ant-..."
+                />
+              </div>
+            </div>
+          </div>
+          <div class="form-group" style="margin-top:8px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input
+                type="checkbox"
+                checked={formHostTerminalAccess.value}
+                onChange={(e) => formHostTerminalAccess.value = (e.target as HTMLInputElement).checked}
+              />
+              Host terminal access
+              <span style="font-size:11px;color:var(--pw-text-muted)">(allow opening shells on the host machine, not inside the container)</span>
+            </label>
+          </div>
           <div style="display:flex;gap:8px;margin-top:12px">
             <button class="btn btn-primary" onClick={handleSubmit} disabled={formLoading.value}>
               {formLoading.value ? 'Saving...' : editingId.value ? 'Update' : 'Create'}
@@ -341,7 +467,14 @@ export function HarnessesPage() {
 
       {/* Managed harness configs */}
       <div class="agent-list">
-        {harnessConfigs.value.map((h) => (
+        {harnessConfigs.value.map((h) => {
+          const launcher = getLauncherForHarness(h);
+          const caps = launcher?.capabilities;
+          const health = healthResults.value[h.id];
+          const authCheck = authCheckResults.value[h.id];
+          const isHealthExpanded = expandedHealth.value === h.id;
+
+          return (
           <div class="agent-card" key={h.id}>
             <div class="agent-card-body">
               <div class="agent-card-top">
@@ -354,7 +487,7 @@ export function HarnessesPage() {
                     {h.status.toUpperCase()}
                   </span>
                 </div>
-                <div style="display:flex;gap:6px;align-items:center">
+                <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                   <SetupAssistButton entityType="harness" entityId={h.id} entityLabel={h.name} />
                   {h.status === 'stopped' || h.status === 'error' ? (
                     <button class="btn btn-sm btn-primary" onClick={() => handleStart(h.id)} disabled={!h.machineId}>
@@ -364,9 +497,19 @@ export function HarnessesPage() {
                     <>
                       <button class="btn btn-sm" onClick={() => handleLaunchSession(h.id)} title="Launch Claude session in container">Session</button>
                       {h.launcherId && <button class="btn btn-sm" onClick={() => handleSpawnTerminal(h.id, h.launcherId)} title="Open plain terminal in container">Terminal</button>}
+                      {h.hostTerminalAccess && h.launcherId && <button class="btn btn-sm" onClick={() => handleSpawnHostTerminal(h.launcherId)} title="Open shell on the host machine">Host Terminal</button>}
+                      <button
+                        class="btn btn-sm"
+                        style={expandedSetupWizard.value === h.id ? 'background:var(--pw-primary);color:#fff' : ''}
+                        onClick={() => expandedSetupWizard.value = expandedSetupWizard.value === h.id ? null : h.id}
+                        title="Setup wizard: check Claude Code installation and auth"
+                      >Setup</button>
                       <button class="btn btn-sm" onClick={() => handleStop(h.id)}>Stop</button>
                     </>
                   )}
+                  {launcher && <button class="btn btn-sm" onClick={() => handleHealthCheck(launcher.id, h.id)} title="Check launcher health">Health</button>}
+                  {launcher && <button class="btn btn-sm" onClick={() => handleCheckAuth(h.id)} title="Check Claude auth on remote">Check Auth</button>}
+                  {launcher && <button class="btn btn-sm" onClick={() => handleRestartLauncher(launcher.id)} title="Restart launcher daemon">Restart</button>}
                   <button class="btn btn-sm" onClick={() => openEdit(h)}>Edit</button>
                   <button class="btn btn-sm btn-danger" onClick={() => handleDelete(h.id, h.name)}>Delete</button>
                 </div>
@@ -375,7 +518,99 @@ export function HarnessesPage() {
                 {h.appId && <span class="agent-meta-tag" style="border-color:var(--pw-primary)40;color:var(--pw-primary)">{getAppName(h.appId)}</span>}
                 <span class="agent-meta-tag">{getMachineName(h.machineId)}</span>
                 {h.appImage && <span class="agent-meta-tag">{h.appImage}</span>}
+                {(h.claudeHomePath || h.anthropicApiKey) && (
+                  <span class="agent-meta-tag" style="border-color:var(--pw-success, #22c55e)40;color:var(--pw-success, #22c55e)" title={[h.claudeHomePath && `Home: ${h.claudeHomePath}`, h.anthropicApiKey && 'API key set'].filter(Boolean).join(', ')}>
+                    {'\u{1F511}'} Auth
+                  </span>
+                )}
+                {launcher?.version && (
+                  <span class="agent-meta-tag" title={`Launcher v${launcher.version}`}>v{launcher.version}</span>
+                )}
+                {caps && !caps.hasDocker && <span class="agent-meta-tag" style="border-color:var(--pw-warning, #eab308)40;color:var(--pw-warning, #eab308)">No Docker</span>}
+                {caps && !caps.hasTmux && <span class="agent-meta-tag" style="border-color:var(--pw-warning, #eab308)40;color:var(--pw-warning, #eab308)">No tmux</span>}
+                {caps && !caps.hasClaudeCli && <span class="agent-meta-tag" style="border-color:var(--pw-warning, #eab308)40;color:var(--pw-warning, #eab308)">No Claude CLI</span>}
               </div>
+              {authCheck && (
+                <div style={`margin-top:6px;font-size:12px;padding:4px 8px;border-radius:4px;${authCheck.error ? 'color:var(--pw-danger, #ef4444);background:var(--pw-danger, #ef4444)10' : authCheck.hasCredentials ? 'color:var(--pw-success, #22c55e);background:var(--pw-success, #22c55e)10' : 'color:var(--pw-warning, #eab308);background:var(--pw-warning, #eab308)10'}`}>
+                  {authCheck.error
+                    ? `Auth check failed: ${authCheck.error}`
+                    : `Claude dir: ${authCheck.hasClaudeDir ? 'found' : 'missing'} | Credentials: ${authCheck.hasCredentials ? 'found' : 'missing'}${authCheck.claudeVersion ? ` | ${authCheck.claudeVersion}` : ''}`
+                  }
+                </div>
+              )}
+              {expandedSetupWizard.value === h.id && h.status === 'running' && (() => {
+                const cc = containerCheckResults.value[h.id];
+                const ccLoading = containerCheckLoading.value[h.id];
+                return (
+                  <div style="margin-top:8px;padding:10px;border:1px solid var(--pw-border);border-radius:6px;font-size:12px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                      <span style="font-weight:600;color:var(--pw-text)">Setup Wizard</span>
+                      <button class="btn btn-sm" style="font-size:10px;padding:1px 6px" onClick={() => expandedSetupWizard.value = null}>{'\u2715'}</button>
+                    </div>
+
+                    {/* Step 1: Check Claude Code installation */}
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                      <span style={`width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;background:${cc?.hasClaudeCli ? 'var(--pw-success, #22c55e)' : 'var(--pw-text-muted)'}`}>1</span>
+                      <span style="font-weight:500;color:var(--pw-text)">Claude Code in container</span>
+                      <button
+                        class="btn btn-sm"
+                        style="font-size:11px;padding:1px 8px;margin-left:auto"
+                        disabled={ccLoading}
+                        onClick={() => handleCheckContainerClaude(h.id)}
+                      >
+                        {ccLoading ? 'Checking...' : cc ? 'Re-check' : 'Check'}
+                      </button>
+                    </div>
+                    {cc && (
+                      <div style={`margin-left:26px;margin-bottom:8px;padding:4px 8px;border-radius:4px;${cc.error ? 'color:var(--pw-danger, #ef4444);background:var(--pw-danger, #ef4444)10' : cc.hasClaudeCli ? 'color:var(--pw-success, #22c55e);background:var(--pw-success, #22c55e)10' : 'color:var(--pw-warning, #eab308);background:var(--pw-warning, #eab308)10'}`}>
+                        {cc.error
+                          ? `Check failed: ${cc.error}`
+                          : cc.hasClaudeCli
+                            ? `Installed: ${cc.claudeVersion || 'yes'}`
+                            : 'Claude Code not found in container. Rebuild the Docker image to include it.'}
+                      </div>
+                    )}
+                    {cc && !cc.hasClaudeCli && !cc.error && (
+                      <div style="margin-left:26px;margin-bottom:8px;font-size:11px;color:var(--pw-text-muted)">
+                        The Dockerfile should include <code style="font-size:11px">npm install -g @anthropic-ai/claude-code</code>. Rebuild with <code style="font-size:11px">docker compose build</code>.
+                      </div>
+                    )}
+
+                    {/* Step 2: Authentication */}
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                      <span style={`width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;background:${cc?.hasCredentials ? 'var(--pw-success, #22c55e)' : 'var(--pw-text-muted)'}`}>2</span>
+                      <span style="font-weight:500;color:var(--pw-text)">Authentication</span>
+                    </div>
+                    {cc?.hasClaudeCli && !cc.hasCredentials && (
+                      <div style="margin-left:26px;margin-bottom:8px">
+                        <div style="margin-bottom:6px;color:var(--pw-warning, #eab308)">No credentials found in container. Open a terminal to authenticate.</div>
+                        {h.launcherId && (
+                          <button
+                            class="btn btn-sm btn-primary"
+                            style="font-size:11px"
+                            onClick={() => handleSpawnTerminal(h.id, h.launcherId)}
+                          >
+                            Open Auth Terminal
+                          </button>
+                        )}
+                        <div style="margin-top:4px;font-size:11px;color:var(--pw-text-muted)">
+                          Run <code style="font-size:11px">claude login</code> in the terminal to authenticate.
+                        </div>
+                      </div>
+                    )}
+                    {cc?.hasClaudeCli && cc.hasCredentials && (
+                      <div style="margin-left:26px;margin-bottom:8px;padding:4px 8px;border-radius:4px;color:var(--pw-success, #22c55e);background:var(--pw-success, #22c55e)10">
+                        Credentials found. Claude Code is ready to use.
+                      </div>
+                    )}
+                    {!cc && (
+                      <div style="margin-left:26px;font-size:11px;color:var(--pw-text-muted)">
+                        Run step 1 first to check Claude Code installation.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--pw-text-muted)">
                 {(() => {
                   const extUrl = getHarnessUrl(h);
@@ -407,6 +642,30 @@ export function HarnessesPage() {
                   </div>
                 )}
               </div>
+              {isHealthExpanded && health && (
+                <div style="margin-top:8px;padding:8px;border:1px solid var(--pw-border);border-radius:6px;font-size:12px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                    <span style="font-weight:600;color:var(--pw-text)">Launcher Health</span>
+                    <button class="btn btn-sm" style="font-size:10px;padding:1px 6px" onClick={() => expandedHealth.value = null}>{'\u2715'}</button>
+                  </div>
+                  {health.error ? (
+                    <div style="color:var(--pw-danger, #ef4444)">{health.error}</div>
+                  ) : (
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;color:var(--pw-text-muted)">
+                      <div><span style="color:var(--pw-text)">Uptime:</span> {formatUptime(health.uptime)}</div>
+                      <div><span style="color:var(--pw-text)">Node:</span> {health.nodeVersion}</div>
+                      <div><span style="color:var(--pw-text)">Version:</span> {health.launcherVersion}</div>
+                      <div><span style="color:var(--pw-text)">Platform:</span> {health.platform}/{health.arch}</div>
+                      <div><span style="color:var(--pw-text)">Memory:</span> {formatBytes(health.memory?.free)} free / {formatBytes(health.memory?.total)}</div>
+                      <div><span style="color:var(--pw-text)">Sessions:</span> {health.activeSessions}</div>
+                      {health.dockerVersion && <div><span style="color:var(--pw-text)">Docker:</span> {health.dockerVersion}</div>}
+                      {health.tmuxVersion && <div><span style="color:var(--pw-text)">tmux:</span> {health.tmuxVersion}</div>}
+                      {health.claudeCliVersion && <div><span style="color:var(--pw-text)">Claude:</span> {health.claudeCliVersion}</div>}
+                      <div><span style="color:var(--pw-text)">Claude Home:</span> {health.claudeHomeExists ? 'exists' : 'missing'}</div>
+                    </div>
+                  )}
+                </div>
+              )}
               {h.errorMessage && (
                 <div style="margin-top:6px;font-size:12px;color:var(--pw-danger, #ef4444);background:var(--pw-danger, #ef4444)10;padding:4px 8px;border-radius:4px">
                   {h.errorMessage}
@@ -418,7 +677,8 @@ export function HarnessesPage() {
               </div>
             </div>
           </div>
-        ))}
+          );
+        })}
         {harnessConfigs.value.length === 0 && !loading.value && (
           <div class="agent-empty">
             <div class="agent-empty-icon">{'\u{1F433}'}</div>

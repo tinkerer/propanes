@@ -21,10 +21,12 @@ import {
   startPruneTimer,
   stopPruneTimer,
   resolveLauncherResponse,
+  getLauncher,
 } from './launcher-registry.js';
 import type { LauncherToServerMessage, LauncherRegistered } from '@prompt-widget/shared';
 import { registerAutoDispatch } from './auto-dispatch.js';
 import { updateFeedbackOnSessionEnd, fixStaleDispatchStatuses } from './feedback-status.js';
+import { cleanupSyncBranch } from './dispatch.js';
 import { detectAndStoreJsonlContinuations } from './jsonl-utils.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -58,9 +60,10 @@ setTimeout(() => {
 
     let backfilled = 0;
     for (const row of rows) {
-      if (!row.claudeSessionId || !row.appProjectDir) continue;
+      if (!row.claudeSessionId) continue;
+      const projDir = row.appProjectDir || process.cwd();
       try {
-        detectAndStoreJsonlContinuations(row.claudeSessionId, row.appProjectDir);
+        detectAndStoreJsonlContinuations(row.claudeSessionId, projDir);
         backfilled++;
       } catch { /* skip individual failures */ }
     }
@@ -194,6 +197,7 @@ const launcherWss = new WebSocketServer({ noServer: true });
 
 launcherWss.on('connection', (ws, req) => {
   let launcherId: string | null = null;
+  console.log(`[launcher-ws] New connection from ${req.socket.remoteAddress}`);
 
   ws.on('message', (raw) => {
     try {
@@ -223,6 +227,7 @@ launcherWss.on('connection', (ws, req) => {
             harness: msg.harness,
             machineId: msg.machineId,
             harnessConfigId: msg.harnessConfigId,
+            version: msg.version,
           });
           const reply: LauncherRegistered = { type: 'launcher_registered', ok: true };
           ws.send(JSON.stringify(reply));
@@ -290,7 +295,8 @@ launcherWss.on('connection', (ws, req) => {
 
           updateFeedbackOnSessionEnd(msg.sessionId, msg.status);
 
-          // Detect and cache JSONL continuation chains (fire-and-forget)
+          // Look up session context for cleanup and continuations
+          let endedSessionProjectDir: string | null = null;
           try {
             const endedSession = db.select({
               claudeSessionId: schema.agentSessions.claudeSessionId,
@@ -301,8 +307,9 @@ launcherWss.on('connection', (ws, req) => {
               .leftJoin(schema.applications, eq(schema.feedbackItems.appId, schema.applications.id))
               .where(eq(schema.agentSessions.id, msg.sessionId))
               .get();
-            if (endedSession?.claudeSessionId && endedSession?.appProjectDir) {
-              detectAndStoreJsonlContinuations(endedSession.claudeSessionId, endedSession.appProjectDir);
+            endedSessionProjectDir = endedSession?.appProjectDir || process.cwd();
+            if (endedSession?.claudeSessionId && endedSessionProjectDir) {
+              detectAndStoreJsonlContinuations(endedSession.claudeSessionId, endedSessionProjectDir);
             }
           } catch (err) {
             console.error('[jsonl-continuations] Failed to detect continuations on session end:', err);
@@ -310,6 +317,11 @@ launcherWss.on('connection', (ws, req) => {
 
           if (launcherId) {
             removeSessionFromLauncher(launcherId, msg.sessionId);
+
+            // Clean up sync branch (best-effort, non-blocking)
+            if (endedSessionProjectDir) {
+              try { cleanupSyncBranch(endedSessionProjectDir, msg.sessionId); } catch {}
+            }
           }
 
           broadcastToLauncherSessionAdmins(msg.sessionId, JSON.stringify({
@@ -347,15 +359,25 @@ launcherWss.on('connection', (ws, req) => {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code, reason) => {
+    console.log(`[launcher-ws] Connection closed: launcher=${launcherId} code=${code} reason=${reason?.toString()}`);
     if (launcherId) {
-      unregisterLauncher(launcherId);
+      // Only unregister if the registry still holds THIS WebSocket
+      // (avoids race when a reconnecting launcher replaces the old connection)
+      const current = getLauncher(launcherId);
+      if (current && current.ws === ws) {
+        unregisterLauncher(launcherId);
+      }
     }
   });
 
-  ws.on('error', () => {
+  ws.on('error', (err) => {
+    console.log(`[launcher-ws] Connection error: launcher=${launcherId} err=${err.message}`);
     if (launcherId) {
-      unregisterLauncher(launcherId);
+      const current = getLauncher(launcherId);
+      if (current && current.ws === ws) {
+        unregisterLauncher(launcherId);
+      }
     }
   });
 });

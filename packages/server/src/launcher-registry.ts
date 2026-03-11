@@ -16,6 +16,7 @@ export interface LauncherInfo {
   isLocal?: boolean;
   machineId?: string;
   harnessConfigId?: string;
+  version?: string;
 }
 
 const launchers = new Map<string, LauncherInfo>();
@@ -166,6 +167,7 @@ export function serializeLauncher(l: LauncherInfo) {
     harness: l.harness || null,
     machineId: l.machineId || null,
     harnessConfigId: l.harnessConfigId || null,
+    version: l.version || null,
   };
 }
 

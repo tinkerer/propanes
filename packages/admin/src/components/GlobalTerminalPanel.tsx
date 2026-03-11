@@ -80,6 +80,7 @@ const statusMenuOpen = signal<{ sessionId: string; x: number; y: number } | null
 const renamingSessionId = signal<string | null>(null);
 const renameValue = signal('');
 export const idMenuOpen = signal<string | null>(null);
+const companionIdMenuOpen = signal<string | null>(null);
 const panelResizing = signal(false);
 
 function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }) {
@@ -209,22 +210,72 @@ function PaneHeader({
         <>
           {isJsonlTab ? (
             <JsonlFileDropdown sessionId={realSessionId!} sess={sess} />
+          ) : isTerminalTab ? (
+            (() => {
+              const termSid = getTerminalCompanion(realSessionId!);
+              const isLoading = termSid === '__loading__';
+              const termSess = termSid && !isLoading ? sessionMap.get(termSid) : null;
+              const showMenu = companionIdMenuOpen.value === sessionId;
+              return (
+                <div class="id-dropdown-wrapper">
+                  <span
+                    class="tmux-id-label"
+                    style="cursor:pointer"
+                    onClick={() => { companionIdMenuOpen.value = showMenu ? null : sessionId!; }}
+                  >
+                    {isLoading ? 'Terminal: loading...' : `Terminal: pw-${termSid?.slice(-6) || realSessionId!.slice(-6)}`}
+                    {!isLoading && <span class="id-dropdown-caret">{'\u25BE'}</span>}
+                  </span>
+                  {showMenu && termSid && !isLoading && (
+                    <div class="id-dropdown-menu" onClick={() => { companionIdMenuOpen.value = null; }}>
+                      <button onClick={(e: any) => { e.stopPropagation(); companionIdMenuOpen.value = null; copyWithTooltip(termSid, e); }}>
+                        Copy ID: {termSid.slice(-8)}
+                      </button>
+                      <button onClick={(e: any) => { e.stopPropagation(); companionIdMenuOpen.value = null; copyWithTooltip(buildTmuxAttachCmd(termSid, termSess), e); }}>
+                        Copy tmux command
+                      </button>
+                      <button onClick={() => { companionIdMenuOpen.value = null; api.openSessionInTerminal(termSid).catch(() => {}); }}>
+                        Open in Terminal.app
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()
           ) : (
-            <span
-              class="tmux-id-label"
-              style="cursor:pointer"
-              title="Click to copy ID"
-              onClick={(e) => {
-                const id = isTerminalTab ? (getTerminalCompanion(realSessionId!) || realSessionId!) : realSessionId!;
-                copyWithTooltip(id, e as any);
-              }}
-            >
-              {isFeedbackTab && `Feedback: pw-${realSessionId!.slice(-6)}`}
-              {isIframeTab && `Page: pw-${realSessionId!.slice(-6)}`}
-              {isTerminalTab && (() => { const ts = getTerminalCompanion(realSessionId!); return `Terminal: pw-${ts?.slice(-6) || realSessionId!.slice(-6)}`; })()}
-              {isIsolateTab && `Isolate: ${realSessionId}`}
-              {isUrlTab && (() => { try { return `Iframe: ${new URL(realSessionId!).hostname}`; } catch { return `Iframe: ${realSessionId!.slice(0, 30)}`; } })()}
-            </span>
+            (() => {
+              const showMenu = companionIdMenuOpen.value === sessionId;
+              const label = isFeedbackTab ? `Feedback: pw-${realSessionId!.slice(-6)}`
+                : isIframeTab ? `Page: pw-${realSessionId!.slice(-6)}`
+                : isIsolateTab ? `Isolate: ${realSessionId}`
+                : isUrlTab ? (() => { try { return `Iframe: ${new URL(realSessionId!).hostname}`; } catch { return `Iframe: ${realSessionId!.slice(0, 30)}`; } })()
+                : `pw-${realSessionId!.slice(-6)}`;
+              return (
+                <div class="id-dropdown-wrapper">
+                  <span
+                    class="tmux-id-label"
+                    style="cursor:pointer"
+                    onClick={() => { companionIdMenuOpen.value = showMenu ? null : sessionId!; }}
+                  >
+                    {label}
+                    <span class="id-dropdown-caret">{'\u25BE'}</span>
+                  </span>
+                  {showMenu && (
+                    <div class="id-dropdown-menu" onClick={() => { companionIdMenuOpen.value = null; }}>
+                      <button onClick={(e: any) => { e.stopPropagation(); companionIdMenuOpen.value = null; copyWithTooltip(realSessionId!, e); }}>
+                        Copy ID: {realSessionId!.slice(-8)}
+                      </button>
+                      <button onClick={(e: any) => { e.stopPropagation(); companionIdMenuOpen.value = null; copyWithTooltip(buildTmuxAttachCmd(realSessionId!, sess), e); }}>
+                        Copy tmux command
+                      </button>
+                      <button onClick={() => { companionIdMenuOpen.value = null; api.openSessionInTerminal(realSessionId!).catch(() => {}); }}>
+                        Open in Terminal.app
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })()
           )}
           {feedbackPath && (
             <a href={`#${feedbackPath}`} onClick={(e) => { e.preventDefault(); navigate(feedbackPath); }} class="feedback-title-link" title={sess?.feedbackTitle || 'View feedback'}>{sess?.feedbackTitle || 'View feedback'}</a>
@@ -316,6 +367,15 @@ function PaneHeader({
                     }}>
                       Iframe... <kbd>U</kbd>
                     </button>
+                    {sess?.isHarness && sess?.harnessAppPort && (
+                      <button onClick={() => {
+                        const host = sess.isRemote && sess.launcherHostname ? sess.launcherHostname : 'localhost';
+                        openUrlCompanion(`http://${host}:${sess.harnessAppPort}`);
+                        idMenuOpen.value = null;
+                      }}>
+                        Open App <kbd>O</kbd>
+                      </button>
+                    )}
                   </div>
                 </div>
                 <div class="id-submenu-group" onClick={(e: any) => e.stopPropagation()}>
@@ -465,7 +525,7 @@ function PaneTabBar({
         const companionLabel = isJsonl ? `JSONL: ${sess?.feedbackTitle || sess?.agentName || realSid.slice(-6)}`
           : isFeedback ? `FB: ${sess?.feedbackTitle || realSid.slice(-6)}`
           : isIframe ? `Page: ${realSid.slice(-6)}`
-          : isTerminal ? (() => { const ts = getTerminalCompanion(realSid); const tSess = ts ? sessionMap.get(ts) : null; return `Term: ${tSess?.paneTitle || ts?.slice(-6) || realSid.slice(-6)}`; })()
+          : isTerminal ? (() => { const ts = getTerminalCompanion(realSid); if (ts === '__loading__') return 'Term: loading...'; const tSess = ts ? sessionMap.get(ts) : null; return `Term: ${tSess?.paneTitle || ts?.slice(-6) || realSid.slice(-6)}`; })()
           : isIsolate ? `Isolate: ${realSid}`
           : isUrl ? (() => { try { return `Iframe: ${new URL(realSid).hostname}`; } catch { return `Iframe: ${realSid.slice(0, 30)}`; } })()
           : '';
@@ -576,7 +636,9 @@ function renderTabContent(
       ) : isTerminal ? (
         (() => {
           const termSid = getTerminalCompanion(realSid);
-          return termSid ? <TerminalCompanionView companionSessionId={termSid} /> : <div class="companion-error">No companion terminal</div>;
+          return termSid === '__loading__'
+            ? <div class="companion-loading">Starting terminal...</div>
+            : termSid ? <TerminalCompanionView companionSessionId={termSid} /> : <div class="companion-error">No companion terminal</div>;
         })()
       ) : (
         <SessionViewToggle
@@ -594,7 +656,18 @@ function renderTabContent(
 
 export function GlobalTerminalPanel() {
   const tabs = openTabs.value;
-  if (tabs.length === 0) return null;
+  if (tabs.length === 0) {
+    // Still render the TerminalPicker even when no tabs are open
+    if (termPickerOpen.value) {
+      return (
+        <TerminalPicker
+          mode={termPickerOpen.value}
+          onClose={() => { termPickerOpen.value = null; }}
+        />
+      );
+    }
+    return null;
+  }
 
   const activeId = activeTabId.value;
   const minimized = panelMinimized.value;
@@ -633,6 +706,13 @@ export function GlobalTerminalPanel() {
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, [idMenuOpen.value]);
+
+  useEffect(() => {
+    if (!companionIdMenuOpen.value) return;
+    const close = () => { companionIdMenuOpen.value = null; };
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [companionIdMenuOpen.value]);
 
   useEffect(() => {
     const onResize = () => {

@@ -15,8 +15,10 @@ import { LiveConnectionsPage } from '../pages/LiveConnectionsPage.js';
 import { SettingsPage } from '../pages/SettingsPage.js';
 import { AppSettingsPage } from '../pages/AppSettingsPage.js';
 import { HarnessesPage } from '../pages/HarnessesPage.js';
+import { SpritesPage } from '../pages/SpritesPage.js';
 import { MachinesPage } from '../pages/MachinesPage.js';
 import { StandaloneSessionPage } from '../pages/StandaloneSessionPage.js';
+import { DispatchDialog } from './DispatchDialog.js';
 
 function parseAppRoute(route: string): { appId: string; sub: string; param?: string } | null {
   const m = route.match(/^\/app\/([^/]+)\/(.+)$/);
@@ -130,6 +132,8 @@ export function App() {
     page = <MachinesPage />;
   } else if (route === '/settings/harnesses') {
     page = <HarnessesPage />;
+  } else if (route === '/settings/sprites') {
+    page = <SpritesPage />;
   } else if (route.startsWith('/session/')) {
     const sessionId = route.replace('/session/', '');
     return <StandaloneSessionPage sessionId={sessionId} />;
@@ -157,9 +161,15 @@ export function App() {
       <div class="pw-embed-root">
         {page}
         <GlobalTerminalPanel />
+        <DispatchDialog />
       </div>
     );
   }
 
-  return <Layout>{page}</Layout>;
+  return (
+    <>
+      <Layout>{page}</Layout>
+      <DispatchDialog />
+    </>
+  );
 }

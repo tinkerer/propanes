@@ -122,7 +122,7 @@ feedbackRoutes.post('/', async (c) => {
     }
   }
 
-  feedbackEvents.emit('new', { id, appId, autoDispatch: !!input.autoDispatch });
+  feedbackEvents.emit('new', { id, appId, autoDispatch: !!input.autoDispatch, launcherId: input.launcherId });
   return c.json({ id, appId, status: 'new', createdAt: now }, 201);
 });
 
@@ -286,6 +286,6 @@ feedbackRoutes.post('/programmatic', async (c) => {
     );
   }
 
-  feedbackEvents.emit('new', { id, appId: progAppId, autoDispatch: !!input.autoDispatch });
+  feedbackEvents.emit('new', { id, appId: progAppId, autoDispatch: !!input.autoDispatch, launcherId: input.launcherId });
   return c.json({ id, appId: progAppId, status: 'new', createdAt: now }, 201);
 });

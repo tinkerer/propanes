@@ -57,7 +57,6 @@ export const WIDGET_CSS = `
 .pw-trigger-peek {
   pointer-events: auto;
   cursor: pointer;
-  clip-path: circle(50% at 100% 100%);
   transition: right 0.3s ease-out, bottom 0.3s ease-out;
 }
 
@@ -833,6 +832,27 @@ export const WIDGET_CSS = `
   transform: rotate(45deg);
 }
 
+.pw-send-menu-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+}
+.pw-send-menu-target-select {
+  flex: 1;
+  font-size: 11px;
+  padding: 3px 4px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  font-family: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+.pw-send-menu-target-select:hover {
+  border-color: #6366f1;
+}
 .pw-send-menu-divider {
   height: 1px;
   background: rgba(255,255,255,0.08);
