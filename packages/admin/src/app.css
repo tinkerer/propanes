@@ -223,6 +223,61 @@ html[data-theme="dark"] {
   display: none !important;
 }
 
+/* PTY Ctrl+mouse text selection overlay */
+.pty-sel-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.pty-sel-hl {
+  position: absolute;
+  background: rgba(99, 102, 241, 0.35);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+/* PTY Ctrl+right-click context menu */
+.pty-ctx-menu {
+  position: fixed;
+  z-index: 10000;
+  background: #1e293b;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: 4px 0;
+  min-width: 200px;
+  max-width: 360px;
+}
+
+.pty-ctx-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: #e2e8f0;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pty-ctx-menu button:hover {
+  background: #334155;
+}
+
+.pty-ctx-menu button + button {
+  border-top: 1px solid #334155;
+}
+
 /* ==================== Base Reset ==================== */
 * {
   box-sizing: border-box;
@@ -3157,17 +3212,6 @@ input:focus, select:focus, textarea:focus {
 .popout-split-container.dragging iframe,
 .popout-dragging iframe {
   pointer-events: none;
-}
-
-.panel-reorder-dragging {
-  z-index: 9999 !important;
-  opacity: 0.92;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
-  transition: none !important;
-}
-
-body.panel-reorder-active .popout-docked:not(.panel-reorder-dragging) {
-  transition: top 150ms ease;
 }
 
 .popout-split-pane {

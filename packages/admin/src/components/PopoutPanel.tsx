@@ -53,7 +53,6 @@ import {
   autoJumpDismissed,
   handleBounceCounter,
   reorderDockedPanel,
-  swapDockedPanels,
   termPickerOpen,
 } from '../lib/sessions.js';
 import { startTabDrag } from '../lib/tab-drag.js';
@@ -242,9 +241,6 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
         : { position: 'fixed' as const, right: 0, top: panelTop, width: panel.dockedWidth, height: panel.dockedHeight, zIndex: panelZIdx }
     : { position: 'fixed' as const, left: panel.floatingRect.x, top: panel.floatingRect.y, width: panel.floatingRect.w, height: isMinimized ? 34 : panel.floatingRect.h, zIndex: panelZIdx };
 
-  const dragOff = reorderDragOffset.value;
-  const isReorderDragging = docked && dragOff?.panelId === panel.id;
-
   const onHeaderDragStart = useCallback((e: MouseEvent) => {
     if ((e.target as HTMLElement).closest('button, select, a, .id-dropdown-wrapper, .session-status-dot')) return;
     e.preventDefault();
@@ -254,7 +250,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
     const cp = popoutPanels.value.find((p) => p.id === panel.id);
     if (!cp) return;
     const fr = cp.floatingRect;
-    startPos.current = { mx: e.clientX, my: e.clientY, x: fr.x, y: fr.y, w: fr.w, h: fr.h, dockedHeight: cp.dockedHeight, dockedTopOffset: 0, dockedBaseTop: cp.docked ? (e.clientY - getDockedPanelTop(panel.id)) : 0 };
+    startPos.current = { mx: e.clientX, my: e.clientY, x: fr.x, y: fr.y, w: fr.w, h: fr.h, dockedHeight: cp.dockedHeight, dockedTopOffset: cp.dockedTopOffset || 0, dockedBaseTop: cp.docked ? (e.clientY - getDockedPanelTop(panel.id)) : 0 };
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current) return;
       const dx = ev.clientX - startPos.current.mx;
@@ -273,35 +269,10 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
             floatingRect: { x: ev.clientX - w / 2, y: ev.clientY - 16, w, h },
           });
           startPos.current = { ...startPos.current, mx: ev.clientX, my: ev.clientY, x: ev.clientX - w / 2, y: ev.clientY - 16, w, h, dockedHeight: h };
-          reorderDragOffset.value = null;
-          document.body.classList.remove('panel-reorder-active');
+
         } else {
-          // Vertical reorder: move panel up/down among docked siblings
-          document.body.classList.add('panel-reorder-active');
-          const side = currentPanel.dockedSide || 'right';
-          const dockedOnSide = popoutPanels.value.filter(p => p.docked && (p.dockedSide || 'right') === side);
-          const currentIdx = dockedOnSide.findIndex(p => p.id === panel.id);
-          // Use mouse position directly for swap checks (not panel center)
-          if (currentIdx > 0) {
-            const above = dockedOnSide[currentIdx - 1];
-            const aboveTop = getDockedPanelTop(above.id);
-            const aboveH = above.visible ? above.dockedHeight : 48;
-            if (ev.clientY < aboveTop + aboveH / 2) {
-              swapDockedPanels(panel.id, above.id);
-            }
-          }
-          if (currentIdx >= 0 && currentIdx < dockedOnSide.length - 1) {
-            const below = dockedOnSide[currentIdx + 1];
-            const belowTop = getDockedPanelTop(below.id);
-            const belowH = below.visible ? below.dockedHeight : 48;
-            if (ev.clientY > belowTop + belowH / 2) {
-              swapDockedPanels(panel.id, below.id);
-            }
-          }
-          // dockedBaseTop stores mouseGrabOffset (constant), getDockedPanelTop auto-updates after swap
-          const mouseGrabOffset = startPos.current.dockedBaseTop;
-          const currentTop = getDockedPanelTop(panel.id);
-          reorderDragOffset.value = { panelId: panel.id, offsetY: ev.clientY - mouseGrabOffset - currentTop };
+          // Vertical drag: move panel up/down by adjusting dockedTopOffset
+          updatePanel(panel.id, { dockedTopOffset: startPos.current.dockedTopOffset + dy });
         }
       } else {
         const rawX = Math.max(0, Math.min(startPos.current.x + dx, window.innerWidth - 100));
@@ -334,8 +305,6 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
     const onUp = () => {
       dragging.current = false;
       wrapperRef.current?.classList.remove('popout-dragging');
-      reorderDragOffset.value = null;
-      document.body.classList.remove('panel-reorder-active');
       snapGuides.value = [];
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
@@ -498,8 +467,8 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
       )}
       <div
         ref={wrapperRef}
-        class={`${docked ? `popout-docked${isLeftDocked ? ' docked-left' : ''}` : 'popout-floating'}${isMinimized ? ' minimized' : ''}${isFocused ? ' panel-focused' : ''}${isActive ? ' panel-active' : ''}${panel.alwaysOnTop ? ' always-on-top' : ''}${isReorderDragging ? ' panel-reorder-dragging' : ''}`}
-        style={isReorderDragging ? { ...panelStyle, top: ((panelStyle as any).top || 0) + dragOff!.offsetY, zIndex: 9999 } : panelStyle}
+        class={`${docked ? `popout-docked${isLeftDocked ? ' docked-left' : ''}` : 'popout-floating'}${isMinimized ? ' minimized' : ''}${isFocused ? ' panel-focused' : ''}${isActive ? ' panel-active' : ''}${panel.alwaysOnTop ? ' always-on-top' : ''}`}
+        style={panelStyle}
         data-panel-id={panel.id}
         onMouseDown={() => { activePanelId.value = panel.id; bringToFront(panel.id); if (panel.activeSessionId) focusSessionTerminal(panel.activeSessionId); }}
       >
@@ -1043,7 +1012,6 @@ function DockedPanelGrabHandle({ panel }: { panel: PopoutPanelState }) {
   const globalIdx = globalSessions.indexOf(activeId);
   const rawGrabY = panel.grabY ?? 0;
   const grabY = panel.visible ? Math.max(0, Math.min(rawGrabY, panel.dockedHeight - GRAB_HANDLE_H)) : rawGrabY;
-  const reorderY = reorderDragOffset.value?.panelId === panel.id ? reorderDragOffset.value.offsetY : 0;
   const _zOrders = panelZOrders.value;  // subscribe to signal
   const grabZIndex = getPanelZIndex(panel) + 1;
 
@@ -1057,7 +1025,7 @@ function DockedPanelGrabHandle({ panel }: { panel: PopoutPanelState }) {
         style={{
           left: leftPos,
           right: 'auto',
-          top: panelTop + grabY + reorderY,
+          top: panelTop + grabY,
           height: GRAB_HANDLE_H,
           zIndex: grabZIndex,
         }}
@@ -1089,7 +1057,7 @@ function DockedPanelGrabHandle({ panel }: { panel: PopoutPanelState }) {
         class="popout-grab-tab popout-grab-tab-horiz"
         style={{
           right: rightPos,
-          top: panelTopH + grabY + reorderY,
+          top: panelTopH + grabY,
           height: GRAB_HANDLE_H,
           zIndex: grabZIndex,
         }}
@@ -1113,7 +1081,7 @@ function DockedPanelGrabHandle({ panel }: { panel: PopoutPanelState }) {
       class="popout-grab-tab"
       style={{
         right: rightPos,
-        top: panelTop + grabY + reorderY,
+        top: panelTop + grabY,
         height: GRAB_HANDLE_H,
         zIndex: grabZIndex,
       }}

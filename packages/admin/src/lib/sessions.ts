@@ -751,15 +751,6 @@ export function removePanel(panelId: string) {
   popoutPanels.value = popoutPanels.value.filter((p) => p.id !== panelId);
 }
 
-export function swapDockedPanels(panelIdA: string, panelIdB: string) {
-  const panels = [...popoutPanels.value];
-  const idxA = panels.findIndex((p) => p.id === panelIdA);
-  const idxB = panels.findIndex((p) => p.id === panelIdB);
-  if (idxA === -1 || idxB === -1) return;
-  [panels[idxA], panels[idxB]] = [panels[idxB], panels[idxA]];
-  popoutPanels.value = panels;
-}
-
 export function reorderDockedPanel(panelId: string, beforePanelId: string | null) {
   const panels = [...popoutPanels.value];
   const idx = panels.findIndex((p) => p.id === panelId);
