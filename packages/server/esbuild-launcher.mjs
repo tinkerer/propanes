@@ -10,7 +10,7 @@ await build({
   target: 'node22',
   format: 'esm',
   outfile: 'dist/launcher-bundle.mjs',
-  external: ['node-pty'],
+  external: ['node-pty', 'ws'],
   banner: {
     js: '// prompt-widget launcher daemon bundle\n// Deploy: scp dist/launcher-bundle.mjs remote:~/ && node launcher-bundle.mjs',
   },
