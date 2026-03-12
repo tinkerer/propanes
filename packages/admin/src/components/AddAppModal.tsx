@@ -43,7 +43,7 @@ export function AddAppModal({ onClose }: { onClose: () => void }) {
       if (mode === 'create') {
         result = await api.scaffoldApp({ name: createName, parentDir, projectName });
       } else if (mode === 'existing') {
-        const res = await api.createApplication({ name: existingName, projectDir: existingDir, hooks: {} });
+        const res = await api.createApplication({ name: existingName, projectDir: existingDir });
         result = { id: res.id, apiKey: res.apiKey, projectDir: existingDir };
       } else if (mode === 'clone') {
         result = await api.cloneApp({
