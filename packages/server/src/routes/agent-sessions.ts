@@ -364,6 +364,7 @@ agentSessionRoutes.get('/', async (c) => {
       paneTitle: live?.paneTitle || null,
       paneCommand: live?.paneCommand || null,
       panePath: live?.panePath || null,
+      cwd: r.session.cwd || null,
       jsonlPath: computeJsonlPath(r.appProjectDir || process.cwd(), r.session.claudeSessionId),
       launcherName,
       launcherHostname,

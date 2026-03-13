@@ -531,6 +531,79 @@ function toggleExpanded(machineId: string) {
   expandedMachines.value = next;
 }
 
+function getAppsForMachine(machineId: string): any[] {
+  const appIds = new Set<string>();
+  for (const h of harnessConfigs.value) {
+    if (h.machineId === machineId && h.appId) appIds.add(h.appId);
+  }
+  return applications.value.filter(a => appIds.has(a.id));
+}
+
+function getRepoName(projectDir: string | null | undefined): string {
+  if (!projectDir) return '';
+  const parts = projectDir.replace(/\/+$/, '').split('/');
+  return parts.slice(-2).join('/');
+}
+
+type RepoEntry = { app: any; infraType: 'machine' | 'sprite'; infraId: string; infraName: string };
+
+function buildRepoMap(): Map<string, RepoEntry[]> {
+  const map = new Map<string, RepoEntry[]>();
+  for (const m of machines.value) {
+    for (const app of getAppsForMachine(m.id)) {
+      const key = app.projectDir || app.id;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push({ app, infraType: 'machine', infraId: m.id, infraName: m.name });
+    }
+  }
+  for (const s of spriteConfigs.value) {
+    if (s.appId) {
+      const app = applications.value.find(a => a.id === s.appId);
+      if (app) {
+        const key = app.projectDir || app.id;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key)!.push({ app, infraType: 'sprite', infraId: s.id, infraName: s.name });
+      }
+    }
+  }
+  return map;
+}
+
+function getUnassociatedApps(): any[] {
+  const assignedIds = new Set<string>();
+  for (const h of harnessConfigs.value) {
+    if (h.appId) assignedIds.add(h.appId);
+  }
+  for (const s of spriteConfigs.value) {
+    if (s.appId) assignedIds.add(s.appId);
+  }
+  return applications.value.filter(a => !assignedIds.has(a.id));
+}
+
+function AppLink({ app }: { app: any }) {
+  return (
+    <a href={`#/app/${app.id}/feedback`} style="color:var(--pw-primary);text-decoration:none;font-weight:500">
+      {app.name}
+    </a>
+  );
+}
+
+function SharedRepoBadge({ repoKey, currentInfraId }: { repoKey: string; currentInfraId: string }) {
+  const repoMap = buildRepoMap();
+  const entries = repoMap.get(repoKey) || [];
+  const others = entries.filter(e => e.infraId !== currentInfraId);
+  if (others.length === 0) return null;
+  const names = others.map(e => e.infraName).join(', ');
+  return (
+    <span
+      title={`Also on: ${names}`}
+      style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--pw-warning, #f59e0b)20;color:var(--pw-warning, #f59e0b);margin-left:4px;cursor:help"
+    >
+      shared: {names}
+    </span>
+  );
+}
+
 // ----- Sub-components -----
 
 function MachineForm() {
@@ -919,7 +992,16 @@ function SpriteCard({ s }: { s: any }) {
         </div>
         <div class="agent-card-meta">
           <span class="agent-meta-tag">{s.spriteName}</span>
-          {s.appId && <span class="agent-meta-tag" style="border-color:var(--pw-primary)40;color:var(--pw-primary)">{getAppName(s.appId)}</span>}
+          {s.appId && (() => {
+            const app = applications.value.find(a => a.id === s.appId);
+            return app ? (
+              <span class="agent-meta-tag" style="border-color:var(--pw-primary)40;color:var(--pw-primary)">
+                <AppLink app={app} />
+              </span>
+            ) : (
+              <span class="agent-meta-tag" style="border-color:var(--pw-primary)40;color:var(--pw-primary)">{s.appId.slice(0, 8)}</span>
+            );
+          })()}
           {s.activeSessions > 0 && (
             <span class="agent-meta-tag" style="border-color:var(--pw-success, #22c55e)40;color:var(--pw-success, #22c55e)">
               {s.activeSessions}/{s.maxSessions} sessions
@@ -927,6 +1009,16 @@ function SpriteCard({ s }: { s: any }) {
           )}
           {s.token && <span class="agent-meta-tag" style="border-color:var(--pw-success, #22c55e)40;color:var(--pw-success, #22c55e)">Token set</span>}
         </div>
+        {s.appId && (() => {
+          const app = applications.value.find(a => a.id === s.appId);
+          if (!app?.projectDir) return null;
+          return (
+            <div style="margin-top:6px;font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span style="color:var(--pw-text-faint);font-size:11px">{getRepoName(app.projectDir)}</span>
+              <SharedRepoBadge repoKey={app.projectDir} currentInfraId={s.id} />
+            </div>
+          );
+        })()}
         {s.spriteUrl && (
           <div style="margin-top:8px;font-size:12px;color:var(--pw-text-muted)">
             <span style="font-weight:500;color:var(--pw-text)">URL: </span>
@@ -1047,6 +1139,25 @@ function MachineCard({ m }: { m: any }) {
             Last seen: {new Date(m.lastSeenAt).toLocaleString()}
           </div>
         )}
+
+        {(() => {
+          const apps = getAppsForMachine(m.id);
+          if (apps.length === 0) return null;
+          return (
+            <div style="margin-top:8px;font-size:12px">
+              <div style="font-weight:500;color:var(--pw-text);margin-bottom:4px">Apps</div>
+              {apps.map(app => (
+                <div key={app.id} style="display:flex;align-items:center;gap:6px;padding:2px 0;flex-wrap:wrap">
+                  <AppLink app={app} />
+                  {app.projectDir && (
+                    <span style="color:var(--pw-text-faint);font-size:11px">{getRepoName(app.projectDir)}</span>
+                  )}
+                  {app.projectDir && <SharedRepoBadge repoKey={app.projectDir} currentInfraId={m.id} />}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
 
         {harnessCount > 0 && (
           <div style="margin-top:8px">
@@ -1212,6 +1323,72 @@ export function InfrastructurePage() {
           <DeletedItemsPanel type="sprites" />
         </>
       )}
+
+      {/* Applications section */}
+      {applications.value.length > 0 && (() => {
+        const repoMap = buildRepoMap();
+        const sharedRepos = [...repoMap.entries()].filter(([, entries]) => {
+          const uniqueInfra = new Set(entries.map(e => e.infraId));
+          return uniqueInfra.size > 1;
+        });
+        const unassociated = getUnassociatedApps();
+
+        if (sharedRepos.length === 0 && unassociated.length === 0) return null;
+
+        return (
+          <>
+            <div class="infra-section-title" style="margin-top:32px">Applications</div>
+
+            {sharedRepos.length > 0 && (
+              <div style="margin-bottom:16px">
+                <div style="font-size:12px;font-weight:500;color:var(--pw-text);margin-bottom:8px">Shared Repos</div>
+                {sharedRepos.map(([repoKey, entries]) => (
+                  <div key={repoKey} class="agent-card" style="margin-bottom:8px">
+                    <div class="agent-card-body" style="padding:10px 14px">
+                      <div style="font-size:12px;font-weight:500;color:var(--pw-text);margin-bottom:4px">
+                        {getRepoName(repoKey)}
+                      </div>
+                      <div style="display:flex;flex-wrap:wrap;gap:8px;font-size:12px">
+                        {entries.map(e => (
+                          <span key={e.infraId + e.app.id} style="display:inline-flex;align-items:center;gap:4px;color:var(--pw-text-muted)">
+                            <AppLink app={e.app} />
+                            <span style="font-size:10px;padding:1px 4px;border-radius:3px;background:var(--pw-bg-hover);color:var(--pw-text-faint)">
+                              {e.infraType === 'machine' ? '\u{1F5A5}' : '\u2601\uFE0F'} {e.infraName}
+                            </span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {unassociated.length > 0 && (
+              <div>
+                <div style="font-size:12px;font-weight:500;color:var(--pw-text);margin-bottom:8px">Unassociated Apps</div>
+                <div class="agent-list">
+                  {unassociated.map(app => (
+                    <div key={app.id} class="agent-card">
+                      <div class="agent-card-body" style="padding:10px 14px">
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                          <AppLink app={app} />
+                          {app.projectDir && (
+                            <span style="color:var(--pw-text-faint);font-size:11px">{getRepoName(app.projectDir)}</span>
+                          )}
+                          {app.serverUrl && (
+                            <a href={app.serverUrl} target="_blank" rel="noopener" style="font-size:11px;color:var(--pw-primary)">{app.serverUrl}</a>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
     </div>
   );
 }

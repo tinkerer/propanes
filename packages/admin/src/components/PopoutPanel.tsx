@@ -63,11 +63,7 @@ import { ctrlShiftHeld } from '../lib/shortcuts.js';
 import { navigate, selectedAppId } from '../lib/state.js';
 import { showHotkeyHints } from '../lib/settings.js';
 import { api } from '../lib/api.js';
-import { JsonlView } from './JsonlView.js';
-import { FeedbackCompanionView } from './FeedbackCompanionView.js';
-import { IframeCompanionView } from './IframeCompanionView.js';
-import { IsolateCompanionView } from './IsolateCompanionView.js';
-import { TerminalCompanionView } from './TerminalCompanionView.js';
+import { renderTabContent } from './PaneContent.js';
 
 export const popoutIdMenuOpen = signal<string | null>(null);
 const popoutStatusMenuOpen = signal<{ sessionId: string; panelId: string; x: number; y: number } | null>(null);
@@ -140,53 +136,6 @@ function PanelTabBadge({ tabNum }: { tabNum: number }) {
 }
 
 
-function renderPanelTabContent(
-  sid: string,
-  isVisible: boolean,
-  sessionMap: Map<string, any>,
-) {
-  const isJsonl = sid.startsWith('jsonl:');
-  const isFeedback = sid.startsWith('feedback:');
-  const isIframe = sid.startsWith('iframe:');
-  const isTerminal = sid.startsWith('terminal:');
-  const isIsolate = sid.startsWith('isolate:');
-  const isUrl = sid.startsWith('url:');
-  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl;
-  const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
-  const sess = (isIsolate || isUrl) ? null : sessionMap.get(realSid);
-
-  return (
-    <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0 }}>
-      {isUrl ? (
-        <IframeCompanionView url={realSid} />
-      ) : isIsolate ? (
-        <IsolateCompanionView componentName={realSid} />
-      ) : isJsonl ? (
-        <JsonlView sessionId={realSid} />
-      ) : isFeedback ? (
-        sess?.feedbackId ? <FeedbackCompanionView feedbackId={sess.feedbackId} /> : <div class="companion-error">No feedback linked</div>
-      ) : isIframe ? (
-        sess?.url ? <IframeCompanionView url={sess.url} /> : <div class="companion-error">No URL available</div>
-      ) : isTerminal ? (
-        (() => {
-          const termSid = getTerminalCompanion(realSid);
-          return termSid === '__loading__'
-            ? <div class="companion-loading">Starting terminal...</div>
-            : termSid ? <TerminalCompanionView companionSessionId={termSid} /> : <div class="companion-error">No companion terminal</div>;
-        })()
-      ) : (
-        <SessionViewToggle
-          sessionId={sid}
-          isActive={isVisible}
-          onExit={(code, text) => markSessionExited(sid, code, text)}
-          onInputStateChange={(s) => setSessionInputState(sid, s)}
-          permissionProfile={sess?.permissionProfile}
-          mode={getViewMode(sid, sess?.permissionProfile)}
-        />
-      )}
-    </div>
-  );
-}
 
 function PanelView({ panel }: { panel: PopoutPanelState }) {
   const ids = panel.sessionIds;
@@ -414,17 +363,19 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
     const isTerminal = sid.startsWith('terminal:');
     const isIsolate = sid.startsWith('isolate:');
     const isUrl = sid.startsWith('url:');
-    const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl;
+    const isFile = sid.startsWith('file:');
+    const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile;
     const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
     const custom = getSessionLabel(sid);
     if (custom) return custom;
-    const s = (isIsolate || isUrl) ? null : sessionMap.get(realSid);
+    const s = (isIsolate || isUrl || isFile) ? null : sessionMap.get(realSid);
     if (isJsonl) return `JSONL: ${s?.feedbackTitle || s?.agentName || realSid.slice(-6)}`;
     if (isFeedback) return `FB: ${s?.feedbackTitle || realSid.slice(-6)}`;
     if (isIframe) return `Page: ${realSid.slice(-6)}`;
     if (isTerminal) { const ts = getTerminalCompanion(realSid); if (ts === '__loading__') return 'Term: loading...'; const tSess = ts ? sessionMap.get(ts) : null; return `Term: ${tSess?.paneTitle || ts?.slice(-6) || realSid.slice(-6)}`; }
     if (isIsolate) return `Isolate: ${realSid}`;
     if (isUrl) { try { return `Iframe: ${new URL(realSid).hostname}`; } catch { return `Iframe: ${realSid.slice(0, 30)}`; } }
+    if (isFile) { const parts = realSid.split('/'); return parts[parts.length - 1] || realSid.slice(-20); }
     const isPlainSess = s?.permissionProfile === 'plain';
     const plainLabel = s?.paneCommand
       ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s?.paneTitle || sid.slice(-6)}`
@@ -807,7 +758,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
               </div>
             )}
             <div class="popout-body">
-              {leftTabs.map((sid) => renderPanelTabContent(sid, sid === activeId, sessionMap))}
+              {leftTabs.map((sid) => renderTabContent(sid, sid === activeId, sessionMap))}
             </div>
           </div>
           <div class="popout-split-divider" onMouseDown={onSplitDividerMouseDown} />
@@ -870,7 +821,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
               );
             })()}
             <div class="popout-body">
-              {panelRightTabs.map((sid) => renderPanelTabContent(sid, sid === panelRightActive, sessionMap))}
+              {panelRightTabs.map((sid) => renderTabContent(sid, sid === panelRightActive, sessionMap))}
             </div>
           </div>
         </div>

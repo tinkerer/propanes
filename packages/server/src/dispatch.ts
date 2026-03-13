@@ -183,6 +183,7 @@ export async function dispatchFeedbackToAgent(params: {
   }
 
   if (mode === 'webhook') {
+    if (!agent.url) throw new Error('Agent endpoint has mode "webhook" but no URL configured');
     const result = await dispatchWebhook(agent.url, agent.authHeader, {
       feedback: hydratedFeedback,
       instructions,
@@ -479,6 +480,7 @@ export async function dispatchAgentSession(params: {
       outputBytes: 0,
       launcherId: launcher ? launcher.id : null,
       claudeSessionId,
+      cwd: params.cwd || null,
       createdAt: now,
     })
     .run();
@@ -579,6 +581,7 @@ export async function dispatchTerminalSession(params: {
       status: 'pending',
       outputBytes: 0,
       launcherId: launcher ? launcher.id : null,
+      cwd: params.cwd || null,
       createdAt: now,
     })
     .run();
@@ -633,6 +636,7 @@ export async function dispatchCompanionTerminal(params: {
       parentSessionId: params.parentSessionId,
       status: 'pending',
       outputBytes: 0,
+      cwd: params.cwd || null,
       createdAt: now,
     })
     .run();
@@ -767,6 +771,7 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
         outputBytes: 0,
         claudeSessionId: parent.claudeSessionId,
         launcherId: launcher ? launcher.id : null,
+        cwd,
         createdAt: now,
       })
       .run();
@@ -839,6 +844,7 @@ IMPORTANT: The previous session may have made partial progress. Check the curren
       outputBytes: 0,
       claudeSessionId,
       launcherId: launcher ? launcher.id : null,
+      cwd,
       createdAt: now,
     })
     .run();
@@ -883,7 +889,7 @@ export async function dispatchHarnessSession(params: {
   const sessionId = ulid();
   const now = new Date().toISOString();
   const claudeSessionId = params.claudeSessionId || crypto.randomUUID();
-  const containerCwd = '/workspace';
+  let containerCwd: string | undefined;
 
   const launcher = getLauncher(params.launcherId);
   if (!launcher || launcher.ws.readyState !== 1) {
@@ -917,10 +923,11 @@ export async function dispatchHarnessSession(params: {
           params.harnessConfigId,
           branch,
           remoteUrl,
-          containerCwd,
+          '/workspace',
           params.composeDir,
           params.serviceName,
         );
+        containerCwd = '/workspace';
         console.log(`[dispatch] Synced codebase to container for harness session ${sessionId}`);
       } catch (err: any) {
         console.warn(`[dispatch] Container code sync failed, proceeding without sync: ${err.message}`);

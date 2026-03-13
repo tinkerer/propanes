@@ -3,38 +3,7 @@ import { fileViewerPanels, closeFileViewer, updateFileViewer } from '../lib/file
 import { api } from '../lib/api.js';
 import hljs from 'highlight.js/lib/common';
 import { marked } from 'marked';
-
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico']);
-const MARKDOWN_EXTS = new Set(['md', 'mdx', 'markdown']);
-
-function getExt(path: string): string {
-  return path.split('.').pop()?.toLowerCase() || '';
-}
-
-function getLanguage(ext: string): string | undefined {
-  const map: Record<string, string> = {
-    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
-    py: 'python', rb: 'ruby', rs: 'rust', go: 'go', java: 'java',
-    c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', cc: 'cpp',
-    css: 'css', scss: 'scss', less: 'less',
-    html: 'xml', htm: 'xml', xml: 'xml', svg: 'xml',
-    json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini',
-    sh: 'bash', bash: 'bash', zsh: 'bash',
-    sql: 'sql', graphql: 'graphql',
-    swift: 'swift', kt: 'kotlin', cs: 'csharp',
-    lua: 'lua', pl: 'perl', php: 'php', r: 'r',
-    makefile: 'makefile', dockerfile: 'dockerfile',
-    diff: 'diff', patch: 'diff',
-  };
-  return map[ext];
-}
-
-function shortenPath(p: string): string {
-  if (p.length <= 60) return p;
-  const parts = p.split('/');
-  if (parts.length <= 3) return p;
-  return '.../' + parts.slice(-3).join('/');
-}
+import { IMAGE_EXTS, MARKDOWN_EXTS, getExt, getLanguage, shortenPath } from '../lib/file-utils.js';
 
 function SingleFileViewer({ path, offset }: { path: string; offset: number }) {
   const panelRef = useRef<HTMLDivElement>(null);

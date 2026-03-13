@@ -4,8 +4,11 @@ import { signal } from '@preact/signals';
 import { currentRoute, clearToken, navigate, selectedAppId, applications, unlinkedCount, appFeedbackCounts, addAppModalOpen } from '../lib/state.js';
 import { api } from '../lib/api.js';
 import { timed } from '../lib/perf.js';
-import { GlobalTerminalPanel, idMenuOpen } from './GlobalTerminalPanel.js';
+import { idMenuOpen } from './LeafPane.js';
 import { PopoutPanel, popoutIdMenuOpen, popoutWindowMenuOpen } from './PopoutPanel.js';
+import { PaneTree } from './PaneTree.js';
+import { SplitPane } from './SplitPane.js';
+import { layoutTree, focusedLeafId, splitLeaf, mergeLeaf, getAllLeaves, setFocusedLeaf, findLeaf, findLeafWithTab, SESSIONS_LEAF_ID } from '../lib/pane-tree.js';
 import { PerfOverlay } from './PerfOverlay.js';
 import { copyText } from '../lib/clipboard.js';
 import { FileViewerOverlay } from './FileViewerPanel.js';
@@ -17,12 +20,13 @@ import { RequestPanel } from './RequestPanel.js';
 import { ControlBar } from './ControlBar.js';
 import { HintToast } from './HintToast.js';
 import { AutoFixToast } from './AutoFixToast.js';
+import { TerminalPicker } from './TerminalPicker.js';
+import { SidebarFilesDrawer } from './SidebarFilesDrawer.js';
 import { registerShortcut, ctrlShiftHeld } from '../lib/shortcuts.js';
-import { toggleTheme, showTabs, arrowTabSwitching, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce } from '../lib/settings.js';
+import { toggleTheme, arrowTabSwitching, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce } from '../lib/settings.js';
 import {
   openTabs,
   activeTabId,
-  panelHeight,
   panelMinimized,
   persistPanelState,
   sidebarCollapsed,
@@ -91,6 +95,8 @@ import {
   activePanelId,
   bringToFront,
   termPickerOpen,
+  sidebarSplitRatio,
+  setSidebarSplitRatio,
 } from '../lib/sessions.js';
 
 interface LiveConnection {
@@ -106,6 +112,7 @@ const totalLiveConnections = signal(0);
 const liveSites = signal<{ origin: string; hostname: string; count: number }[]>([]);
 const sidebarStatusMenu = signal<{ sessionId: string; x: number; y: number } | null>(null);
 const sidebarItemMenu = signal<{ sessionId: string; x: number; y: number } | null>(null);
+const filesDrawerOpen = signal(false);
 
 function highlightMatch(text: string, query: string) {
   const lower = text.toLowerCase();
@@ -172,9 +179,6 @@ function SidebarTabBadge({ tabNum }: { tabNum: number }) {
 
 export function Layout({ children }: { children: ComponentChildren }) {
   const route = currentRoute.value;
-  const hasTabs = openTabs.value.length > 0;
-  const minimizedHeight = showTabs.value ? 66 : 32;
-  const bottomPad = hasTabs ? (panelMinimized.value ? minimizedHeight : panelHeight.value) : 0;
   const collapsed = sidebarCollapsed.value;
   const width = sidebarWidth.value;
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
@@ -222,6 +226,14 @@ export function Layout({ children }: { children: ComponentChildren }) {
   }, [autoJumpMenuOpen.value]);
 
   function getActivePanelSession(): string | null {
+    // Check focused tree leaf first
+    const leafId = focusedLeafId.value;
+    if (leafId) {
+      const leaf = findLeaf(layoutTree.value.root, leafId);
+      if (leaf && leaf.activeTabId && !leaf.activeTabId.includes(':')) {
+        return leaf.activeTabId;
+      }
+    }
     const ap = activePanelId.value;
     if (!ap || ap === 'global' || ap === 'split-left' || ap === 'split-right') {
       return activeTabId.value;
@@ -513,7 +525,16 @@ export function Layout({ children }: { children: ComponentChildren }) {
         modifiers: { ctrl: true, shift: true },
         label: 'Cycle panel focus',
         category: 'Panels',
-        action: () => cyclePanelFocus(1),
+        action: () => {
+          const leaves = getAllLeaves(layoutTree.value.root).filter(l => l.panelType === 'tabs' && l.tabs.length > 0);
+          if (leaves.length > 1) {
+            const curIdx = leaves.findIndex(l => l.id === focusedLeafId.value);
+            const nextIdx = (curIdx + 1) % leaves.length;
+            setFocusedLeaf(leaves[nextIdx].id);
+          } else {
+            cyclePanelFocus(1);
+          }
+        },
       }),
       registerShortcut({
         key: '|',
@@ -527,11 +548,32 @@ export function Layout({ children }: { children: ComponentChildren }) {
         key: '"',
         code: 'Quote',
         modifiers: { ctrl: true, shift: true },
-        label: 'Toggle split pane',
+        label: 'Split pane horizontal',
         category: 'Panels',
         action: () => {
-          if (splitEnabled.value) disableSplit();
-          else enableSplit();
+          const leafId = focusedLeafId.value || SESSIONS_LEAF_ID;
+          splitLeaf(leafId, 'horizontal');
+        },
+      }),
+      registerShortcut({
+        key: '-',
+        code: 'Minus',
+        modifiers: { ctrl: true, shift: true },
+        label: 'Split pane vertical',
+        category: 'Panels',
+        action: () => {
+          const leafId = focusedLeafId.value || SESSIONS_LEAF_ID;
+          splitLeaf(leafId, 'vertical');
+        },
+      }),
+      registerShortcut({
+        key: 'Backspace',
+        modifiers: { ctrl: true, shift: true },
+        label: 'Merge/close pane',
+        category: 'Panels',
+        action: () => {
+          const leafId = focusedLeafId.value;
+          if (leafId) mergeLeaf(leafId);
         },
       }),
       registerShortcut({
@@ -845,8 +887,8 @@ export function Layout({ children }: { children: ComponentChildren }) {
     { path: '/settings/preferences', label: 'Preferences', icon: '\u2699' },
   ];
 
-  return (
-    <div class="layout">
+  const sidebarJSX = (
+    <>
       <div class={`sidebar ${collapsed ? 'collapsed' : ''}${sidebarAnimating.value ? ' animating' : ''}`} style={{ width: `${width}px` }}>
         <div class="sidebar-header">
           <Tooltip text={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} shortcut="Ctrl+\" position="right">
@@ -1007,203 +1049,181 @@ export function Layout({ children }: { children: ComponentChildren }) {
           </a>
         </nav>
         {!collapsed && (
-          <>
-            <div
-              class="sidebar-resize-handle"
-              onMouseDown={(e) => {
-                const startY = e.clientY;
-                const startSH = sessionsHeight.value;
-                const startTH = terminalsHeight.value;
-                const total = startSH + startTH;
-                const sRatio = total > 0 ? startSH / total : 0.5;
-                const tRatio = total > 0 ? startTH / total : 0.5;
-                startDrag(e, 'ns-resize', (ev) => {
-                  const delta = -(ev.clientY - startY);
-                  setSessionsHeight(startSH + delta * sRatio);
-                  setTerminalsHeight(startTH + delta * tRatio);
-                }, e.currentTarget as HTMLElement);
-              }}
-            />
-            <div
-              class={`sidebar-sessions ${sessionsDrawerOpen.value ? 'open' : 'closed'}`}
-              style={sessionsDrawerOpen.value ? { height: `${sessionsHeight.value}px` } : undefined}
-            >
-              <div class="sidebar-sessions-header">
-                <span class={`sessions-chevron ${sessionsDrawerOpen.value ? 'expanded' : ''}`} onClick={toggleSessionsDrawer}>{'\u25B8'}</span>
-                Sessions ({visibleSessions.length})
-                {runningSessions > 0 && <span class="sidebar-running-badge">{runningSessions} running</span>}
-                {waitingCount > 0 && <span class="sidebar-waiting-badge">{waitingCount} waiting</span>}
-                <div class="auto-jump-dropdown" onClick={(e) => e.stopPropagation()}>
-                    <span
-                      class={`auto-jump-trigger${autoJumpWaiting.value ? ' active' : ''}`}
-                      onClick={() => { autoJumpMenuOpen.value = !autoJumpMenuOpen.value; }}
-                    >
-                      aj {autoJumpWaiting.value ? '\u25CF' : '\u25CB'} {'\u25BE'}
-                    </span>
-                    {autoJumpMenuOpen.value && (
-                      <div class="auto-jump-menu" onClick={(e) => e.stopPropagation()}>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={autoJumpWaiting.value}
-                            onChange={(e) => { autoJumpWaiting.value = (e.target as HTMLInputElement).checked; }}
-                          />
-                          Enable Auto-Jump
-                        </label>
-                        <div class="id-dropdown-separator" />
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={autoJumpInterrupt.value}
-                            onChange={(e) => { autoJumpInterrupt.value = (e.target as HTMLInputElement).checked; }}
-                          />
-                          Interrupt typing
-                        </label>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={autoJumpDelay.value}
-                            onChange={(e) => { autoJumpDelay.value = (e.target as HTMLInputElement).checked; }}
-                          />
-                          3s delay <kbd>{'\u2303\u21E7'}X</kbd>
-                        </label>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={autoJumpShowPopup.value}
-                            onChange={(e) => { autoJumpShowPopup.value = (e.target as HTMLInputElement).checked; }}
-                          />
-                          Show paused popup
-                        </label>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={autoCloseWaitingPanel.value}
-                            onChange={(e) => { autoCloseWaitingPanel.value = (e.target as HTMLInputElement).checked; }}
-                          />
-                          Auto-close panel
-                        </label>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={autoJumpHandleBounce.value}
-                            onChange={(e) => { autoJumpHandleBounce.value = (e.target as HTMLInputElement).checked; }}
-                          />
-                          Handle bounce
-                        </label>
-                        <div class="id-dropdown-separator" />
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={autoJumpLogs.value}
-                            onChange={(e) => { autoJumpLogs.value = (e.target as HTMLInputElement).checked; }}
-                          />
-                          Log to console
-                        </label>
-                      </div>
-                    )}
-                  </div>
-                <button
-                  class="sidebar-new-terminal-btn"
-                  onClick={() => { termPickerOpen.value = { kind: 'claude' }; }}
-                  title="New Claude session (g c)"
-                >+</button>
-              </div>
-              {sessionsDrawerOpen.value && (
-                <>
-                  <div class="sidebar-sessions-filters">
-                    <input
-                      type="text"
-                      placeholder="Search..."
-                      value={sessionSearchQuery.value}
-                      onInput={(e) => (sessionSearchQuery.value = (e.target as HTMLInputElement).value)}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                    <button
-                      class={`sidebar-filter-toggle-btn ${filtersOpen ? 'active' : ''}`}
-                      onClick={(e) => { e.stopPropagation(); toggleSessionFiltersOpen(); }}
-                      title="Filter options"
-                    >
-                      {'\u2630'}
-                      {activeFilterCount < 5 && <span class="filter-active-dot" />}
-                    </button>
-                  </div>
-                  {filtersOpen && (
-                    <div class="sidebar-filter-panel" onClick={(e) => e.stopPropagation()}>
-                      <div class="sidebar-filter-section">
-                        <div class="sidebar-filter-section-label">Status</div>
-                        <div class="sidebar-filter-checkboxes">
-                          {(['running', 'pending', 'completed', 'failed', 'killed'] as const).map((status) => (
-                            <label key={status} class="sidebar-filter-checkbox">
-                              <input
-                                type="checkbox"
-                                checked={activeStatusFilters.has(status)}
-                                onChange={() => toggleStatusFilter(status)}
-                              />
-                              <span class={`session-status-dot ${status}`} />
-                              <span>{status}</span>
-                              {(statusCounts[status] || 0) > 0 && (
-                                <span class="sidebar-filter-count">{statusCounts[status]}</span>
-                              )}
-                            </label>
-                          ))}
+          <SplitPane
+            direction="vertical"
+            ratio={sidebarSplitRatio.value}
+            splitId="sidebar-split"
+            onRatioChange={(_id, r) => setSidebarSplitRatio(r)}
+            first={
+              <div class={`sidebar-sessions ${sessionsDrawerOpen.value ? 'open' : 'closed'}`} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+                <div class="sidebar-sessions-header">
+                  <span class={`sessions-chevron ${sessionsDrawerOpen.value ? 'expanded' : ''}`} onClick={toggleSessionsDrawer}>{'\u25B8'}</span>
+                  Sessions ({visibleSessions.length})
+                  {runningSessions > 0 && <span class="sidebar-running-badge">{runningSessions} running</span>}
+                  {waitingCount > 0 && <span class="sidebar-waiting-badge">{waitingCount} waiting</span>}
+                  <div class="auto-jump-dropdown" onClick={(e) => e.stopPropagation()}>
+                      <span
+                        class={`auto-jump-trigger${autoJumpWaiting.value ? ' active' : ''}`}
+                        onClick={() => { autoJumpMenuOpen.value = !autoJumpMenuOpen.value; }}
+                      >
+                        aj {autoJumpWaiting.value ? '\u25CF' : '\u25CB'} {'\u25BE'}
+                      </span>
+                      {autoJumpMenuOpen.value && (
+                        <div class="auto-jump-menu" onClick={(e) => e.stopPropagation()}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={autoJumpWaiting.value}
+                              onChange={(e) => { autoJumpWaiting.value = (e.target as HTMLInputElement).checked; }}
+                            />
+                            Enable Auto-Jump
+                          </label>
+                          <div class="id-dropdown-separator" />
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={autoJumpInterrupt.value}
+                              onChange={(e) => { autoJumpInterrupt.value = (e.target as HTMLInputElement).checked; }}
+                            />
+                            Interrupt typing
+                          </label>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={autoJumpDelay.value}
+                              onChange={(e) => { autoJumpDelay.value = (e.target as HTMLInputElement).checked; }}
+                            />
+                            3s delay <kbd>{'\u2303\u21E7'}X</kbd>
+                          </label>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={autoJumpShowPopup.value}
+                              onChange={(e) => { autoJumpShowPopup.value = (e.target as HTMLInputElement).checked; }}
+                            />
+                            Show paused popup
+                          </label>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={autoCloseWaitingPanel.value}
+                              onChange={(e) => { autoCloseWaitingPanel.value = (e.target as HTMLInputElement).checked; }}
+                            />
+                            Auto-close panel
+                          </label>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={autoJumpHandleBounce.value}
+                              onChange={(e) => { autoJumpHandleBounce.value = (e.target as HTMLInputElement).checked; }}
+                            />
+                            Handle bounce
+                          </label>
+                          <div class="id-dropdown-separator" />
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={autoJumpLogs.value}
+                              onChange={(e) => { autoJumpLogs.value = (e.target as HTMLInputElement).checked; }}
+                            />
+                            Log to console
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  <button
+                    class="sidebar-new-terminal-btn"
+                    onClick={() => { termPickerOpen.value = { kind: 'claude' }; }}
+                    title="New Claude session (g c)"
+                  >+</button>
+                </div>
+                {sessionsDrawerOpen.value && (
+                  <>
+                    <div class="sidebar-sessions-filters">
+                      <input
+                        type="text"
+                        placeholder="Search..."
+                        value={sessionSearchQuery.value}
+                        onInput={(e) => (sessionSearchQuery.value = (e.target as HTMLInputElement).value)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      <button
+                        class={`sidebar-filter-toggle-btn ${filtersOpen ? 'active' : ''}`}
+                        onClick={(e) => { e.stopPropagation(); toggleSessionFiltersOpen(); }}
+                        title="Filter options"
+                      >
+                        {'\u2630'}
+                        {activeFilterCount < 5 && <span class="filter-active-dot" />}
+                      </button>
+                    </div>
+                    {filtersOpen && (
+                      <div class="sidebar-filter-panel" onClick={(e) => e.stopPropagation()}>
+                        <div class="sidebar-filter-section">
+                          <div class="sidebar-filter-section-label">Status</div>
+                          <div class="sidebar-filter-checkboxes">
+                            {(['running', 'pending', 'completed', 'failed', 'killed'] as const).map((status) => (
+                              <label key={status} class="sidebar-filter-checkbox">
+                                <input
+                                  type="checkbox"
+                                  checked={activeStatusFilters.has(status)}
+                                  onChange={() => toggleStatusFilter(status)}
+                                />
+                                <span class={`session-status-dot ${status}`} />
+                                <span>{status}</span>
+                                {(statusCounts[status] || 0) > 0 && (
+                                  <span class="sidebar-filter-count">{statusCounts[status]}</span>
+                                )}
+                              </label>
+                            ))}
+                          </div>
                         </div>
                       </div>
+                    )}
+                    <div class="sidebar-sessions-list" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                      {waitingAgents.length > 0 && (
+                        <>
+                          <div class="sidebar-section-label waiting-section-label">
+                            Waiting for input ({waitingAgents.length})
+                          </div>
+                          {waitingAgents.map(renderItem)}
+                        </>
+                      )}
+                      {restAgents.length > 0 && (
+                        <>
+                          <div class="sidebar-section-label">Agent Sessions ({restAgents.length})</div>
+                          {restAgents.map(renderItem)}
+                        </>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            }
+            second={
+              <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+                <div class="sidebar-terminals" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: filesDrawerOpen.value ? '30px' : 0, overflow: 'hidden' }}>
+                  <div class="sidebar-terminals-header">
+                    Terminals ({terminals.length})
+                    <button
+                      class="sidebar-new-terminal-btn"
+                      onClick={() => { termPickerOpen.value = { kind: 'new' }; }}
+                      title="New terminal (g t)"
+                    >+</button>
+                  </div>
+                  {terminals.length > 0 && (
+                    <div class="sidebar-terminals-list" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                      {terminals.map(renderItem)}
                     </div>
                   )}
-                  <div class="sidebar-sessions-list">
-                    {waitingAgents.length > 0 && (
-                      <>
-                        <div class="sidebar-section-label waiting-section-label">
-                          Waiting for input ({waitingAgents.length})
-                        </div>
-                        {waitingAgents.map(renderItem)}
-                      </>
-                    )}
-                    {restAgents.length > 0 && (
-                      <>
-                        <div class="sidebar-section-label">Agent Sessions ({restAgents.length})</div>
-                        {restAgents.map(renderItem)}
-                      </>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-            {terminals.length > 0 && (
-              <div
-                class="sidebar-terminals-resize-handle"
-                onMouseDown={(e) => {
-                  const startY = e.clientY;
-                  const startSH = sessionsHeight.value;
-                  const startTH = terminalsHeight.value;
-                  startDrag(e, 'ns-resize', (ev) => {
-                    const delta = ev.clientY - startY;
-                    setSessionsHeight(startSH + delta);
-                    setTerminalsHeight(startTH - delta);
-                  }, e.currentTarget as HTMLElement);
-                }}
-              />
-            )}
-            <div
-              class="sidebar-terminals"
-              style={terminals.length > 0 ? { height: `${terminalsHeight.value}px` } : undefined}
-            >
-              <div class="sidebar-terminals-header">
-                Terminals ({terminals.length})
-                <button
-                  class="sidebar-new-terminal-btn"
-                  onClick={() => { termPickerOpen.value = { kind: 'new' }; }}
-                  title="New terminal (g t)"
-                >+</button>
-              </div>
-              {terminals.length > 0 && (
-                <div class="sidebar-terminals-list">
-                  {terminals.map(renderItem)}
                 </div>
-              )}
-            </div>
-          </>
+                <SidebarFilesDrawer
+                  appId={selectedAppId.value}
+                  open={filesDrawerOpen.value}
+                  onToggle={() => { filesDrawerOpen.value = !filesDrawerOpen.value; }}
+                />
+              </div>
+            }
+          />
         )}
       </div>
       {!collapsed && (
@@ -1216,17 +1236,35 @@ export function Layout({ children }: { children: ComponentChildren }) {
           }}
         />
       )}
-      <div class="main-wrapper">
-        <ControlBar />
-        <div class="main" style={{
-          paddingBottom: bottomPad ? `${bottomPad + 16}px` : undefined,
-        }}>
-          <RequestPanel />
-          {children}
-        </div>
+    </>
+  );
+
+  const pageJSX = (
+    <>
+      <ControlBar />
+      <div class="main" style={{
+        flex: 1, minHeight: 0, overflow: 'auto',
+      }}>
+        <RequestPanel />
+        {children}
       </div>
-      <GlobalTerminalPanel />
+    </>
+  );
+
+  return (
+    <div class="layout">
+      <PaneTree
+        node={layoutTree.value.root}
+        sidebarContent={sidebarJSX}
+        pageContent={pageJSX}
+      />
       <PopoutPanel />
+      {termPickerOpen.value && (
+        <TerminalPicker
+          mode={termPickerOpen.value}
+          onClose={() => { termPickerOpen.value = null; }}
+        />
+      )}
       <FileViewerOverlay />
       {showShortcutHelp && <ShortcutHelpModal onClose={() => setShowShortcutHelp(false)} />}
       {showSpotlight && <SpotlightSearch onClose={() => setShowSpotlight(false)} />}
@@ -1307,7 +1345,15 @@ export function Layout({ children }: { children: ComponentChildren }) {
               sidebarItemMenu.value = null;
               api.openSessionInTerminal(menuSid).catch((err: any) => console.error('Open in terminal failed:', err.message));
             }}>Open in Terminal.app</button>
-            <button onClick={() => { sidebarItemMenu.value = null; enableSplit(menuSid); }}>Split pane</button>
+            <button onClick={() => {
+              sidebarItemMenu.value = null;
+              const leaf = findLeafWithTab(menuSid);
+              if (leaf) {
+                splitLeaf(leaf.id, 'horizontal', 'second', [], 0.5);
+              } else {
+                enableSplit(menuSid);
+              }
+            }}>Split pane</button>
             <div style="display:flex;gap:4px;padding:4px 8px;align-items:center">
               {SESSION_COLOR_PRESETS.map((c) => (
                 <span

@@ -1,86 +1,107 @@
-import { useRef, useCallback, useEffect, useState } from 'preact/hooks';
+import { useRef, useCallback, useEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { type ViewMode } from './SessionViewToggle.js';
+import type { LeafNode } from '../lib/pane-tree.js';
 import {
-  openTabs,
-  activeTabId,
-  panelMinimized,
-  panelMaximized,
-  panelHeight,
-  exitedSessions,
-  openSession,
-  closeTab,
-  killSession,
-  resumeSession,
-  markSessionExited,
-  sidebarWidth,
-  sidebarCollapsed,
+  setActiveTab,
+  setFocusedLeaf,
+  focusedLeafId,
+  reorderTabInLeaf,
+  splitLeaf,
+  mergeLeaf,
+  SIDEBAR_LEAF_ID,
+  PAGE_LEAF_ID,
+  SESSIONS_LEAF_ID,
+} from '../lib/pane-tree.js';
+import { renderTabContent } from './PaneContent.js';
+import {
   allSessions,
-  persistPanelState,
-  popOutTab,
-  getViewMode,
-  setViewMode,
-  pendingFirstDigit,
-  allNumberedSessions,
-  sidebarAnimating,
-  focusedPanelId,
-  hotkeyMenuOpen,
-  sessionInputStates,
-  setSessionInputState,
-  splitEnabled,
-  rightPaneTabs,
-  rightPaneActiveId,
-  splitRatio,
-  leftPaneTabs,
-  enableSplit,
-  disableSplit,
-  setSplitRatio,
-  sessionLabels,
-  setSessionLabel,
+  exitedSessions,
   getSessionLabel,
+  setSessionLabel,
   getSessionColor,
   setSessionColor,
   SESSION_COLOR_PRESETS,
-  activePanelId,
-  AUTOJUMP_PANEL_ID,
-  popoutPanels,
+  getTerminalCompanion,
+  closeTab,
+  openSession,
+  killSession,
+  resumeSession,
+  markSessionExited,
+  resolveSession,
+  sessionInputStates,
+  allNumberedSessions,
+  pendingFirstDigit,
+  popOutTab,
+  getViewMode,
+  setViewMode,
   toggleCompanion,
   getCompanions,
-  type CompanionType,
-  resolveSession,
-  bringToFront,
-  getPanelZIndex,
-  panelZOrders,
-  getTerminalCompanion,
-  terminalCompanionMap,
-  focusSessionTerminal,
   termPickerOpen,
   openUrlCompanion,
   jsonlFilesCache,
-  jsonlSelectedFile,
   jsonlDropdownOpen,
   fetchJsonlFiles,
   getJsonlSelectedFile,
   setJsonlSelectedFile,
   type JsonlFileInfo,
   buildTmuxAttachCmd,
+  hotkeyMenuOpen,
+  getWorktreeLabel,
 } from '../lib/sessions.js';
-import { renderTabContent } from './PaneContent.js';
-import { AdminAssistChat } from './AdminAssistChat.js';
-import { startTabDrag, type TabDragSource } from '../lib/tab-drag.js';
-import { navigate, selectedAppId } from '../lib/state.js';
-import { showTabs, showHotkeyHints, popoutMode, type PopoutMode } from '../lib/settings.js';
+import { startTabDrag } from '../lib/tab-drag.js';
 import { ctrlShiftHeld } from '../lib/shortcuts.js';
+import { showHotkeyHints, popoutMode, type PopoutMode } from '../lib/settings.js';
+import { navigate, selectedAppId } from '../lib/state.js';
 import { api } from '../lib/api.js';
-import { copyText, copyWithTooltip } from '../lib/clipboard.js';
-import { TerminalPicker } from './TerminalPicker.js';
+import { copyWithTooltip } from '../lib/clipboard.js';
+import { useState } from 'preact/hooks';
 
-const statusMenuOpen = signal<{ sessionId: string; x: number; y: number } | null>(null);
-const renamingSessionId = signal<string | null>(null);
-const renameValue = signal('');
+// --- Shared signals (also used by Layout.tsx for keyboard shortcuts) ---
+export const statusMenuOpen = signal<{ sessionId: string; x: number; y: number } | null>(null);
 export const idMenuOpen = signal<string | null>(null);
 const companionIdMenuOpen = signal<string | null>(null);
-const panelResizing = signal(false);
+const renamingSessionId = signal<string | null>(null);
+const renameValue = signal('');
+
+// --- Helpers ---
+
+function executePopout(sessionId: string, mode: PopoutMode) {
+  switch (mode) {
+    case 'panel':
+      popOutTab(sessionId);
+      break;
+    case 'window':
+      window.open(`#/session/${sessionId}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no');
+      break;
+    case 'tab':
+      window.open(`#/session/${sessionId}`, '_blank');
+      break;
+    case 'terminal':
+      api.openSessionInTerminal(sessionId);
+      break;
+  }
+}
+
+// --- Sub-components ---
+
+function TabBadge({ tabNum }: { tabNum: number }) {
+  const pending = pendingFirstDigit.value;
+  const digits = String(tabNum);
+  if (pending !== null) {
+    const pendingStr = String(pending);
+    if (!digits.startsWith(pendingStr)) {
+      return <span class="tab-number-badge tab-badge-dimmed">{tabNum}</span>;
+    }
+    return (
+      <span class="tab-number-badge tab-badge-pending">
+        <span class="tab-badge-green">{pendingStr}</span>
+        {digits.slice(pendingStr.length) || ''}
+      </span>
+    );
+  }
+  return <span class="tab-number-badge">{tabNum}</span>;
+}
 
 function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }) {
   const [files, setFiles] = useState<JsonlFileInfo[]>([]);
@@ -101,12 +122,10 @@ function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }
       }).catch(() => {});
     };
     refresh();
-    // Poll for new files every 10s (new continuations/subagents appear mid-session)
     const interval = setInterval(() => refresh(true), 10_000);
     return () => clearInterval(interval);
   }, [sessionId]);
 
-  // Close dropdown on outside click
   useEffect(() => {
     if (!isOpen) return;
     const close = (e: MouseEvent) => {
@@ -119,25 +138,19 @@ function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }
     return () => document.removeEventListener('click', close);
   }, [isOpen]);
 
-  const selectedLabel = selectedFile
-    ? files.find(f => f.id === selectedFile)?.label || selectedFile
-    : 'All (merged)';
-
   const shortUuid = claudeUuid ? claudeUuid.slice(0, 8) : sessionId.slice(-6);
 
   return (
     <div class="id-dropdown-wrapper jsonl-file-dropdown">
       <span
         class="tmux-id-label"
-        onClick={() => {
-          jsonlDropdownOpen.value = isOpen ? null : sessionId;
-        }}
+        onClick={() => { jsonlDropdownOpen.value = isOpen ? null : sessionId; }}
         title={claudeUuid ? `Claude Session: ${claudeUuid}` : undefined}
       >
         JSONL: {shortUuid} {files.length > 1 && <span class="id-dropdown-caret">{'\u25BE'}</span>}
       </span>
       {selectedFile && (
-        <span class="jsonl-file-badge" title={selectedLabel}>
+        <span class="jsonl-file-badge" title={files.find(f => f.id === selectedFile)?.label || selectedFile}>
           {files.find(f => f.id === selectedFile)?.type === 'subagent' ? 'sub' : 'file'}
         </span>
       )}
@@ -174,18 +187,12 @@ function PaneHeader({
   sessionId,
   sessionMap,
   exited,
-  canSplit,
-  showCollapse,
-  onToggleMinimized,
-  onToggleMaximized,
+  leafId,
 }: {
   sessionId: string | null;
   sessionMap: Map<string, any>;
   exited: Set<string>;
-  canSplit?: boolean;
-  showCollapse?: boolean;
-  onToggleMinimized?: () => void;
-  onToggleMaximized?: () => void;
+  leafId: string;
 }) {
   const isJsonlTab = sessionId?.startsWith('jsonl:') || false;
   const isFeedbackTab = sessionId?.startsWith('feedback:') || false;
@@ -386,9 +393,6 @@ function PaneHeader({
                     {!isExited && (
                       <button onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'terminal'); }}>Terminal.app <kbd>A</kbd></button>
                     )}
-                    {canSplit && (
-                      <button onClick={() => { idMenuOpen.value = null; enableSplit(); }}>{'\u2AFF'} Split Panes <kbd>S</kbd></button>
-                    )}
                   </div>
                 </div>
               </div>
@@ -430,221 +434,94 @@ function PaneHeader({
           )}
         </>
       )}
-      {showCollapse && (
-        <>
-          {onToggleMaximized && (
-            <button class="terminal-collapse-btn" onClick={onToggleMaximized} title={panelMaximized.value ? 'Restore' : 'Maximize'}>
-              {panelMaximized.value ? '\u25A3' : '\u25B2'}
-            </button>
-          )}
-          {onToggleMinimized && (
-            <button class="terminal-collapse-btn" onClick={onToggleMinimized}>
-              {panelMinimized.value ? '\u25B2' : '\u25BC'}
-            </button>
-          )}
-        </>
-      )}
     </div>
   );
 }
 
-function executePopout(sessionId: string, mode: PopoutMode) {
-  switch (mode) {
-    case 'panel':
-      popOutTab(sessionId);
-      break;
-    case 'window':
-      window.open(`#/session/${sessionId}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no');
-      break;
-    case 'tab':
-      window.open(`#/session/${sessionId}`, '_blank');
-      break;
-    case 'terminal':
-      api.openSessionInTerminal(sessionId);
-      break;
+// --- Tab label helper ---
+
+function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
+  const isJsonl = sid.startsWith('jsonl:');
+  const isFeedback = sid.startsWith('feedback:');
+  const isIframe = sid.startsWith('iframe:');
+  const isTerminal = sid.startsWith('terminal:');
+  const isIsolate = sid.startsWith('isolate:');
+  const isUrl = sid.startsWith('url:');
+  const isFile = sid.startsWith('file:');
+  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile;
+  const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
+  const sess = (isIsolate || isUrl || isFile) ? null : sessionMap.get(realSid);
+
+  const customLabel = getSessionLabel(sid);
+  if (customLabel) return customLabel;
+
+  if (isJsonl) return `JSONL: ${sess?.feedbackTitle || sess?.agentName || realSid.slice(-6)}`;
+  if (isFeedback) return `FB: ${sess?.feedbackTitle || realSid.slice(-6)}`;
+  if (isIframe) return `Page: ${realSid.slice(-6)}`;
+  if (isTerminal) {
+    const ts = getTerminalCompanion(realSid);
+    if (ts === '__loading__') return 'Term: loading...';
+    const tSess = ts ? sessionMap.get(ts) : null;
+    return `Term: ${tSess?.paneTitle || ts?.slice(-6) || realSid.slice(-6)}`;
   }
+  if (isIsolate) return `Isolate: ${realSid}`;
+  if (isUrl) { try { return `Iframe: ${new URL(realSid).hostname}`; } catch { return `Iframe: ${realSid.slice(0, 30)}`; } }
+  if (isFile) { const parts = realSid.split('/'); return parts[parts.length - 1] || realSid.slice(-20); }
+
+  const isPlain = sess?.permissionProfile === 'plain';
+  if (isPlain) {
+    const plainLabel = sess?.paneCommand
+      ? `${sess.paneCommand}:${sess.panePath || ''} \u2014 ${sess?.paneTitle || realSid.slice(-6)}`
+      : (sess?.paneTitle || realSid.slice(-6));
+    return `${sess?.isHarness ? '\u{1F4E6}' : sess?.isRemote ? '\u{1F310}' : '\u{1F5A5}\uFE0F'} ${plainLabel}`;
+  }
+  const locationPrefix = sess?.isHarness ? '\u{1F4E6}' : sess?.isRemote ? '\u{1F310}' : '';
+  return `${locationPrefix ? locationPrefix + ' ' : ''}${sess?.feedbackTitle || sess?.agentName || `Session ${sid.slice(-6)}`}`;
 }
 
-function TabBadge({ tabNum }: { tabNum: number }) {
-  const pending = pendingFirstDigit.value;
-  const digits = String(tabNum);
-  if (pending !== null) {
-    const pendingStr = String(pending);
-    if (!digits.startsWith(pendingStr)) {
-      return <span class="tab-number-badge tab-badge-dimmed">{tabNum}</span>;
-    }
-    return (
-      <span class="tab-number-badge tab-badge-pending">
-        <span class="tab-badge-green">{pendingStr}</span>
-        {digits.slice(pendingStr.length) || ''}
-      </span>
-    );
-  }
-  return <span class="tab-number-badge">{tabNum}</span>;
+// --- Main component ---
+
+interface LeafPaneProps {
+  leaf: LeafNode;
 }
 
-function PaneTabBar({
-  tabs,
-  activeId,
-  source,
-  exited,
-  sessionMap,
-  tabsRef,
-  onActivate,
-}: {
-  tabs: string[];
-  activeId: string | null;
-  source: TabDragSource;
-  exited: Set<string>;
-  sessionMap: Map<string, any>;
-  tabsRef?: preact.RefObject<HTMLDivElement>;
-  onActivate: (sid: string) => void;
-}) {
-  const globalSessions = allNumberedSessions();
-  return (
-    <div ref={tabsRef} class="terminal-tabs" onWheel={(e) => { const delta = e.deltaX || e.deltaY; if (delta) { e.preventDefault(); (e.currentTarget as HTMLElement).scrollLeft += delta; } }}>
-      {tabs.map((sid) => {
-        const isJsonl = sid.startsWith('jsonl:');
-        const isFeedback = sid.startsWith('feedback:');
-        const isIframe = sid.startsWith('iframe:');
-        const isTerminal = sid.startsWith('terminal:');
-        const isIsolate = sid.startsWith('isolate:');
-        const isUrl = sid.startsWith('url:');
-        const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl;
-        const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
-        const isExited = exited.has(realSid);
-        const inputState = !isExited && !isCompanion ? (sessionInputStates.value.get(sid) || null) : null;
-        const isActive = sid === activeId;
-        const sess = (isIsolate || isUrl) ? null : sessionMap.get(realSid);
-        const isPlain = !isCompanion && sess?.permissionProfile === 'plain';
-        const plainLabel = sess?.paneCommand
-          ? `${sess.paneCommand}:${sess.panePath || ''} \u2014 ${sess?.paneTitle || realSid.slice(-6)}`
-          : (sess?.paneTitle || realSid.slice(-6));
-        const customLabel = getSessionLabel(sid);
-        const companionLabel = isJsonl ? `JSONL: ${sess?.feedbackTitle || sess?.agentName || realSid.slice(-6)}`
-          : isFeedback ? `FB: ${sess?.feedbackTitle || realSid.slice(-6)}`
-          : isIframe ? `Page: ${realSid.slice(-6)}`
-          : isTerminal ? (() => { const ts = getTerminalCompanion(realSid); if (ts === '__loading__') return 'Term: loading...'; const tSess = ts ? sessionMap.get(ts) : null; return `Term: ${tSess?.paneTitle || ts?.slice(-6) || realSid.slice(-6)}`; })()
-          : isIsolate ? `Isolate: ${realSid}`
-          : isUrl ? (() => { try { return `Iframe: ${new URL(realSid).hostname}`; } catch { return `Iframe: ${realSid.slice(0, 30)}`; } })()
-          : '';
-        const locationPrefix = !isCompanion && sess?.isHarness ? '\u{1F4E6}' : !isCompanion && sess?.isRemote ? '\u{1F310}' : '';
-        const raw = customLabel || (isCompanion ? companionLabel : isPlain ? `${locationPrefix || '\u{1F5A5}\uFE0F'} ${plainLabel}` : `${locationPrefix ? locationPrefix + ' ' : ''}${sess?.feedbackTitle || sess?.agentName || `Session ${sid.slice(-6)}`}`);
-        const tabLabel = raw;
-        const tabTooltipParts: string[] = [];
-        if (!isCompanion && sess?.isHarness) tabTooltipParts.push(`Harness: ${sess.harnessName || 'unknown'}`);
-        else if (!isCompanion && sess?.isRemote) tabTooltipParts.push(`Remote: ${sess.machineName || sess.launcherHostname || 'unknown'}`);
-        if (sess?.paneCommand) tabTooltipParts.push(`Process: ${sess.paneCommand}`);
-        if (sess?.panePath) tabTooltipParts.push(`Path: ${sess.panePath}`);
-        tabTooltipParts.push(raw);
-        const tabTooltip = tabTooltipParts.length > 1 ? tabTooltipParts.join('\n') : raw;
-        const globalIdx = globalSessions.indexOf(sid);
-        const tabNum = globalIdx >= 0 ? globalIdx + 1 : null;
-        return (
-          <button
-            key={sid}
-            class={`terminal-tab ${isActive ? 'active' : ''}`}
-            style={getSessionColor(sid) ? { boxShadow: `inset 0 -2px 0 ${getSessionColor(sid)}` } : undefined}
-            onMouseDown={(e) => {
-              if (e.button !== 0) return;
-              startTabDrag(e, {
-                sessionId: sid,
-                source,
-                label: tabLabel,
-                onClickFallback: () => onActivate(sid),
-              });
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !renamingSessionId.value) {
-                e.preventDefault();
-                onActivate(sid);
-              }
-            }}
-            title={tabTooltip}
-            onDblClick={(e) => {
-              e.stopPropagation();
-              renameValue.value = customLabel || '';
-              renamingSessionId.value = sid;
-            }}
-          >
-            {!isCompanion && <span
-              class={`status-dot ${isExited ? 'exited' : ''}${isPlain ? ' plain' : ''}${inputState ? ` ${inputState}` : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                statusMenuOpen.value = { sessionId: sid, x: rect.left, y: rect.bottom + 4 };
-              }}
-            >
-              {ctrlShiftHeld.value && tabNum !== null && (
-                <TabBadge tabNum={tabNum} />
-              )}
-            </span>}
-            {renamingSessionId.value === sid ? (
-              <input
-                type="text"
-                value={renameValue.value}
-                onInput={(e) => { renameValue.value = (e.target as HTMLInputElement).value; }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') { setSessionLabel(sid, renameValue.value); renamingSessionId.value = null; }
-                  if (e.key === 'Escape') { renamingSessionId.value = null; }
-                }}
-                onBlur={() => { setSessionLabel(sid, renameValue.value); renamingSessionId.value = null; }}
-                onClick={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                style="font-size:11px;padding:1px 4px;border:1px solid var(--pw-accent);border-radius:3px;background:var(--pw-input-bg);color:var(--pw-primary-text);width:120px;outline:none"
-                ref={(el) => el?.focus()}
-              />
-            ) : (
-              <span class="terminal-tab-label">{tabLabel}</span>
-            )}
-            <span class="tab-close" onClick={(e) => { e.stopPropagation(); closeTab(sid); }}>&times;</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-
-export function GlobalTerminalPanel() {
-  const tabs = openTabs.value;
-  if (tabs.length === 0) {
-    // Still render the TerminalPicker even when no tabs are open
-    if (termPickerOpen.value) {
-      return (
-        <TerminalPicker
-          mode={termPickerOpen.value}
-          onClose={() => { termPickerOpen.value = null; }}
-        />
-      );
-    }
-    return <AdminAssistChat />;
-  }
-
-  const activeId = activeTabId.value;
-  const minimized = panelMinimized.value;
-  const height = panelHeight.value;
-  const exited = exitedSessions.value;
+export function LeafPane({ leaf }: LeafPaneProps) {
+  const tabsRef = useRef<HTMLDivElement>(null);
   const sessions = allSessions.value;
   const sessionMap = new Map(sessions.map((s: any) => [s.id, s]));
-  const isSplit = splitEnabled.value;
-  const leftTabs = isSplit ? leftPaneTabs() : tabs;
-  const rightTabs = isSplit ? rightPaneTabs.value : [];
-  const rightActive = rightPaneActiveId.value;
+  const exited = exitedSessions.value;
+  const isFocused = focusedLeafId.value === leaf.id;
+  const globalSessions = allNumberedSessions();
+  const activeId = leaf.activeTabId;
 
-  const dragging = useRef(false);
-  const tabsRef = useRef<HTMLDivElement>(null);
-  const splitDragging = useRef(false);
+  const handleActivate = useCallback((sid: string) => {
+    setActiveTab(leaf.id, sid);
+    setFocusedLeaf(leaf.id);
+    openSession(sid);
+  }, [leaf.id]);
+
+  const handleClose = useCallback((sid: string) => {
+    closeTab(sid);
+  }, [leaf.id]);
+
+  const handleMouseDown = useCallback(() => {
+    if (focusedLeafId.value !== leaf.id) {
+      setFocusedLeaf(leaf.id);
+    }
+  }, [leaf.id]);
+
+  // Auto-scroll active tab into view
   useEffect(() => {
     if (!activeId) return;
     requestAnimationFrame(() => {
       const container = tabsRef.current;
       if (!container) return;
-      const el = container.querySelector('.terminal-tab.active') as HTMLElement | null;
+      const el = container.querySelector('.pane-leaf-tab.active') as HTMLElement | null;
       if (el) el.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'nearest' });
     });
-  }, [activeId, tabs.length]);
+  }, [activeId, leaf.tabs.length]);
 
+  // Outside-click handlers for menus
   useEffect(() => {
     if (!statusMenuOpen.value) return;
     const close = () => { statusMenuOpen.value = null; };
@@ -666,27 +543,18 @@ export function GlobalTerminalPanel() {
     return () => document.removeEventListener('click', close);
   }, [companionIdMenuOpen.value]);
 
-  useEffect(() => {
-    const onResize = () => {
-      const maxH = window.innerHeight - 100;
-      if (panelHeight.value > maxH) {
-        panelHeight.value = Math.max(150, maxH);
-      }
-    };
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
-
+  // ID menu keyboard shortcuts
   useEffect(() => {
     const menuSessionId = idMenuOpen.value;
     if (!menuSessionId) return;
     const onKey = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       let handled = true;
+      const sess = sessionMap.get(menuSessionId);
       if (key === 'c') {
-        copyText(menuSessionId);
+        navigator.clipboard.writeText(menuSessionId);
       } else if (key === 't') {
-        copyText(buildTmuxAttachCmd(menuSessionId, sessionMap.get(menuSessionId)));
+        navigator.clipboard.writeText(buildTmuxAttachCmd(menuSessionId, sess));
       } else if (key === 'p') {
         executePopout(menuSessionId, 'panel');
       } else if (key === 'w') {
@@ -696,20 +564,15 @@ export function GlobalTerminalPanel() {
       } else if (key === 'a' && !exited.has(menuSessionId)) {
         executePopout(menuSessionId, 'terminal');
       } else if (key === 'j') {
-        const s = sessionMap.get(menuSessionId);
-        if (s?.jsonlPath) copyText(s.jsonlPath);
+        if (sess?.jsonlPath) navigator.clipboard.writeText(sess.jsonlPath);
       } else if (key === 'd') {
-        const s = sessionMap.get(menuSessionId);
-        if (s?.feedbackId) copyText(s.feedbackId);
+        if (sess?.feedbackId) navigator.clipboard.writeText(sess.feedbackId);
       } else if (key === 'l') {
-        const s = sessionMap.get(menuSessionId);
-        if (s?.jsonlPath) toggleCompanion(menuSessionId, 'jsonl');
+        if (sess?.jsonlPath) toggleCompanion(menuSessionId, 'jsonl');
       } else if (key === 'f') {
-        const s = sessionMap.get(menuSessionId);
-        if (s?.feedbackId) toggleCompanion(menuSessionId, 'feedback');
+        if (sess?.feedbackId) toggleCompanion(menuSessionId, 'feedback');
       } else if (key === 'i') {
-        const s = sessionMap.get(menuSessionId);
-        if (s?.url) toggleCompanion(menuSessionId, 'iframe');
+        if (sess?.url) toggleCompanion(menuSessionId, 'iframe');
       } else if (key === 'm') {
         const companions = getCompanions(menuSessionId);
         if (companions.includes('terminal')) {
@@ -719,8 +582,11 @@ export function GlobalTerminalPanel() {
         }
       } else if (key === 'u') {
         termPickerOpen.value = { kind: 'url' };
-      } else if (key === 's' && tabs.length >= 2 && !isSplit) {
-        enableSplit();
+      } else if (key === 'o') {
+        if (sess?.isHarness && sess?.harnessAppPort) {
+          const host = sess.isRemote && sess.launcherHostname ? sess.launcherHostname : 'localhost';
+          openUrlCompanion(`http://${host}:${sess.harnessAppPort}`);
+        }
       } else if (key === 'escape') {
         // just close
       } else {
@@ -736,19 +602,18 @@ export function GlobalTerminalPanel() {
     return () => document.removeEventListener('keydown', onKey, true);
   }, [idMenuOpen.value]);
 
+  // Hotkey hint menu (Ctrl+Shift)
   useEffect(() => {
     const held = ctrlShiftHeld.value;
-    const ap = activePanelId.value;
-    const isGlobalFocused = ap === 'global' || ap === 'split-left' || ap === 'split-right';
-    if (!held || !activeId || !showHotkeyHints.value || !isGlobalFocused) {
-      hotkeyMenuOpen.value = null;
+    if (!held || !activeId || !showHotkeyHints.value || !isFocused) {
+      if (isFocused) hotkeyMenuOpen.value = null;
       return;
     }
 
     function updatePos() {
-      const dot = tabsRef.current?.querySelector('.terminal-tab.active .status-dot') as HTMLElement | null;
+      const dot = tabsRef.current?.querySelector('.pane-leaf-tab.active .status-dot') as HTMLElement | null;
       const scrollBox = tabsRef.current;
-      if (!dot || !scrollBox) { hotkeyMenuOpen.value = null; return; }
+      if (!dot || !scrollBox) { if (isFocused) hotkeyMenuOpen.value = null; return; }
       const dotRect = dot.getBoundingClientRect();
       const scrollRect = scrollBox.getBoundingClientRect();
       if (dotRect.right < scrollRect.left || dotRect.left > scrollRect.right) {
@@ -764,130 +629,162 @@ export function GlobalTerminalPanel() {
     const scrollEl = tabsRef.current;
     scrollEl?.addEventListener('scroll', updatePos, { passive: true });
     return () => scrollEl?.removeEventListener('scroll', updatePos);
-  }, [ctrlShiftHeld.value, activeId, activePanelId.value]);
+  }, [ctrlShiftHeld.value, activeId, isFocused]);
 
-  const onResizeMouseDown = useCallback((e: MouseEvent) => {
-    e.preventDefault();
-    dragging.current = true;
-    panelResizing.value = true;
-    if (panelMinimized.value) {
-      panelMinimized.value = false;
-    }
-    panelMaximized.value = false;
-    const onMove = (ev: MouseEvent) => {
-      if (!dragging.current) return;
-      const newH = window.innerHeight - ev.clientY;
-      panelHeight.value = Math.max(150, Math.min(newH, window.innerHeight - 100));
-    };
-    const onUp = () => {
-      dragging.current = false;
-      panelResizing.value = false;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      persistPanelState();
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }, []);
-
-  const onSplitDividerMouseDown = useCallback((e: MouseEvent) => {
-    e.preventDefault();
-    splitDragging.current = true;
-    const container = (e.currentTarget as HTMLElement).parentElement;
-    if (!container) return;
-    container.classList.add('dragging');
-    const containerRect = container.getBoundingClientRect();
-    const onMove = (ev: MouseEvent) => {
-      if (!splitDragging.current) return;
-      const ratio = (ev.clientX - containerRect.left) / containerRect.width;
-      setSplitRatio(ratio);
-    };
-    const onUp = () => {
-      splitDragging.current = false;
-      container.classList.remove('dragging');
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }, []);
-
-  const hasTabs = showTabs.value;
-  const maximized = panelMaximized.value;
-  const toggleMinimized = () => { panelMinimized.value = !panelMinimized.value; persistPanelState(); };
-  const toggleMaximized = () => {
-    if (panelMaximized.value) {
-      panelMaximized.value = false;
-    } else {
-      panelMaximized.value = true;
-      panelMinimized.value = false;
-    }
-    persistPanelState();
-  };
-  const appId = selectedAppId.value;
-
-  const panelButtons = (
-    <>
-      <button
-        class="terminal-collapse-btn"
-        title="New terminal"
-        onClick={(e) => {
-          e.stopPropagation();
-          termPickerOpen.value = { kind: 'new' };
-        }}
-      >+</button>
-      <button class="terminal-collapse-btn" onClick={toggleMaximized} title={maximized ? 'Restore' : 'Maximize'}>
-        {maximized ? '\u25A3' : '\u25B2'}
-      </button>
-      <button class="terminal-collapse-btn" onClick={toggleMinimized}>
-        {minimized ? '\u25B2' : '\u25BC'}
-      </button>
-    </>
-  );
-
-  const ap = activePanelId.value;
-  const fp = focusedPanelId.value;
-  const isFocused = fp === 'global' || fp === 'split-left' || fp === 'split-right' || ap === 'global' || ap === 'split-left' || ap === 'split-right';
-  const canSplit = tabs.length >= 2 && !isSplit;
-  const _zOrders = panelZOrders.value;
-  const globalZIdx = getPanelZIndex('global-panel');
+  if (leaf.tabs.length === 0) {
+    return (
+      <div
+        class={`pane-leaf pane-leaf-empty${isFocused ? ' pane-leaf-focused' : ''}`}
+        data-leaf-id={leaf.id}
+        onMouseDown={handleMouseDown}
+      />
+    );
+  }
 
   return (
-    <>
-    {termPickerOpen.value && (
-      <TerminalPicker
-        mode={termPickerOpen.value}
-        onClose={() => { termPickerOpen.value = null; }}
-      />
-    )}
     <div
-      class={`global-terminal-panel${sidebarAnimating.value ? ' animating' : ''}${panelResizing.value ? ' dragging' : ''}${isFocused ? ' panel-focused' : ''}`}
-      style={{ height: minimized ? (hasTabs ? '66px' : '32px') : maximized ? '100vh' : `${height}px`, left: `${sidebarWidth.value + (sidebarCollapsed.value ? 0 : 3)}px`, zIndex: globalZIdx }}
-      onMouseDown={() => {
-        bringToFront('global-panel');
-        if (!isSplit) {
-          activePanelId.value = 'global';
-          if (activeId) focusSessionTerminal(activeId);
-        }
-      }}
+      class={`pane-leaf${isFocused ? ' pane-leaf-focused' : ''}`}
+      data-leaf-id={leaf.id}
+      onMouseDown={handleMouseDown}
+      style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflow: 'hidden' }}
     >
-      <div class="terminal-resize-handle" onMouseDown={onResizeMouseDown} />
-      {hasTabs && !isSplit && (
-        <div class="terminal-tab-bar">
-          <PaneTabBar
-            tabs={tabs}
-            activeId={activeId}
-            source="main"
-            exited={exited}
-            sessionMap={sessionMap}
-            tabsRef={tabsRef}
-            onActivate={openSession}
-          />
-          <div class="terminal-tab-actions">
-            {panelButtons}
-          </div>
+      <div class="terminal-tab-bar">
+        <div
+          ref={tabsRef}
+          class="pane-leaf-tabs"
+          onWheel={(e) => { const d = (e as WheelEvent).deltaX || (e as WheelEvent).deltaY; if (d) { e.preventDefault(); (e.currentTarget as HTMLElement).scrollLeft += d; } }}
+        >
+          {leaf.tabs.map((sid) => {
+            const isJsonl = sid.startsWith('jsonl:');
+            const isFeedback = sid.startsWith('feedback:');
+            const isIframe = sid.startsWith('iframe:');
+            const isTerminal = sid.startsWith('terminal:');
+            const isIsolate = sid.startsWith('isolate:');
+            const isUrl = sid.startsWith('url:');
+            const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl;
+            const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
+            const isActive = sid === leaf.activeTabId;
+            const isExited = exited.has(realSid);
+            const sess = (isIsolate || isUrl) ? null : sessionMap.get(realSid);
+            const isPlain = !isCompanion && sess?.permissionProfile === 'plain';
+            const inputState = !isExited && !isCompanion ? (sessionInputStates.value.get(sid) || null) : null;
+            const label = getTabLabel(sid, sessionMap);
+            const customLabel = getSessionLabel(sid);
+            const globalIdx = globalSessions.indexOf(sid);
+            const tabNum = globalIdx >= 0 ? globalIdx + 1 : null;
+
+            const worktreeLabel = !isCompanion ? getWorktreeLabel(sess) : null;
+
+            const tabTooltipParts: string[] = [];
+            if (!isCompanion && sess?.isHarness) tabTooltipParts.push(`Harness: ${sess.harnessName || 'unknown'}`);
+            else if (!isCompanion && sess?.isRemote) tabTooltipParts.push(`Remote: ${sess.machineName || sess.launcherHostname || 'unknown'}`);
+            if (sess?.paneCommand) tabTooltipParts.push(`Process: ${sess.paneCommand}`);
+            if (sess?.panePath) tabTooltipParts.push(`Path: ${sess.panePath}`);
+            else if (sess?.cwd) tabTooltipParts.push(`Path: ${sess.cwd}`);
+            tabTooltipParts.push(label);
+            const tabTooltip = tabTooltipParts.length > 1 ? tabTooltipParts.join('\n') : label;
+
+            return (
+              <button
+                key={sid}
+                class={`pane-leaf-tab${isActive ? ' active' : ''}`}
+                style={getSessionColor(sid) ? { boxShadow: `inset 0 -2px 0 ${getSessionColor(sid)}` } : undefined}
+                onMouseDown={(e) => {
+                  if (e.button !== 0) return;
+                  startTabDrag(e, {
+                    sessionId: sid,
+                    source: { type: 'leaf', leafId: leaf.id },
+                    label,
+                    onClickFallback: () => handleActivate(sid),
+                  });
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !renamingSessionId.value) {
+                    e.preventDefault();
+                    handleActivate(sid);
+                  }
+                }}
+                title={tabTooltip}
+                onDblClick={(e) => {
+                  e.stopPropagation();
+                  renameValue.value = customLabel || '';
+                  renamingSessionId.value = sid;
+                }}
+              >
+                {!isCompanion && <span
+                  class={`status-dot ${isExited ? 'exited' : ''}${isPlain ? ' plain' : ''}${inputState ? ` ${inputState}` : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    statusMenuOpen.value = { sessionId: sid, x: rect.left, y: rect.bottom + 4 };
+                  }}
+                >
+                  {ctrlShiftHeld.value && tabNum !== null && (
+                    <TabBadge tabNum={tabNum} />
+                  )}
+                </span>}
+                {renamingSessionId.value === sid ? (
+                  <input
+                    type="text"
+                    value={renameValue.value}
+                    onInput={(e) => { renameValue.value = (e.target as HTMLInputElement).value; }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { setSessionLabel(sid, renameValue.value); renamingSessionId.value = null; }
+                      if (e.key === 'Escape') { renamingSessionId.value = null; }
+                    }}
+                    onBlur={() => { setSessionLabel(sid, renameValue.value); renamingSessionId.value = null; }}
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    style="font-size:11px;padding:1px 4px;border:1px solid var(--pw-accent);border-radius:3px;background:var(--pw-input-bg);color:var(--pw-primary-text);width:120px;outline:none"
+                    ref={(el) => el?.focus()}
+                  />
+                ) : (
+                  <span class="pane-leaf-tab-label">{label}{worktreeLabel && <span class="worktree-badge" title={sess?.panePath || sess?.cwd || ''}>[{worktreeLabel}]</span>}</span>
+                )}
+                <span class="tab-close" onClick={(e) => { e.stopPropagation(); handleClose(sid); }}>&times;</span>
+              </button>
+            );
+          })}
         </div>
-      )}
+        <div class="terminal-tab-actions">
+          <button
+            class="terminal-collapse-btn"
+            title="Split right (Ctrl+Shift+&quot;)"
+            onClick={(e) => {
+              e.stopPropagation();
+              splitLeaf(leaf.id, 'horizontal');
+            }}
+          >{'\u2502'}</button>
+          <button
+            class="terminal-collapse-btn"
+            title="Split down (Ctrl+Shift+-)"
+            onClick={(e) => {
+              e.stopPropagation();
+              splitLeaf(leaf.id, 'vertical');
+            }}
+          >{'\u2500'}</button>
+          {leaf.id !== SIDEBAR_LEAF_ID && leaf.id !== PAGE_LEAF_ID && leaf.id !== SESSIONS_LEAF_ID && (
+            <button
+              class="terminal-collapse-btn"
+              title="Close pane (Ctrl+Shift+Backspace)"
+              onClick={(e) => {
+                e.stopPropagation();
+                mergeLeaf(leaf.id);
+              }}
+            >{'\u00D7'}</button>
+          )}
+          <button
+            class="terminal-collapse-btn"
+            title="New terminal"
+            onClick={(e) => {
+              e.stopPropagation();
+              termPickerOpen.value = { kind: 'new' };
+            }}
+          >+</button>
+        </div>
+      </div>
+
+      {/* Status dot menu */}
       {statusMenuOpen.value && (() => {
         const menuSid = statusMenuOpen.value!.sessionId;
         const menuSess = sessionMap.get(menuSid);
@@ -900,12 +797,12 @@ export function GlobalTerminalPanel() {
           >
             {!menuExited && (
               <button onClick={() => { statusMenuOpen.value = null; killSession(menuSid); }}>
-                Kill {showHotkeyHints.value && <kbd>⌃⇧K</kbd>}
+                Kill {showHotkeyHints.value && <kbd>{'\u2303\u21E7'}K</kbd>}
               </button>
             )}
             {menuSess?.feedbackId && (
               <button onClick={() => { statusMenuOpen.value = null; resolveSession(menuSid, menuSess.feedbackId); }}>
-                Resolve {showHotkeyHints.value && <kbd>⌃⇧R</kbd>}
+                Resolve {showHotkeyHints.value && <kbd>{'\u2303\u21E7'}R</kbd>}
               </button>
             )}
             {!menuExited && (
@@ -913,6 +810,12 @@ export function GlobalTerminalPanel() {
                 Pop out
               </button>
             )}
+            <button onClick={() => { statusMenuOpen.value = null; splitLeaf(leaf.id, 'horizontal'); }}>
+              Split Right {showHotkeyHints.value && <kbd>{'\u2303\u21E7'}"</kbd>}
+            </button>
+            <button onClick={() => { statusMenuOpen.value = null; splitLeaf(leaf.id, 'vertical'); }}>
+              Split Down {showHotkeyHints.value && <kbd>{'\u2303\u21E7'}-</kbd>}
+            </button>
             {menuExited && (
               <button onClick={() => { statusMenuOpen.value = null; resumeSession(menuSid); }}>Resume</button>
             )}
@@ -928,8 +831,8 @@ export function GlobalTerminalPanel() {
                 Clear name
               </button>
             )}
-            <button onClick={() => { statusMenuOpen.value = null; closeTab(menuSid); }}>
-              Close tab {showHotkeyHints.value && <kbd>⌃⇧W</kbd>}
+            <button onClick={() => { statusMenuOpen.value = null; handleClose(menuSid); }}>
+              Close tab {showHotkeyHints.value && <kbd>{'\u2303\u21E7'}W</kbd>}
             </button>
             <div style="display:flex;gap:4px;padding:4px 8px;align-items:center">
               {SESSION_COLOR_PRESETS.map((c) => (
@@ -954,7 +857,9 @@ export function GlobalTerminalPanel() {
           </div>
         );
       })()}
-      {hotkeyMenuOpen.value && !statusMenuOpen.value && (() => {
+
+      {/* Hotkey hint menu */}
+      {hotkeyMenuOpen.value && !statusMenuOpen.value && isFocused && (() => {
         const hk = hotkeyMenuOpen.value!;
         const hkSess = sessionMap.get(hk.sessionId);
         const hkExited = exited.has(hk.sessionId);
@@ -980,89 +885,24 @@ export function GlobalTerminalPanel() {
             {hkExited && (
               <button onClick={() => resumeSession(hk.sessionId)}>Resume</button>
             )}
-            <button onClick={() => closeTab(hk.sessionId)}>
+            <button onClick={() => handleClose(hk.sessionId)}>
               Close tab <kbd>W</kbd>
             </button>
           </div>
         );
       })()}
-      {!isSplit && (
-        <PaneHeader
-          sessionId={activeId}
-          sessionMap={sessionMap}
-          exited={exited}
-          canSplit={canSplit}
-          showCollapse={!hasTabs}
-          onToggleMinimized={toggleMinimized}
-          onToggleMaximized={toggleMaximized}
-        />
-      )}
-      {!minimized && !isSplit && (
-        <div class="terminal-body">
-          {tabs.map((sid) => renderTabContent(sid, sid === activeId, sessionMap, (code, text) => markSessionExited(sid, code, text)))}
-        </div>
-      )}
-      {!minimized && isSplit && (
-        <div class="terminal-split-container">
-          <div
-            class={`terminal-split-pane${activePanelId.value === 'split-left' ? ' split-focused' : ''}`}
-            data-split-pane="split-left"
-            style={{ flex: splitRatio.value }}
-            onMouseDown={() => { activePanelId.value = 'split-left'; if (activeId) focusSessionTerminal(activeId); }}
-          >
-            <div class="split-pane-tab-bar">
-              <PaneTabBar
-                tabs={leftTabs}
-                activeId={activeId}
-                source="split-left"
-                exited={exited}
-                sessionMap={sessionMap}
-                tabsRef={tabsRef}
-                onActivate={openSession}
-              />
-              <div class="terminal-tab-actions">
-                {panelButtons}
-              </div>
-            </div>
-            <PaneHeader sessionId={activeId} sessionMap={sessionMap} exited={exited} />
-            <div class="terminal-body">
-              {leftTabs.map((sid) => renderTabContent(sid, sid === activeId, sessionMap, (code, text) => markSessionExited(sid, code, text)))}
-            </div>
-          </div>
-          <div class="terminal-split-divider" onMouseDown={onSplitDividerMouseDown} />
-          <div
-            class={`terminal-split-pane${activePanelId.value === 'split-right' ? ' split-focused' : ''}`}
-            data-split-pane="split-right"
-            style={{ flex: 1 - splitRatio.value }}
-            onMouseDown={() => { activePanelId.value = 'split-right'; if (rightActive) focusSessionTerminal(rightActive); }}
-          >
-            <div class="split-pane-tab-bar">
-              <PaneTabBar
-                tabs={rightTabs}
-                activeId={rightActive}
-                source="split-right"
-                exited={exited}
-                sessionMap={sessionMap}
-                onActivate={(sid) => { rightPaneActiveId.value = sid; }}
-              />
-              <div class="terminal-tab-actions">
-                <button
-                  class="split-pane-unsplit-btn"
-                  onClick={() => disableSplit()}
-                  title="Close split pane"
-                >
-                  &times;
-                </button>
-              </div>
-            </div>
-            <PaneHeader sessionId={rightActive} sessionMap={sessionMap} exited={exited} />
-            <div class="terminal-body">
-              {rightTabs.map((sid) => renderTabContent(sid, sid === rightActive, sessionMap, (code, text) => markSessionExited(sid, code, text)))}
-            </div>
-          </div>
-        </div>
-      )}
+
+      <PaneHeader
+        sessionId={activeId}
+        sessionMap={sessionMap}
+        exited={exited}
+        leafId={leaf.id}
+      />
+      <div class="pane-leaf-body">
+        {leaf.tabs.map((sid) =>
+          renderTabContent(sid, sid === leaf.activeTabId, sessionMap, (code, text) => markSessionExited(sid, code, text))
+        )}
+      </div>
     </div>
-    </>
   );
 }

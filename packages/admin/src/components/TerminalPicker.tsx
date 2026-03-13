@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { allSessions, paneMruHistory, spawnTerminal, attachTmuxSession, setTerminalCompanionAndOpen, setTerminalCompanion, togglePanelCompanion, loadAllSessions, openSession, openIsolateCompanion, openUrlCompanion } from '../lib/sessions.js';
 import { selectedAppId } from '../lib/state.js';
 import { getIsolateNames, getIsolateEntry } from '../lib/isolate.js';
-import { cachedTargets, ensureTargetsLoaded } from './DispatchTargetSelect.js';
+import { cachedTargets, ensureTargetsLoaded, refreshTargets } from './DispatchTargetSelect.js';
 import { api } from '../lib/api.js';
 
 export type TerminalPickerMode =
@@ -55,24 +55,32 @@ export function TerminalPicker({ mode, onClose }: Props) {
 
   useEffect(() => {
     if (isUrlMode) return;
-    ensureTargetsLoaded();
     setTmuxLoading(true);
 
     const localP = api.listTmuxSessions()
       .then((r) => setTmuxSessions(r.sessions))
       .catch(() => setTmuxSessions([]));
 
-    // Fetch remote tmux sessions for each online machine
-    const targets = cachedTargets.value;
-    const onlineMachines = targets.filter(t => !t.isHarness && !t.isSprite && t.online);
-    const remoteP = Promise.all(
-      onlineMachines.map(m =>
-        api.listLauncherTmuxSessions(m.launcherId)
-          .then(r => [m.launcherId, r.sessions] as const)
-          .catch(() => [m.launcherId, []] as const)
-      )
-    ).then(results => {
-      const map = new Map<string, typeof tmuxSessions>();
+    // Await targets, then fetch remote tmux sessions for each online machine/harness
+    const remoteP = refreshTargets().then(() => {
+      const targets = cachedTargets.value;
+      const onlineMachines = targets.filter(t => !t.isHarness && !t.isSprite && t.online);
+      const onlineHarnesses = targets.filter(t => t.isHarness && t.online && t.harnessConfigId);
+      const fetches = [
+        ...onlineMachines.map(m =>
+          api.listLauncherTmuxSessions(m.launcherId)
+            .then(r => [m.launcherId, r.sessions] as const)
+            .catch(() => [m.launcherId, []] as const)
+        ),
+        ...onlineHarnesses.map(h =>
+          api.listHostTmuxSessions(h.harnessConfigId!)
+            .then(r => [h.launcherId, r.sessions] as const)
+            .catch(() => [h.launcherId, []] as const)
+        ),
+      ];
+      return Promise.all(fetches);
+    }).then(results => {
+      const map = new Map<string, { name: string; windows: number; created: string; attached: boolean }[]>();
       for (const [lid, sessions] of results) {
         if (sessions.length > 0) map.set(lid, sessions);
       }
@@ -247,6 +255,22 @@ export function TerminalPicker({ mode, onClose }: Props) {
     });
   }
 
+  // 3b. Harness tmux sessions
+  for (const h of harnesses) {
+    const hSessions = remoteTmux.get(h.launcherId);
+    if (!hSessions?.length) continue;
+    for (const s of hSessions) {
+      items.push({
+        id: `harness-tmux:${h.launcherId}:${s.name}`,
+        category: `${h.name} Tmux`,
+        icon: '\u{1F4DF}',
+        title: s.name,
+        subtitle: `${s.windows} window${s.windows !== 1 ? 's' : ''}${s.attached ? ', attached' : ''}`,
+        action: () => pickTmux(s.name, h.launcherId),
+      });
+    }
+  }
+
   // 4. Sprites
   for (const t of sprites) {
     items.push({
@@ -366,7 +390,10 @@ export function TerminalPicker({ mode, onClose }: Props) {
   const remoteTmuxCategories = machines
     .filter(m => remoteTmux.has(m.launcherId))
     .map(m => `${m.machineName || m.name} Tmux`);
-  const categoryOrder = ['New', 'Remote Machines', ...remoteTmuxCategories, 'Harnesses', 'Sprites', 'Recent', 'Open Terminals', 'Tmux Sessions', 'Isolated Components', 'Iframe'];
+  const harnessTmuxCategories = harnesses
+    .filter(h => remoteTmux.has(h.launcherId))
+    .map(h => `${h.name} Tmux`);
+  const categoryOrder = ['New', 'Remote Machines', ...remoteTmuxCategories, 'Harnesses', ...harnessTmuxCategories, 'Sprites', 'Recent', 'Open Terminals', 'Tmux Sessions', 'Isolated Components', 'Iframe'];
   for (const cat of categoryOrder) {
     if (cat === 'Iframe' && urlItem) continue;
     const catItems = filtered.filter(i => i.category === cat);

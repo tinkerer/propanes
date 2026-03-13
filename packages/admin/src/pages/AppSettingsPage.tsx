@@ -3,6 +3,10 @@ import { api } from '../lib/api.js';
 import { applications, loadApplications, navigate } from '../lib/state.js';
 import { copyText, copyWithTooltip } from '../lib/clipboard.js';
 import { AiAssistButton } from '../components/AiAssistButton.js';
+import { AgentCard } from '../components/AgentCard.js';
+import { AgentFormModal } from '../components/AgentFormModal.js';
+import { TOOL_PRESETS } from '../lib/agent-constants.js';
+import { trackDeletion } from '../components/DeletedItemsPanel.js';
 
 interface SuggestionDraft {
   label: string;
@@ -22,17 +26,6 @@ interface ControlActionDraft {
   command: string;
   icon: string;
 }
-
-const TOOL_PRESETS = [
-  { label: 'Read from /tmp', value: 'Read(/tmp/*)' },
-  { label: 'Write to /tmp', value: 'Write(/tmp/*)' },
-  { label: 'All file operations', value: 'Edit, Read, Write' },
-  { label: 'Run tests (npm)', value: 'Bash(npm test)' },
-  { label: 'Run npm scripts', value: 'Bash(npm run *)' },
-  { label: 'Git operations', value: 'Bash(git *)' },
-  { label: 'Git commit', value: 'Bash(git commit:*)' },
-  { label: 'Git add', value: 'Bash(git add:*)' },
-] as const;
 
 export function AppSettingsPage({ appId }: { appId: string }) {
   const app = applications.value.find((a: any) => a.id === appId);
@@ -61,6 +54,10 @@ export function AppSettingsPage({ appId }: { appId: string }) {
 
   // Control actions state
   const [actions, setActions] = useState<ControlActionDraft[]>([]);
+
+  // Agent modal state
+  const [agentModalVisible, setAgentModalVisible] = useState(false);
+  const [agentModalEdit, setAgentModalEdit] = useState<any>(undefined);
 
   const loadAgents = useCallback(async () => {
     try {
@@ -399,6 +396,47 @@ export function AppSettingsPage({ appId }: { appId: string }) {
             value={promptPrefix}
             onInput={(e) => setPromptPrefix((e.target as HTMLTextAreaElement).value)}
             spellcheck={false}
+          />
+        </div>
+
+        {/* Agents for this app */}
+        <div class="settings-section">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <h3 style="margin:0">Agents</h3>
+            <button class="btn btn-sm" onClick={() => { setAgentModalEdit(undefined); setAgentModalVisible(true); }}>+ Add Agent</button>
+          </div>
+          <div class="settings-toggle-desc" style="margin-bottom:10px">
+            Agents scoped to this application. <span style="color:var(--pw-text-faint)">Global agents are managed in Settings &gt; Agents.</span>
+          </div>
+          <div class="agent-list">
+            {agents.filter((a: any) => a.appId === appId).map((agent: any) => (
+              <AgentCard
+                key={agent.id}
+                agent={agent}
+                applications={[app]}
+                onEdit={(a) => { setAgentModalEdit(a); setAgentModalVisible(true); }}
+                onDelete={async (id, name) => {
+                  await api.deleteAgent(id);
+                  trackDeletion('agents', id, name);
+                  await loadAgents();
+                }}
+                showAppBadge={false}
+              />
+            ))}
+            {agents.filter((a: any) => a.appId === appId).length === 0 && (
+              <div style="font-size:12px;color:var(--pw-text-muted);padding:8px 0">
+                No agents for this app yet.
+              </div>
+            )}
+          </div>
+          <AgentFormModal
+            key={agentModalEdit?.id || (agentModalVisible ? 'new' : 'closed')}
+            visible={agentModalVisible}
+            onClose={() => setAgentModalVisible(false)}
+            onSaved={loadAgents}
+            editAgent={agentModalEdit}
+            applications={[app]}
+            fixedAppId={appId}
           />
         </div>
 

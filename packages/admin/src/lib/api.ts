@@ -582,6 +582,22 @@ export const api = {
     return request<{ path: string; parent: string | null; dirs: string[] }>(`/admin/browse-dirs${qs}`);
   },
 
+  browseFiles: (appId: string, path?: string) => {
+    const params = new URLSearchParams({ appId });
+    if (path) params.set('path', path);
+    return request<{ path: string; relativePath: string; parent: string | null; entries: { name: string; type: 'file' | 'dir'; size?: number; ext?: string }[]; isGitRepo: boolean }>(`/admin/browse-files?${params}`);
+  },
+
+  gitStatus: (appId: string) =>
+    request<{ isGitRepo: boolean; branch: string | null; files: { path: string; status: string; staged: string; unstaged: string }[] }>(`/admin/git-status?appId=${encodeURIComponent(appId)}`),
+
+  gitDiff: (appId: string, path?: string, staged?: boolean) => {
+    const params = new URLSearchParams({ appId });
+    if (path) params.set('path', path);
+    if (staged) params.set('staged', 'true');
+    return request<{ diff: string }>(`/admin/git-diff?${params}`);
+  },
+
   deleteScreenshot: (id: string) =>
     request<{ id: string; deleted: boolean }>(`/images/${id}`, { method: 'DELETE' }),
 

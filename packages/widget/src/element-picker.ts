@@ -6,6 +6,7 @@ export interface SelectedElementInfo {
   textContent: string;
   boundingRect: { x: number; y: number; width: number; height: number };
   attributes: Record<string, string>;
+  childrenHTML?: string;
 }
 
 const CAPTURE_ATTRS = [
@@ -52,7 +53,7 @@ function generateSelector(el: Element): string {
   return segments.join(' > ');
 }
 
-function captureElementInfo(el: Element): SelectedElementInfo {
+function captureElementInfo(el: Element, includeChildren?: boolean): SelectedElementInfo {
   const rect = el.getBoundingClientRect();
   const attrs: Record<string, string> = {};
   for (const name of CAPTURE_ATTRS) {
@@ -60,7 +61,7 @@ function captureElementInfo(el: Element): SelectedElementInfo {
     if (val !== null) attrs[name] = val;
   }
 
-  return {
+  const info: SelectedElementInfo = {
     selector: generateSelector(el),
     tagName: el.tagName.toLowerCase(),
     id: el.id,
@@ -69,6 +70,10 @@ function captureElementInfo(el: Element): SelectedElementInfo {
     boundingRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
     attributes: attrs,
   };
+  if (includeChildren) {
+    info.childrenHTML = el.innerHTML;
+  }
+  return info;
 }
 
 interface SelectionHighlight {
@@ -80,10 +85,12 @@ interface SelectionHighlight {
 export function startPicker(
   callback: (infos: SelectedElementInfo[]) => void,
   widgetHost: Element,
-  options?: { multiSelect?: boolean; excludeWidget?: boolean },
+  options?: { multiSelect?: boolean; excludeWidget?: boolean; includeChildren?: boolean; onSelectionChange?: (infos: SelectedElementInfo[]) => void },
 ): () => void {
   const multiSelect = options?.multiSelect ?? false;
   const excludeWidget = options?.excludeWidget ?? true;
+  const includeChildren = options?.includeChildren ?? false;
+  const onSelectionChange = options?.onSelectionChange;
   const selected: SelectionHighlight[] = [];
 
   const highlight = document.createElement('div');
@@ -298,7 +305,7 @@ export function startPicker(
 
   function selectTarget(target: Element) {
     if (!multiSelect) {
-      const info = captureElementInfo(target);
+      const info = captureElementInfo(target, includeChildren);
       selected.push({ element: target, overlay: createSelectionOverlay(target), info });
       finish();
       return;
@@ -309,11 +316,14 @@ export function startPicker(
       selected[idx].overlay.remove();
       selected.splice(idx, 1);
     } else {
-      const info = captureElementInfo(target);
+      const info = captureElementInfo(target, includeChildren);
       const overlay = createSelectionOverlay(target);
       selected.push({ element: target, overlay, info });
     }
     updateBarText();
+    if (onSelectionChange) {
+      onSelectionChange(selected.map(s => s.info));
+    }
   }
 
   function onClick(e: MouseEvent) {

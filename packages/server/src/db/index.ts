@@ -159,6 +159,7 @@ export function runMigrations() {
     `ALTER TABLE agent_endpoints ADD COLUMN sprite_config_id TEXT`,
     `ALTER TABLE agent_sessions ADD COLUMN sprite_config_id TEXT`,
     `ALTER TABLE agent_sessions ADD COLUMN sprite_exec_session_id TEXT`,
+    `ALTER TABLE agent_sessions ADD COLUMN cwd TEXT`,
   ];
 
   for (const stmt of alterStatements) {

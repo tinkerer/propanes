@@ -111,6 +111,7 @@ export const agentSessions = sqliteTable('agent_sessions', {
   machineId: text('machine_id'),
   claudeSessionId: text('claude_session_id'),
   companionSessionId: text('companion_session_id'),
+  cwd: text('cwd'),
   spriteConfigId: text('sprite_config_id'),
   spriteExecSessionId: text('sprite_exec_session_id'),
   createdAt: text('created_at').notNull(),

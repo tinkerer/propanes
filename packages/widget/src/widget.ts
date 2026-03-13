@@ -44,6 +44,7 @@ export class PromptWidgetElement {
   private savedCollectors = new Set<string>();
   private pickerMultiSelect = false;
   private pickerExcludeWidget = true;
+  private pickerIncludeChildren = false;
   private excludeWidget = true;
   private excludeCursor = false;
   private keepStream = false;
@@ -307,6 +308,19 @@ export class PromptWidgetElement {
     span.textContent = 'Multi-select';
     label.append(cb, span);
     menu.appendChild(label);
+
+    const childrenLabel = document.createElement('label');
+    childrenLabel.className = 'pw-picker-menu-item';
+    const childrenCb = document.createElement('input');
+    childrenCb.type = 'checkbox';
+    childrenCb.checked = this.pickerIncludeChildren;
+    childrenCb.addEventListener('change', () => {
+      this.pickerIncludeChildren = childrenCb.checked;
+    });
+    const childrenSpan = document.createElement('span');
+    childrenSpan.textContent = 'Include children';
+    childrenLabel.append(childrenCb, childrenSpan);
+    menu.appendChild(childrenLabel);
 
     group.appendChild(menu);
 
@@ -1066,14 +1080,25 @@ export class PromptWidgetElement {
     const panel = this.shadow.querySelector('.pw-panel') as HTMLElement;
     if (panel && this.pickerExcludeWidget) panel.style.opacity = '0.3';
 
+    const liveUpdate = this.pickerMultiSelect;
     this.pickerCleanup = startPicker((infos) => {
       if (panel) panel.style.opacity = '1';
       this.pickerCleanup = null;
-      if (infos.length > 0) {
+      if (liveUpdate) {
+        this.selectedElements = infos;
+      } else if (infos.length > 0) {
         this.selectedElements.push(...infos);
-        this.renderSelectedElementChips();
       }
-    }, this.host, { multiSelect: this.pickerMultiSelect, excludeWidget: this.pickerExcludeWidget });
+      this.renderSelectedElementChips();
+    }, this.host, {
+      multiSelect: this.pickerMultiSelect,
+      excludeWidget: this.pickerExcludeWidget,
+      includeChildren: this.pickerIncludeChildren,
+      onSelectionChange: liveUpdate ? (infos) => {
+        this.selectedElements = [...infos];
+        this.renderSelectedElementChips();
+      } : undefined,
+    });
   }
 
   private renderSelectedElementChips() {

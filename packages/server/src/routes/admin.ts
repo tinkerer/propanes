@@ -1,7 +1,8 @@
-import { readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from 'node:fs';
-import { resolve, dirname, join } from 'node:path';
+import { readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { resolve, dirname, join, relative, extname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 import { Hono } from 'hono';
 import { ulid } from 'ulidx';
 import { eq, desc, asc, like, and, or, isNull, sql, inArray, ne } from 'drizzle-orm';
@@ -674,6 +675,7 @@ adminRoutes.get('/dispatch-targets', (c) => {
     .all();
   for (const m of dbMachines) {
     if (connectedMachineIds.has(m.id)) continue;
+    if (m.type === 'local') continue;
     launcherTargets.push({
       launcherId: `db-machine:${m.id}`,
       name: m.name,
@@ -1016,6 +1018,125 @@ adminRoutes.get('/read-file', (c) => {
     if (err.code === 'ENOENT') return c.json({ error: 'File not found', path: resolved }, 404);
     if (err.code === 'EACCES') return c.json({ error: 'Permission denied', path: resolved }, 403);
     if (err.code === 'EISDIR') return c.json({ error: 'Path is a directory', path: resolved }, 400);
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+// Browse files in an app's projectDir (files + directories)
+adminRoutes.get('/browse-files', (c) => {
+  const appId = c.req.query('appId');
+  const relPath = c.req.query('path') || '.';
+  if (!appId) return c.json({ error: 'appId query parameter required' }, 400);
+
+  const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
+  if (!app) return c.json({ error: 'Application not found' }, 404);
+  if (!app.projectDir) return c.json({ error: 'Application has no projectDir' }, 400);
+
+  const projectDir = resolve(app.projectDir);
+  const target = resolve(projectDir, relPath);
+  if (!target.startsWith(projectDir)) return c.json({ error: 'Path traversal not allowed' }, 403);
+
+  try {
+    const entries = readdirSync(target, { withFileTypes: true });
+    const items = entries
+      .filter((e) => e.name !== '.git' && !e.name.startsWith('.'))
+      .map((e) => {
+        const result: { name: string; type: 'file' | 'dir'; size?: number; ext?: string } = {
+          name: e.name,
+          type: e.isDirectory() ? 'dir' : 'file',
+        };
+        if (!e.isDirectory()) {
+          try {
+            const st = statSync(join(target, e.name));
+            result.size = st.size;
+          } catch { /* ignore */ }
+          const ext = extname(e.name).slice(1).toLowerCase();
+          if (ext) result.ext = ext;
+        }
+        return result;
+      })
+      .sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+        return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      });
+
+    const relativePath = relative(projectDir, target) || '.';
+    const parent = target === projectDir ? null : relative(projectDir, dirname(target)) || '.';
+    let isGitRepo = false;
+    try { isGitRepo = existsSync(join(projectDir, '.git')); } catch { /* ignore */ }
+
+    return c.json({ path: target, relativePath, parent, entries: items, isGitRepo });
+  } catch (err: any) {
+    if (err.code === 'ENOENT') return c.json({ error: 'Directory not found', path: target }, 404);
+    if (err.code === 'EACCES') return c.json({ error: 'Permission denied', path: target }, 403);
+    return c.json({ error: err.message, path: target }, 500);
+  }
+});
+
+// Git status for an app's projectDir
+adminRoutes.get('/git-status', (c) => {
+  const appId = c.req.query('appId');
+  if (!appId) return c.json({ error: 'appId query parameter required' }, 400);
+
+  const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
+  if (!app) return c.json({ error: 'Application not found' }, 404);
+  if (!app.projectDir) return c.json({ error: 'Application has no projectDir' }, 400);
+
+  const projectDir = resolve(app.projectDir);
+  try {
+    existsSync(join(projectDir, '.git'));
+  } catch {
+    return c.json({ isGitRepo: false, branch: null, files: [] });
+  }
+  if (!existsSync(join(projectDir, '.git'))) {
+    return c.json({ isGitRepo: false, branch: null, files: [] });
+  }
+
+  try {
+    const branchRaw = execSync('git rev-parse --abbrev-ref HEAD', { cwd: projectDir, encoding: 'utf-8', timeout: 5000 }).trim();
+    const statusRaw = execSync('git status --porcelain=v1', { cwd: projectDir, encoding: 'utf-8', timeout: 10000 });
+    const files = statusRaw.split('\n').filter(Boolean).map((line) => {
+      const staged = line[0];
+      const unstaged = line[1];
+      const path = line.slice(3);
+      let status = 'modified';
+      const code = staged !== ' ' && staged !== '?' ? staged : unstaged;
+      if (code === 'A') status = 'added';
+      else if (code === 'D') status = 'deleted';
+      else if (code === '?') status = 'untracked';
+      else if (code === 'R') status = 'renamed';
+      else if (code === 'C') status = 'copied';
+      return { path, status, staged, unstaged };
+    });
+    return c.json({ isGitRepo: true, branch: branchRaw, files });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+// Git diff for an app's projectDir
+adminRoutes.get('/git-diff', (c) => {
+  const appId = c.req.query('appId');
+  const filePath = c.req.query('path') || '';
+  const staged = c.req.query('staged') === 'true';
+  if (!appId) return c.json({ error: 'appId query parameter required' }, 400);
+
+  const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
+  if (!app) return c.json({ error: 'Application not found' }, 404);
+  if (!app.projectDir) return c.json({ error: 'Application has no projectDir' }, 400);
+
+  const projectDir = resolve(app.projectDir);
+  if (!existsSync(join(projectDir, '.git'))) {
+    return c.json({ diff: '' });
+  }
+
+  try {
+    const args = ['git', 'diff'];
+    if (staged) args.push('--cached');
+    if (filePath) args.push('--', filePath);
+    const diff = execSync(args.join(' '), { cwd: projectDir, encoding: 'utf-8', timeout: 10000, maxBuffer: 2 * 1024 * 1024 });
+    return c.json({ diff });
+  } catch (err: any) {
     return c.json({ error: err.message }, 500);
   }
 });

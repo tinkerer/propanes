@@ -1,10 +1,23 @@
 import { signal, effect } from '@preact/signals';
 import { api } from './api.js';
 import { autoNavigateToFeedback, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce } from './settings.js';
-import { navigate, selectedAppId } from './state.js';
+import { navigate, selectedAppId, applications } from './state.js';
 import { timed } from './perf.js';
 import type { ViewMode } from '../components/SessionViewToggle.js';
 import type { TerminalPickerMode } from '../components/TerminalPicker.js';
+import {
+  layoutTree,
+  findLeaf,
+  findLeafWithTab,
+  findCompanionSibling,
+  addTabToLeaf,
+  removeTabFromLeaf,
+  splitLeaf,
+  mergeLeaf,
+  focusedLeafId,
+  showSessionsLeaf,
+  SESSIONS_LEAF_ID,
+} from './pane-tree.js';
 
 export const termPickerOpen = signal<TerminalPickerMode | null>(null);
 
@@ -38,6 +51,20 @@ export const rightPaneTabs = signal<string[]>(loadJson('pw-right-pane-tabs', [])
 export const rightPaneActiveId = signal<string | null>(loadJson('pw-right-pane-active', null));
 export const splitRatio = signal<number>(loadJson('pw-split-ratio', 0.5));
 export const activePanelId = signal<string | null>('split-left');
+
+// Seed pane tree from flat signals on first load (migration)
+{
+  const sessLeaf = findLeaf(layoutTree.value.root, SESSIONS_LEAF_ID);
+  if (sessLeaf && sessLeaf.tabs.length === 0 && openTabs.value.length > 0) {
+    for (const tab of openTabs.value) {
+      addTabToLeaf(SESSIONS_LEAF_ID, tab, false);
+    }
+    if (activeTabId.value) {
+      addTabToLeaf(SESSIONS_LEAF_ID, activeTabId.value, true);
+    }
+    showSessionsLeaf();
+  }
+}
 
 export const controlBarMinimized = signal(loadJson('pw-control-bar-minimized', false));
 export function toggleControlBarMinimized() {
@@ -1084,6 +1111,14 @@ export function setTerminalsHeight(h: number) {
   localStorage.setItem('pw-terminals-height', JSON.stringify(clamped));
 }
 
+export const sidebarSplitRatio = signal(loadJson('pw-sidebar-split-ratio', 0.7));
+
+export function setSidebarSplitRatio(ratio: number) {
+  const clamped = Math.max(0.15, Math.min(0.95, ratio));
+  sidebarSplitRatio.value = clamped;
+  localStorage.setItem('pw-sidebar-split-ratio', JSON.stringify(clamped));
+}
+
 export async function loadAllSessions(includeDeleted = false, isAutoPoll = false) {
   if (isAutoPoll && lastTerminalInput.value > 0 && Date.now() - lastTerminalInput.value < 2000) {
     return;
@@ -1198,6 +1233,10 @@ export function openSession(sessionId: string) {
   activeTabId.value = sessionId;
   panelMinimized.value = false;
   persistTabs();
+
+  // Sync to pane tree
+  addTabToLeaf(SESSIONS_LEAF_ID, sessionId, true);
+  showSessionsLeaf();
 
   // Auto-seed terminal companion from server's companionSessionId if not already mapped
   const sess = allSessions.value.find((s) => s.id === sessionId);
@@ -1323,6 +1362,12 @@ export function closeTab(sessionId: string) {
     activeTabId.value = neighbor;
   }
   persistTabs();
+
+  // Sync to pane tree — find whichever leaf actually contains this tab
+  const leaf = findLeafWithTab(sessionId);
+  if (leaf) {
+    removeTabFromLeaf(leaf.id, sessionId);
+  }
 }
 
 export async function resolveSession(sessionId: string, feedbackId?: string) {
@@ -1854,6 +1899,20 @@ export function getSessionLabel(sessionId: string): string | undefined {
   return sessionLabels.value[sessionId];
 }
 
+/** Returns a short worktree/cwd label if session's effective cwd differs from its app's projectDir. */
+export function getWorktreeLabel(session: any): string | null {
+  if (!session) return null;
+  const effectiveCwd = session.panePath || session.cwd;
+  if (!effectiveCwd) return null;
+  const appId = session.appId;
+  if (!appId) return null;
+  const app = applications.value.find((a: any) => a.id === appId);
+  if (!app?.projectDir) return null;
+  if (effectiveCwd === app.projectDir) return null;
+  const parts = effectiveCwd.replace(/\/+$/, '').split('/');
+  return parts[parts.length - 1] || null;
+}
+
 export const SESSION_COLOR_PRESETS = [
   '#ef4444', '#f97316', '#eab308', '#22c55e',
   '#3b82f6', '#a855f7', '#ec4899', '#06b6d4',
@@ -1951,7 +2010,7 @@ export function handleTabDigit0to9(digit: number) {
 
 // --- Companion Pane System ---
 
-export type CompanionType = 'jsonl' | 'feedback' | 'iframe' | 'terminal' | 'isolate' | 'url';
+export type CompanionType = 'jsonl' | 'feedback' | 'iframe' | 'terminal' | 'isolate' | 'url' | 'file';
 
 // Terminal companion: maps parent session ID → terminal session ID
 export const terminalCompanionMap = signal<Record<string, string>>(
@@ -2014,7 +2073,7 @@ function extractCompanionType(tabId: string): CompanionType | null {
   const idx = tabId.indexOf(':');
   if (idx < 0) return null;
   const prefix = tabId.slice(0, idx);
-  if (prefix === 'jsonl' || prefix === 'feedback' || prefix === 'iframe' || prefix === 'terminal' || prefix === 'isolate' || prefix === 'url') return prefix;
+  if (prefix === 'jsonl' || prefix === 'feedback' || prefix === 'iframe' || prefix === 'terminal' || prefix === 'isolate' || prefix === 'url' || prefix === 'file') return prefix;
   return null;
 }
 
@@ -2030,10 +2089,12 @@ export function toggleCompanion(sessionId: string, type: CompanionType) {
   const current = getCompanions(sessionId);
   const tabId = companionTabId(sessionId, type);
 
-  const isVisible = rightPaneTabs.value.includes(tabId) && splitEnabled.value;
+  // Check if companion tab exists in the tree
+  const existingLeaf = findLeafWithTab(tabId);
+  const isVisibleInTree = !!existingLeaf;
 
-  if (current.includes(type) && isVisible) {
-    // Toggle OFF — only if actually visible
+  if (current.includes(type) && isVisibleInTree) {
+    // Toggle OFF
     const next = current.filter((t) => t !== type);
     if (next.length === 0) {
       const { [sessionId]: _, ...rest } = sessionCompanions.value;
@@ -2043,23 +2104,26 @@ export function toggleCompanion(sessionId: string, type: CompanionType) {
     }
     persistCompanions();
 
-    // Clean up terminal companion map when toggling off
     if (type === 'terminal') {
       removeTerminalCompanion(sessionId);
     }
 
-    // Close the tab from right pane
-    const remaining = rightPaneTabs.value.filter((id) => id !== tabId);
-    rightPaneTabs.value = remaining;
-    if (rightPaneActiveId.value === tabId) {
-      rightPaneActiveId.value = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+    // Remove from pane tree (auto-merges empty non-well-known leaves)
+    removeTabFromLeaf(existingLeaf.id, tabId);
+
+    // Keep legacy signals in sync
+    if (rightPaneTabs.value.includes(tabId)) {
+      const remaining = rightPaneTabs.value.filter((id) => id !== tabId);
+      rightPaneTabs.value = remaining;
+      if (rightPaneActiveId.value === tabId) {
+        rightPaneActiveId.value = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+      }
+      if (remaining.length === 0 && splitEnabled.value) {
+        disableSplit();
+        return;
+      }
+      persistSplitState();
     }
-    if (remaining.length === 0 && splitEnabled.value) {
-      disableSplit();
-      return;
-    }
-    persistSplitState();
-    // Also remove from openTabs
     if (openTabs.value.includes(tabId)) {
       openTabs.value = openTabs.value.filter((id) => id !== tabId);
       persistTabs();
@@ -2070,6 +2134,22 @@ export function toggleCompanion(sessionId: string, type: CompanionType) {
       sessionCompanions.value = { ...sessionCompanions.value, [sessionId]: [...current, type] };
       persistCompanions();
     }
+
+    // Place companion in the tree: find or create a sibling pane
+    const sessionLeaf = findLeafWithTab(sessionId);
+    if (sessionLeaf) {
+      const sibling = findCompanionSibling(sessionLeaf.id, sessionId);
+      if (sibling) {
+        addTabToLeaf(sibling.id, tabId, true);
+      } else {
+        splitLeaf(sessionLeaf.id, 'horizontal', 'second', [tabId], 0.5);
+      }
+    } else {
+      // Fallback: add to sessions leaf
+      addTabToLeaf(SESSIONS_LEAF_ID, tabId, true);
+    }
+
+    // Keep legacy signals in sync
     openSessionInRightPane(tabId);
   }
 }
@@ -2080,6 +2160,16 @@ export function openIsolateCompanion(componentName: string) {
     openTabs.value = [...openTabs.value, tabId];
   }
   openSessionInRightPane(tabId);
+
+  // Place in tree: find focused session's leaf and split, or add to sessions leaf
+  const focused = focusedLeafId.value;
+  const focusedLeaf = focused ? findLeaf(layoutTree.value.root, focused) : null;
+  if (focusedLeaf && focusedLeaf.panelType === 'tabs' && focusedLeaf.tabs.length > 0) {
+    splitLeaf(focusedLeaf.id, 'horizontal', 'second', [tabId], 0.5);
+  } else {
+    addTabToLeaf(SESSIONS_LEAF_ID, tabId, true);
+    showSessionsLeaf();
+  }
 }
 
 export function openUrlCompanion(url: string) {
@@ -2092,6 +2182,25 @@ export function openUrlCompanion(url: string) {
     openTabs.value = [...openTabs.value, tabId];
   }
   openSessionInRightPane(tabId);
+
+  // Place in tree: find focused session's leaf and split, or add to sessions leaf
+  const focused = focusedLeafId.value;
+  const focusedLeaf = focused ? findLeaf(layoutTree.value.root, focused) : null;
+  if (focusedLeaf && focusedLeaf.panelType === 'tabs' && focusedLeaf.tabs.length > 0) {
+    splitLeaf(focusedLeaf.id, 'horizontal', 'second', [tabId], 0.5);
+  } else {
+    addTabToLeaf(SESSIONS_LEAF_ID, tabId, true);
+    showSessionsLeaf();
+  }
+}
+
+export function openFileCompanion(filePath: string) {
+  const tabId = `file:${filePath}`;
+  if (!openTabs.value.includes(tabId)) {
+    openTabs.value = [...openTabs.value, tabId];
+  }
+  addTabToLeaf(SESSIONS_LEAF_ID, tabId, true);
+  showSessionsLeaf();
 }
 
 export function syncCompanionsToRightPane(newSessionId: string, oldSessionId?: string | null) {
