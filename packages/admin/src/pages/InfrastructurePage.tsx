@@ -1095,6 +1095,7 @@ export function InfrastructurePage() {
           </p>
         </div>
         <div style="display:flex;gap:6px;align-items:center">
+          <SetupAssistButton entityType={showSprites ? 'sprite' : 'machine'} entityLabel="Infrastructure" />
           {showMachines && <button class="btn btn-primary" onClick={openAddMachine}>Add Machine</button>}
           {showMachines && <button class="btn btn-primary" onClick={() => openAddHarness()}>Create Harness</button>}
           {showSprites && <button class="btn btn-primary" onClick={openAddSprite}>Create Sprite</button>}

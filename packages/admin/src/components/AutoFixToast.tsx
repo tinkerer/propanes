@@ -10,10 +10,9 @@ export function AutoFixToast() {
         <>
           <div class="autofix-toast-msg">
             Session on <strong>{state.machineName}</strong> failed (exit {state.exitCode}).
-            Starting diagnostic in {state.countdown}s...
           </div>
           <div class="autofix-toast-actions">
-            <button class="autofix-btn-fix" onClick={launchAutoFix}>Fix Now</button>
+            <button class="autofix-btn-fix" onClick={launchAutoFix}>Run Diagnostic</button>
             <button class="autofix-btn-dismiss" onClick={dismissAutoFix}>Dismiss</button>
           </div>
         </>

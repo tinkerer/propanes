@@ -7,9 +7,9 @@ const AUTOFIX_STORAGE_KEY = 'pw-autofix-enabled';
 export const autoFixEnabled = signal<boolean>((() => {
   try {
     const raw = localStorage.getItem(AUTOFIX_STORAGE_KEY);
-    return raw === null ? true : JSON.parse(raw);
+    return raw === null ? false : JSON.parse(raw);
   } catch {
-    return true;
+    return false;
   }
 })());
 
@@ -36,6 +36,12 @@ const offeredSessions = new Set<string>();
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
 let launchTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Exponential backoff state
+let consecutiveFailures = 0;
+let lastAutoFixTime = 0;
+const BACKOFF_DELAYS = [1000, 5000, 10000]; // 1s, 5s, 10s then give up
+const MAX_RETRIES = 3;
+
 const ERROR_PATTERNS = [
   /can't find session/i,
   /session not found/i,
@@ -58,6 +64,11 @@ function shouldAutoFix(sessionId: string, exitCode: number, terminalText: string
   if (!autoFixEnabled.value) return false;
   if (exitCode === 0) return false;
   if (offeredSessions.has(sessionId)) return false;
+  if (consecutiveFailures >= MAX_RETRIES) return false;
+
+  // Enforce minimum interval between autofix attempts
+  const backoffDelay = BACKOFF_DELAYS[Math.min(consecutiveFailures, BACKOFF_DELAYS.length - 1)] || 10000;
+  if (Date.now() - lastAutoFixTime < backoffDelay) return false;
 
   const openedAt = sessionOpenTimestamps.get(sessionId);
   if (openedAt && Date.now() - openedAt > MAX_SESSION_AGE_MS) return false;
@@ -74,25 +85,13 @@ export function handleSessionExit(sessionId: string, exitCode: number, terminalT
   const sess = allSessions.value.find((s: any) => s.id === sessionId);
   const machineName = sess?.machineName || sess?.launcherHostname || 'unknown';
 
+  // Show toast but require user click — no auto-launch
   autoFixState.value = {
     phase: 'pending',
     sessionId,
     machineName,
     exitCode,
-    countdown: 3,
   };
-
-  let remaining = 3;
-  countdownTimer = setInterval(() => {
-    remaining--;
-    if (remaining <= 0) {
-      if (countdownTimer) clearInterval(countdownTimer);
-      countdownTimer = null;
-      launchAutoFix();
-    } else {
-      autoFixState.value = { ...autoFixState.value, countdown: remaining };
-    }
-  }, 1000);
 }
 
 export async function launchAutoFix() {
@@ -103,6 +102,7 @@ export async function launchAutoFix() {
   if (state.phase === 'idle') return;
 
   autoFixState.value = { ...state, phase: 'launching' };
+  lastAutoFixTime = Date.now();
 
   const sess = allSessions.value.find((s: any) => s.id === state.sessionId);
   const machineName = sess?.machineName || sess?.launcherHostname || 'unknown';
@@ -130,6 +130,7 @@ Check the machine configuration, launcher status, and tmux setup. Common issues:
     if (state.sessionId) closeTab(state.sessionId);
     openSession(fixSessionId);
 
+    consecutiveFailures = 0;
     autoFixState.value = { phase: 'active', sessionId: fixSessionId, machineName };
     setTimeout(() => {
       if (autoFixState.value.phase === 'active') {
@@ -138,6 +139,7 @@ Check the machine configuration, launcher status, and tmux setup. Common issues:
     }, 2000);
   } catch (err) {
     console.error('[autofix] Failed to launch:', err);
+    consecutiveFailures++;
     autoFixState.value = { phase: 'idle' };
   }
 }
@@ -146,4 +148,9 @@ export function dismissAutoFix() {
   if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
   if (launchTimer) { clearTimeout(launchTimer); launchTimer = null; }
   autoFixState.value = { phase: 'idle' };
+}
+
+export function resetAutoFixBackoff() {
+  consecutiveFailures = 0;
+  lastAutoFixTime = 0;
 }
