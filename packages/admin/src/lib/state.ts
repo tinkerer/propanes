@@ -1,4 +1,4 @@
-import { signal, computed } from '@preact/signals';
+import { signal, computed, effect } from '@preact/signals';
 import { api } from './api.js';
 import { timed, bindRouteSignal } from './perf.js';
 import { isolatedComponent } from './isolate.js';
@@ -23,11 +23,25 @@ export const isAuthenticated = signal(!!localStorage.getItem('pw-admin-token'));
 export const currentRoute = signal(window.location.hash.slice(1) || '/');
 bindRouteSignal(currentRoute);
 
-export const selectedAppId = signal<string | null>(embedAppId);
+function extractAppIdFromRoute(route: string): string | null {
+  const m = route.match(/^\/app\/([^/]+)\//);
+  return m ? m[1] : null;
+}
+
+const initialAppId = embedAppId
+  || extractAppIdFromRoute(window.location.hash.slice(1) || '/')
+  || localStorage.getItem('pw-selected-app-id');
+export const selectedAppId = signal<string | null>(initialAppId);
 export const applications = signal<any[]>([]);
 export const unlinkedCount = signal(0);
 export const appFeedbackCounts = signal<Record<string, { total: number; new: number; running: number }>>({});
 export const addAppModalOpen = signal(false);
+
+effect(() => {
+  const id = selectedAppId.value;
+  if (id) localStorage.setItem('pw-selected-app-id', id);
+  else localStorage.removeItem('pw-selected-app-id');
+});
 
 export async function loadApplications() {
   try {
@@ -81,12 +95,8 @@ export function setToken(token: string) {
 
 export function clearToken() {
   localStorage.removeItem('pw-admin-token');
+  localStorage.removeItem('pw-selected-app-id');
   isAuthenticated.value = false;
-}
-
-function extractAppIdFromRoute(route: string): string | null {
-  const m = route.match(/^\/app\/([^/]+)\//);
-  return m ? m[1] : null;
 }
 
 export function navigate(path: string) {

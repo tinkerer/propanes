@@ -973,19 +973,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
       )}
       {!isMinimized && !isSplit && (
         <div class="popout-body">
-          {activeId && (activeId.startsWith('view:') ? (
-            renderTabContent(activeId, true, sessionMap)
-          ) : (
-            <SessionViewToggle
-              key={activeId}
-              sessionId={activeId}
-              isActive={true}
-              onExit={(code, text) => markSessionExited(activeId, code, text)}
-              onInputStateChange={(s) => setSessionInputState(activeId, s)}
-              permissionProfile={session?.permissionProfile}
-              mode={viewMode}
-            />
-          ))}
+          {activeId && renderTabContent(activeId, true, sessionMap)}
         </div>
       )}
       {!isMinimized && isSplit && (

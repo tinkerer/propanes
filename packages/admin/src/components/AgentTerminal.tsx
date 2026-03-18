@@ -697,6 +697,13 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
   useEffect(() => {
     if (!isActive || !fitRef.current || !termRef.current || !containerRef.current) return;
     const term = termRef.current;
+    // Check if focus is already inside this terminal's panel — only then should
+    // we steal focus.  Without this guard, any signal-driven re-render that
+    // flips isActive (e.g. syncAutoJumpPanel updating panel state) would yank
+    // focus away from whatever the user is interacting with.
+    const container = containerRef.current;
+    const panelEl = container.closest('[data-panel-id]') || container.closest('.global-terminal-panel');
+    const focusInPanel = panelEl?.contains(document.activeElement) ?? false;
     // Wait for the browser to lay out the newly-visible container before fitting.
     // On macOS the kernel skips SIGWINCH when PTY size is unchanged, so we use
     // bounce=true to briefly send rows-1 then correct rows, forcing tmux to
@@ -705,7 +712,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
     const rafId = requestAnimationFrame(() => {
       safeFitAndResizeRef.current(true);
       term.refresh(0, term.rows - 1);
-      term.focus();
+      if (focusInPanel) term.focus();
     });
     // No periodic resize — ResizeObserver, focus, and visibility handlers cover
     // all real scenarios. The old 5s setInterval caused visible flicker.

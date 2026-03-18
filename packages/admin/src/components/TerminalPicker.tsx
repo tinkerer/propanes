@@ -31,6 +31,19 @@ function looksLikeUrl(s: string): boolean {
   return /^https?:\/\//i.test(s.trim());
 }
 
+const COLLAPSED_STORAGE_KEY = 'pw-picker-collapsed';
+
+function loadCollapsedState(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+
+function saveCollapsedState(state: Record<string, boolean>) {
+  localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(state));
+}
+
 export function TerminalPicker({ mode, onClose }: Props) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -38,9 +51,29 @@ export function TerminalPicker({ mode, onClose }: Props) {
   const [remoteTmux, setRemoteTmux] = useState<Map<string, { name: string; windows: number; created: string; attached: boolean }[]>>(new Map());
   const [tmuxLoading, setTmuxLoading] = useState(true);
   const [internalUrlMode, setInternalUrlMode] = useState(false);
+  const [collapsedCats, setCollapsedCats] = useState<Record<string, boolean>>(() => {
+    const saved = loadCollapsedState();
+    // Default: everything collapsed except "Layout"
+    // Only use saved state for categories that have been explicitly toggled
+    return saved;
+  });
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const isUrlMode = mode.kind === 'url' || internalUrlMode;
+
+  function isCatCollapsed(cat: string): boolean {
+    if (collapsedCats[cat] !== undefined) return collapsedCats[cat];
+    // Default: everything collapsed except "Layout"
+    return cat !== 'Layout';
+  }
+
+  function toggleCategory(cat: string) {
+    setCollapsedCats(prev => {
+      const next = { ...prev, [cat]: !isCatCollapsed(cat) };
+      saveCollapsedState(next);
+      return next;
+    });
+  }
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -445,8 +478,10 @@ export function TerminalPicker({ mode, onClose }: Props) {
     if (catItems.length > 0) grouped.push([cat, catItems]);
   }
 
-  // Flat list for keyboard nav
-  const flatFiltered = grouped.flatMap(([, items]) => items);
+  // Flat list for keyboard nav — only includes items from expanded categories (when not searching)
+  const flatFiltered = lower
+    ? grouped.flatMap(([, items]) => items)
+    : grouped.flatMap(([cat, items]) => isCatCollapsed(cat) ? [] : items);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -496,32 +531,45 @@ export function TerminalPicker({ mode, onClose }: Props) {
         </div>
         {flatFiltered.length > 0 && (
           <div class="spotlight-results" ref={listRef}>
-            {grouped.map(([category, catItems]) => (
-              <div key={category}>
-                <div class="spotlight-category">{category}</div>
-                {catItems.map((item) => {
-                  const globalIdx = flatFiltered.indexOf(item);
-                  return (
-                    <div
-                      key={item.id}
-                      class={`spotlight-result ${globalIdx === selectedIndex ? 'selected' : ''}`}
-                      style={item.disabled ? 'opacity:0.5;cursor:default' : undefined}
-                      onClick={() => item.action()}
-                      onMouseEnter={() => setSelectedIndex(globalIdx)}
-                    >
-                      <span class="spotlight-result-icon">{item.icon}</span>
-                      <div class="spotlight-result-text">
-                        <span class="spotlight-result-title">
-                          {item.title}
-                          {item.disabled && <span style="margin-left:6px;color:var(--pw-text-muted);font-size:11px">(offline)</span>}
-                        </span>
-                        {item.subtitle && <span class="spotlight-result-subtitle">{item.subtitle}</span>}
+            {grouped.map(([category, catItems]) => {
+              const collapsed = !lower && isCatCollapsed(category);
+              return (
+                <div key={category}>
+                  <div
+                    class="spotlight-category"
+                    style={!lower ? 'cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px' : undefined}
+                    onClick={!lower ? () => toggleCategory(category) : undefined}
+                  >
+                    {!lower && (
+                      <span style={`display:inline-block;font-size:10px;transition:transform 0.15s;transform:rotate(${collapsed ? '0deg' : '90deg'})`}>{'\u25B6'}</span>
+                    )}
+                    {category}
+                    {collapsed && <span style="margin-left:4px;color:var(--pw-text-muted);font-size:11px">({catItems.length})</span>}
+                  </div>
+                  {!collapsed && catItems.map((item) => {
+                    const globalIdx = flatFiltered.indexOf(item);
+                    return (
+                      <div
+                        key={item.id}
+                        class={`spotlight-result ${globalIdx === selectedIndex ? 'selected' : ''}`}
+                        style={item.disabled ? 'opacity:0.5;cursor:default' : undefined}
+                        onClick={() => item.action()}
+                        onMouseEnter={() => setSelectedIndex(globalIdx)}
+                      >
+                        <span class="spotlight-result-icon">{item.icon}</span>
+                        <div class="spotlight-result-text">
+                          <span class="spotlight-result-title">
+                            {item.title}
+                            {item.disabled && <span style="margin-left:6px;color:var(--pw-text-muted);font-size:11px">(offline)</span>}
+                          </span>
+                          {item.subtitle && <span class="spotlight-result-subtitle">{item.subtitle}</span>}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
+                    );
+                  })}
+                </div>
+              );
+            })}
           </div>
         )}
         {query && flatFiltered.length === 0 && (

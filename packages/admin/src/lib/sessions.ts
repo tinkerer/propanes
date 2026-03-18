@@ -261,14 +261,9 @@ export function toggleDockedOrientation() {
 }
 
 export const focusedPanelId = signal<string | null>(null);
-let focusTimer: ReturnType<typeof setTimeout> | null = null;
 
 export function setFocusedPanel(panelId: string | null) {
-  if (focusTimer) { clearTimeout(focusTimer); focusTimer = null; }
   focusedPanelId.value = panelId;
-  if (panelId) {
-    focusTimer = setTimeout(() => { focusedPanelId.value = null; }, 2000);
-  }
 }
 
 let panelZCounter = 0;
@@ -335,6 +330,7 @@ export function cyclePanelFocus(direction: 1 | -1) {
   const nextIdx = currentIdx < 0 ? 0 : (currentIdx + direction + panels.length) % panels.length;
   const targetId = panels[nextIdx];
   setFocusedPanel(targetId);
+  bringToFront(targetId === 'global' || targetId === 'split-left' || targetId === 'split-right' ? 'global-panel' : targetId);
 
   let container: Element | null = null;
   if (targetId === 'global') {

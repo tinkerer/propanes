@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'preact/hooks';
-import { fileViewerPanels, closeFileViewer, updateFileViewer } from '../lib/file-viewer.js';
+import { fileViewerPanels, closeFileViewer, updateFileViewer, bringFileViewerToFront, getFileViewerZIndex, fileViewerZOrders } from '../lib/file-viewer.js';
 import { api } from '../lib/api.js';
 import hljs from 'highlight.js/lib/common';
 import { marked } from 'marked';
@@ -101,11 +101,15 @@ function SingleFileViewer({ path, offset }: { path: string; offset: number }) {
     }
   }
 
+  // subscribe to z-order changes
+  const _z = fileViewerZOrders.value;
+
   return (
     <div
       ref={panelRef}
       class="file-viewer-panel"
-      style={{ left: posRef.current.x, top: posRef.current.y }}
+      style={{ left: posRef.current.x, top: posRef.current.y, zIndex: getFileViewerZIndex(path) }}
+      onMouseDown={() => bringFileViewerToFront(path)}
     >
       <div class="fv-header" onMouseDown={onHeaderMouseDown}>
         <span class="fv-title" title={path}>{shortenPath(path)}</span>
