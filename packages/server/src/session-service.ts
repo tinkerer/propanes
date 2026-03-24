@@ -122,10 +122,7 @@ function pollTmuxPaneInfo(): void {
           { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
       } catch {}
       const newState = classifyFromTitle(title, visibleText);
-      if (newState !== proc.inputState) {
-        proc.inputState = newState;
-        sendSequenced(proc, { kind: 'input_state', state: newState });
-      }
+      applyInputState(proc, newState);
     }
   } catch {}
 }
@@ -148,10 +145,43 @@ interface AgentProcess {
   paneCommand: string;
   panePath: string;
   hasStarted: boolean;
+  /** Timer for debouncing transitions away from 'waiting' state */
+  waitingDebounce: ReturnType<typeof setTimeout> | null;
 }
 
 const activeSessions = new Map<string, AgentProcess>();
 const pendingConnections = new Map<string, Set<WebSocket>>();
+
+// Debounce delay before transitioning away from 'waiting' state.
+// Claude Code briefly flashes spinner titles even while at a permission prompt,
+// causing rapid waiting→active→waiting flicker on the UI status dots.
+const WAITING_EXIT_DEBOUNCE_MS = 1500;
+
+function applyInputState(proc: AgentProcess, newState: InputState): void {
+  if (newState === proc.inputState) {
+    // Same state — cancel any pending debounce
+    if (proc.waitingDebounce) { clearTimeout(proc.waitingDebounce); proc.waitingDebounce = null; }
+    return;
+  }
+  // Transitioning away from 'waiting' — debounce to avoid flicker
+  if (proc.inputState === 'waiting' && newState !== 'waiting') {
+    if (!proc.waitingDebounce) {
+      proc.waitingDebounce = setTimeout(() => {
+        proc.waitingDebounce = null;
+        // Re-check: if still not waiting after debounce, apply
+        if (proc.inputState === 'waiting') {
+          proc.inputState = newState;
+          sendSequenced(proc, { kind: 'input_state', state: newState });
+        }
+      }, WAITING_EXIT_DEBOUNCE_MS);
+    }
+    return;
+  }
+  // Transitioning TO waiting (or between active/idle) — apply immediately
+  if (proc.waitingDebounce) { clearTimeout(proc.waitingDebounce); proc.waitingDebounce = null; }
+  proc.inputState = newState;
+  sendSequenced(proc, { kind: 'input_state', state: newState });
+}
 
 function buildClaudeArgs(
   prompt: string,
@@ -351,6 +381,7 @@ function spawnSession(params: {
     paneCommand: '',
     panePath: '',
     hasStarted: false,
+    waitingDebounce: null,
   };
 
   activeSessions.set(sessionId, proc);
@@ -405,16 +436,15 @@ function wireOnData(proc: AgentProcess, ptyProcess: pty.IPty): void {
     if (proc.permissionProfile !== 'plain') {
       const title = extractOscTitle(data);
       if (title !== null) {
-        // Strip ANSI codes from the tail to get readable text for matching
+        // Strip ANSI/terminal escape sequences to get readable text for matching
         const visibleTail = proc.outputBuffer.slice(-4000)
-          .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
-          .replace(/\x1b\][^\x07]*\x07/g, '')
-          .replace(/\x1b\([A-Z]/g, '');
+          .replace(/\x1b\[\??[0-9;]*[a-zA-Z]/g, '')  // CSI sequences (including DECSET ?-prefixed)
+          .replace(/\x1b\][^\x07]*\x07/g, '')         // OSC sequences
+          .replace(/\x1b\([A-Z]/g, '')                 // character set designators
+          .replace(/\x1b[>=][0-9;]*[a-zA-Z]/g, '')    // DEC private sequences (DA2 etc.)
+          .replace(/\x1b[\x20-\x2F]*[\x30-\x7E]/g, ''); // remaining 2-char ESC sequences
         const newState = classifyFromTitle(title, visibleTail);
-        if (newState !== proc.inputState) {
-          proc.inputState = newState;
-          sendSequenced(proc, { kind: 'input_state', state: newState });
-        }
+        applyInputState(proc, newState);
       }
     }
 
@@ -512,7 +542,9 @@ function writeToSession(sessionId: string, data: string): void {
   if (proc && proc.status === 'running') {
     proc.ptyProcess.write(data);
     // Immediately clear waiting/idle on real user input (not xterm.js escape responses)
+    // Bypass debounce — user explicitly typed, so transition is intentional.
     if (proc.inputState !== 'active' && !data.startsWith('\x1b')) {
+      if (proc.waitingDebounce) { clearTimeout(proc.waitingDebounce); proc.waitingDebounce = null; }
       proc.inputState = 'active';
       sendSequenced(proc, { kind: 'input_state', state: 'active' });
     }
@@ -543,6 +575,7 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
       paneCommand: '',
       panePath: '',
       hasStarted: (session.outputBytes || 0) > 100,
+      waitingDebounce: null,
     };
     activeSessions.set(session.id, proc);
 
