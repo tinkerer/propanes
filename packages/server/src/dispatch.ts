@@ -25,7 +25,7 @@ import { feedbackEvents } from './events.js';
 import { extractArtifactPaths, exportSessionFiles } from './jsonl-utils.js';
 import { launchSpriteSession } from './sprite-sessions.js';
 
-export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, tags: string[], screenshots: (typeof schema.feedbackScreenshots.$inferSelect)[]): FeedbackItem {
+export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, tags: string[], screenshots: (typeof schema.feedbackScreenshots.$inferSelect)[], audioFiles: (typeof schema.feedbackAudio.$inferSelect)[] = []): FeedbackItem {
   return {
     ...row,
     type: row.type as FeedbackItem['type'],
@@ -35,6 +35,7 @@ export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, t
     appId: row.appId || null,
     tags,
     screenshots,
+    audioFiles,
   };
 }
 

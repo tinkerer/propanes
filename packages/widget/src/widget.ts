@@ -18,6 +18,7 @@ import { captureScreenshot, stopScreencastStream, type ScreenshotMethod } from '
 import { SessionBridge } from './session.js';
 import { startPicker, type SelectedElementInfo } from './element-picker.js';
 import { OverlayPanelManager, type PanelType } from './overlay-panels.js';
+import { VoiceRecorder, type VoiceRecordingResult } from './voice-recorder.js';
 
 type EventHandler = (data: unknown) => void;
 
@@ -53,6 +54,8 @@ export class PromptWidgetElement {
   private dispatchMode: 'off' | 'once' | 'auto' = 'off';
   private annotatorOpen = false;
   private adminAlwaysShow = false;
+  private voiceRecorder = new VoiceRecorder();
+  private voiceResult: VoiceRecordingResult | null = null;
   private appendTargetId: string | null = null;
   private escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && this.isOpen) {
@@ -854,6 +857,9 @@ export class PromptWidgetElement {
               <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
             </button>
           </div>
+          <button class="pw-mic-btn" id="pw-mic-btn" title="Voice recording">
+            <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+          </button>
           <div class="pw-admin-group">
             <button class="pw-admin-btn" id="pw-admin-btn" title="Admin panels"><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg></button>
             <button class="pw-admin-dropdown-toggle" id="pw-admin-dropdown" title="Admin options"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></button>
@@ -911,6 +917,9 @@ export class PromptWidgetElement {
 
     const contextBtn = panel.querySelector('#pw-context-btn') as HTMLButtonElement | null;
     const contextDropdownBtn = panel.querySelector('#pw-context-dropdown') as HTMLButtonElement | null;
+
+    const micBtn = panel.querySelector('#pw-mic-btn') as HTMLButtonElement;
+    micBtn.addEventListener('click', () => this.toggleVoiceRecording());
 
     captureBtn.addEventListener('click', () => this.captureScreen());
     pickerBtn.addEventListener('click', () => this.startElementPicker());
@@ -1076,6 +1085,76 @@ export class PromptWidgetElement {
     });
   }
 
+  private async toggleVoiceRecording() {
+    const micBtn = this.shadow.querySelector('#pw-mic-btn') as HTMLButtonElement;
+    if (this.voiceRecorder.recording) {
+      micBtn.classList.remove('pw-mic-recording');
+      const result = await this.voiceRecorder.stop();
+      this.voiceResult = result;
+
+      // Populate textarea with transcript
+      const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement;
+      const transcriptText = result.transcript.map(s => s.text).join(' ').trim();
+      if (transcriptText && input) {
+        input.value = (input.value ? input.value + '\n' : '') + transcriptText;
+      }
+
+      // Show voice indicator
+      this.renderVoiceIndicator();
+
+      // Remove live transcript
+      const liveEl = this.shadow.querySelector('.pw-voice-transcript');
+      if (liveEl) liveEl.remove();
+    } else {
+      try {
+        this.voiceRecorder.onTranscript = (seg) => {
+          let liveEl = this.shadow.querySelector('.pw-voice-transcript') as HTMLElement;
+          if (!liveEl) {
+            const input = this.shadow.querySelector('#pw-chat-input') as HTMLElement;
+            if (input) {
+              liveEl = document.createElement('div');
+              liveEl.className = 'pw-voice-transcript';
+              input.parentElement!.insertBefore(liveEl, input.nextSibling);
+            }
+          }
+          if (liveEl) liveEl.textContent = seg.text;
+        };
+        this.voiceRecorder.onInteraction = null;
+        await this.voiceRecorder.start();
+        micBtn.classList.add('pw-mic-recording');
+      } catch (err) {
+        const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement;
+        if (errorEl) {
+          errorEl.textContent = 'Mic access denied';
+          errorEl.classList.remove('pw-hidden');
+        }
+      }
+    }
+  }
+
+  private renderVoiceIndicator() {
+    let indicator = this.shadow.querySelector('.pw-voice-indicator') as HTMLElement;
+    if (indicator) indicator.remove();
+    if (!this.voiceResult) return;
+
+    const duration = Math.round(this.voiceResult.duration / 1000);
+    const interactions = this.voiceResult.interactions.length;
+
+    indicator = document.createElement('div');
+    indicator.className = 'pw-voice-indicator';
+    indicator.innerHTML = `
+      <span>${duration}s recorded, ${interactions} interaction${interactions !== 1 ? 's' : ''}</span>
+      <button class="pw-voice-discard" title="Discard recording">&times;</button>
+    `;
+    indicator.querySelector('.pw-voice-discard')!.addEventListener('click', () => {
+      this.voiceResult = null;
+      indicator.remove();
+    });
+
+    const toolbar = this.shadow.querySelector('.pw-toolbar');
+    if (toolbar) toolbar.parentElement!.insertBefore(indicator, toolbar);
+  }
+
   private startElementPicker() {
     const panel = this.shadow.querySelector('.pw-panel') as HTMLElement;
     if (panel && this.pickerExcludeWidget) panel.style.opacity = '0.3';
@@ -1189,7 +1268,7 @@ export class PromptWidgetElement {
     const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement;
     const description = input.value.trim();
 
-    if (!description && this.pendingScreenshots.length === 0) {
+    if (!description && this.pendingScreenshots.length === 0 && !this.voiceResult) {
       return;
     }
 
@@ -1285,15 +1364,35 @@ export class PromptWidgetElement {
         feedbackPayload.launcherId = dispatchTarget;
       }
     }
+    const dataObj: Record<string, unknown> = {};
     if (this.selectedElements.length > 0) {
-      feedbackPayload.data = { selectedElements: this.selectedElements };
+      dataObj.selectedElements = this.selectedElements;
+    }
+    if (this.voiceResult) {
+      dataObj.voiceRecording = {
+        duration: this.voiceResult.duration,
+        transcript: this.voiceResult.transcript,
+        interactions: this.voiceResult.interactions,
+        consoleLogs: this.voiceResult.consoleLogs,
+      };
+    }
+    if (Object.keys(dataObj).length > 0) {
+      feedbackPayload.data = dataObj;
     }
 
-    if (this.pendingScreenshots.length > 0) {
+    const useFormData = this.pendingScreenshots.length > 0 || !!this.voiceResult;
+
+    if (useFormData) {
       const formData = new FormData();
       formData.append('feedback', JSON.stringify(feedbackPayload));
       for (const blob of this.pendingScreenshots) {
         formData.append('screenshots', blob, `screenshot-${Date.now()}.png`);
+      }
+      if (this.voiceResult) {
+        formData.append('audio', this.voiceResult.audioBlob, `voice-${Date.now()}.webm`);
+        this.voiceResult = null;
+        const indicator = this.shadow.querySelector('.pw-voice-indicator');
+        if (indicator) indicator.remove();
       }
 
       const res = await fetch(this.config.endpoint, {

@@ -237,7 +237,12 @@ adminRoutes.get('/feedback', async (c) => {
       .from(schema.feedbackScreenshots)
       .where(eq(schema.feedbackScreenshots.feedbackId, item.id))
       .all();
-    const fb = hydrateFeedback(item, tags, screenshots);
+    const audioFiles = db
+      .select()
+      .from(schema.feedbackAudio)
+      .where(eq(schema.feedbackAudio.feedbackId, item.id))
+      .all();
+    const fb = hydrateFeedback(item, tags, screenshots, audioFiles);
     const si = sessionMap.get(item.id);
     return si ? { ...fb, latestSessionId: si.latestSessionId, latestSessionStatus: si.latestSessionStatus, sessionCount: si.sessionCount } : fb;
   });
@@ -279,8 +284,13 @@ adminRoutes.get('/feedback/:id', async (c) => {
     .from(schema.feedbackScreenshots)
     .where(eq(schema.feedbackScreenshots.feedbackId, id))
     .all();
+  const audioFiles = db
+    .select()
+    .from(schema.feedbackAudio)
+    .where(eq(schema.feedbackAudio.feedbackId, id))
+    .all();
 
-  return c.json(hydrateFeedback(item, tags, screenshots));
+  return c.json(hydrateFeedback(item, tags, screenshots, audioFiles));
 });
 
 adminRoutes.get('/feedback/:id/context', async (c) => {

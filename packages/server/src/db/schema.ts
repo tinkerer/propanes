@@ -53,6 +53,18 @@ export const feedbackScreenshots = sqliteTable('feedback_screenshots', {
   createdAt: text('created_at').notNull(),
 });
 
+export const feedbackAudio = sqliteTable('feedback_audio', {
+  id: text('id').primaryKey(),
+  feedbackId: text('feedback_id')
+    .notNull()
+    .references(() => feedbackItems.id, { onDelete: 'cascade' }),
+  filename: text('filename').notNull(),
+  mimeType: text('mime_type').notNull(),
+  size: integer('size').notNull(),
+  duration: integer('duration').notNull().default(0),
+  createdAt: text('created_at').notNull(),
+});
+
 export const feedbackTags = sqliteTable('feedback_tags', {
   feedbackId: text('feedback_id')
     .notNull()

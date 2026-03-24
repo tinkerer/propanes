@@ -5,6 +5,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { feedbackRoutes } from './routes/feedback.js';
 import { adminRoutes } from './routes/admin.js';
 import { imageRoutes } from './routes/images.js';
+import { audioRoutes } from './routes/audio.js';
 import { authRoutes } from './routes/auth.js';
 import { agentRoutes } from './routes/agent.js';
 import { applicationRoutes } from './routes/applications.js';
@@ -45,6 +46,7 @@ app.get('/api/v1/bookmarklet', (c) => {
 app.route('/api/v1/feedback', feedbackRoutes);
 app.route('/api/v1/admin', adminRoutes);
 app.route('/api/v1/images', imageRoutes);
+app.route('/api/v1/audio', audioRoutes);
 app.route('/api/v1/auth', authRoutes);
 app.route('/api/v1/agent', agentRoutes);
 app.route('/api/v1/admin/applications', applicationRoutes);

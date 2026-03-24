@@ -41,6 +41,7 @@ feedbackRoutes.post('/', async (c) => {
 
   let feedbackData: Record<string, unknown>;
   const imageFiles: { data: ArrayBuffer; name: string; type: string }[] = [];
+  const audioFiles: { data: ArrayBuffer; name: string; type: string }[] = [];
 
   if (contentType.includes('multipart/form-data')) {
     const formData = await c.req.formData();
@@ -57,6 +58,17 @@ feedbackRoutes.post('/', async (c) => {
           data: await file.arrayBuffer(),
           name: file.name,
           type: file.type || 'image/png',
+        });
+      }
+    }
+
+    const audios = formData.getAll('audio');
+    for (const file of audios) {
+      if (file instanceof File) {
+        audioFiles.push({
+          data: await file.arrayBuffer(),
+          name: file.name,
+          type: file.type || 'audio/webm',
         });
       }
     }
@@ -104,7 +116,7 @@ feedbackRoutes.post('/', async (c) => {
     );
   }
 
-  if (imageFiles.length > 0) {
+  if (imageFiles.length > 0 || audioFiles.length > 0) {
     await mkdir(UPLOAD_DIR, { recursive: true });
     for (const file of imageFiles) {
       const screenshotId = ulid();
@@ -117,6 +129,22 @@ feedbackRoutes.post('/', async (c) => {
         filename,
         mimeType: file.type,
         size: file.data.byteLength,
+        createdAt: now,
+      });
+    }
+    for (const file of audioFiles) {
+      const audioId = ulid();
+      const ext = file.type.includes('webm') ? 'webm' : file.type.split('/')[1] || 'webm';
+      const filename = `${audioId}.${ext}`;
+      await writeFile(join(UPLOAD_DIR, filename), Buffer.from(file.data));
+      const duration = (input.data as any)?.voiceRecording?.duration || 0;
+      await db.insert(schema.feedbackAudio).values({
+        id: audioId,
+        feedbackId: id,
+        filename,
+        mimeType: file.type,
+        size: file.data.byteLength,
+        duration,
         createdAt: now,
       });
     }

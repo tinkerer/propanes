@@ -6,7 +6,9 @@ import { openSession, resumeSession, feedbackTitleCache } from '../lib/sessions.
 import { copyText, copyWithTooltip } from '../lib/clipboard.js';
 import { CropEditor } from '../components/CropEditor.js';
 import { DispatchTargetButton } from '../components/DispatchPicker.js';
+import { VoicePlayback } from '../components/VoicePlayback.js';
 import { cachedTargets, parseTargetKey } from '../components/DispatchTargetSelect.js';
+import { formatDate } from '../lib/date-utils.js';
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -201,10 +203,6 @@ async function doDispatch() {
   } finally {
     dispatchLoading.value = false;
   }
-}
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleString();
 }
 
 function formatJson(data: any) {
@@ -641,6 +639,28 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
                 </section>
               );
             })()}
+
+            {fb.data?.voiceRecording && (fb.audioFiles?.length > 0 ? (
+              <section class="detail-section">
+                <h4>Voice Recording</h4>
+                <VoicePlayback
+                  audioUrl={`/api/v1/audio/${fb.audioFiles[0].id}`}
+                  duration={fb.data.voiceRecording.duration || 0}
+                  transcript={fb.data.voiceRecording.transcript || []}
+                  interactions={fb.data.voiceRecording.interactions || []}
+                  consoleLogs={fb.data.voiceRecording.consoleLogs || []}
+                />
+              </section>
+            ) : (
+              <section class="detail-section">
+                <h4>Voice Recording (transcript only)</h4>
+                <div style="font-size:13px;color:var(--pw-text)">
+                  {(fb.data.voiceRecording.transcript || []).map((seg: any, i: number) => (
+                    <span key={i} style="margin-right:4px">{seg.text}</span>
+                  ))}
+                </div>
+              </section>
+            ))}
 
             <section class="detail-section">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">

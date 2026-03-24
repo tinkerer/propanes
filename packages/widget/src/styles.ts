@@ -1118,4 +1118,77 @@ export const WIDGET_CSS = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.pw-mic-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: none;
+  background: #334155;
+  color: #94a3b8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.pw-mic-btn:hover {
+  background: #475569;
+  color: #e2e8f0;
+}
+
+.pw-mic-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.pw-mic-recording {
+  background: #dc2626 !important;
+  color: #fff !important;
+  animation: pw-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pw-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.pw-voice-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: #1e3a5f;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #93c5fd;
+  margin: 0 8px 4px;
+}
+
+.pw-voice-discard {
+  background: none;
+  border: none;
+  color: #93c5fd;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.pw-voice-discard:hover {
+  color: #f87171;
+}
+
+.pw-voice-transcript {
+  padding: 2px 10px 4px;
+  font-size: 11px;
+  color: #94a3b8;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 `;

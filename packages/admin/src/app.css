@@ -72,7 +72,7 @@
 
   /* Terminal panel */
   --pw-terminal-bg: #1e293b;
-  --pw-terminal-border: #334155;
+  --pw-terminal-border: #475569;
   --pw-terminal-text-dim: #64748b;
 
   /* Badges - self-contained pairs, don't need theme switching */
@@ -129,7 +129,7 @@ html[data-theme="dark"] {
   --pw-code-block-text: #e2e8f0;
 
   --pw-terminal-bg: #0f172a;
-  --pw-terminal-border: #1e293b;
+  --pw-terminal-border: #334155;
   --pw-terminal-text-dim: #64748b;
 }
 
@@ -185,7 +185,7 @@ html[data-theme="dark"] {
     --pw-code-block-text: #e2e8f0;
 
     --pw-terminal-bg: #0f172a;
-    --pw-terminal-border: #1e293b;
+    --pw-terminal-border: #334155;
     --pw-terminal-text-dim: #64748b;
   }
 }
@@ -1133,11 +1133,13 @@ body {
   background: var(--pw-bg-surface);
   border-radius: 8px;
   box-shadow: var(--pw-shadow-sm);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 table {
   width: 100%;
+  min-width: 100%;
   border-collapse: collapse;
 }
 
@@ -1151,6 +1153,13 @@ th {
   color: var(--pw-text-muted);
   background: var(--pw-bg-raised);
   border-bottom: 1px solid var(--pw-border);
+  position: relative;
+}
+
+/* Resizable columns (not checkbox column) */
+th:not(:first-child) {
+  resize: horizontal;
+  overflow: hidden;
 }
 
 td {
@@ -2107,19 +2116,9 @@ input:focus, select:focus, textarea:focus {
   opacity: 1;
 }
 
-/* Hover-reveal checkboxes in list table */
+/* Checkboxes always visible in list table */
 .table-wrap td .checkbox,
 .table-wrap th .checkbox {
-  opacity: 0;
-  transition: opacity 0.1s;
-}
-
-.table-wrap tr:hover td .checkbox,
-.table-wrap th:hover .checkbox,
-.table-wrap td .checkbox:checked,
-.table-wrap th .checkbox:checked,
-.table-wrap .has-selection td .checkbox,
-.table-wrap .has-selection th .checkbox {
   opacity: 1;
 }
 
@@ -7928,7 +7927,7 @@ body.pw-isolate {
 
 .pane-split-divider {
   flex-shrink: 0;
-  background: var(--pw-terminal-border, #333);
+  background: var(--pw-terminal-border, #555);
   transition: background 0.15s ease;
   z-index: 10;
   position: relative;
@@ -8582,4 +8581,118 @@ body.pw-isolate {
 @keyframes fc-toast-fade {
   0%, 60% { opacity: 1; }
   100% { opacity: 0; }
+}
+
+/* ==================== Voice Playback ==================== */
+.voice-playback {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.voice-section {
+  padding: 8px 0;
+  border-top: 1px solid var(--pw-border);
+}
+
+.voice-segment {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--pw-text);
+  background: var(--pw-bg-sunken);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.voice-segment:hover {
+  background: var(--pw-bg-hover);
+}
+
+.voice-segment.active {
+  background: var(--pw-accent-bg, #eff6ff);
+  outline: 1px solid var(--pw-accent, #3b82f6);
+}
+
+.voice-segment-time {
+  font-size: 10px;
+  color: var(--pw-text-faint);
+  margin-right: 4px;
+  font-family: monospace;
+}
+
+.voice-event {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.voice-event:hover {
+  background: var(--pw-bg-hover);
+}
+
+.voice-event.active {
+  background: var(--pw-accent-bg, #eff6ff);
+}
+
+.voice-event-time {
+  font-size: 10px;
+  color: var(--pw-text-faint);
+  font-family: monospace;
+  flex-shrink: 0;
+  width: 36px;
+}
+
+.voice-event-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.voice-event-target {
+  color: var(--pw-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-console-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 6px;
+  font-size: 12px;
+  font-family: monospace;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.voice-console-entry:hover {
+  background: var(--pw-bg-hover);
+}
+
+.voice-console-entry.active {
+  background: var(--pw-accent-bg, #eff6ff);
+}
+
+.voice-console-level {
+  font-size: 10px;
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.voice-console-msg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

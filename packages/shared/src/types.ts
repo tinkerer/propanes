@@ -73,6 +73,7 @@ export interface FeedbackItem {
   appId: string | null;
   tags: string[];
   screenshots: FeedbackScreenshot[];
+  audioFiles?: FeedbackAudio[];
   dispatchedTo: string | null;
   dispatchedAt: string | null;
   dispatchStatus: string | null;
@@ -87,6 +88,16 @@ export interface FeedbackScreenshot {
   filename: string;
   mimeType: string;
   size: number;
+  createdAt: string;
+}
+
+export interface FeedbackAudio {
+  id: string;
+  feedbackId: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  duration: number;
   createdAt: string;
 }
 
