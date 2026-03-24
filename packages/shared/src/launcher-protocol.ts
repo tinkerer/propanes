@@ -150,6 +150,15 @@ export interface CapturePaneResult {
   error?: string;
 }
 
+export interface ExecInHarnessResult {
+  type: 'exec_in_harness_result';
+  sessionId: string;
+  ok: boolean;
+  output?: string;
+  exitCode?: number;
+  error?: string;
+}
+
 export type LauncherToServerMessage =
   | LauncherRegister
   | LauncherHeartbeat
@@ -166,7 +175,8 @@ export type LauncherToServerMessage =
   | CheckContainerClaudeResult
   | LauncherHealthCheckResult
   | SendKeysResult
-  | CapturePaneResult;
+  | CapturePaneResult
+  | ExecInHarnessResult;
 
 // --- Server → Launcher messages ---
 
@@ -332,6 +342,16 @@ export interface CapturePane {
   tmuxTarget?: string;
 }
 
+export interface ExecInHarness {
+  type: 'exec_in_harness';
+  sessionId: string;
+  harnessConfigId: string;
+  command: string;
+  composeDir?: string;
+  serviceName?: string;
+  timeout?: number;
+}
+
 export type ServerToLauncherMessage =
   | LauncherRegistered
   | LaunchSession
@@ -351,7 +371,8 @@ export type ServerToLauncherMessage =
   | CheckContainerClaude
   | LauncherHealthCheck
   | SendKeys
-  | CapturePane;
+  | CapturePane
+  | ExecInHarness;
 
 // --- Combined ---
 

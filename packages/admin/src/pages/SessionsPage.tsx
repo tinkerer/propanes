@@ -14,6 +14,7 @@ const searchQuery = signal('');
 const feedbackMap = signal<Record<string, string>>({});
 const agentMap = signal<Record<string, string>>({});
 const agentAppMap = signal<Record<string, string | null>>({});
+const metaWiggumAgentIds = signal<Set<string>>(new Set());
 const mapsLoaded = signal(false);
 
 async function loadMaps() {
@@ -30,12 +31,17 @@ async function loadMaps() {
     feedbackMap.value = fm;
     const am: Record<string, string> = {};
     const aam: Record<string, string | null> = {};
+    const mwIds = new Set<string>();
     for (const a of agents) {
       am[a.id] = a.name || a.id.slice(-8);
       aam[a.id] = a.appId || null;
+      if (a.promptTemplate && a.promptTemplate.includes('meta-wiggum orchestrator')) {
+        mwIds.add(a.id);
+      }
     }
     agentMap.value = am;
     agentAppMap.value = aam;
+    metaWiggumAgentIds.value = mwIds;
     mapsLoaded.value = true;
   } catch {
     // ignore
@@ -297,10 +303,26 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
         {sorted.map((s) => {
           const agentLabel = s.permissionProfile === 'plain' ? 'Terminal' : (agentMap.value[s.agentEndpointId] || s.agentEndpointId?.slice(-8) || null);
           const feedbackTitle = feedbackMap.value[s.feedbackId];
+          const isMetaWiggum = s.agentEndpointId && metaWiggumAgentIds.value.has(s.agentEndpointId);
           return (
             <div key={s.id} class={`session-card ${s.status}`} onClick={() => openSession(s.id)}>
               <div class="session-card-main">
                 <span class={`session-status-dot ${s.status}${s.status === 'running' && sessionInputStates.value.has(s.id) ? ` ${sessionInputStates.value.get(s.id)}` : ''}`} />
+                {isMetaWiggum && (
+                  <span style={{
+                    fontSize: 9,
+                    fontWeight: 700,
+                    padding: '1px 5px',
+                    borderRadius: 3,
+                    background: '#7c3aed',
+                    color: '#fff',
+                    marginRight: 4,
+                    letterSpacing: '0.5px',
+                    textTransform: 'uppercase',
+                  }}>
+                    orchestrator
+                  </span>
+                )}
                 <span class="session-card-label">
                   {feedbackTitle || agentLabel || `Session ${s.id.slice(-8)}`}
                 </span>

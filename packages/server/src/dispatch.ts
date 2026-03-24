@@ -99,6 +99,7 @@ export function renderPromptTemplate(
     'feedback.networkErrors': networkErrors,
     'feedback.data': customData,
     'feedback.screenshot': screenshotText,
+    'app.id': String(app?.id || ''),
     'app.name': app?.name || '',
     'app.projectDir': app?.projectDir || '',
     'app.description': app?.description || '',

@@ -316,6 +316,38 @@ export interface HarnessConfig {
   updatedAt: string;
 }
 
+export type WiggumRunStatus = 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'stopped';
+
+export interface WiggumIteration {
+  iteration: number;
+  sessionId: string;
+  screenshotId: string | null;
+  startedAt: string;
+  completedAt: string | null;
+  exitCode: number | null;
+}
+
+export interface WiggumRun {
+  id: string;
+  agentEndpointId: string | null;
+  harnessConfigId: string | null;
+  feedbackId: string | null;
+  appId: string | null;
+  prompt: string;
+  deployCommand: string | null;
+  maxIterations: number;
+  widgetSessionId: string | null;
+  screenshotDelayMs: number;
+  status: WiggumRunStatus;
+  currentIteration: number;
+  iterations: WiggumIteration[];
+  errorMessage: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  updatedAt: string;
+}
+
 export interface LoginRequest {
   username: string;
   password: string;

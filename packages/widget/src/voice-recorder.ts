@@ -1,3 +1,5 @@
+import { captureScreenshot, stopScreencastStream, cropBlob } from './screenshot.js';
+
 export interface TranscriptSegment {
   text: string;
   timestamp: number;
@@ -5,7 +7,8 @@ export interface TranscriptSegment {
 }
 
 export interface InteractionEvent {
-  type: 'click' | 'scroll' | 'input' | 'focus' | 'navigation';
+  id: string;
+  type: 'click' | 'scroll' | 'input' | 'focus' | 'navigation' | 'hover';
   timestamp: number;
   target: {
     tagName: string;
@@ -23,12 +26,27 @@ export interface ConsoleEntry {
   args: string[];
 }
 
+export interface ScreenshotCapture {
+  id: string;
+  timestamp: number;
+  blob: Blob;
+  boundingBox: { x: number; y: number; width: number; height: number };
+}
+
+export type TimelineItem =
+  | { kind: 'speech'; segment: TranscriptSegment }
+  | { kind: 'interaction'; event: InteractionEvent }
+  | { kind: 'console'; entry: ConsoleEntry }
+  | { kind: 'hover'; event: InteractionEvent }
+  | { kind: 'screenshot'; capture: ScreenshotCapture };
+
 export interface VoiceRecordingResult {
   audioBlob: Blob;
   duration: number;
   transcript: TranscriptSegment[];
   interactions: InteractionEvent[];
   consoleLogs: ConsoleEntry[];
+  screenshots: ScreenshotCapture[];
 }
 
 type SpeechRecognitionType = typeof window extends { SpeechRecognition: infer T } ? T : any;
@@ -57,6 +75,7 @@ function getTargetInfo(el: Element): InteractionEvent['target'] {
 }
 
 const MAX_CONSOLE_ENTRIES = 200;
+const MAX_SCREENSHOTS = 10;
 
 export class VoiceRecorder {
   private mediaRecorder: MediaRecorder | null = null;
@@ -67,17 +86,23 @@ export class VoiceRecorder {
   private _transcript: TranscriptSegment[] = [];
   private _interactions: InteractionEvent[] = [];
   private _consoleLogs: ConsoleEntry[] = [];
+  private _screenshots: ScreenshotCapture[] = [];
   private cleanupFns: (() => void)[] = [];
   private originalConsole: Record<string, Function> = {};
+  private interactionCounter = 0;
+  private screenshotCounter = 0;
 
   onTranscript: ((segment: TranscriptSegment) => void) | null = null;
   onInteraction: ((event: InteractionEvent) => void) | null = null;
+  onConsole: ((entry: ConsoleEntry) => void) | null = null;
+  onHover: ((event: InteractionEvent) => void) | null = null;
+  onScreenshotCapture: ((capture: ScreenshotCapture) => void) | null = null;
 
   get recording(): boolean {
     return this._recording;
   }
 
-  async start(): Promise<void> {
+  async start(opts?: { screenCaptures?: boolean }): Promise<void> {
     if (this._recording) return;
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -87,6 +112,9 @@ export class VoiceRecorder {
     this._transcript = [];
     this._interactions = [];
     this._consoleLogs = [];
+    this._screenshots = [];
+    this.interactionCounter = 0;
+    this.screenshotCounter = 0;
 
     // MediaRecorder
     const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
@@ -142,6 +170,11 @@ export class VoiceRecorder {
     // Console capture
     this.installConsoleCapture();
 
+    // Gesture detection for area screenshots
+    if (opts?.screenCaptures) {
+      this.installGestureDetection();
+    }
+
     // Cleanup stream on stop
     this.cleanupFns.push(() => {
       stream.getTracks().forEach(t => t.stop());
@@ -181,18 +214,34 @@ export class VoiceRecorder {
       transcript: this._transcript,
       interactions: this._interactions,
       consoleLogs: this._consoleLogs,
+      screenshots: this._screenshots,
     };
+  }
+
+  removeInteraction(id: string) {
+    const idx = this._interactions.findIndex(e => e.id === id);
+    if (idx >= 0) this._interactions.splice(idx, 1);
+  }
+
+  removeScreenshot(id: string) {
+    const idx = this._screenshots.findIndex(s => s.id === id);
+    if (idx >= 0) this._screenshots.splice(idx, 1);
   }
 
   private installDomListeners() {
     const addInteraction = (type: InteractionEvent['type'], el: Element, details?: Record<string, unknown>) => {
       if (el.closest('prompt-widget-host')) return;
       const event: InteractionEvent = {
+        id: `int-${this.interactionCounter++}`,
         type,
         timestamp: Date.now() - this.t0,
         target: getTargetInfo(el),
         details,
       };
+      if (type === 'hover') {
+        this.onHover?.(event);
+        return;
+      }
       this._interactions.push(event);
       this.onInteraction?.(event);
     };
@@ -228,11 +277,25 @@ export class VoiceRecorder {
       addInteraction('navigation', document.body, { url: location.href });
     };
 
+    // Throttled hover
+    let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+    const onMousemove = (e: MouseEvent) => {
+      if (hoverTimer) return;
+      hoverTimer = setTimeout(() => {
+        hoverTimer = null;
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        if (el && !el.closest('prompt-widget-host')) {
+          addInteraction('hover', el);
+        }
+      }, 200);
+    };
+
     document.addEventListener('click', onClick, true);
     document.addEventListener('scroll', onScroll, true);
     document.addEventListener('input', onInput, true);
     document.addEventListener('focusin', onFocusin, true);
     window.addEventListener('popstate', onPopstate);
+    document.addEventListener('mousemove', onMousemove, { passive: true });
 
     const origPushState = history.pushState;
     history.pushState = function (...args) {
@@ -246,7 +309,9 @@ export class VoiceRecorder {
       document.removeEventListener('input', onInput, true);
       document.removeEventListener('focusin', onFocusin, true);
       window.removeEventListener('popstate', onPopstate);
+      document.removeEventListener('mousemove', onMousemove);
       history.pushState = origPushState;
+      if (hoverTimer) clearTimeout(hoverTimer);
     });
   }
 
@@ -257,14 +322,16 @@ export class VoiceRecorder {
       console[level] = (...args: any[]) => {
         this.originalConsole[level].apply(console, args);
         if (this._consoleLogs.length < MAX_CONSOLE_ENTRIES) {
-          this._consoleLogs.push({
+          const entry: ConsoleEntry = {
             level,
             timestamp: Date.now() - this.t0,
             args: args.map(a => {
               try { return typeof a === 'string' ? a : JSON.stringify(a); }
               catch { return String(a); }
             }),
-          });
+          };
+          this._consoleLogs.push(entry);
+          this.onConsole?.(entry);
         }
       };
     }
@@ -276,6 +343,153 @@ export class VoiceRecorder {
         }
       }
       this.originalConsole = {};
+    });
+  }
+
+  private installGestureDetection() {
+    let pending = false;
+    let tracking = false;
+    let startX = 0;
+    let startY = 0;
+    let points: { x: number; y: number }[] = [];
+    let canvas: HTMLCanvasElement | null = null;
+    let ctx: CanvasRenderingContext2D | null = null;
+    let gestureCompleted = false;
+    const ACTIVATE_DIST = 30;
+
+    const onMousedown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      if ((e.target as Element)?.closest('prompt-widget-host')) return;
+      pending = true;
+      tracking = false;
+      gestureCompleted = false;
+      startX = e.clientX;
+      startY = e.clientY;
+      points = [{ x: e.clientX, y: e.clientY }];
+    };
+
+    const activateCanvas = () => {
+      canvas = document.createElement('canvas');
+      canvas.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483646;';
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      document.body.appendChild(canvas);
+      ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.strokeStyle = '#6366f1';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) {
+          ctx.lineTo(points[i].x, points[i].y);
+        }
+        ctx.stroke();
+      }
+    };
+
+    const onMousemove = (e: MouseEvent) => {
+      if (!pending && !tracking) return;
+      points.push({ x: e.clientX, y: e.clientY });
+
+      if (pending && !tracking) {
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        if (Math.sqrt(dx * dx + dy * dy) >= ACTIVATE_DIST) {
+          pending = false;
+          tracking = true;
+          activateCanvas();
+        }
+        return;
+      }
+
+      if (tracking && ctx) {
+        ctx.lineTo(e.clientX, e.clientY);
+        ctx.stroke();
+      }
+    };
+
+    const onMouseup = async (e: MouseEvent) => {
+      if (!tracking && !pending) return;
+      const wasTracking = tracking;
+      pending = false;
+      tracking = false;
+      if (canvas) {
+        canvas.remove();
+        canvas = null;
+      }
+      ctx = null;
+
+      if (!wasTracking || points.length < 5) return;
+
+      const start = points[0];
+      const end = points[points.length - 1];
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const closeDist = Math.sqrt(dx * dx + dy * dy);
+
+      let totalDist = 0;
+      for (let i = 1; i < points.length; i++) {
+        const px = points[i].x - points[i - 1].x;
+        const py = points[i].y - points[i - 1].y;
+        totalDist += Math.sqrt(px * px + py * py);
+      }
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of points) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+      const bboxW = maxX - minX;
+      const bboxH = maxY - minY;
+
+      if (closeDist < 80 && totalDist > 300 && bboxW > 50 && bboxH > 50) {
+        gestureCompleted = true;
+
+        if (this._screenshots.length >= MAX_SCREENSHOTS) return;
+
+        try {
+          const fullBlob = await captureScreenshot({ excludeWidget: true, method: 'display-media', keepStream: true });
+          if (!fullBlob) return;
+
+          const rect = { x: Math.round(minX), y: Math.round(minY), width: Math.round(bboxW), height: Math.round(bboxH) };
+          const cropped = await cropBlob(fullBlob, rect);
+          if (!cropped) return;
+
+          const capture: ScreenshotCapture = {
+            id: `ss-${this.screenshotCounter++}`,
+            timestamp: Date.now() - this.t0,
+            blob: cropped,
+            boundingBox: rect,
+          };
+          this._screenshots.push(capture);
+          this.onScreenshotCapture?.(capture);
+        } catch {}
+      }
+    };
+
+    const onClickCapture = (e: MouseEvent) => {
+      if (gestureCompleted) {
+        e.stopPropagation();
+        e.preventDefault();
+        gestureCompleted = false;
+      }
+    };
+
+    document.addEventListener('mousedown', onMousedown, true);
+    document.addEventListener('mousemove', onMousemove, true);
+    document.addEventListener('mouseup', onMouseup, true);
+    document.addEventListener('click', onClickCapture, true);
+
+    this.cleanupFns.push(() => {
+      document.removeEventListener('mousedown', onMousedown, true);
+      document.removeEventListener('mousemove', onMousemove, true);
+      document.removeEventListener('mouseup', onMouseup, true);
+      document.removeEventListener('click', onClickCapture, true);
+      if (canvas) canvas.remove();
+      stopScreencastStream();
     });
   }
 }

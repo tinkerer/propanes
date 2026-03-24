@@ -636,4 +636,32 @@ export const api = {
       body: fd,
     });
   },
+
+  // Wiggum runs
+  getWiggumRuns: () =>
+    request<any[]>('/admin/wiggum'),
+
+  createWiggumRun: (data: Record<string, unknown>) =>
+    request<any>('/admin/wiggum', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  getWiggumRun: (id: string) =>
+    request<any>(`/admin/wiggum/${id}`),
+
+  pauseWiggumRun: (id: string) =>
+    request<any>(`/admin/wiggum/${id}/pause`, { method: 'POST' }),
+
+  resumeWiggumRun: (id: string) =>
+    request<any>(`/admin/wiggum/${id}/resume`, { method: 'POST' }),
+
+  stopWiggumRun: (id: string) =>
+    request<any>(`/admin/wiggum/${id}/stop`, { method: 'POST' }),
+
+  deleteWiggumRun: (id: string) =>
+    request<{ ok: boolean }>(`/admin/wiggum/${id}`, { method: 'DELETE' }),
+
+  getWiggumRunsByParent: (sessionId: string) =>
+    request<any[]>(`/admin/wiggum?parentSessionId=${encodeURIComponent(sessionId)}`),
 };

@@ -30,7 +30,7 @@ import {
 
 // --- Companion Types ---
 
-export type CompanionType = 'jsonl' | 'feedback' | 'iframe' | 'terminal' | 'isolate' | 'url' | 'file';
+export type CompanionType = 'jsonl' | 'feedback' | 'iframe' | 'terminal' | 'isolate' | 'url' | 'file' | 'wiggum-runs';
 
 // --- Terminal Companion Map ---
 
@@ -93,7 +93,7 @@ export function extractCompanionType(tabId: string): CompanionType | null {
   const idx = tabId.indexOf(':');
   if (idx < 0) return null;
   const prefix = tabId.slice(0, idx);
-  if (prefix === 'jsonl' || prefix === 'feedback' || prefix === 'iframe' || prefix === 'terminal' || prefix === 'isolate' || prefix === 'url' || prefix === 'file') return prefix;
+  if (prefix === 'jsonl' || prefix === 'feedback' || prefix === 'iframe' || prefix === 'terminal' || prefix === 'isolate' || prefix === 'url' || prefix === 'file' || prefix === 'wiggum-runs') return prefix as CompanionType;
   return null;
 }
 
@@ -220,6 +220,42 @@ export function openFileCompanion(filePath: string) {
   if (!openTabs.value.includes(tabId)) {
     openTabs.value = [...openTabs.value, tabId];
   }
+  batchTreeOps(() => {
+    const leafId = ensureSessionsLeaf();
+    addTabToLeaf(leafId, tabId, true);
+    showSessionsLeaf();
+  });
+}
+
+// --- Settings Panel Tabs ---
+
+const settingsLabelMap: Record<string, string> = {
+  agents: 'Agents',
+  infrastructure: 'Infrastructure',
+  'user-guide': 'User Guide',
+  'getting-started': 'Getting Started',
+  preferences: 'Preferences',
+};
+
+export function getSettingsLabel(key: string): string {
+  return settingsLabelMap[key] || key;
+}
+
+export function openSettingsPanel(settingsKey: string) {
+  const tabId = `settings:${settingsKey}`;
+
+  const existingLeaf = findLeafWithTab(tabId);
+  if (existingLeaf) {
+    setActiveTab(existingLeaf.id, tabId);
+    setFocusedLeaf(existingLeaf.id);
+    return;
+  }
+
+  if (!openTabs.value.includes(tabId)) {
+    openTabs.value = [...openTabs.value, tabId];
+  }
+  persistTabs();
+
   batchTreeOps(() => {
     const leafId = ensureSessionsLeaf();
     addTabToLeaf(leafId, tabId, true);

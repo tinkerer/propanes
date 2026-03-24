@@ -353,3 +353,17 @@ export function stopScreencastStream() {
 export function hasActiveDisplayMediaStream(): boolean {
   return isStreamAlive();
 }
+
+export async function cropBlob(blob: Blob, rect: { x: number; y: number; width: number; height: number }): Promise<Blob | null> {
+  try {
+    const bitmap = await createImageBitmap(blob, rect.x, rect.y, rect.width, rect.height);
+    const canvas = document.createElement('canvas');
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+    canvas.getContext('2d')!.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    return new Promise<Blob | null>(r => canvas.toBlob(b => r(b), 'image/png'));
+  } catch {
+    return null;
+  }
+}

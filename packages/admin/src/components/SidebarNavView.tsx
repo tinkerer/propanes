@@ -2,7 +2,7 @@ import { useEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { currentRoute, clearToken, navigate, selectedAppId, applications, unlinkedCount, appFeedbackCounts, addAppModalOpen } from '../lib/state.js';
 import { api } from '../lib/api.js';
-import { sidebarCollapsed, sidebarAnimating, toggleSidebar, sidebarWidth } from '../lib/sessions.js';
+import { sidebarCollapsed, sidebarAnimating, toggleSidebar, sidebarWidth, openSettingsPanel } from '../lib/sessions.js';
 import { Tooltip } from './Tooltip.js';
 
 interface LiveConnection {
@@ -46,6 +46,7 @@ async function pollLiveConnections() {
 const settingsItems = [
   { path: '/settings/agents', label: 'Agents', icon: '\u{1F916}' },
   { path: '/settings/infrastructure', label: 'Infrastructure', icon: '\u{1F3D7}' },
+  { path: '/settings/wiggum', label: 'Wiggum', icon: '\u{1F575}' },
   { path: '/settings/user-guide', label: 'User Guide', icon: '\u{1F4D6}' },
   { path: '/settings/getting-started', label: 'Getting Started', icon: '\u{1F680}' },
   { path: '/settings/preferences', label: 'Preferences', icon: '\u2699' },
@@ -200,18 +201,21 @@ export function SidebarNavView() {
         {!collapsed && (
           <div class="sidebar-section-header">Settings</div>
         )}
-        {settingsItems.map((item) => (
-          <a
-            key={item.path}
-            href={`#${item.path}`}
-            class={`sidebar-app-item ${route === item.path ? 'active' : ''}`}
-            onClick={(e) => { e.preventDefault(); navigate(item.path); }}
-            title={collapsed ? item.label : undefined}
-          >
-            <span class="nav-icon">{item.icon}</span>
-            <span class="nav-label">{item.label}</span>
-          </a>
-        ))}
+        {settingsItems.map((item) => {
+          const key = item.path.replace('/settings/', '');
+          return (
+            <a
+              key={item.path}
+              href={`#${item.path}`}
+              class={`sidebar-app-item ${route === item.path ? 'active' : ''}`}
+              onClick={(e) => { e.preventDefault(); openSettingsPanel(key); }}
+              title={collapsed ? item.label : undefined}
+            >
+              <span class="nav-icon">{item.icon}</span>
+              <span class="nav-label">{item.label}</span>
+            </a>
+          );
+        })}
         <a
           href="#"
           class="sidebar-app-item"

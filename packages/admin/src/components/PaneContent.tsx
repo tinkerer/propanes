@@ -5,6 +5,7 @@ import { IframeCompanion } from './IframeCompanion.js';
 import { getIsolateEntry } from '../lib/isolate.js';
 import { TerminalCompanionView } from './TerminalCompanionView.js';
 import { FileCompanionView } from './FileCompanionView.js';
+import { WiggumRunsPanel } from './WiggumRunsPanel.js';
 import { SessionsListView } from './SessionsListView.js';
 import { TerminalsListView } from './TerminalsListView.js';
 import { FilesView } from './FilesView.js';
@@ -18,6 +19,11 @@ import { FeedbackDetailPage } from '../pages/FeedbackDetailPage.js';
 import { AggregatePage } from '../pages/AggregatePage.js';
 import { SessionsPage } from '../pages/SessionsPage.js';
 import { LiveConnectionsPage } from '../pages/LiveConnectionsPage.js';
+import { AgentsPage } from '../pages/AgentsPage.js';
+import { InfrastructurePage } from '../pages/InfrastructurePage.js';
+import { UserGuidePage } from '../pages/UserGuidePage.js';
+import { GettingStartedPage } from '../pages/GettingStartedPage.js';
+import { SettingsPage } from '../pages/SettingsPage.js';
 import {
   getTerminalCompanion,
   getViewMode,
@@ -90,6 +96,21 @@ export function renderTabContent(
     );
   }
 
+  // Settings tabs (settings:<key>)
+  if (sid.startsWith('settings:')) {
+    const key = sid.slice(9);
+    return (
+      <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0, overflow: 'auto' }}>
+        {key === 'agents' ? <AgentsPage />
+          : key === 'infrastructure' ? <InfrastructurePage />
+          : key === 'user-guide' ? <UserGuidePage />
+          : key === 'getting-started' ? <GettingStartedPage />
+          : key === 'preferences' ? <SettingsPage />
+          : <div class="companion-error">Unknown settings page: {key}</div>}
+      </div>
+    );
+  }
+
   const isJsonl = sid.startsWith('jsonl:');
   const isFeedback = sid.startsWith('feedback:');
   const isIframe = sid.startsWith('iframe:');
@@ -97,15 +118,18 @@ export function renderTabContent(
   const isIsolate = sid.startsWith('isolate:');
   const isUrl = sid.startsWith('url:');
   const isFile = sid.startsWith('file:');
-  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile;
+  const isWiggumRuns = sid.startsWith('wiggum-runs:');
+  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns;
   const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
-  const sess = (isIsolate || isUrl || isFile) ? null : sessionMap.get(realSid);
+  const sess = (isIsolate || isUrl || isFile || isWiggumRuns) ? null : sessionMap.get(realSid);
 
   const handleExit = onExit ?? ((code: number, text: string) => markSessionExited(sid, code, text));
 
   return (
     <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0 }}>
-      {isFile ? (
+      {isWiggumRuns ? (
+        <WiggumRunsPanel sessionId={realSid} />
+      ) : isFile ? (
         <FileCompanionView filePath={realSid} />
       ) : isUrl ? (
         <IframeCompanion url={realSid} />

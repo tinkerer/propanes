@@ -709,14 +709,24 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
     // bounce=true to briefly send rows-1 then correct rows, forcing tmux to
     // re-render.  Also call term.refresh() to repaint the xterm.js canvas
     // (content written while the tab was display:none may leave it stale).
-    const rafId = requestAnimationFrame(() => {
+    let cancelled = false;
+    let rafId = 0;
+    const attemptFitAndFocus = () => {
+      if (cancelled) return;
+      const rect = container.getBoundingClientRect();
+      // If the container has no dimensions yet, the browser hasn't finished
+      // laying out the newly-visible element. Retry next frame.
+      if (rect.width === 0 || rect.height === 0) {
+        rafId = requestAnimationFrame(attemptFitAndFocus);
+        return;
+      }
       safeFitAndResizeRef.current(true);
       term.refresh(0, term.rows - 1);
       if (focusInPanel) term.focus();
-    });
-    // No periodic resize — ResizeObserver, focus, and visibility handlers cover
-    // all real scenarios. The old 5s setInterval caused visible flicker.
+    };
+    rafId = requestAnimationFrame(attemptFitAndFocus);
     return () => {
+      cancelled = true;
       cancelAnimationFrame(rafId);
     };
   }, [isActive]);

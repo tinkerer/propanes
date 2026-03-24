@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks';
 import { api } from '../lib/api.js';
-import { DEFAULT_PROMPT_TEMPLATE, TOOL_PRESETS, PROFILE_DESCRIPTIONS } from '../lib/agent-constants.js';
+import { DEFAULT_PROMPT_TEMPLATE, TOOL_PRESETS, PROFILE_DESCRIPTIONS, TEMPLATE_PRESETS } from '../lib/agent-constants.js';
 
 interface AgentFormModalProps {
   visible: boolean;
@@ -245,14 +245,48 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
             {formMode !== 'webhook' && (
               <>
                 <div class="form-group">
-                  <label>Prompt Template</label>
+                  <label style="display:flex;align-items:center;gap:8px">
+                    Prompt Template
+                    <select
+                      style="font-size:11px;padding:1px 4px;background:var(--pw-bg-surface);border:1px solid var(--pw-border);color:var(--pw-text);border-radius:4px"
+                      value={TEMPLATE_PRESETS.findIndex(p => p.value === formPromptTemplate) >= 0
+                        ? String(TEMPLATE_PRESETS.findIndex(p => p.value === formPromptTemplate))
+                        : TEMPLATE_PRESETS.findIndex(p => p.value === null) >= 0 && formPromptTemplate === DEFAULT_PROMPT_TEMPLATE
+                          ? String(TEMPLATE_PRESETS.findIndex(p => p.value === null))
+                          : 'custom'}
+                      onChange={(e) => {
+                        const idx = (e.target as HTMLSelectElement).value;
+                        if (idx === 'custom') return;
+                        const preset = TEMPLATE_PRESETS[parseInt(idx)];
+                        const tmpl = preset.value ?? DEFAULT_PROMPT_TEMPLATE;
+                        setFormPromptTemplate(tmpl);
+                        if (preset.label === 'Meta-Wiggum (Orchestrator)') {
+                          setFormMode('headless');
+                          setFormPermissionProfile('auto');
+                          const metaTools = 'Bash, Read, Write, Glob, Grep';
+                          const current = formAllowedTools.trim();
+                          if (!current) {
+                            setFormAllowedTools(metaTools);
+                          }
+                        }
+                      }}
+                    >
+                      {TEMPLATE_PRESETS.map((p, i) => (
+                        <option key={i} value={String(i)}>{p.label}</option>
+                      ))}
+                      {TEMPLATE_PRESETS.findIndex(p => p.value === formPromptTemplate) < 0 &&
+                        formPromptTemplate !== DEFAULT_PROMPT_TEMPLATE && (
+                        <option value="custom">Custom</option>
+                      )}
+                    </select>
+                  </label>
                   <textarea
                     value={formPromptTemplate}
                     onInput={(e) => setFormPromptTemplate((e.target as HTMLTextAreaElement).value)}
                     style="width:100%;min-height:160px;font-family:monospace;font-size:12px"
                   />
                   <span style="font-size:11px;color:var(--pw-text-faint)">
-                    Variables: {'{{feedback.id}}'}, {'{{feedback.title}}'}, {'{{feedback.description}}'}, {'{{feedback.sourceUrl}}'}, {'{{feedback.tags}}'}, {'{{feedback.consoleLogs}}'}, {'{{feedback.networkErrors}}'}, {'{{feedback.data}}'}, {'{{feedback.screenshot}}'}, {'{{app.name}}'}, {'{{app.projectDir}}'}, {'{{app.description}}'}, {'{{instructions}}'}
+                    Variables: {'{{feedback.id}}'}, {'{{feedback.title}}'}, {'{{feedback.description}}'}, {'{{feedback.sourceUrl}}'}, {'{{feedback.tags}}'}, {'{{feedback.consoleLogs}}'}, {'{{feedback.networkErrors}}'}, {'{{feedback.data}}'}, {'{{feedback.screenshot}}'}, {'{{app.id}}'}, {'{{app.name}}'}, {'{{app.projectDir}}'}, {'{{app.description}}'}, {'{{instructions}}'}
                   </span>
                 </div>
                 <label class="agent-checkbox-label">

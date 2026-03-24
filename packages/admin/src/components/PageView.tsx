@@ -11,6 +11,7 @@ import { SettingsPage } from '../pages/SettingsPage.js';
 import { AppSettingsPage } from '../pages/AppSettingsPage.js';
 import { InfrastructurePage } from '../pages/InfrastructurePage.js';
 import { UserGuidePage } from '../pages/UserGuidePage.js';
+import { WiggumPage } from '../pages/WiggumPage.js';
 
 function parseAppRoute(route: string): { appId: string; sub: string; param?: string } | null {
   const m = route.match(/^\/app\/([^/]+)\/(.+)$/);
@@ -73,6 +74,8 @@ export function PageView() {
     page = <UserGuidePage />;
   } else if (route === '/settings/preferences') {
     page = <SettingsPage />;
+  } else if (route === '/settings/wiggum' || route.startsWith('/settings/wiggum/')) {
+    page = <WiggumPage />;
   } else if (route === '/settings/infrastructure') {
     page = <InfrastructurePage />;
   } else if (route === '/settings/machines' || route === '/settings/harnesses' || route === '/settings/sprites') {

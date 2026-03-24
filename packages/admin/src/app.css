@@ -2479,6 +2479,34 @@ input:focus, select:focus, textarea:focus {
   padding: 16px 20px;
   overflow-x: auto;
   margin-bottom: 16px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  position: relative;
+}
+
+.getting-started-content pre .gs-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 4px;
+  color: var(--pw-text-muted, #94a3b8);
+  cursor: pointer;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.getting-started-content pre:hover .gs-copy-btn {
+  opacity: 1;
+}
+
+.getting-started-content pre .gs-copy-btn:hover {
+  background: rgba(255,255,255,0.15);
+  color: var(--pw-text-primary, #e2e8f0);
 }
 
 .getting-started-content pre code {

@@ -341,6 +341,53 @@ export function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_sprite_configs_app ON sprite_configs(app_id);
   `);
 
+  // Wiggum runs table
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS wiggum_runs (
+      id TEXT PRIMARY KEY,
+      agent_endpoint_id TEXT REFERENCES agent_endpoints(id) ON DELETE SET NULL,
+      harness_config_id TEXT REFERENCES harness_configs(id) ON DELETE SET NULL,
+      feedback_id TEXT REFERENCES feedback_items(id) ON DELETE SET NULL,
+      app_id TEXT REFERENCES applications(id) ON DELETE SET NULL,
+      prompt TEXT NOT NULL,
+      deploy_command TEXT,
+      max_iterations INTEGER NOT NULL DEFAULT 10,
+      widget_session_id TEXT,
+      screenshot_delay_ms INTEGER NOT NULL DEFAULT 3000,
+      parent_session_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      current_iteration INTEGER NOT NULL DEFAULT 0,
+      iterations TEXT NOT NULL DEFAULT '[]',
+      error_message TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_wiggum_runs_status ON wiggum_runs(status);
+    CREATE INDEX IF NOT EXISTS idx_wiggum_runs_harness ON wiggum_runs(harness_config_id);
+
+    CREATE TABLE IF NOT EXISTS wiggum_screenshots (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES wiggum_runs(id) ON DELETE CASCADE,
+      iteration INTEGER NOT NULL,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_wiggum_screenshots_run ON wiggum_screenshots(run_id);
+  `);
+
+  // Add parent_session_id to wiggum_runs (meta-wiggum orchestration)
+  try {
+    sqlite.exec(`ALTER TABLE wiggum_runs ADD COLUMN parent_session_id TEXT`);
+  } catch {
+    // Column already exists
+  }
+
   // JSONL continuation tracking
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS jsonl_continuations (

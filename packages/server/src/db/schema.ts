@@ -214,6 +214,38 @@ export const jsonlContinuations = sqliteTable('jsonl_continuations', {
   discoveredAt: text('discovered_at').notNull(),
 });
 
+export const wiggumRuns = sqliteTable('wiggum_runs', {
+  id: text('id').primaryKey(),
+  agentEndpointId: text('agent_endpoint_id').references(() => agentEndpoints.id, { onDelete: 'set null' }),
+  harnessConfigId: text('harness_config_id').references(() => harnessConfigs.id, { onDelete: 'set null' }),
+  feedbackId: text('feedback_id').references(() => feedbackItems.id, { onDelete: 'set null' }),
+  appId: text('app_id').references(() => applications.id, { onDelete: 'set null' }),
+  prompt: text('prompt').notNull(),
+  deployCommand: text('deploy_command'),
+  maxIterations: integer('max_iterations').notNull().default(10),
+  widgetSessionId: text('widget_session_id'),
+  screenshotDelayMs: integer('screenshot_delay_ms').notNull().default(3000),
+  parentSessionId: text('parent_session_id'),
+  status: text('status').notNull().default('pending'),
+  currentIteration: integer('current_iteration').notNull().default(0),
+  iterations: text('iterations').notNull().default('[]'),
+  errorMessage: text('error_message'),
+  createdAt: text('created_at').notNull(),
+  startedAt: text('started_at'),
+  completedAt: text('completed_at'),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const wiggumScreenshots = sqliteTable('wiggum_screenshots', {
+  id: text('id').primaryKey(),
+  runId: text('run_id').notNull().references(() => wiggumRuns.id, { onDelete: 'cascade' }),
+  iteration: integer('iteration').notNull(),
+  filename: text('filename').notNull(),
+  mimeType: text('mime_type').notNull(),
+  size: integer('size').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
 export const pendingMessages = sqliteTable('pending_messages', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   sessionId: text('session_id').notNull(),

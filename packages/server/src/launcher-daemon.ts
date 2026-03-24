@@ -30,6 +30,7 @@ import type {
   LauncherHealthCheckResult,
   SendKeysResult,
   CapturePaneResult,
+  ExecInHarnessResult,
 } from '@prompt-widget/shared';
 import {
   isTmuxAvailable,
@@ -757,6 +758,38 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
         sendToServer(result);
       } catch (err: any) {
         const result: CapturePaneResult = { type: 'capture_pane_result', sessionId: msg.sessionId, ok: false, error: err.message?.slice(0, 500) };
+        sendToServer(result);
+      }
+      break;
+    }
+
+    case 'exec_in_harness': {
+      const projectName = `pw-${msg.harnessConfigId}`.toLowerCase();
+      const svc = msg.serviceName || 'pw-server';
+      const cwd = msg.composeDir || undefined;
+      const timeoutMs = msg.timeout || 60_000;
+      try {
+        const output = execSync(
+          `docker compose -p ${projectName} exec -T ${svc} sh -c ${JSON.stringify(msg.command)}`,
+          { stdio: 'pipe', timeout: timeoutMs, cwd },
+        ).toString();
+        const result: ExecInHarnessResult = {
+          type: 'exec_in_harness_result',
+          sessionId: msg.sessionId,
+          ok: true,
+          output: output.slice(0, 10_000),
+          exitCode: 0,
+        };
+        sendToServer(result);
+      } catch (err: any) {
+        const result: ExecInHarnessResult = {
+          type: 'exec_in_harness_result',
+          sessionId: msg.sessionId,
+          ok: false,
+          output: (err.stdout?.toString() || '').slice(0, 10_000),
+          exitCode: err.status ?? 1,
+          error: err.message?.slice(0, 500),
+        };
         sendToServer(result);
       }
       break;

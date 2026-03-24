@@ -58,6 +58,7 @@ import {
   popBackInToLeaf,
   popBackInToLeafWithSplit,
   feedbackTitleCache,
+  getSettingsLabel,
 } from '../lib/sessions.js';
 import { startTabDrag, dragOverLeafZone } from '../lib/tab-drag.js';
 import { ctrlShiftHeld } from '../lib/shortcuts.js';
@@ -369,6 +370,15 @@ function PaneHeader({
                         </button>
                       );
                     })()}
+                    {(() => {
+                      const companions = getCompanions(sessionId);
+                      const wiggumActive = companions.includes('wiggum-runs');
+                      return (
+                        <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; toggleCompanion(sessionId, 'wiggum-runs'); }}>
+                          {wiggumActive ? '\u2713 ' : ''}Wiggum Runs <kbd>W</kbd>
+                        </button>
+                      );
+                    })()}
                     <button class="popup-menu-item" onClick={() => {
                       idMenuOpen.value = null;
                       termPickerOpen.value = { kind: 'url' };
@@ -556,6 +566,11 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (sid.startsWith('view:git:')) return 'Git Changes';
   if (sid.startsWith('view:')) return sid.slice(5);
 
+  // Settings tabs
+  if (sid.startsWith('settings:')) {
+    return getSettingsLabel(sid.slice(9));
+  }
+
   // Feedback item tabs
   if (sid.startsWith('fb:')) {
     const customLabel = getSessionLabel(sid);
@@ -576,9 +591,10 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   const isIsolate = sid.startsWith('isolate:');
   const isUrl = sid.startsWith('url:');
   const isFile = sid.startsWith('file:');
-  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile;
+  const isWiggumRuns = sid.startsWith('wiggum-runs:');
+  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns;
   const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
-  const sess = (isIsolate || isUrl || isFile) ? null : sessionMap.get(realSid);
+  const sess = (isIsolate || isUrl || isFile || isWiggumRuns) ? null : sessionMap.get(realSid);
 
   const customLabel = getSessionLabel(sid);
   if (customLabel) return customLabel;
@@ -595,6 +611,7 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (isIsolate) return `Isolate: ${realSid}`;
   if (isUrl) { try { return `Iframe: ${new URL(realSid).hostname}`; } catch { return `Iframe: ${realSid.slice(0, 30)}`; } }
   if (isFile) { const parts = realSid.split('/'); return parts[parts.length - 1] || realSid.slice(-20); }
+  if (isWiggumRuns) return `Wiggum: ${realSid.slice(-6)}`;
 
   const isPlain = sess?.permissionProfile === 'plain';
   if (isPlain) {
@@ -922,7 +939,9 @@ export function LeafPane({ leaf }: LeafPaneProps) {
             const isTerminal = sid.startsWith('terminal:');
             const isIsolate = sid.startsWith('isolate:');
             const isUrl = sid.startsWith('url:');
-            const isCompanion = isView || isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl;
+            const isSettings = sid.startsWith('settings:');
+            const isWiggumRuns = sid.startsWith('wiggum-runs:');
+            const isCompanion = isView || isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isSettings || isWiggumRuns;
             const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
             const isActive = sid === leaf.activeTabId;
             const isExited = exited.has(realSid);

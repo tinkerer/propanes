@@ -15,6 +15,7 @@ import launcherRoutes from './routes/launchers.js';
 import machineRoutes from './routes/machines.js';
 import harnessConfigRoutes from './routes/harness-configs.js';
 import spriteConfigRoutes from './routes/sprites.js';
+import wiggumRoutes from './routes/wiggum.js';
 import { gettingStartedMarkdown } from './getting-started.js';
 
 export const app = new Hono();
@@ -56,6 +57,7 @@ app.route('/api/v1/admin/launchers', launcherRoutes);
 app.route('/api/v1/admin/machines', machineRoutes);
 app.route('/api/v1/admin/harness-configs', harnessConfigRoutes);
 app.route('/api/v1/admin/sprite-configs', spriteConfigRoutes);
+app.route('/api/v1/admin/wiggum', wiggumRoutes);
 
 app.get('/GETTING_STARTED.md', (c) => {
   const proto = c.req.header('x-forwarded-proto') || 'http';

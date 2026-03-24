@@ -18,7 +18,7 @@ import { captureScreenshot, stopScreencastStream, type ScreenshotMethod } from '
 import { SessionBridge } from './session.js';
 import { startPicker, type SelectedElementInfo } from './element-picker.js';
 import { OverlayPanelManager, type PanelType } from './overlay-panels.js';
-import { VoiceRecorder, type VoiceRecordingResult } from './voice-recorder.js';
+import { VoiceRecorder, type VoiceRecordingResult, type TimelineItem } from './voice-recorder.js';
 
 type EventHandler = (data: unknown) => void;
 
@@ -57,6 +57,10 @@ export class PromptWidgetElement {
   private voiceRecorder = new VoiceRecorder();
   private voiceResult: VoiceRecordingResult | null = null;
   private appendTargetId: string | null = null;
+  private timelineItems: TimelineItem[] = [];
+  private micScreenCaptures = false;
+  private micHideTranscript = false;
+  private micHideWidget = false;
   private escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && this.isOpen) {
       // Let sub-overlays (annotator, element picker) handle Escape first
@@ -857,9 +861,14 @@ export class PromptWidgetElement {
               <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
             </button>
           </div>
-          <button class="pw-mic-btn" id="pw-mic-btn" title="Voice recording">
-            <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
-          </button>
+          <div class="pw-mic-group">
+            <button class="pw-mic-btn" id="pw-mic-btn" title="Voice recording">
+              <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+            </button>
+            <button class="pw-mic-dropdown-toggle" id="pw-mic-dropdown" title="Mic options">
+              <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+            </button>
+          </div>
           <div class="pw-admin-group">
             <button class="pw-admin-btn" id="pw-admin-btn" title="Admin panels"><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg></button>
             <button class="pw-admin-dropdown-toggle" id="pw-admin-dropdown" title="Admin options"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></button>
@@ -920,6 +929,8 @@ export class PromptWidgetElement {
 
     const micBtn = panel.querySelector('#pw-mic-btn') as HTMLButtonElement;
     micBtn.addEventListener('click', () => this.toggleVoiceRecording());
+    const micDropdownBtn = panel.querySelector('#pw-mic-dropdown') as HTMLButtonElement | null;
+    micDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleMicMenu(); });
 
     captureBtn.addEventListener('click', () => this.captureScreen());
     pickerBtn.addEventListener('click', () => this.startElementPicker());
@@ -987,6 +998,14 @@ export class PromptWidgetElement {
     }
 
     this.initResize();
+
+    // Restore timeline if recording is active (reopening while recording)
+    if (this.voiceRecorder.recording) {
+      this.showTimeline();
+      const micBtnRestore = panel.querySelector('#pw-mic-btn') as HTMLButtonElement;
+      if (micBtnRestore) micBtnRestore.classList.add('pw-mic-recording');
+    }
+
     setTimeout(() => input.focus(), 50);
   }
 
@@ -1088,9 +1107,14 @@ export class PromptWidgetElement {
   private async toggleVoiceRecording() {
     const micBtn = this.shadow.querySelector('#pw-mic-btn') as HTMLButtonElement;
     if (this.voiceRecorder.recording) {
+      // Stop recording
       micBtn.classList.remove('pw-mic-recording');
       const result = await this.voiceRecorder.stop();
       this.voiceResult = result;
+
+      // Remove trigger recording indicator
+      const trigger = this.shadow.querySelector('.pw-trigger') as HTMLElement;
+      if (trigger) trigger.classList.remove('pw-trigger-recording');
 
       // Populate textarea with transcript
       const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement;
@@ -1099,29 +1123,71 @@ export class PromptWidgetElement {
         input.value = (input.value ? input.value + '\n' : '') + transcriptText;
       }
 
-      // Show voice indicator
+      // Timeline stays visible for review — show voice indicator
       this.renderVoiceIndicator();
-
-      // Remove live transcript
-      const liveEl = this.shadow.querySelector('.pw-voice-transcript');
-      if (liveEl) liveEl.remove();
     } else {
       try {
+        // Clear timeline
+        this.timelineItems = [];
+
+        // Wire callbacks
         this.voiceRecorder.onTranscript = (seg) => {
-          let liveEl = this.shadow.querySelector('.pw-voice-transcript') as HTMLElement;
-          if (!liveEl) {
-            const input = this.shadow.querySelector('#pw-chat-input') as HTMLElement;
-            if (input) {
-              liveEl = document.createElement('div');
-              liveEl.className = 'pw-voice-transcript';
-              input.parentElement!.insertBefore(liveEl, input.nextSibling);
-            }
+          if (!this.micHideTranscript) {
+            const item: TimelineItem = { kind: 'speech', segment: seg };
+            this.timelineItems.push(item);
+            this.appendTimelineEntry(item);
           }
-          if (liveEl) liveEl.textContent = seg.text;
         };
-        this.voiceRecorder.onInteraction = null;
-        await this.voiceRecorder.start();
+        this.voiceRecorder.onInteraction = (event) => {
+          const item: TimelineItem = { kind: 'interaction', event };
+          this.timelineItems.push(item);
+          this.appendTimelineEntry(item);
+        };
+        this.voiceRecorder.onConsole = (entry) => {
+          const item: TimelineItem = { kind: 'console', entry };
+          this.timelineItems.push(item);
+          this.appendTimelineEntry(item);
+        };
+        this.voiceRecorder.onHover = (event) => {
+          // Replace last hover entry, auto-remove after 2s
+          const existIdx = this.timelineItems.findIndex(i => i.kind === 'hover');
+          if (existIdx >= 0) {
+            this.timelineItems.splice(existIdx, 1);
+            const existEl = this.shadow.querySelector('.pw-tl-hover');
+            if (existEl) existEl.remove();
+          }
+          const item: TimelineItem = { kind: 'hover', event };
+          this.timelineItems.push(item);
+          this.appendTimelineEntry(item);
+          setTimeout(() => {
+            const idx = this.timelineItems.indexOf(item);
+            if (idx >= 0) {
+              this.timelineItems.splice(idx, 1);
+              const el = this.shadow.querySelector('.pw-tl-hover');
+              if (el) el.remove();
+            }
+          }, 2000);
+        };
+        this.voiceRecorder.onScreenshotCapture = (capture) => {
+          const item: TimelineItem = { kind: 'screenshot', capture };
+          this.timelineItems.push(item);
+          this.appendTimelineEntry(item);
+        };
+
+        await this.voiceRecorder.start({ screenCaptures: this.micScreenCaptures });
         micBtn.classList.add('pw-mic-recording');
+
+        // Show timeline
+        this.showTimeline();
+
+        // Set trigger recording indicator
+        const trigger = this.shadow.querySelector('.pw-trigger') as HTMLElement;
+        if (trigger) trigger.classList.add('pw-trigger-recording');
+
+        // Auto-minimize if "hide widget" option is on
+        if (this.micHideWidget) {
+          this.close();
+        }
       } catch (err) {
         const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement;
         if (errorEl) {
@@ -1139,20 +1205,231 @@ export class PromptWidgetElement {
 
     const duration = Math.round(this.voiceResult.duration / 1000);
     const interactions = this.voiceResult.interactions.length;
+    const screenshots = this.voiceResult.screenshots.length;
+    const parts = [`${duration}s recorded`, `${interactions} interaction${interactions !== 1 ? 's' : ''}`];
+    if (screenshots > 0) parts.push(`${screenshots} screenshot${screenshots !== 1 ? 's' : ''}`);
 
     indicator = document.createElement('div');
     indicator.className = 'pw-voice-indicator';
     indicator.innerHTML = `
-      <span>${duration}s recorded, ${interactions} interaction${interactions !== 1 ? 's' : ''}</span>
+      <span>${parts.join(', ')}</span>
       <button class="pw-voice-discard" title="Discard recording">&times;</button>
     `;
     indicator.querySelector('.pw-voice-discard')!.addEventListener('click', () => {
       this.voiceResult = null;
       indicator.remove();
+      this.exitTimeline();
     });
 
     const toolbar = this.shadow.querySelector('.pw-toolbar');
     if (toolbar) toolbar.parentElement!.insertBefore(indicator, toolbar);
+  }
+
+  private toggleMicMenu() {
+    const existing = this.shadow.querySelector('.pw-mic-menu');
+    if (existing) { existing.remove(); return; }
+
+    const group = this.shadow.querySelector('.pw-mic-group') as HTMLElement;
+    if (!group) return;
+
+    const menu = document.createElement('div');
+    menu.className = 'pw-mic-menu';
+
+    const makeItem = (label: string, checked: boolean, onChange: (v: boolean) => void) => {
+      const row = document.createElement('label');
+      row.className = 'pw-mic-menu-item';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = checked;
+      cb.addEventListener('change', () => onChange(cb.checked));
+      const span = document.createElement('span');
+      span.textContent = label;
+      row.append(cb, span);
+      return row;
+    };
+
+    menu.appendChild(makeItem('Screen captures', this.micScreenCaptures, (v) => { this.micScreenCaptures = v; }));
+    menu.appendChild(makeItem('Hide transcript', this.micHideTranscript, (v) => { this.micHideTranscript = v; }));
+    menu.appendChild(makeItem('Hide widget', this.micHideWidget, (v) => { this.micHideWidget = v; }));
+
+    group.appendChild(menu);
+
+    const closeHandler = (e: Event) => {
+      if (!menu.contains(e.target as Node)) {
+        menu.remove();
+        this.shadow.removeEventListener('click', closeHandler);
+      }
+    };
+    setTimeout(() => this.shadow.addEventListener('click', closeHandler), 0);
+  }
+
+  private showTimeline() {
+    const panel = this.shadow.querySelector('.pw-panel') as HTMLElement;
+    if (!panel) return;
+
+    panel.classList.add('pw-panel-recording');
+
+    // Hide textarea, show timeline
+    const textarea = this.shadow.querySelector('#pw-chat-input') as HTMLElement;
+    if (textarea) textarea.style.display = 'none';
+
+    // Remove existing live transcript
+    const liveEl = this.shadow.querySelector('.pw-voice-transcript');
+    if (liveEl) liveEl.remove();
+
+    // Remove existing timeline if any
+    const existing = this.shadow.querySelector('.pw-timeline');
+    if (existing) existing.remove();
+
+    const timeline = document.createElement('div');
+    timeline.className = 'pw-timeline';
+
+    // Render existing items
+    for (const item of this.timelineItems) {
+      const el = this.createTimelineEntryDOM(item);
+      if (el) timeline.appendChild(el);
+    }
+
+    // Insert before toolbar
+    const inputArea = this.shadow.querySelector('.pw-input-area') as HTMLElement;
+    if (inputArea) {
+      const toolbarEl = inputArea.querySelector('.pw-toolbar');
+      if (toolbarEl) {
+        inputArea.insertBefore(timeline, toolbarEl);
+      } else {
+        inputArea.appendChild(timeline);
+      }
+    }
+  }
+
+  private appendTimelineEntry(item: TimelineItem) {
+    const timeline = this.shadow.querySelector('.pw-timeline') as HTMLElement;
+    if (!timeline) return;
+    const el = this.createTimelineEntryDOM(item);
+    if (el) {
+      timeline.appendChild(el);
+      timeline.scrollTop = timeline.scrollHeight;
+    }
+  }
+
+  private createTimelineEntryDOM(item: TimelineItem): HTMLElement | null {
+    const entry = document.createElement('div');
+    entry.className = 'pw-tl-entry';
+
+    const ts = document.createElement('span');
+    ts.className = 'pw-tl-timestamp';
+
+    const content = document.createElement('div');
+    content.className = 'pw-tl-content';
+
+    switch (item.kind) {
+      case 'speech': {
+        const secs = Math.round(item.segment.timestamp / 1000);
+        ts.textContent = `${secs}s`;
+        entry.classList.add('pw-tl-speech');
+        content.textContent = item.segment.text;
+        break;
+      }
+      case 'interaction': {
+        const secs = Math.round(item.event.timestamp / 1000);
+        ts.textContent = `${secs}s`;
+        entry.classList.add('pw-tl-interaction');
+
+        const badge = document.createElement('span');
+        badge.className = `pw-tl-badge pw-tl-badge-${item.event.type}`;
+        badge.textContent = item.event.type;
+
+        const selector = document.createElement('span');
+        selector.className = 'pw-tl-selector';
+        selector.textContent = item.event.target.selector;
+
+        content.appendChild(badge);
+        content.appendChild(selector);
+
+        if (item.event.target.textContent) {
+          const preview = document.createElement('span');
+          preview.className = 'pw-tl-text-preview';
+          preview.textContent = item.event.target.textContent.slice(0, 40);
+          content.appendChild(preview);
+        }
+
+        // Remove button
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'pw-tl-remove';
+        removeBtn.textContent = '\u00d7';
+        removeBtn.addEventListener('click', () => {
+          const idx = this.timelineItems.indexOf(item);
+          if (idx >= 0) this.timelineItems.splice(idx, 1);
+          this.voiceRecorder.removeInteraction(item.event.id);
+          entry.remove();
+        });
+        entry.appendChild(ts);
+        entry.appendChild(content);
+        entry.appendChild(removeBtn);
+        return entry;
+      }
+      case 'console': {
+        const secs = Math.round(item.entry.timestamp / 1000);
+        ts.textContent = `${secs}s`;
+        entry.classList.add('pw-tl-console', `pw-tl-console-${item.entry.level}`);
+        content.textContent = item.entry.args.join(' ');
+        break;
+      }
+      case 'hover': {
+        entry.classList.add('pw-tl-hover');
+        ts.textContent = '';
+        content.textContent = item.event.target.selector;
+        break;
+      }
+      case 'screenshot': {
+        const secs = Math.round(item.capture.timestamp / 1000);
+        ts.textContent = `${secs}s`;
+        entry.classList.add('pw-tl-screenshot');
+
+        const img = document.createElement('img');
+        img.className = 'pw-tl-thumb';
+        img.src = URL.createObjectURL(item.capture.blob);
+
+        const dims = document.createElement('span');
+        dims.className = 'pw-tl-dims';
+        dims.textContent = `${item.capture.boundingBox.width}\u00d7${item.capture.boundingBox.height}`;
+
+        content.appendChild(img);
+        content.appendChild(dims);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'pw-tl-remove';
+        removeBtn.textContent = '\u00d7';
+        removeBtn.addEventListener('click', () => {
+          const idx = this.timelineItems.indexOf(item);
+          if (idx >= 0) this.timelineItems.splice(idx, 1);
+          this.voiceRecorder.removeScreenshot(item.capture.id);
+          URL.revokeObjectURL(img.src);
+          entry.remove();
+        });
+        entry.appendChild(ts);
+        entry.appendChild(content);
+        entry.appendChild(removeBtn);
+        return entry;
+      }
+    }
+
+    entry.appendChild(ts);
+    entry.appendChild(content);
+    return entry;
+  }
+
+  private exitTimeline() {
+    this.timelineItems = [];
+
+    const timeline = this.shadow.querySelector('.pw-timeline');
+    if (timeline) timeline.remove();
+
+    const textarea = this.shadow.querySelector('#pw-chat-input') as HTMLElement;
+    if (textarea) textarea.style.display = '';
+
+    const panel = this.shadow.querySelector('.pw-panel') as HTMLElement;
+    if (panel) panel.classList.remove('pw-panel-recording');
   }
 
   private startElementPicker() {
@@ -1268,7 +1545,7 @@ export class PromptWidgetElement {
     const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement;
     const description = input.value.trim();
 
-    if (!description && this.pendingScreenshots.length === 0 && !this.voiceResult) {
+    if (!description && this.pendingScreenshots.length === 0 && !this.voiceResult && this.timelineItems.length === 0) {
       return;
     }
 
@@ -1311,6 +1588,7 @@ export class PromptWidgetElement {
       this.pendingScreenshots = [];
       this.selectedElements = [];
       input.value = '';
+      this.exitTimeline();
 
       this.emit('submit', { type: 'manual', title: '', description });
 
@@ -1369,12 +1647,22 @@ export class PromptWidgetElement {
       dataObj.selectedElements = this.selectedElements;
     }
     if (this.voiceResult) {
+      // Use cleaned interactions from timeline (only items still present)
+      const cleanedInteractions = this.timelineItems
+        .filter(i => i.kind === 'interaction')
+        .map(i => (i as { kind: 'interaction'; event: any }).event);
       dataObj.voiceRecording = {
         duration: this.voiceResult.duration,
         transcript: this.voiceResult.transcript,
-        interactions: this.voiceResult.interactions,
+        interactions: cleanedInteractions.length > 0 ? cleanedInteractions : this.voiceResult.interactions,
         consoleLogs: this.voiceResult.consoleLogs,
       };
+      // Collect timeline screenshots into pendingScreenshots
+      for (const item of this.timelineItems) {
+        if (item.kind === 'screenshot') {
+          this.pendingScreenshots.push(item.capture.blob);
+        }
+      }
     }
     if (Object.keys(dataObj).length > 0) {
       feedbackPayload.data = dataObj;

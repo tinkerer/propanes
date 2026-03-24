@@ -57,11 +57,12 @@ export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
   const isIsolate = sid.startsWith('isolate:');
   const isUrl = sid.startsWith('url:');
   const isFile = sid.startsWith('file:');
-  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile;
+  const isWiggumRuns = sid.startsWith('wiggum-runs:');
+  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns;
   const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
   const custom = getSessionLabel(sid);
   if (custom) return custom;
-  const s = (isIsolate || isUrl || isFile) ? null : sessionMap.get(realSid);
+  const s = (isIsolate || isUrl || isFile || isWiggumRuns) ? null : sessionMap.get(realSid);
   if (isJsonl) return `JSONL: ${s?.feedbackTitle || s?.agentName || realSid.slice(-6)}`;
   if (isFeedback) return `FB: ${s?.feedbackTitle || realSid.slice(-6)}`;
   if (isIframe) return `Page: ${realSid.slice(-6)}`;
@@ -69,6 +70,7 @@ export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (isIsolate) return `Isolate: ${realSid}`;
   if (isUrl) { try { return `Iframe: ${new URL(realSid).hostname}`; } catch { return `Iframe: ${realSid.slice(0, 30)}`; } }
   if (isFile) { const parts = realSid.split('/'); return parts[parts.length - 1] || realSid.slice(-20); }
+  if (isWiggumRuns) return `Wiggum: ${realSid.slice(-6)}`;
   const isPlainSess = s?.permissionProfile === 'plain';
   const plainLabel = s?.paneCommand
     ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s?.paneTitle || sid.slice(-6)}`

@@ -560,8 +560,70 @@ export function setSplitRatio(splitId: string, ratio: number) {
   const tree = cloneTree(layoutTree.value);
   const node = findNodeById(tree.root, splitId);
   if (!node || node.type !== 'split') return;
+
+  const oldRatio = node.ratio;
   node.ratio = clamped;
+
+  // When dragging a split's divider, both children resize. If a child is itself
+  // a split in the same direction, all its sub-panels resize proportionally —
+  // but the user expects only the sub-panel directly adjacent to the divider to
+  // change. Fix by adjusting child split ratios to preserve non-adjacent panels.
+  const [first, second] = node.children;
+
+  if (first.type === 'split' && first.direction === node.direction) {
+    // First child shrank/grew from oldRatio to clamped.
+    // Its second sub-child (index 1) is adjacent to our divider.
+    preserveNonAdjacentSizes(first, oldRatio, clamped, 1);
+  }
+
+  if (second.type === 'split' && second.direction === node.direction) {
+    // Second child shrank/grew from (1-oldRatio) to (1-clamped).
+    // Its first sub-child (index 0) is adjacent to our divider.
+    preserveNonAdjacentSizes(second, 1 - oldRatio, 1 - clamped, 0);
+  }
+
   commitTree(tree);
+}
+
+/**
+ * When a same-direction child split's container resizes, adjust its ratio so
+ * that the sub-panel NOT adjacent to the external divider keeps its absolute
+ * size. Recurses for deeply nested same-direction splits.
+ */
+function preserveNonAdjacentSizes(
+  node: SplitNode,
+  oldProportion: number,
+  newProportion: number,
+  adjacentChildIndex: 0 | 1,
+) {
+  if (newProportion < 0.001 || oldProportion < 0.001) return;
+
+  const oldRatio = node.ratio;
+  let newRatio: number;
+
+  if (adjacentChildIndex === 1) {
+    // Second child is adjacent — preserve first child's absolute size
+    // firstAbs = ratio * proportion → newRatio = oldRatio * old / new
+    newRatio = oldRatio * oldProportion / newProportion;
+  } else {
+    // First child is adjacent — preserve second child's absolute size
+    // secondAbs = (1-ratio) * proportion → newRatio = 1 - (1-oldRatio) * old / new
+    newRatio = 1 - (1 - oldRatio) * oldProportion / newProportion;
+  }
+
+  node.ratio = Math.max(0.05, Math.min(0.95, newRatio));
+
+  // Recurse into the adjacent child if it's also a same-direction split
+  const adjChild = node.children[adjacentChildIndex];
+  if (adjChild.type === 'split' && adjChild.direction === node.direction) {
+    const oldAdj = adjacentChildIndex === 1
+      ? (1 - oldRatio) * oldProportion
+      : oldRatio * oldProportion;
+    const newAdj = adjacentChildIndex === 1
+      ? (1 - node.ratio) * newProportion
+      : node.ratio * newProportion;
+    preserveNonAdjacentSizes(adjChild, oldAdj, newAdj, adjacentChildIndex);
+  }
 }
 
 export function setFocusedLeaf(leafId: string | null) {
