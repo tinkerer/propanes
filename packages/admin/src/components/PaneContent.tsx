@@ -1,8 +1,8 @@
 import { SessionViewToggle } from './SessionViewToggle.js';
 import { JsonlView } from './JsonlView.js';
 import { FeedbackCompanionView } from './FeedbackCompanionView.js';
-import { IframeCompanionView } from './IframeCompanionView.js';
-import { IsolateCompanionView } from './IsolateCompanionView.js';
+import { IframeCompanion } from './IframeCompanion.js';
+import { getIsolateEntry } from '../lib/isolate.js';
 import { TerminalCompanionView } from './TerminalCompanionView.js';
 import { FileCompanionView } from './FileCompanionView.js';
 import { SessionsListView } from './SessionsListView.js';
@@ -108,15 +108,20 @@ export function renderTabContent(
       {isFile ? (
         <FileCompanionView filePath={realSid} />
       ) : isUrl ? (
-        <IframeCompanionView url={realSid} />
+        <IframeCompanion url={realSid} />
       ) : isIsolate ? (
-        <IsolateCompanionView componentName={realSid} />
+        (() => {
+          const entry = getIsolateEntry(realSid);
+          const label = entry?.label || realSid;
+          const src = `${window.location.origin}${window.location.pathname}?isolate=${encodeURIComponent(realSid)}`;
+          return <IframeCompanion url={src} label={label} />;
+        })()
       ) : isJsonl ? (
         <JsonlView sessionId={realSid} />
       ) : isFeedback ? (
         sess?.feedbackId ? <FeedbackCompanionView feedbackId={sess.feedbackId} /> : <div class="companion-error">No feedback linked</div>
       ) : isIframe ? (
-        sess?.url ? <IframeCompanionView url={sess.url} /> : <div class="companion-error">No URL available</div>
+        sess?.url ? <IframeCompanion url={sess.url} /> : <div class="companion-error">No URL available</div>
       ) : isTerminal ? (
         (() => {
           const termSid = getTerminalCompanion(realSid);

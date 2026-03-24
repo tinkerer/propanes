@@ -3,7 +3,7 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { feedbackRoutes } from './routes/feedback.js';
-import { adminRoutes } from './routes/admin.js';
+import { adminRoutes } from './routes/admin/index.js';
 import { imageRoutes } from './routes/images.js';
 import { audioRoutes } from './routes/audio.js';
 import { authRoutes } from './routes/auth.js';

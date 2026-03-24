@@ -2,7 +2,12 @@ node_modules/
 dist/
 .turbo/
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 uploads/
 .env
 .env.local
+.DS_Store
+.metadata_never_index
+packages/harness/artifacts/

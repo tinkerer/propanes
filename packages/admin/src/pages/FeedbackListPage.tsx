@@ -6,6 +6,7 @@ import { openSession, sessionInputStates, openFeedbackItem, feedbackTitleCache }
 import { openDispatchDialog, dispatchDialogResult } from '../components/DispatchDialog.js';
 import { copyWithTooltip } from '../lib/clipboard.js';
 import { DeletedItemsPanel, trackDeletion } from '../components/DeletedItemsPanel.js';
+import { formatDate } from '../lib/date-utils.js';
 
 const items = signal<any[]>([]);
 const total = signal(0);
@@ -181,10 +182,6 @@ async function createFeedback() {
   } finally {
     createLoading.value = false;
   }
-}
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleString();
 }
 
 function StatusCell({ item }: { item: any }) {

@@ -4,6 +4,7 @@ import { api } from '../lib/api.js';
 import { navigate } from '../lib/state.js';
 import { openSession } from '../lib/sessions.js';
 import { DeletedItemsPanel, trackDeletion } from '../components/DeletedItemsPanel.js';
+import { formatDateShort } from '../lib/date-utils.js';
 
 interface ClusterItem {
   id: string;
@@ -88,10 +89,6 @@ effect(() => {
   void minCount.value;
   loadClusters();
 });
-
-function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString();
-}
 
 function PlanEditor({ cluster, appId, onSaved }: {
   cluster: Cluster;
@@ -256,7 +253,7 @@ function ClusterCard({ cluster, appId }: { cluster: Cluster; appId: string | nul
           <span class="cluster-expand">{expanded ? '\u25B2' : '\u25BC'}</span>
         </div>
         <div class="cluster-meta">
-          <span class="cluster-date">{formatDate(cluster.oldestAt)} — {formatDate(cluster.newestAt)}</span>
+          <span class="cluster-date">{formatDateShort(cluster.oldestAt)} — {formatDateShort(cluster.newestAt)}</span>
           {cluster.types.map((t) => (
             <span key={t} class={`badge badge-${t}`} style="font-size:11px">{t.replace(/_/g, ' ')}</span>
           ))}
@@ -288,7 +285,7 @@ function ClusterCard({ cluster, appId }: { cluster: Cluster; appId: string | nul
                 )}
                 <div class="cluster-item-meta">
                   <span class={`badge badge-${item.type}`} style="font-size:10px">{item.type.replace(/_/g, ' ')}</span>
-                  <span class="cluster-item-date">{formatDate(item.createdAt)}</span>
+                  <span class="cluster-item-date">{formatDateShort(item.createdAt)}</span>
                 </div>
               </div>
             ))}

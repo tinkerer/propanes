@@ -1,837 +1,33 @@
 import { readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, existsSync } from 'node:fs';
-import { resolve, dirname, join, relative, extname, basename } from 'node:path';
+import { resolve, dirname, join, relative, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { Hono } from 'hono';
 import { ulid } from 'ulidx';
-import { eq, desc, asc, like, and, or, isNull, sql, inArray, ne } from 'drizzle-orm';
-import {
-  feedbackListSchema,
-  feedbackUpdateSchema,
-  adminFeedbackCreateSchema,
-  batchOperationSchema,
-  agentEndpointSchema,
-  dispatchSchema,
-} from '@prompt-widget/shared';
-import { db, schema } from '../db/index.js';
+import { eq, desc } from 'drizzle-orm';
+import { db, schema } from '../../db/index.js';
 import {
   dispatchTerminalSession,
   dispatchTmuxAttachSession,
   dispatchAgentSession,
   dispatchCompanionTerminal,
   dispatchHarnessSession,
-  hydrateFeedback,
-  DEFAULT_PROMPT_TEMPLATE,
-  dispatchFeedbackToAgent,
-} from '../dispatch.js';
-import { inputSessionRemote, getSessionStatus, SessionServiceError } from '../session-service-client.js';
-import { killSession } from '../agent-sessions.js';
-import { feedbackEvents } from '../events.js';
-import { verifyAdminToken } from '../auth.js';
-import { listLaunchers, getLauncher, sendAndWait } from '../launcher-registry.js';
-import { countActiveSpriteSessions } from '../sprite-sessions.js';
+} from '../../dispatch.js';
+import { inputSessionRemote } from '../../session-service-client.js';
+import { getLauncher, sendAndWait } from '../../launcher-registry.js';
 
-const PW_TMUX_CONF = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'tmux-pw.conf');
+const PW_TMUX_CONF = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'tmux-pw.conf');
 
-export const adminRoutes = new Hono();
-
-adminRoutes.get('/feedback/events', async (c) => {
-  const token = c.req.header('Authorization')?.replace('Bearer ', '') || c.req.query('token');
-  if (!token || !(await verifyAdminToken(token))) return c.json({ error: 'Unauthorized' }, 401);
-
-  return c.body(
-    new ReadableStream({
-      start(controller) {
-        const encoder = new TextEncoder();
-        const send = (event: string, data: unknown) => {
-          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-        };
-
-        send('connected', { ts: Date.now() });
-
-        const onNew = (item: { id: string; appId: string | null }) => send('new-feedback', item);
-        const onUpdated = (item: { id: string; appId: string | null }) => send('feedback-updated', item);
-        feedbackEvents.on('new', onNew);
-        feedbackEvents.on('updated', onUpdated);
-
-        const keepalive = setInterval(() => {
-          try { controller.enqueue(encoder.encode(': keepalive\n\n')); } catch { /* closed */ }
-        }, 30_000);
-
-        c.req.raw.signal.addEventListener('abort', () => {
-          feedbackEvents.off('new', onNew);
-          feedbackEvents.off('updated', onUpdated);
-          clearInterval(keepalive);
-        });
-      },
-    }),
-    {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      },
-    }
-  );
-});
-
-adminRoutes.post('/feedback', async (c) => {
-  const body = await c.req.json();
-  const parsed = adminFeedbackCreateSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
-  }
-
-  const now = new Date().toISOString();
-  const id = ulid();
-  const input = parsed.data;
-
-  await db.insert(schema.feedbackItems).values({
-    id,
-    type: input.type,
-    status: 'new',
-    title: input.title,
-    description: input.description,
-    appId: input.appId,
-    createdAt: now,
-    updatedAt: now,
-  });
-
-  if (input.tags && input.tags.length > 0) {
-    await db.insert(schema.feedbackTags).values(
-      input.tags.map((tag) => ({ feedbackId: id, tag }))
-    );
-  }
-
-  feedbackEvents.emit('new', { id, appId: input.appId });
-  return c.json({ id, status: 'new', createdAt: now }, 201);
-});
-
-adminRoutes.get('/feedback', async (c) => {
-  const query = feedbackListSchema.safeParse(c.req.query());
-  if (!query.success) {
-    return c.json({ error: 'Invalid query', details: query.error.flatten() }, 400);
-  }
-
-  const { page, limit, type, status, dispatchStatus, tag, search, appId, sortBy, sortOrder } = query.data;
-  const offset = (page - 1) * limit;
-
-  const conditions = [];
-  if (type) conditions.push(eq(schema.feedbackItems.type, type));
-
-  // Build status + dispatchStatus as OR branches
-  const statusBranches = [];
-  if (status) {
-    const statuses = status.split(',').filter(Boolean);
-    if (statuses.length === 1) {
-      statusBranches.push(eq(schema.feedbackItems.status, statuses[0]));
-    } else if (statuses.length > 1) {
-      statusBranches.push(inArray(schema.feedbackItems.status, statuses));
-    }
-  }
-  if (dispatchStatus) {
-    const dStatuses = dispatchStatus.split(',').filter(Boolean);
-    const dCond = dStatuses.length === 1
-      ? eq(schema.feedbackItems.dispatchStatus, dStatuses[0])
-      : inArray(schema.feedbackItems.dispatchStatus, dStatuses);
-    statusBranches.push(and(eq(schema.feedbackItems.status, 'dispatched'), dCond)!);
-  }
-  if (statusBranches.length > 1) {
-    conditions.push(or(...statusBranches)!);
-  } else if (statusBranches.length === 1) {
-    conditions.push(statusBranches[0]);
-  } else {
-    // Exclude deleted items by default unless explicitly requested
-    conditions.push(sql`${schema.feedbackItems.status} != 'deleted'`);
-  }
-  if (search) conditions.push(like(schema.feedbackItems.title, `%${search}%`));
-  if (appId) {
-    if (appId === '__unlinked__') {
-      conditions.push(sql`${schema.feedbackItems.appId} IS NULL`);
-    } else {
-      conditions.push(eq(schema.feedbackItems.appId, appId));
-    }
-  }
-
-  let whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
-  if (tag) {
-    const taggedIds = db
-      .select({ feedbackId: schema.feedbackTags.feedbackId })
-      .from(schema.feedbackTags)
-      .where(eq(schema.feedbackTags.tag, tag))
-      .all()
-      .map((r) => r.feedbackId);
-
-    if (taggedIds.length === 0) {
-      return c.json({ items: [], total: 0, page, limit, totalPages: 0 });
-    }
-
-    const inClause = sql`${schema.feedbackItems.id} IN (${sql.join(
-      taggedIds.map((id) => sql`${id}`),
-      sql`, `
-    )})`;
-    whereClause = whereClause ? and(whereClause, inClause) : inClause;
-  }
-
-  const sortColumn =
-    sortBy === 'updatedAt'
-      ? schema.feedbackItems.updatedAt
-      : schema.feedbackItems.createdAt;
-  const orderFn = sortOrder === 'asc' ? asc : desc;
-
-  const items = db
-    .select()
-    .from(schema.feedbackItems)
-    .where(whereClause)
-    .orderBy(orderFn(sortColumn))
-    .limit(limit)
-    .offset(offset)
-    .all();
-
-  const countResult = db
-    .select({ count: sql<number>`count(*)` })
-    .from(schema.feedbackItems)
-    .where(whereClause)
-    .get();
-  const total = countResult?.count || 0;
-
-  // Fetch latest session info for dispatched feedback items
-  const feedbackIds = items.map((i) => i.id);
-  const sessionMap = new Map<string, { latestSessionId: string; latestSessionStatus: string; sessionCount: number }>();
-  if (feedbackIds.length > 0) {
-    const sessions = db
-      .select({
-        feedbackId: schema.agentSessions.feedbackId,
-        id: schema.agentSessions.id,
-        status: schema.agentSessions.status,
-      })
-      .from(schema.agentSessions)
-      .where(and(
-        inArray(schema.agentSessions.feedbackId, feedbackIds),
-        ne(schema.agentSessions.status, 'deleted'),
-      ))
-      .orderBy(desc(schema.agentSessions.createdAt))
-      .all();
-    for (const s of sessions) {
-      if (!s.feedbackId) continue;
-      const existing = sessionMap.get(s.feedbackId);
-      if (existing) {
-        existing.sessionCount++;
-      } else {
-        sessionMap.set(s.feedbackId, { latestSessionId: s.id, latestSessionStatus: s.status, sessionCount: 1 });
-      }
-    }
-  }
-
-  const hydrated = items.map((item) => {
-    const tags = db
-      .select()
-      .from(schema.feedbackTags)
-      .where(eq(schema.feedbackTags.feedbackId, item.id))
-      .all()
-      .map((t) => t.tag);
-    const screenshots = db
-      .select()
-      .from(schema.feedbackScreenshots)
-      .where(eq(schema.feedbackScreenshots.feedbackId, item.id))
-      .all();
-    const audioFiles = db
-      .select()
-      .from(schema.feedbackAudio)
-      .where(eq(schema.feedbackAudio.feedbackId, item.id))
-      .all();
-    const fb = hydrateFeedback(item, tags, screenshots, audioFiles);
-    const si = sessionMap.get(item.id);
-    return si ? { ...fb, latestSessionId: si.latestSessionId, latestSessionStatus: si.latestSessionStatus, sessionCount: si.sessionCount } : fb;
-  });
-
-  return c.json({
-    items: hydrated,
-    total,
-    page,
-    limit,
-    totalPages: Math.ceil(total / limit),
-  });
-});
-
-adminRoutes.get('/feedback/:id', async (c) => {
-  const id = c.req.param('id');
-  let item = await db.query.feedbackItems.findFirst({
-    where: eq(schema.feedbackItems.id, id),
-  });
-
-  // Fall back to short ID suffix match (last 6+ chars)
-  if (!item && id.length >= 4 && id.length < 26) {
-    item = await db.query.feedbackItems.findFirst({
-      where: like(schema.feedbackItems.id, `%${id}`),
-    });
-  }
-
-  if (!item) {
-    return c.json({ error: 'Not found' }, 404);
-  }
-
-  const tags = db
-    .select()
-    .from(schema.feedbackTags)
-    .where(eq(schema.feedbackTags.feedbackId, id))
-    .all()
-    .map((t) => t.tag);
-  const screenshots = db
-    .select()
-    .from(schema.feedbackScreenshots)
-    .where(eq(schema.feedbackScreenshots.feedbackId, id))
-    .all();
-  const audioFiles = db
-    .select()
-    .from(schema.feedbackAudio)
-    .where(eq(schema.feedbackAudio.feedbackId, id))
-    .all();
-
-  return c.json(hydrateFeedback(item, tags, screenshots, audioFiles));
-});
-
-adminRoutes.get('/feedback/:id/context', async (c) => {
-  const id = c.req.param('id');
-  const item = await db.query.feedbackItems.findFirst({
-    where: eq(schema.feedbackItems.id, id),
-  });
-
-  if (!item) {
-    return c.json({ error: 'Not found' }, 404);
-  }
-
-  const context = item.context ? JSON.parse(item.context) : null;
-  const lines: string[] = [];
-
-  lines.push(`# Feedback Context: ${id}`);
-  lines.push(`Title: ${item.title}`);
-  lines.push(`Description: ${item.description}`);
-  lines.push(`URL: ${item.sourceUrl || 'N/A'}`);
-  lines.push(`Created: ${item.createdAt}`);
-  lines.push('');
-
-  if (context?.environment) {
-    const env = context.environment;
-    lines.push('## Page Info');
-    lines.push(`URL: ${env.url}`);
-    lines.push(`Referrer: ${env.referrer || 'none'}`);
-    lines.push(`Viewport: ${env.viewport}`);
-    lines.push(`Screen: ${env.screenResolution}`);
-    lines.push(`Platform: ${env.platform}`);
-    lines.push(`Language: ${env.language}`);
-    lines.push(`User-Agent: ${env.userAgent}`);
-    lines.push(`Timestamp: ${new Date(env.timestamp).toISOString()}`);
-    lines.push('');
-  }
-
-  if (context?.consoleLogs && context.consoleLogs.length > 0) {
-    lines.push('## Console Logs');
-    for (const log of context.consoleLogs) {
-      const ts = new Date(log.timestamp).toISOString();
-      lines.push(`[${ts}] ${log.level.toUpperCase()}: ${log.message}`);
-    }
-    lines.push('');
-  }
-
-  if (context?.networkErrors && context.networkErrors.length > 0) {
-    lines.push('## Network Errors');
-    for (const err of context.networkErrors) {
-      const ts = new Date(err.timestamp).toISOString();
-      lines.push(`[${ts}] ${err.method} ${err.url} → ${err.status} ${err.statusText}`);
-    }
-    lines.push('');
-  }
-
-  if (context?.performanceTiming) {
-    const perf = context.performanceTiming;
-    lines.push('## Performance');
-    if (perf.loadTime != null) lines.push(`Load time: ${perf.loadTime.toFixed(1)}ms`);
-    if (perf.domContentLoaded != null) lines.push(`DOM content loaded: ${perf.domContentLoaded.toFixed(1)}ms`);
-    if (perf.firstContentfulPaint != null) lines.push(`First contentful paint: ${perf.firstContentfulPaint.toFixed(1)}ms`);
-    lines.push('');
-  }
-
-  const screenshots = db
-    .select()
-    .from(schema.feedbackScreenshots)
-    .where(eq(schema.feedbackScreenshots.feedbackId, id))
-    .all();
-
-  if (screenshots.length > 0) {
-    lines.push('## Screenshots');
-    for (const ss of screenshots) {
-      const baseUrl = new URL(c.req.url).origin;
-      lines.push(`- ${baseUrl}/api/v1/images/${ss.id} (${ss.mimeType}, ${ss.size} bytes)`);
-    }
-    lines.push('');
-  }
-
-  return c.text(lines.join('\n'));
-});
-
-adminRoutes.patch('/feedback/:id', async (c) => {
-  const id = c.req.param('id');
-  const body = await c.req.json();
-  const parsed = feedbackUpdateSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
-  }
-
-  const existing = await db.query.feedbackItems.findFirst({
-    where: eq(schema.feedbackItems.id, id),
-  });
-  if (!existing) {
-    return c.json({ error: 'Not found' }, 404);
-  }
-
-  const now = new Date().toISOString();
-  const updates: Record<string, unknown> = { updatedAt: now };
-  if (parsed.data.status) updates.status = parsed.data.status;
-  if (parsed.data.title) updates.title = parsed.data.title;
-  if (parsed.data.description !== undefined) updates.description = parsed.data.description;
-
-  if (parsed.data.data) {
-    const existingData = existing.data ? JSON.parse(existing.data as string) : {};
-    updates.data = JSON.stringify({ ...existingData, ...parsed.data.data });
-  }
-
-  if (parsed.data.context) {
-    const existingCtx = existing.context ? JSON.parse(existing.context as string) : {};
-    const merged = { ...existingCtx };
-    if (parsed.data.context.consoleLogs) {
-      merged.consoleLogs = [...(existingCtx.consoleLogs || []), ...parsed.data.context.consoleLogs];
-    }
-    if (parsed.data.context.networkErrors) {
-      merged.networkErrors = [...(existingCtx.networkErrors || []), ...parsed.data.context.networkErrors];
-    }
-    if (parsed.data.context.performanceTiming) {
-      merged.performanceTiming = parsed.data.context.performanceTiming;
-    }
-    if (parsed.data.context.environment) {
-      merged.environment = parsed.data.context.environment;
-    }
-    updates.context = JSON.stringify(merged);
-  }
-
-  await db.update(schema.feedbackItems).set(updates).where(eq(schema.feedbackItems.id, id));
-
-  if (parsed.data.tags) {
-    await db.delete(schema.feedbackTags).where(eq(schema.feedbackTags.feedbackId, id));
-    if (parsed.data.tags.length > 0) {
-      await db.insert(schema.feedbackTags).values(
-        parsed.data.tags.map((tag) => ({ feedbackId: id, tag }))
-      );
-    }
-  }
-
-  return c.json({ id, updated: true });
-});
-
-adminRoutes.delete('/feedback/:id', async (c) => {
-  const id = c.req.param('id');
-  const existing = await db.query.feedbackItems.findFirst({
-    where: eq(schema.feedbackItems.id, id),
-  });
-  if (!existing) {
-    return c.json({ error: 'Not found' }, 404);
-  }
-
-  await db.delete(schema.feedbackItems).where(eq(schema.feedbackItems.id, id));
-  return c.json({ id, deleted: true });
-});
-
-adminRoutes.post('/feedback/batch', async (c) => {
-  const body = await c.req.json();
-  const parsed = batchOperationSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
-  }
-
-  const { ids, operation, value } = parsed.data;
-  const now = new Date().toISOString();
-  let affected = 0;
-
-  for (const id of ids) {
-    const existing = await db.query.feedbackItems.findFirst({
-      where: eq(schema.feedbackItems.id, id),
-    });
-    if (!existing) continue;
-
-    switch (operation) {
-      case 'updateStatus':
-        if (value) {
-          await db.update(schema.feedbackItems)
-            .set({ status: value, updatedAt: now })
-            .where(eq(schema.feedbackItems.id, id));
-          affected++;
-        }
-        break;
-      case 'addTag':
-        if (value) {
-          const existingTag = db
-            .select()
-            .from(schema.feedbackTags)
-            .where(and(eq(schema.feedbackTags.feedbackId, id), eq(schema.feedbackTags.tag, value)))
-            .get();
-          if (!existingTag) {
-            await db.insert(schema.feedbackTags).values({ feedbackId: id, tag: value });
-          }
-          affected++;
-        }
-        break;
-      case 'removeTag':
-        if (value) {
-          await db.delete(schema.feedbackTags)
-            .where(and(eq(schema.feedbackTags.feedbackId, id), eq(schema.feedbackTags.tag, value)));
-          affected++;
-        }
-        break;
-      case 'delete':
-        await db.update(schema.feedbackItems)
-          .set({ status: 'deleted', updatedAt: now })
-          .where(eq(schema.feedbackItems.id, id));
-        affected++;
-        break;
-      case 'permanentDelete':
-        await db.delete(schema.feedbackItems).where(eq(schema.feedbackItems.id, id));
-        affected++;
-        break;
-    }
-  }
-
-  return c.json({ operation, affected });
-});
-
-// Agent endpoints CRUD
-adminRoutes.get('/agents', async (c) => {
-  const appId = c.req.query('appId');
-  let agents;
-  if (appId) {
-    agents = db.select().from(schema.agentEndpoints)
-      .where(or(eq(schema.agentEndpoints.appId, appId), isNull(schema.agentEndpoints.appId)))
-      .all();
-  } else {
-    agents = db.select().from(schema.agentEndpoints).all();
-  }
-  return c.json(agents);
-});
-
-adminRoutes.post('/agents', async (c) => {
-  const body = await c.req.json();
-  const parsed = agentEndpointSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
-  }
-
-  const now = new Date().toISOString();
-  const id = ulid();
-
-  if (parsed.data.isDefault) {
-    const condition = parsed.data.appId
-      ? eq(schema.agentEndpoints.appId, parsed.data.appId)
-      : isNull(schema.agentEndpoints.appId);
-    await db.update(schema.agentEndpoints)
-      .set({ isDefault: false, updatedAt: now })
-      .where(condition);
-  }
-
-  await db.insert(schema.agentEndpoints).values({
-    id,
-    name: parsed.data.name,
-    url: parsed.data.url || '',
-    authHeader: parsed.data.authHeader || null,
-    isDefault: parsed.data.isDefault,
-    appId: parsed.data.appId || null,
-    promptTemplate: parsed.data.promptTemplate || null,
-    mode: parsed.data.mode || 'webhook',
-    permissionProfile: parsed.data.permissionProfile || 'interactive',
-    allowedTools: parsed.data.allowedTools || null,
-    autoPlan: parsed.data.autoPlan || false,
-    createdAt: now,
-    updatedAt: now,
-  });
-
-  return c.json({ id }, 201);
-});
-
-adminRoutes.patch('/agents/:id', async (c) => {
-  const id = c.req.param('id');
-  const body = await c.req.json();
-  const parsed = agentEndpointSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
-  }
-
-  const existing = await db.query.agentEndpoints.findFirst({
-    where: eq(schema.agentEndpoints.id, id),
-  });
-  if (!existing) {
-    return c.json({ error: 'Not found' }, 404);
-  }
-
-  const now = new Date().toISOString();
-
-  if (parsed.data.isDefault) {
-    const condition = parsed.data.appId
-      ? eq(schema.agentEndpoints.appId, parsed.data.appId)
-      : isNull(schema.agentEndpoints.appId);
-    await db.update(schema.agentEndpoints)
-      .set({ isDefault: false, updatedAt: now })
-      .where(condition);
-  }
-
-  await db.update(schema.agentEndpoints).set({
-    name: parsed.data.name,
-    url: parsed.data.url || '',
-    authHeader: parsed.data.authHeader || null,
-    isDefault: parsed.data.isDefault,
-    appId: parsed.data.appId || null,
-    promptTemplate: parsed.data.promptTemplate || null,
-    mode: parsed.data.mode || 'webhook',
-    permissionProfile: parsed.data.permissionProfile || 'interactive',
-    allowedTools: parsed.data.allowedTools || null,
-    autoPlan: parsed.data.autoPlan || false,
-    preferredLauncherId: parsed.data.preferredLauncherId ?? existing.preferredLauncherId,
-    harnessConfigId: parsed.data.harnessConfigId ?? existing.harnessConfigId,
-    spriteConfigId: parsed.data.spriteConfigId ?? existing.spriteConfigId,
-    updatedAt: now,
-  }).where(eq(schema.agentEndpoints.id, id));
-
-  return c.json({ id, updated: true });
-});
-
-adminRoutes.delete('/agents/:id', async (c) => {
-  const id = c.req.param('id');
-  const existing = await db.query.agentEndpoints.findFirst({
-    where: eq(schema.agentEndpoints.id, id),
-  });
-  if (!existing) {
-    return c.json({ error: 'Not found' }, 404);
-  }
-
-  await db.delete(schema.agentEndpoints).where(eq(schema.agentEndpoints.id, id));
-  return c.json({ id, deleted: true });
-});
-
-// Dispatch targets (connected remote launchers + running harness configs + DB-sourced offline targets)
-adminRoutes.get('/dispatch-targets', (c) => {
-  const launchers = listLaunchers();
-  const launcherTargets: Array<Record<string, unknown>> = launchers
-    .filter(l => !l.isLocal && l.ws?.readyState === 1)
-    .map(l => {
-      let machineName: string | null = null;
-      let machineId: string | null = l.machineId || null;
-      let defaultCwd: string | null = null;
-      if (l.machineId) {
-        const machine = db.select().from(schema.machines).where(eq(schema.machines.id, l.machineId)).get();
-        if (machine) {
-          machineName = machine.name;
-          defaultCwd = machine.defaultCwd || null;
-        }
-      }
-      return {
-        launcherId: l.id,
-        name: l.name,
-        hostname: l.hostname,
-        machineName,
-        machineId,
-        defaultCwd,
-        isHarness: !!l.harness,
-        harnessConfigId: l.harnessConfigId || null,
-        activeSessions: l.activeSessions.size,
-        maxSessions: l.capabilities.maxSessions,
-        online: true,
-      };
-    });
-
-  // Also include running harness configs whose launcher is connected but
-  // that don't appear as separate harness launchers
-  const launcherIds = new Set(launcherTargets.filter(t => t.isHarness).map(t => t.harnessConfigId));
-  const harnessConfigs = db.select().from(schema.harnessConfigs)
-    .where(eq(schema.harnessConfigs.status, 'running'))
-    .all();
-  for (const hc of harnessConfigs) {
-    if (launcherIds.has(hc.id)) continue;
-    if (!hc.launcherId) continue;
-    const launcher = launchers.find(l => l.id === hc.launcherId);
-    if (!launcher || launcher.ws?.readyState !== 1) continue;
-    let hcDefaultCwd: string | null = null;
-    if (launcher.machineId) {
-      const m = db.select().from(schema.machines).where(eq(schema.machines.id, launcher.machineId)).get();
-      if (m) hcDefaultCwd = m.defaultCwd || null;
-    }
-    launcherTargets.push({
-      launcherId: launcher.id,
-      name: hc.name || `harness-${hc.id.slice(-6)}`,
-      hostname: launcher.hostname,
-      machineName: null,
-      machineId: launcher.machineId || null,
-      defaultCwd: hcDefaultCwd,
-      isHarness: true,
-      harnessConfigId: hc.id,
-      activeSessions: launcher.activeSessions.size,
-      maxSessions: launcher.capabilities.maxSessions,
-      online: true,
-    });
-  }
-
-  // Include DB-sourced machines with status='online' that don't already have a connected launcher
-  const connectedMachineIds = new Set(launcherTargets.filter(t => !t.isHarness && t.machineId).map(t => t.machineId));
-  const dbMachines = db.select().from(schema.machines)
-    .where(eq(schema.machines.status, 'online'))
-    .all();
-  for (const m of dbMachines) {
-    if (connectedMachineIds.has(m.id)) continue;
-    if (m.type === 'local') continue;
-    launcherTargets.push({
-      launcherId: `db-machine:${m.id}`,
-      name: m.name,
-      hostname: m.hostname || m.address || '',
-      machineName: m.name,
-      machineId: m.id,
-      defaultCwd: m.defaultCwd || null,
-      isHarness: false,
-      harnessConfigId: null,
-      activeSessions: 0,
-      maxSessions: 0,
-      online: false,
-    });
-  }
-
-  // Include DB-sourced harness configs with status='running' that don't already have a target
-  const existingHarnessIds = new Set(launcherTargets.filter(t => t.isHarness && t.harnessConfigId).map(t => t.harnessConfigId));
-  for (const hc of harnessConfigs) {
-    if (existingHarnessIds.has(hc.id)) continue;
-    launcherTargets.push({
-      launcherId: `db-harness:${hc.id}`,
-      name: hc.name || `harness-${hc.id.slice(-6)}`,
-      hostname: '',
-      machineName: null,
-      machineId: hc.machineId || null,
-      defaultCwd: null,
-      isHarness: true,
-      harnessConfigId: hc.id,
-      activeSessions: 0,
-      maxSessions: 0,
-      online: false,
-    });
-  }
-
-  // Include sprite configs as targets
-  const spriteConfigs = db.select().from(schema.spriteConfigs).all();
-  for (const sc of spriteConfigs) {
-    launcherTargets.push({
-      launcherId: `sprite:${sc.id}`,
-      name: sc.name,
-      hostname: `${sc.spriteName}.sprites.app`,
-      machineName: null,
-      machineId: null,
-      defaultCwd: sc.defaultCwd || null,
-      isHarness: false,
-      isSprite: true,
-      spriteConfigId: sc.id,
-      harnessConfigId: null,
-      activeSessions: countActiveSpriteSessions(sc.id),
-      maxSessions: sc.maxSessions,
-      online: sc.status !== 'error' && sc.status !== 'destroyed',
-    });
-  }
-
-  return c.json({ targets: launcherTargets });
-});
-
-// Dispatch
-adminRoutes.post('/dispatch', async (c) => {
-  const body = await c.req.json();
-  const parsed = dispatchSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
-  }
-
-  const { feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId } = parsed.data;
-
-  try {
-    // Admin-specific: detect and kill stuck sessions before dispatching
-    const agent = await db.query.agentEndpoints.findFirst({
-      where: eq(schema.agentEndpoints.id, agentEndpointId),
-    });
-    if (agent) {
-      const mode = (agent.mode || 'webhook') as string;
-      if (mode !== 'webhook') {
-        const existing = db
-          .select()
-          .from(schema.agentSessions)
-          .where(
-            and(
-              eq(schema.agentSessions.feedbackId, feedbackId),
-              sql`${schema.agentSessions.status} IN ('pending', 'running')`
-            )
-          )
-          .get();
-
-        if (existing) {
-          const ageMs = Date.now() - new Date(existing.createdAt).getTime();
-
-          if (ageMs > 30_000) {
-            const status = await getSessionStatus(existing.id);
-            const stuck = !status || status.healthy === false || (status.totalBytes ?? 0) < 15_000;
-
-            if (stuck) {
-              console.log(`[admin] Stuck session detected: ${existing.id} (age=${Math.round(ageMs / 1000)}s, bytes=${status?.totalBytes ?? 0}, healthy=${status?.healthy}) — killing`);
-              await killSession(existing.id);
-            } else {
-              return c.json({
-                dispatched: true,
-                sessionId: existing.id,
-                status: 200,
-                response: `Existing active session: ${existing.id}`,
-                existing: true,
-              });
-            }
-          } else {
-            return c.json({
-              dispatched: true,
-              sessionId: existing.id,
-              status: 200,
-              response: `Existing active session: ${existing.id}`,
-              existing: true,
-            });
-          }
-        }
-      }
-    }
-
-    const result = await dispatchFeedbackToAgent({ feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId });
-    return c.json(result);
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-    if (errorMsg === 'Feedback not found' || errorMsg === 'Agent endpoint not found') {
-      return c.json({ error: errorMsg }, 404);
-    }
-    if (err instanceof SessionServiceError) {
-      console.error(`[admin] Session service error during dispatch:`, errorMsg);
-      return c.json({ dispatched: false, error: errorMsg }, 503);
-    }
-    console.error(`[admin] Dispatch error:`, errorMsg);
-    return c.json({ dispatched: false, error: errorMsg }, 500);
-  }
-});
-
-// Default prompt template
-adminRoutes.get('/default-prompt-template', (c) => {
-  return c.json({ template: DEFAULT_PROMPT_TEMPLATE });
-});
+export const systemRoutes = new Hono();
 
 // Tmux configs CRUD
-adminRoutes.get('/tmux-configs', (c) => {
+systemRoutes.get('/tmux-configs', (c) => {
   const configs = db.select().from(schema.tmuxConfigs).all();
   return c.json(configs);
 });
 
-adminRoutes.post('/tmux-configs', async (c) => {
+systemRoutes.post('/tmux-configs', async (c) => {
   const body = await c.req.json() as { name: string; content?: string };
   if (!body.name) return c.json({ error: 'Name required' }, 400);
 
@@ -848,7 +44,7 @@ adminRoutes.post('/tmux-configs', async (c) => {
   return c.json({ id }, 201);
 });
 
-adminRoutes.patch('/tmux-configs/:id', async (c) => {
+systemRoutes.patch('/tmux-configs/:id', async (c) => {
   const id = c.req.param('id');
   const existing = db.select().from(schema.tmuxConfigs).where(eq(schema.tmuxConfigs.id, id)).get();
   if (!existing) return c.json({ error: 'Not found' }, 404);
@@ -867,7 +63,7 @@ adminRoutes.patch('/tmux-configs/:id', async (c) => {
   return c.json({ id, updated: true });
 });
 
-adminRoutes.delete('/tmux-configs/:id', async (c) => {
+systemRoutes.delete('/tmux-configs/:id', async (c) => {
   const id = c.req.param('id');
   const existing = db.select().from(schema.tmuxConfigs).where(eq(schema.tmuxConfigs.id, id)).get();
   if (!existing) return c.json({ error: 'Not found' }, 404);
@@ -878,7 +74,7 @@ adminRoutes.delete('/tmux-configs/:id', async (c) => {
 });
 
 // Edit tmux config in terminal (nano/vim)
-adminRoutes.post('/tmux-configs/:id/edit-terminal', async (c) => {
+systemRoutes.post('/tmux-configs/:id/edit-terminal', async (c) => {
   const id = c.req.param('id');
   const config = db.select().from(schema.tmuxConfigs).where(eq(schema.tmuxConfigs.id, id)).get();
   if (!config) return c.json({ error: 'Not found' }, 404);
@@ -901,7 +97,7 @@ adminRoutes.post('/tmux-configs/:id/edit-terminal', async (c) => {
 });
 
 // Save tmux config back from temp file after terminal editing
-adminRoutes.post('/tmux-configs/:id/save-from-file', async (c) => {
+systemRoutes.post('/tmux-configs/:id/save-from-file', async (c) => {
   const id = c.req.param('id');
   const existing = db.select().from(schema.tmuxConfigs).where(eq(schema.tmuxConfigs.id, id)).get();
   if (!existing) return c.json({ error: 'Config not found' }, 404);
@@ -925,7 +121,7 @@ adminRoutes.post('/tmux-configs/:id/save-from-file', async (c) => {
 });
 
 // Tmux config endpoints — read/write tmux-pw.conf file directly
-adminRoutes.get('/tmux-conf', (c) => {
+systemRoutes.get('/tmux-conf', (c) => {
   try {
     const content = readFileSync(PW_TMUX_CONF, 'utf-8');
     return c.json({ content });
@@ -934,14 +130,14 @@ adminRoutes.get('/tmux-conf', (c) => {
   }
 });
 
-adminRoutes.put('/tmux-conf', async (c) => {
+systemRoutes.put('/tmux-conf', async (c) => {
   const { content } = await c.req.json() as { content: string };
   writeFileSync(PW_TMUX_CONF, content, 'utf-8');
   return c.json({ saved: true });
 });
 
 // Perf metrics
-adminRoutes.post('/perf-metrics', async (c) => {
+systemRoutes.post('/perf-metrics', async (c) => {
   const body = await c.req.json() as { route?: string; timestamp?: number; durations?: Record<string, number> };
   if (!body.route || !body.durations || typeof body.durations !== 'object') {
     return c.json({ error: 'route and durations required' }, 400);
@@ -959,7 +155,7 @@ adminRoutes.post('/perf-metrics', async (c) => {
   return c.json({ id }, 201);
 });
 
-adminRoutes.get('/perf-metrics', (c) => {
+systemRoutes.get('/perf-metrics', (c) => {
   const route = c.req.query('route');
   const limit = Math.min(parseInt(c.req.query('limit') || '50', 10) || 50, 500);
 
@@ -984,7 +180,7 @@ adminRoutes.get('/perf-metrics', (c) => {
 });
 
 // Browse directories (for directory picker UI)
-adminRoutes.get('/browse-dirs', (c) => {
+systemRoutes.get('/browse-dirs', (c) => {
   const raw = c.req.query('path') || homedir();
   const target = raw === '~' ? homedir() : raw.startsWith('~/') ? join(homedir(), raw.slice(2)) : raw;
   const resolved = resolve(target);
@@ -1008,7 +204,7 @@ adminRoutes.get('/browse-dirs', (c) => {
 });
 
 // Read a file from disk (for file viewer panel)
-adminRoutes.get('/read-file', (c) => {
+systemRoutes.get('/read-file', (c) => {
   const filePath = c.req.query('path');
   if (!filePath) return c.json({ error: 'path query parameter required' }, 400);
   const resolved = resolve(filePath);
@@ -1033,7 +229,7 @@ adminRoutes.get('/read-file', (c) => {
 });
 
 // Browse files in an app's projectDir (files + directories)
-adminRoutes.get('/browse-files', (c) => {
+systemRoutes.get('/browse-files', (c) => {
   const appId = c.req.query('appId');
   const relPath = c.req.query('path') || '.';
   if (!appId) return c.json({ error: 'appId query parameter required' }, 400);
@@ -1060,8 +256,8 @@ adminRoutes.get('/browse-files', (c) => {
             const st = statSync(join(target, e.name));
             result.size = st.size;
           } catch { /* ignore */ }
-          const ext = extname(e.name).slice(1).toLowerCase();
-          if (ext) result.ext = ext;
+          const ext2 = extname(e.name).slice(1).toLowerCase();
+          if (ext2) result.ext = ext2;
         }
         return result;
       })
@@ -1084,7 +280,7 @@ adminRoutes.get('/browse-files', (c) => {
 });
 
 // Git status for an app's projectDir
-adminRoutes.get('/git-status', (c) => {
+systemRoutes.get('/git-status', (c) => {
   const appId = c.req.query('appId');
   if (!appId) return c.json({ error: 'appId query parameter required' }, 400);
 
@@ -1125,7 +321,7 @@ adminRoutes.get('/git-status', (c) => {
 });
 
 // Git diff for an app's projectDir
-adminRoutes.get('/git-diff', (c) => {
+systemRoutes.get('/git-diff', (c) => {
   const appId = c.req.query('appId');
   const filePath = c.req.query('path') || '';
   const staged = c.req.query('staged') === 'true';
@@ -1152,7 +348,7 @@ adminRoutes.get('/git-diff', (c) => {
 });
 
 // Setup assist — AI assistant for configuring machines and harnesses
-adminRoutes.post('/setup-assist', async (c) => {
+systemRoutes.post('/setup-assist', async (c) => {
   const body = await c.req.json();
   const { request, entityType, entityId } = body as {
     request?: string;
@@ -1700,7 +896,7 @@ function buildNewEntityPrompt(
 }
 
 // Plain terminal session (no agent, no feedback)
-adminRoutes.post('/terminal', async (c) => {
+systemRoutes.post('/terminal', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const { cwd, appId, launcherId, harnessConfigId, permissionProfile, tmuxTarget } = body as { cwd?: string; appId?: string; launcherId?: string; harnessConfigId?: string; permissionProfile?: string; tmuxTarget?: string };
   // Harness terminal: exec into the container
@@ -1740,13 +936,13 @@ adminRoutes.post('/terminal', async (c) => {
 });
 
 // List tmux sessions from the default tmux server
-adminRoutes.get('/tmux-sessions', async (c) => {
-  const { listDefaultTmuxSessions } = await import('../tmux-pty.js');
+systemRoutes.get('/tmux-sessions', async (c) => {
+  const { listDefaultTmuxSessions } = await import('../../tmux-pty.js');
   return c.json({ sessions: listDefaultTmuxSessions() });
 });
 
 // List tmux sessions on a remote launcher
-adminRoutes.get('/launcher/:launcherId/tmux-sessions', async (c) => {
+systemRoutes.get('/launcher/:launcherId/tmux-sessions', async (c) => {
   const launcherId = c.req.param('launcherId');
   const launcher = getLauncher(launcherId);
   if (!launcher || launcher.ws?.readyState !== 1) {
@@ -1763,7 +959,7 @@ adminRoutes.get('/launcher/:launcherId/tmux-sessions', async (c) => {
 });
 
 // Attach to an existing tmux session from the default server
-adminRoutes.post('/terminal/attach-tmux', async (c) => {
+systemRoutes.post('/terminal/attach-tmux', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const { tmuxTarget, appId, launcherId } = body as { tmuxTarget?: string; appId?: string; launcherId?: string };
 

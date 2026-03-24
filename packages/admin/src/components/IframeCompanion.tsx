@@ -1,24 +1,21 @@
 import { signal } from '@preact/signals';
 import { useRef } from 'preact/hooks';
-import { getIsolateEntry } from '../lib/isolate.js';
 
-export function IsolateCompanionView({ componentName }: { componentName: string }) {
+export function IframeCompanion({ url, label }: { url: string; label?: string }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const loading = signal(true);
-  const entry = getIsolateEntry(componentName);
-  const label = entry?.label || componentName;
-  const src = `${window.location.origin}${window.location.pathname}?isolate=${encodeURIComponent(componentName)}`;
+  const displayLabel = label || url;
 
   return (
     <div class="iframe-companion">
       <div class="iframe-companion-toolbar">
-        <span class="iframe-companion-url" title={label}>{label}</span>
+        <span class="iframe-companion-url" title={displayLabel}>{displayLabel}</span>
         <button
           class="iframe-companion-reload"
           onClick={() => {
             const iframe = iframeRef.current;
             if (iframe) {
-              iframe.src = src;
+              iframe.src = url;
               loading.value = true;
             }
           }}
@@ -28,7 +25,7 @@ export function IsolateCompanionView({ componentName }: { componentName: string 
         </button>
         <a
           class="iframe-companion-open"
-          href={src}
+          href={url}
           target="_blank"
           rel="noopener noreferrer"
           title="Open in new tab"
@@ -38,7 +35,7 @@ export function IsolateCompanionView({ componentName }: { componentName: string 
       </div>
       <iframe
         ref={iframeRef}
-        src={src}
+        src={url}
         class="iframe-companion-frame"
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
         onLoad={() => { loading.value = false; }}
