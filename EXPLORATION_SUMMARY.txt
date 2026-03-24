@@ -1,0 +1,373 @@
+================================================================================
+PROMPT WIDGET ADMIN UI - TERMINAL PICKER EXPLORATION SUMMARY
+================================================================================
+
+EXPLORATION COMPLETED: March 2, 2026
+
+The following is a comprehensive exploration of the terminal picker / terminal
+submenu components in the prompt-widget admin UI codebase.
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+1. TERMINAL PICKER COMPONENTS FOUND
+   - TerminalCompanionPicker (GlobalTerminalPanel.tsx, lines 81-182)
+   - NewTerminalPicker (GlobalTerminalPanel.tsx, lines 184-263)
+   - Both use CSS classes: .id-dropdown-menu and .term-picker-menu
+   - Both positioned absolutely with dropdown behavior
+
+2. DROPDOWN/SUBMENU SYSTEM
+   - Main menu system: PaneHeader ID Dropdown (.id-dropdown-menu)
+   - Terminal companion toggle via 'M' keyboard shortcut
+   - Click-outside detection pattern used throughout
+   - Dropdown sections separated by .id-dropdown-separator dividers
+
+3. DATA SOURCES
+   - Remote machines & harnesses: /admin/dispatch-targets API
+   - Open terminals: allSessions signal filtered by permissionProfile==='plain'
+   - Tmux sessions: /admin/tmux-sessions API (loaded on demand)
+   - Data cached with 10-second TTL for machines/harnesses
+
+4. MODAL/DIALOG COMPONENTS
+   - AddAppModal.tsx - Fixed overlay modal pattern
+   - ShortcutHelpModal.tsx - Simpler modal variant
+   - DirPicker.tsx - Nested dropdown with async loading (reference pattern)
+   - All modals follow same structure: modal-overlay + modal container
+
+5. SEARCH/CMD-K FUNCTIONALITY
+   - SpotlightSearch.tsx component (Cmd-K / Ctrl-K trigger)
+   - Local search: applications, sessions (synchronous)
+   - API search: feedback (debounced 200ms)
+   - Keyboard navigation, recent results tracking
+   - Result grouping and auto-scroll to selection
+
+================================================================================
+COMPONENT ARCHITECTURE
+================================================================================
+
+GlobalTerminalPanel.tsx (1055 lines)
+├── PaneHeader() - Session header with dropdown menu
+│   ├── ID Dropdown .id-dropdown-menu
+│   │   ├── Copy commands
+│   │   ├── Toggle companion views (JSONL, Feedback, Iframe, Terminal)
+│   │   ├── Popout options
+│   │   └── Split panes
+│   └── Terminal Companion Button (M key handler)
+│       └── Opens TerminalCompanionPicker when clicked
+│
+├── TerminalCompanionPicker() - lines 81-182
+│   ├── "New terminal" button
+│   ├── Remote machines section (if available)
+│   ├── Harnesses section (if available)
+│   ├── Open terminals section (existing sessions)
+│   └── Attach tmux session section (async loaded)
+│
+└── NewTerminalPicker() - lines 184-263
+    ├── "Local terminal" option
+    ├── Remote machines section
+    ├── Harnesses section
+    └── Attach tmux session section
+
+Signal Flow:
+┌─────────────────────────────┐
+│ termPickerSessionId.value   │ ← Triggers TerminalCompanionPicker
+└──────────────┬──────────────┘
+               │
+      ┌────────┴────────┐
+      │                 │
+ ┌────▼────┐      ┌────▼────┐
+ │pickNew()│      │pickExisting()
+ └────┬────┘      └────┬─────┘
+      │                │
+      └────────┬───────┘
+               │
+         ┌─────▼──────────────┐
+         │spawnTerminal() or  │
+         │attachTmuxSession() │
+         └─────┬──────────────┘
+               │
+         ┌─────▼──────────────────────┐
+         │setTerminalCompanionAndOpen │
+         └─────┬──────────────────────┘
+               │
+    ┌──────────▼────────────┐
+    │terminalCompanionMap   │
+    │(persisted to LocalStor)
+    └───────────────────────┘
+
+================================================================================
+CSS STYLING REFERENCE
+================================================================================
+
+Terminal Picker/Dropdown Menu:
+- .id-dropdown-menu (app.css, line 5368)
+  Position: absolute, top: 100%, left: 0
+  Background: #1e293b (dark slate)
+  Border: 1px solid #475569
+  Border-radius: 6px
+  Box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4)
+  z-index: 1000
+  min-width: 180px
+  padding: 4px 0
+
+- .term-picker-menu (additional inline styles)
+  TerminalCompanionPicker: top:100%;left:0;min-width:200px
+  NewTerminalPicker: top:auto;bottom:100%;right:0;left:auto;min-width:200px
+
+Modal Overlays:
+- .modal-overlay (app.css, line 1650)
+  Position: fixed, inset: 0
+  Background: var(--pw-overlay) [rgba(0,0,0,0.4) light / 0.6 dark]
+  z-index: 1000
+
+- .modal (app.css, line 1660)
+  width: 90%, max-width: 500px
+  max-height: 90vh
+  Border-radius: 12px
+  Padding: 24px
+
+Spotlight Search:
+- .spotlight-overlay (app.css, line 5997)
+  Position: fixed, inset: 0, z-index: 9999
+  Animation: fade-in 0.1s ease-out
+
+- .spotlight-container (app.css, line 6013)
+  width: 560px, max-height: 420px
+  Border-radius: 12px
+  Animation: slide-down 0.15s ease-out
+
+================================================================================
+STATE MANAGEMENT
+================================================================================
+
+Signals in GlobalTerminalPanel.tsx (lines 71-79):
+- termPickerSessionId: Tracks which session's terminal picker is open
+- termPickerTmux: Array of tmux sessions from API
+- termPickerLoading: Boolean for async loading state
+- newTermPickerOpen: Boolean for "+" button dropdown visibility
+- idMenuOpen: Tracks which session's main dropdown menu is open
+
+Signals in sessions.ts (lines 1804-1809):
+- terminalCompanionMap: Record<parentSessionId, termSessionId>
+- Persisted to localStorage under key: 'pw-terminal-companion-map'
+
+Functions in sessions.ts:
+- getTerminalCompanion(sessionId): Returns companion terminal ID
+- setTerminalCompanionAndOpen(parentId, termId): Links and opens companion
+- spawnTerminal(appId?, launcherId?, harnessConfigId?): Create new terminal
+- attachTmuxSession(tmuxTarget, appId?): Attach existing tmux session
+
+================================================================================
+API ENDPOINTS
+================================================================================
+
+GET /admin/dispatch-targets
+  Response: { targets: DispatchTarget[] }
+  DispatchTarget interface:
+    - launcherId: string
+    - name: string
+    - hostname: string
+    - machineName: string | null
+    - machineId: string | null
+    - isHarness: boolean
+    - harnessConfigId: string | null
+    - activeSessions: number
+    - maxSessions: number
+
+GET /admin/tmux-sessions
+  Response: { sessions: TmuxSession[] }
+  TmuxSession interface:
+    - name: string
+    - windows: number
+    - created: string
+    - attached: boolean
+
+POST /admin/terminal
+  Body: { cwd?: string; appId?: string; launcherId?: string; harnessConfigId?: string }
+  Response: { sessionId: string }
+
+POST /admin/terminal/attach-tmux
+  Body: { tmuxTarget: string; appId?: string }
+  Response: { sessionId: string }
+
+================================================================================
+KEYBOARD INTERACTIONS
+================================================================================
+
+In Terminal Picker Menus:
+- Esc: Close menu
+- M: Toggle terminal companion (opens TerminalCompanionPicker)
+- Keyboard shortcut hints shown in menu via <kbd> elements
+
+In ID Dropdown Menu (lines 696-747):
+- C: Copy session ID
+- T: Copy tmux attach command
+- J: Copy JSONL path
+- L: Toggle JSONL companion
+- F: Toggle feedback companion
+- I: Toggle iframe companion
+- M: Open/close terminal companion
+- P: Pop out as panel
+- W: Pop out as window
+- B: Pop out as browser tab
+- A: Pop out to Terminal.app (macOS)
+- S: Enable split panes
+- Esc: Close menu
+
+In Spotlight Search (SpotlightSearch.tsx):
+- Cmd-K / Ctrl-K: Open/close
+- Arrow Up/Down: Navigate results
+- Enter: Select result
+- Esc: Close
+- Type: Filter results
+
+================================================================================
+CLICK-OUTSIDE HANDLING PATTERNS
+================================================================================
+
+Pattern 1: Terminal Picker (useEffect with setTimeout)
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.term-picker-menu')) onClose();
+    }
+    setTimeout(() => document.addEventListener('mousedown', handleClick), 0);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [onClose]);
+
+Pattern 2: Directory Picker (useRef container check)
+  useEffect(() => {
+    if (!open) return;
+    function onClickOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [open]);
+
+Pattern 3: Modal (stopPropagation)
+  <div class="modal-overlay" onClick={onClose}>
+    <div class="modal" onClick={(e) => e.stopPropagation()}>
+      {/* content */}
+    </div>
+  </div>
+
+================================================================================
+FILES ANALYZED
+================================================================================
+
+Admin UI Components:
+✓ GlobalTerminalPanel.tsx (1055 lines) - Main terminal panel + pickers
+✓ DispatchTargetSelect.tsx (85 lines) - Machine/harness selector
+✓ AddAppModal.tsx (213 lines) - Modal pattern reference
+✓ ShortcutHelpModal.tsx (63 lines) - Simpler modal pattern
+✓ SpotlightSearch.tsx (260 lines) - Cmd-K search functionality
+✓ DirPicker.tsx (125 lines) - Directory dropdown pattern reference
+✓ AgentTerminal.tsx (465 lines) - Terminal rendering via xterm.js
+
+State/API:
+✓ sessions.ts (lines 1-100+) - Session management signals and functions
+✓ api.ts (lines 1-150+) - API client with dispatch/terminal endpoints
+
+Styling:
+✓ app.css (6196+ lines)
+  - .id-dropdown-menu (lines 5368-5428)
+  - .modal-overlay / .modal (lines 1650-1681)
+  - .dir-picker-dropdown (lines 1804-1912)
+  - .spotlight-* (lines 5997-6182)
+
+================================================================================
+DESIGN PATTERNS IDENTIFIED
+================================================================================
+
+1. DROPDOWN SUBMENU PATTERN
+   - Absolute positioned relative to trigger
+   - Click-outside detection for closing
+   - Keyboard-driven (single-key shortcuts shown as <kbd>)
+   - Section separators for visual grouping
+   - Inline styles for positioning variants
+
+2. ASYNC DATA LOADING PATTERN
+   - Loading state signal
+   - useEffect triggers data fetch on mount
+   - Loading indicator displayed during fetch
+   - Error handling with .catch()
+   - Finally block clears loading state
+
+3. MODAL OVERLAY PATTERN
+   - Fixed full-screen overlay with dark background
+   - Centered container with max-width constraint
+   - stopPropagation on container to prevent backdrop close
+   - onClick on overlay for backdrop close
+   - z-index: 1000 for modals
+
+4. SIGNAL-BASED STATE MANAGEMENT
+   - Preact signals for reactive state
+   - localStorage persistence for some signals
+   - Automatic re-renders on signal changes
+   - Effect hooks for side effects
+
+5. KEYBOARD-FIRST NAVIGATION
+   - Single-letter shortcuts for common actions
+   - Arrow keys for list navigation
+   - Enter for selection
+   - Esc for closing
+   - Ctrl/Cmd modifiers for less common actions
+
+================================================================================
+EXISTING SEARCH/CMD-K IMPLEMENTATION
+================================================================================
+
+Component: SpotlightSearch.tsx
+Trigger: Cmd-K or Ctrl-K (managed in Layout/App)
+z-index: 9999 (above all other UI)
+
+Features:
+- Three search modes:
+  1. Local: Applications (synchronous filter)
+  2. Local: Sessions (synchronous filter)
+  3. API: Feedback (debounced 200ms)
+
+- Keyboard navigation:
+  - Arrow Up/Down: cycle through results
+  - Enter: select result
+  - Esc: close search
+
+- Recent results:
+  - Tracks last 10 searched items
+  - Persistent in localStorage
+  - Displayed when search is empty
+
+- Result types:
+  - Applications (package icon)
+  - Sessions (lightning or computer icon)
+  - Feedback (clipboard icon)
+
+- Grouping:
+  - By type: Applications, Sessions, Feedback
+  - Fixed display order: Apps, Sessions, Feedback
+
+================================================================================
+RECOMMENDATIONS FOR ENHANCEMENT
+================================================================================
+
+To add a cmd-k terminal picker or search:
+1. Create new command in SpotlightSearch results with type: 'terminal'
+2. Reuse terminal picker data sources (cachedTargets, allSessions, tmuxSessions)
+3. Add keyboard handler in result selection for terminal operations
+4. Use existing setTerminalCompanionAndOpen() for linking
+5. Leverage existing click-outside pattern for modal closure
+6. Follow established styling with .id-dropdown-menu classes
+
+Key components to leverage:
+- DispatchTargetSelect for machine/harness data
+- DirPicker for reference on async dropdown patterns
+- SpotlightSearch for search algorithm and UI
+- AddAppModal for modal overlay template
+
+================================================================================
+END OF EXPLORATION SUMMARY
+================================================================================

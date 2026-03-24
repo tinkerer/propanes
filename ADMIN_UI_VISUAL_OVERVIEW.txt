@@ -1,0 +1,322 @@
+================================================================================
+                    ADMIN UI STRUCTURE - VISUAL OVERVIEW
+================================================================================
+
+ROOT ENTRY POINT
+================
+main.tsx → renders <App /> to #app div
+
+App.tsx (Router)
+├─ Check isAuthenticated.value
+├─ Parse currentRoute.value
+└─ Render appropriate page or LoginPage
+
+
+AUTHENTICATED USER FLOW
+=======================
+App.tsx
+└─ <Layout>                                    ← Main shell
+    ├─ ┌─────────────────────────────────────────────────────────┐
+    │  │ SIDEBAR (collapsible)                                   │
+    │  ├─ App switcher dropdown                                  │
+    │  ├─ App-specific links: Feedback, Sessions, Aggregate, etc │
+    │  ├─ Global nav: Agents, Settings, Guides                  │
+    │  └─ Logout, Preferences                                   │
+    │
+    ├─ ┌─────────────────────────────────────────────────────────┐
+    │  │ MAIN CONTENT AREA (fills horizontal space)              │
+    │  ├─ FeedbackListPage / FeedbackDetailPage                  │
+    │  ├─ AggregatePage                                          │
+    │  ├─ SessionsPage                                           │
+    │  ├─ LiveConnectionsPage                                    │
+    │  ├─ AppSettingsPage / AgentsPage / InfrastructurePage      │
+    │  └─ etc.                                                   │
+    │
+    ├─ ┌─────────────────────────────────────────────────────────┐
+    │  │ BOTTOM PANEL (GlobalTerminalPanel) - RESIZABLE          │
+    │  ├─ Tab bar:                                               │
+    │  │  ┌─────────────┬─────────────┬──────────┬──────────┐   │
+    │  │  │ jsonl:abc1  │ feedback:2  │ terminal │ X        │   │
+    │  │  └─────────────┴─────────────┴──────────┴──────────┘   │
+    │  │                      ▲                                  │
+    │  │                   Click tabs                            │
+    │  │                 to switch view                          │
+    │  │                                                         │
+    │  └─ Active companion content:                              │
+    │     ├─ <JsonlView />               (for jsonl:*)           │
+    │     ├─ <FeedbackCompanionView />   (for feedback:*)        │
+    │     ├─ <TerminalCompanionView />   (for terminal:*)        │
+    │     ├─ <IframeCompanionView />     (for iframe:*)          │
+    │     ├─ <IsolateCompanionView />    (for isolate:*)         │
+    │     └─ <AdminAssistCompanion />    (for admin-assist:*) ← NEW
+    │
+    └─ <PopoutPanel />                         ← Floating windows (independent)
+
+
+TAB ID FORMAT
+=============
+Tab IDs are strings in format: '<type>:<identifier>'
+
+  TYPE                IDENTIFIER          RENDERED BY
+  ────────────────────────────────────────────────────────────────
+  jsonl               sessionId            <JsonlView />
+  feedback            sessionId            <FeedbackCompanionView />
+  terminal            sessionId            <TerminalCompanionView />
+  iframe              sessionId            <IframeCompanionView />
+  isolate             componentName        <IsolateCompanionView />
+  url                 fullUrl              <IframeCompanionView />
+  admin-assist        context              <AdminAssistCompanion />  ← NEW
+
+
+STATE SIGNALS
+=============
+From lib/sessions.js:
+
+  openTabs: string[]           ← Array of tab IDs: ['jsonl:abc', 'terminal:def']
+  activeTabId: string | null   ← Currently visible tab: 'jsonl:abc'
+  panelHeight: number          ← Height in pixels (resizable)
+  panelMinimized: boolean      ← Collapsed or expanded
+  panelMaximized: boolean      ← Full-screen companion
+  sidebarCollapsed: boolean    ← Sidebar hidden
+  splitEnabled: boolean        ← Left/right pane split
+  leftPaneTabs: string[]       ← Tabs in left pane
+  rightPaneTabs: string[]      ← Tabs in right pane
+
+
+PAGES (14 TOTAL)
+================
+App-specific (under /app/{appId}/):
+  FeedbackListPage      ← /app/{appId}/feedback
+  FeedbackDetailPage    ← /app/{appId}/feedback/{id}
+  SessionsPage          ← /app/{appId}/sessions
+  AggregatePage         ← /app/{appId}/aggregate
+  LiveConnectionsPage   ← /app/{appId}/live
+  AppSettingsPage       ← /app/{appId}/settings
+
+Global settings (under /settings/):
+  AgentsPage            ← /settings/agents
+  GettingStartedPage    ← /settings/getting-started
+  UserGuidePage         ← /settings/user-guide
+  SettingsPage          ← /settings/preferences
+  InfrastructurePage    ← /settings/infrastructure
+
+Special:
+  StandaloneSessionPage ← /session/{sessionId}
+  LoginPage             ← /login
+  ApplicationsPage      ← deprecated
+
+
+COMPONENTS (33 TOTAL)
+=====================
+Router & Shell:
+  App.tsx
+  Layout.tsx
+
+Panel & Tabs:
+  GlobalTerminalPanel.tsx (LARGE - 52.8 KB)
+  PopoutPanel.tsx
+
+Companions (rendered in tabs):
+  JsonlView.tsx                  ← JSONL conversation viewer
+  FeedbackCompanionView.tsx      ← Feedback detail
+  TerminalCompanionView.tsx      ← Terminal/tmux
+  IframeCompanionView.tsx        ← URL/page iframe
+  IsolateCompanionView.tsx       ← Isolated component
+  AdminAssistCompanion.tsx       ← [TO CREATE]
+
+Message display:
+  StructuredView.tsx             ← Group + render messages
+  MessageRenderer.tsx            ← Tool-specific rendering (15+ types)
+  AgentTerminal.tsx              ← Terminal output
+  SessionViewToggle.tsx          ← View mode switcher
+
+Modals & Popovers:
+  AddAppModal.tsx                ← App creation (good pattern reference)
+  DispatchDialog.tsx             ← Feedback dispatch modal
+  ShortcutHelpModal.tsx          ← Keyboard shortcuts
+  TerminalPicker.tsx             ← Terminal/companion picker
+  SpotlightSearch.tsx            ← Global search/command palette
+
+AI Assistants:
+  AiAssistButton.tsx             ← Inline popover pattern
+  SetupAssistButton.tsx          ← Draggable popover with presets
+
+Selection:
+  DispatchPicker.tsx
+  DispatchTargetSelect.tsx
+  DirPicker.tsx
+
+Utilities:
+  ControlBar.tsx
+  RequestPanel.tsx
+  FileViewerPanel.tsx
+  CropEditor.tsx
+  PerfOverlay.tsx
+  Tooltip.tsx
+  HintToast.tsx
+  AutoFixToast.tsx
+  DeletedItemsPanel.tsx
+  Guide.tsx
+
+
+HOW TO ADD ADMIN CHAT BOX
+=========================
+
+Step 1: Update lib/sessions.ts
+  ├─ Add 'admin-assist' to CompanionType union
+  ├─ Update extractCompanionType() to recognize 'admin-assist:'
+  └─ Update renderTabContent() switch to handle 'admin-assist'
+
+Step 2: Create components/AdminAssistCompanion.tsx
+  ├─ Chat message list
+  ├─ Input textarea (Cmd+Enter to submit)
+  ├─ API call: api.setupAssist({ request, entityType: 'admin' })
+  ├─ Load messages from returned sessionId
+  └─ Message rendering (reuse StructuredView or MessageRenderer)
+
+Step 3: Update GlobalTerminalPanel.tsx
+  ├─ Import AdminAssistCompanion
+  ├─ Auto-open 'admin-assist:welcome' tab on first load
+  └─ Add case in renderTabContent():
+       case 'admin-assist': return <AdminAssistCompanion tabId={tabId} />;
+
+Step 4: Update app.css (optional)
+  └─ Add styles following .ai-assist-* pattern
+
+
+EXISTING COMPONENTS TO REFERENCE
+=================================
+AiAssistButton.tsx
+  ├─ Small popover for page-specific AI help
+  ├─ Pattern: button → popover → textarea → submit → open session
+  └─ Used on: Feedback detail, Aggregate, App settings
+
+SetupAssistButton.tsx
+  ├─ Draggable popover for infrastructure setup
+  ├─ Pattern: button → draggable popover → preset buttons
+  ├─ Has presets for: machine, harness, agent, sprite
+  └─ Used on: Infrastructure page, Settings pages
+
+AddAppModal.tsx
+  ├─ Good FSM pattern: null → mode selection → form → success
+  ├─ Good form + error handling patterns
+  └─ Good copy-to-clipboard pattern
+
+JsonlView.tsx
+  ├─ Loads JSONL files from API
+  ├─ Two parsers: JsonOutputParser + TerminalOutputParser
+  ├─ Three view modes: Terminal, Structured, Split
+  └─ Message filtering via dropdown
+
+StructuredView.tsx
+  ├─ Group messages by type
+  ├─ Show token count and tool count per group
+  ├─ Click to expand/collapse
+  └─ Calls MessageRenderer for individual messages
+
+MessageRenderer.tsx
+  ├─ Renders 15+ tool types
+  ├─ Syntax highlighting with Prism
+  ├─ Image lightbox with base64/URL detection
+  ├─ Auto-truncate long output with expand
+  └─ Tool-specific formatting (Bash, Edit, Grep, etc.)
+
+
+KEY STATE FUNCTIONS
+===================
+from lib/sessions.js:
+
+  openSession(sessionId)
+    └─ Adds sessionId to openTabs and sets as activeTabId
+
+  toggleCompanion(sessionId, type)
+    └─ Opens a companion tab for a session (jsonl, feedback, etc.)
+
+  openUrlCompanion(url)
+    └─ Opens a URL in iframe companion
+
+  closeTab(tabId)
+    └─ Closes a tab
+
+  persistPanelState()
+    └─ Saves panel layout to localStorage
+
+
+API CALLS
+=========
+from lib/api.js:
+
+  api.setupAssist({ request, entityType, entityId? })
+    └─ Returns: { sessionId }
+    └─ Creates agent session for setup/infrastructure help
+
+  api.designAssist(appId, { request, context, settingPath? })
+    └─ Returns: { sessionId }
+    └─ Creates agent session for design/UI help
+
+  api.getAgentSessions(options?)
+    └─ Returns: Session[]
+    └─ Fetches all agent sessions
+
+  api.getApplications()
+    └─ Returns: Application[]
+    └─ Fetches all registered apps
+
+
+CSS CLASSES TO REUSE
+====================
+.ai-assist-popover       ← Popover container
+.ai-assist-header        ← Header with title
+.ai-assist-body          ← Content area
+.ai-assist-footer        ← Action buttons
+.request-panel-textarea  ← Textarea styling
+.btn, .btn-primary       ← Button styles
+.btn-sm                  ← Small button
+.pw-panel                ← Bottom panel
+.pw-tab-bar              ← Tab navigation
+.pw-tab-content          ← Tab content area
+.modal, .modal-overlay   ← Modal styling
+.form-group, .form-error ← Form elements
+
+
+WHAT YOU HAVE
+=============
+✓ Sophisticated Preact SPA with 14 pages
+✓ 33 reusable components
+✓ Signals-based reactive state management
+✓ Bottom docked panel with tab system
+✓ 6 companion types (JSONL, Feedback, Iframe, Terminal, Isolate, URL)
+✓ Two existing assistant components (AI Assist, Setup Assist)
+✓ Message rendering system with 15+ tool types
+✓ Perfect infrastructure for adding a chat box as 7th companion type
+
+
+WHERE TO PUT IT
+===============
+Add 'admin-assist' as a new companion type in GlobalTerminalPanel
+  ├─ Auto-opens as default tab: 'admin-assist:welcome'
+  ├─ Follows existing tab pattern perfectly
+  ├─ Reuses all panel features (split view, minimize, fullscreen)
+  ├─ Can be closed and reopened like other tabs
+  ├─ Integrates seamlessly with session management
+  └─ No UI disruption to existing layout
+
+
+SUMMARY
+=======
+The admin UI is well-architected with:
+  • Clear routing via URL
+  • Consistent component structure
+  • Centralized state management
+  • Reusable patterns for forms, modals, popovers
+  • Extensible companion tab system
+
+Adding an admin chat box is a straightforward 4-step process:
+  1. Define new companion type in state
+  2. Create component to render it
+  3. Wire it into GlobalTerminalPanel
+  4. Auto-open on first load
+
+No layout changes needed. It integrates naturally as another tab type.
+
+================================================================================

@@ -1,0 +1,245 @@
+================================================================================
+Cmd+K SEARCH ISSUE - COMPLETE ANALYSIS SUMMARY
+================================================================================
+
+ROOT CAUSE: iframe Keyboard Event Isolation
+
+When the feedback companion panel (an iframe) has focus, Cmd+K fails to open
+the spotlight search. This is NOT a bug in the shortcut handler logic. Instead,
+it's a BROWSER SECURITY BOUNDARY issue:
+
+  keyboard events fired inside an iframe's document context are ISOLATED
+  and do NOT propagate to the parent document's event listeners.
+
+================================================================================
+THE PROBLEM IN 3 POINTS
+================================================================================
+
+1. Cmd+K Shortcut Registration (Layout.tsx:287-293)
+   ✓ Correctly registered with modifiers: { meta: true }
+   ✓ Registered in global shortcut registry
+   ✓ Action is setShowSpotlight((v) => !v)
+
+2. Global Keyboard Handler (shortcuts.ts:239)
+   ✓ Correctly installed with capture phase
+   ✓ Cmd+K is on the allow-list (line 74)
+   ✓ Should work from any context... EXCEPT iframes
+
+3. THE ACTUAL PROBLEM
+   ✗ FeedbackCompanionView renders an <iframe> (FeedbackCompanionView.tsx:10-16)
+   ✗ When user focuses on iframe, keyboard events fire in IFRAME'S document
+   ✗ Parent document's event listener NEVER receives these events
+   ✗ Handler never runs, shortcut never fires, spotlight never opens
+
+================================================================================
+WHY OTHER SHORTCUTS DON'T FAIL
+================================================================================
+
+If you test Ctrl+Shift+[0-9] or other panel shortcuts:
+- They work because you're testing them while focused on PARENT document
+- If you press them while focused in the companion iframe, they'll ALSO fail
+- The difference: Most testing happens without focus in the iframe
+
+================================================================================
+TECHNICAL DETAILS
+================================================================================
+
+Parent Document Event Flow (Works):
+  User presses Cmd+K
+  → keydown event fires in parent document
+  → capture phase listener intercepts
+  → handleKeyDown() executes
+  → Cmd+K matches in registry
+  → setShowSpotlight() is called
+  → Spotlight opens ✓
+
+iframe Event Flow (Fails):
+  User presses Cmd+K
+  → keydown event fires in IFRAME'S document
+  → Parent's listener DOES NOT receive event (security boundary)
+  → handleKeyDown() never runs
+  → Spotlight never opens ✗
+
+The Cmd+K allow-list (shortcuts.ts:74) is irrelevant because:
+  - The handler never runs in the first place
+  - The allow-list only matters if handleKeyDown() executes
+  - It's like having a security check on a door that's never opened
+
+================================================================================
+KEY CODE LOCATIONS
+================================================================================
+
+Cmd+K Registration:
+  /Users/amir/work/github.com/prompt-widget/packages/admin/src/components/Layout.tsx
+  Lines 287-293
+
+Global Handler:
+  /Users/amir/work/github.com/prompt-widget/packages/admin/src/lib/shortcuts.ts
+  Lines 239-241 (installation)
+  Lines 65-137 (main logic)
+  Lines 71-88 (allow-list including Cmd+K on line 74)
+
+iframe Components:
+  /Users/amir/work/github.com/prompt-widget/packages/admin/src/components/FeedbackCompanionView.tsx
+  Lines 10-16 (creates iframe with companion mode)
+
+  /Users/amir/work/github.com/prompt-widget/packages/admin/src/components/IframeCompanionView.tsx
+  Lines 35-41 (renders external URL iframe)
+
+Rendering:
+  /Users/amir/work/github.com/prompt-widget/packages/admin/src/components/GlobalTerminalPanel.tsx
+  Lines 430-456 (decides which companion to show)
+
+Companion Mode Detection:
+  /Users/amir/work/github.com/prompt-widget/packages/admin/src/lib/state.ts
+  Line 8 (isCompanion flag)
+
+================================================================================
+THE ALLOW-LIST EXCEPTION
+================================================================================
+
+shortcuts.ts lines 73-74:
+  if (ctrlOrMeta && shiftHeld && e.code === 'Space') { /* allow through */ }
+  else if (ctrlOrMeta && e.key === 'k') { /* allow through */ }
+
+This explicitly allows Cmd+K even when typing in an input field. This is good
+design, but it only helps if the event reaches the handler. In iframe context,
+it never does.
+
+================================================================================
+isInputFocused() FUNCTION GAP
+================================================================================
+
+shortcuts.ts:32-48 checks if an input is focused:
+  - It traverses into shadow DOM (for web components)
+  - It does NOT traverse into iframes (browser prevents this)
+  - When focus is in iframe, document.activeElement returns the <iframe> element
+  - Function returns false ("not in input")
+  - But this is moot because the event never fires in parent anyway
+
+================================================================================
+COMPANION VIEW ARCHITECTURE
+================================================================================
+
+Three types of companion views:
+
+1. FeedbackCompanionView
+   - Renders admin page in iframe
+   - Source: /admin/?companion=true#${route}
+   - Self-referential: shows same app as parent
+
+2. IframeCompanionView
+   - Renders user-provided URLs
+   - Source: User's external web page
+   - Sandbox: "allow-scripts allow-same-origin allow-forms allow-popups"
+
+3. TerminalCompanionView
+   - Terminal view in sidebar/panel
+   - NOT an iframe, so no event isolation issues
+
+All are rendered in GlobalTerminalPanel (lines 430-456) and PopoutPanel
+based on session.permissionProfile type.
+
+================================================================================
+HOW TO FIX
+================================================================================
+
+Option 1: Message-Based Communication (Recommended)
+  - iframe sends postMessage to parent when Cmd+K pressed
+  - Parent listens for message and opens spotlight
+  - Works with sandboxed iframes
+  - Example in CMD_K_ANALYSIS.md
+
+Option 2: Detect Iframe Focus and Relay Events
+  - Detect when iframe has focus
+  - Intercept Cmd+K at window level
+  - Forward to parent
+  - More complex, may have edge cases
+
+Option 3: Ditch iframe for Companion
+  - Instead of iframe, use floating/docked panel with direct components
+  - No event isolation issues
+  - Requires architecture refactor
+
+Option 4: Remove iframe Sandbox
+  - Remove sandbox attribute
+  - iframe can now listen to parent document events
+  - DANGEROUS: allows scripts to escape containment
+
+================================================================================
+WHY THIS IS HARD TO DIAGNOSE
+================================================================================
+
+1. No console errors or warnings
+2. Handler is properly installed
+3. Shortcut logic is correct
+4. Code path exists from registration to execution
+5. The missing link is SUBTLE: "the event never fires in the parent"
+6. Developers typically assume "the handler should catch this"
+7. Without understanding iframe boundaries, it seems like a mystery
+
+================================================================================
+TESTING HOW TO VERIFY
+================================================================================
+
+Test 1: Cmd+K in normal context
+  - Click on main page
+  - Press Cmd+K
+  - Expected: Spotlight opens ✓
+
+Test 2: Cmd+K with input focused
+  - Click in a text input on main page
+  - Press Cmd+K
+  - Expected: Spotlight still opens ✓ (on allow-list)
+
+Test 3: Cmd+K with companion iframe focused
+  - Click inside the companion iframe panel
+  - Press Cmd+K
+  - Expected: Spotlight opens but... FAILS ✗ (current bug)
+
+Test 4: Other shortcuts in iframe
+  - Click inside companion iframe
+  - Press Ctrl+Shift+W (close tab)
+  - Expected: ALSO FAILS ✗ (same root cause)
+
+================================================================================
+FILES TO REVIEW
+================================================================================
+
+Three detailed analysis documents have been created:
+
+1. CMD_K_ANALYSIS.md
+   - Executive summary
+   - Key findings with code snippets
+   - Technical details of event flow
+   - Solution approaches
+   - Current behavior table
+
+2. COMPANION_IFRAME_ARCHITECTURE.md
+   - Where companions are rendered
+   - iframe component details
+   - Companion mode detection
+   - Event flow diagrams
+   - Key code locations
+
+3. CMD_K_CODE_PATHS.md
+   - Complete code path from registration to execution
+   - Detailed walkthrough of each phase
+   - Helper function analysis
+   - Why allow-list is irrelevant
+   - Clear "chain of failure" explanation
+
+All files include code snippets, line numbers, and file paths for easy reference.
+
+================================================================================
+BOTTOM LINE
+================================================================================
+
+The Cmd+K shortcut doesn't fail because it's broken.
+It fails because keyboard events are isolated to the iframe's document context.
+
+This is a FEATURE of browsers (security boundary), not a BUG in the code.
+
+The fix requires CROSS-DOCUMENT communication (postMessage) to bridge the gap.
+
+================================================================================
