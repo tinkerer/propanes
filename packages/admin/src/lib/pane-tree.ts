@@ -371,20 +371,40 @@ export function batch(fn: () => void) {
   } finally {
     _batchDepth--;
     if (_batchDepth === 0 && _batchTree) {
-      layoutTree.value = _batchTree;
+      _scheduleFlush(_batchTree);
       _batchTree = null;
-      persist();
     }
   }
 }
 
-/** Commit a cloned tree — deferred during batch. */
+/**
+ * Commit a cloned tree — debounced via requestAnimationFrame.
+ * Multiple mutations within a single frame coalesce into one signal update.
+ */
+let _pendingTree: LayoutTree | null = null;
+let _rafId = 0;
+
+function _scheduleFlush(tree: LayoutTree) {
+  _pendingTree = tree;
+  if (!_rafId) {
+    _rafId = requestAnimationFrame(_flushCommit);
+  }
+}
+
+function _flushCommit() {
+  _rafId = 0;
+  if (!_pendingTree) return;
+  const tree = _pendingTree;
+  _pendingTree = null;
+  layoutTree.value = tree;
+  persist();
+}
+
 function commitTree(tree: LayoutTree) {
   if (_batchDepth > 0) {
     _batchTree = tree;
   } else {
-    layoutTree.value = tree;
-    persist();
+    _scheduleFlush(tree);
   }
 }
 

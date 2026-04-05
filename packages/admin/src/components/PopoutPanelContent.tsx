@@ -38,15 +38,14 @@ export function PanelTabBadge({ tabNum }: { tabNum: number }) {
 
 export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (sid === 'view:page') return 'Page';
-  if (sid === 'view:controlbar') return 'Control Bar';
   if (sid === 'view:sessions-list') return 'Sessions';
   if (sid === 'view:terminals') return 'Terminals';
   if (sid === 'view:files') return 'Files';
   if (sid === 'view:nav') return 'Nav';
   if (sid === 'view:feedback') return 'Feedback';
-  if (sid === 'view:aggregate') return 'Aggregate';
   if (sid === 'view:sessions-page') return 'Sessions';
   if (sid === 'view:live') return 'Live';
+  if (sid === 'view:app-settings') return 'Settings';
   if (sid.startsWith('view:files:')) return 'Files';
   if (sid.startsWith('view:git:')) return 'Git Changes';
   if (sid.startsWith('view:')) return sid.slice(5);

@@ -14,6 +14,7 @@ import { AddAppModal } from './AddAppModal.js';
 import { HintToast } from './HintToast.js';
 import { AutoFixToast } from './AutoFixToast.js';
 import { TerminalPicker } from './TerminalPicker.js';
+import { ControlBar } from './ControlBar.js';
 import { registerShortcut, ctrlShiftHeld } from '../lib/shortcuts.js';
 import { toggleTheme, arrowTabSwitching, showHotkeyHints } from '../lib/settings.js';
 import {
@@ -68,6 +69,8 @@ import {
   popInPickerSessionId,
   cycleWaitingSession,
   bringAllPanelsToFront,
+  openFeedbackItem,
+  feedbackTitleCache,
 } from '../lib/sessions.js';
 
 export function Layout() {
@@ -91,6 +94,16 @@ export function Layout() {
       if (stopSessionPolling) stopSessionPolling();
     };
   }, []);
+
+  // Intercept feedback detail routes and open them as separate pane tabs
+  useEffect(() => {
+    const detailMatch = route.match(/^\/app\/([^/]+)\/feedback\/(.+)$/);
+    if (detailMatch) {
+      const [, appId, feedbackId] = detailMatch;
+      openFeedbackItem(feedbackId);
+      navigate(`/app/${appId}/feedback`);
+    }
+  }, [route]);
 
   useEffect(() => {
     if (!sidebarStatusMenu.value) return;
@@ -594,6 +607,7 @@ export function Layout() {
 
   return (
     <div class="layout">
+      <ControlBar />
       <PaneTree
         node={layoutTree.value.root}
       />
@@ -648,7 +662,7 @@ export function Layout() {
             {menuExited && (
               <button onClick={() => { sidebarStatusMenu.value = null; resumeSession(menuSid); }}>Resume</button>
             )}
-            <button onClick={() => { sidebarStatusMenu.value = null; closeTab(menuSid); }}>Close tab {showHotkeyHints.value && <kbd>⌃⇧W</kbd>}</button>
+            <button onClick={() => { closeTab(menuSid); sidebarStatusMenu.value = null; }}>Close tab {showHotkeyHints.value && <kbd>⌃⇧W</kbd>}</button>
             <button onClick={() => { sidebarStatusMenu.value = null; deleteSession(menuSid); }}>Archive</button>
           </div>
         );

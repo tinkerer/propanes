@@ -55,7 +55,7 @@ export function JsonlView({ sessionId }: Props) {
     setLoading(true);
     setError(null);
     fetchJsonl();
-    const interval = setInterval(fetchJsonl, 3000);
+    const interval = setInterval(() => { if (!document.hidden) fetchJsonl(); }, 3000);
     return () => clearInterval(interval);
   }, [sessionId, selectedFile]);
 

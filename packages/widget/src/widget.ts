@@ -1149,24 +1149,9 @@ export class PromptWidgetElement {
           this.appendTimelineEntry(item);
         };
         this.voiceRecorder.onHover = (event) => {
-          // Replace last hover entry, auto-remove after 2s
-          const existIdx = this.timelineItems.findIndex(i => i.kind === 'hover');
-          if (existIdx >= 0) {
-            this.timelineItems.splice(existIdx, 1);
-            const existEl = this.shadow.querySelector('.pw-tl-hover');
-            if (existEl) existEl.remove();
-          }
           const item: TimelineItem = { kind: 'hover', event };
           this.timelineItems.push(item);
           this.appendTimelineEntry(item);
-          setTimeout(() => {
-            const idx = this.timelineItems.indexOf(item);
-            if (idx >= 0) {
-              this.timelineItems.splice(idx, 1);
-              const el = this.shadow.querySelector('.pw-tl-hover');
-              if (el) el.remove();
-            }
-          }, 2000);
         };
         this.voiceRecorder.onScreenshotCapture = (capture) => {
           const item: TimelineItem = { kind: 'screenshot', capture };
@@ -1248,7 +1233,13 @@ export class PromptWidgetElement {
       return row;
     };
 
-    menu.appendChild(makeItem('Screen captures', this.micScreenCaptures, (v) => { this.micScreenCaptures = v; }));
+    menu.appendChild(makeItem('Screen captures', this.micScreenCaptures, (v) => {
+      this.micScreenCaptures = v;
+      if (this.voiceRecorder.recording) {
+        if (v) this.voiceRecorder.enableScreenCaptures();
+        else this.voiceRecorder.disableScreenCaptures();
+      }
+    }));
     menu.appendChild(makeItem('Hide transcript', this.micHideTranscript, (v) => { this.micHideTranscript = v; }));
     menu.appendChild(makeItem('Hide widget', this.micHideWidget, (v) => { this.micHideWidget = v; }));
 
@@ -1376,10 +1367,34 @@ export class PromptWidgetElement {
         break;
       }
       case 'hover': {
+        const secs = Math.round(item.event.timestamp / 1000);
+        ts.textContent = `${secs}s`;
         entry.classList.add('pw-tl-hover');
-        ts.textContent = '';
-        content.textContent = item.event.target.selector;
-        break;
+
+        const badge = document.createElement('span');
+        badge.className = 'pw-tl-badge pw-tl-badge-hover';
+        badge.textContent = 'hover';
+
+        const selector = document.createElement('span');
+        selector.className = 'pw-tl-selector';
+        selector.textContent = item.event.target.selector;
+
+        content.appendChild(badge);
+        content.appendChild(selector);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'pw-tl-remove';
+        removeBtn.textContent = '\u00d7';
+        removeBtn.addEventListener('click', () => {
+          const idx = this.timelineItems.indexOf(item);
+          if (idx >= 0) this.timelineItems.splice(idx, 1);
+          this.voiceRecorder.removeInteraction(item.event.id);
+          entry.remove();
+        });
+        entry.appendChild(ts);
+        entry.appendChild(content);
+        entry.appendChild(removeBtn);
+        return entry;
       }
       case 'screenshot': {
         const secs = Math.round(item.capture.timestamp / 1000);
@@ -1437,13 +1452,12 @@ export class PromptWidgetElement {
     if (panel && this.pickerExcludeWidget) panel.style.opacity = '0.3';
 
     const liveUpdate = this.pickerMultiSelect;
+    const previousElements = [...this.selectedElements];
     this.pickerCleanup = startPicker((infos) => {
       if (panel) panel.style.opacity = '1';
       this.pickerCleanup = null;
-      if (liveUpdate) {
-        this.selectedElements = infos;
-      } else if (infos.length > 0) {
-        this.selectedElements.push(...infos);
+      if (infos.length > 0) {
+        this.selectedElements = [...previousElements, ...infos];
       }
       this.renderSelectedElementChips();
     }, this.host, {
@@ -1451,7 +1465,7 @@ export class PromptWidgetElement {
       excludeWidget: this.pickerExcludeWidget,
       includeChildren: this.pickerIncludeChildren,
       onSelectionChange: liveUpdate ? (infos) => {
-        this.selectedElements = [...infos];
+        this.selectedElements = [...previousElements, ...infos];
         this.renderSelectedElementChips();
       } : undefined,
     });

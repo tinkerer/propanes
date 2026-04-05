@@ -235,7 +235,7 @@ function SidebarGitChanges({ appId, projectDir }: { appId: string; projectDir: s
 
   useEffect(() => {
     loadStatus();
-    pollRef.current = setInterval(loadStatus, 10000);
+    pollRef.current = setInterval(() => { if (!document.hidden) loadStatus(); }, 10000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [loadStatus]);
 

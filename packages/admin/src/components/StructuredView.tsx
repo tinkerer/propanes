@@ -112,10 +112,17 @@ export function StructuredView({ sessionId, isActive, permissionProfile }: Props
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${proto}//${window.location.host}/ws/agent-session?sessionId=${sessionId}&token=${token}`;
 
+    let reconnectDelay = 2000;
+    const MAX_RECONNECT_DELAY = 30000;
+
     function connect() {
       if (cleanedUp.current) return;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
+
+      ws.onopen = () => {
+        reconnectDelay = 2000;
+      };
 
       ws.onmessage = (event) => {
         try {
@@ -142,7 +149,8 @@ export function StructuredView({ sessionId, isActive, permissionProfile }: Props
       ws.onclose = () => {
         wsRef.current = null;
         if (!cleanedUp.current) {
-          setTimeout(connect, 2000);
+          setTimeout(connect, reconnectDelay);
+          reconnectDelay = Math.min(reconnectDelay * 1.5, MAX_RECONNECT_DELAY);
         }
       };
     }

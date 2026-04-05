@@ -51,10 +51,11 @@ import {
   autoJumpDismissed,
   handleBounceCounter,
   termPickerOpen,
+  openFeedbackItem,
 } from '../lib/sessions.js';
 import { startTabDrag } from '../lib/tab-drag.js';
 import { ctrlShiftHeld, stickyModeActive } from '../lib/shortcuts.js';
-import { navigate, selectedAppId } from '../lib/state.js';
+import { selectedAppId } from '../lib/state.js';
 import { showHotkeyHints } from '../lib/settings.js';
 import { api } from '../lib/api.js';
 import { renderTabContent } from './PaneContent.js';
@@ -293,7 +294,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
         {feedbackPath && (
           <a
             href={`#${feedbackPath}`}
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!dragMoved.current) navigate(feedbackPath); }}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!dragMoved.current && session?.feedbackId) openFeedbackItem(session.feedbackId); }}
             class="feedback-title-link"
             title={session?.feedbackTitle || 'View feedback'}
           >
@@ -399,6 +400,13 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
                 >
                   {ctrlShiftHeld.value && gn !== null && <PanelTabBadge tabNum={gn} />}
                 </span>}
+                {tabIsCompanion && <span class="companion-icon">{
+                  sid.startsWith('feedback:') ? '\u{1F4AC}' :
+                  sid.startsWith('jsonl:') ? '\u{1F4DC}' :
+                  sid.startsWith('iframe:') ? '\u{1F310}' :
+                  sid.startsWith('terminal:') ? '\u{25B8}' :
+                  '\u25C6'
+                }</span>}
                 {renamingSessionId.value === sid ? (
                   <input
                     type="text"
@@ -446,7 +454,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
         {feedbackPath && (
           <a
             href={`#${feedbackPath}`}
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!dragMoved.current) navigate(feedbackPath); }}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!dragMoved.current && session?.feedbackId) openFeedbackItem(session.feedbackId); }}
             class="feedback-title-link"
             title={session?.feedbackTitle || 'View feedback'}
           >
@@ -526,7 +534,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
               </div>
             )}
             <div class="popout-body">
-              {leftTabs.map((sid) => renderTabContent(sid, sid === activeId, sessionMap))}
+              {leftTabs.filter((sid) => sid === activeId).map((sid) => renderTabContent(sid, true, sessionMap))}
             </div>
           </div>
           <div class="popout-split-divider" onMouseDown={onSplitDividerMouseDown} />
@@ -590,7 +598,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
               );
             })()}
             <div class="popout-body">
-              {panelRightTabs.map((sid) => renderTabContent(sid, sid === panelRightActive, sessionMap))}
+              {panelRightTabs.filter((sid) => sid === panelRightActive).map((sid) => renderTabContent(sid, true, sessionMap))}
             </div>
           </div>
         </div>
@@ -1043,7 +1051,7 @@ export function PopoutPanel() {
                 Clear name
               </button>
             )}
-            <button onClick={() => { popoutStatusMenuOpen.value = null; closeTab(menuSid); }}>
+            <button onClick={() => { closeTab(menuSid); popoutStatusMenuOpen.value = null; }}>
               Close tab {showHotkeyHints.value && <kbd>{'\u2303\u21E7'}W</kbd>}
             </button>
             <div style="display:flex;gap:4px;padding:4px 8px;align-items:center">

@@ -1,7 +1,7 @@
 import { signal } from '@preact/signals';
-import { useEffect } from 'preact/hooks';
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { api } from '../lib/api.js';
+import { subscribeAdmin } from '../lib/admin-ws.js';
 
 interface ActivityEntry {
   ts: string;
@@ -183,9 +183,11 @@ export function LiveConnectionsPage({ appId }: { appId?: string | null }) {
 
   useEffect(() => {
     loading.value = true;
-    loadConnections();
-    const interval = setInterval(loadConnections, 5_000);
-    return () => clearInterval(interval);
+    loadConnections(); // initial load
+    return subscribeAdmin('live-connections', (data: LiveConnection[]) => {
+      connections.value = data;
+      loading.value = false;
+    });
   }, []);
 
   let filtered = connections.value;

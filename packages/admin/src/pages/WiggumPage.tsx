@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { api } from '../lib/api.js';
+import { subscribeAdmin } from '../lib/admin-ws.js';
 
 interface WiggumIteration {
   iteration: number;
@@ -134,9 +135,11 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
-  }, [load]);
+    return subscribeAdmin('wiggum', (data: WiggumRun[]) => {
+      const found = data.find((r: any) => r.id === runId);
+      if (found) setRun(found);
+    });
+  }, [load, runId]);
 
   if (error) return <div style={{ color: '#f44336', padding: 16 }}>Error: {error}</div>;
   if (!run) return <div style={{ padding: 16, color: '#888' }}>Loading...</div>;
@@ -312,8 +315,9 @@ export function WiggumPage() {
 
   useEffect(() => {
     loadRuns();
-    const interval = setInterval(loadRuns, 5000);
-    return () => clearInterval(interval);
+    return subscribeAdmin('wiggum', (data: WiggumRun[]) => {
+      setRuns(data);
+    });
   }, [loadRuns]);
 
   const handleAction = async (id: string, action: string) => {

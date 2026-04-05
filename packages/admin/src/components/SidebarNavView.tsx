@@ -2,7 +2,8 @@ import { useEffect } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { currentRoute, clearToken, navigate, selectedAppId, applications, unlinkedCount, appFeedbackCounts, addAppModalOpen } from '../lib/state.js';
 import { api } from '../lib/api.js';
-import { sidebarCollapsed, sidebarAnimating, toggleSidebar, sidebarWidth, openSettingsPanel } from '../lib/sessions.js';
+import { subscribeAdmin } from '../lib/admin-ws.js';
+import { sidebarCollapsed, sidebarAnimating, toggleSidebar, sidebarWidth, openSettingsPanel, openPageView } from '../lib/sessions.js';
 import { Tooltip } from './Tooltip.js';
 
 interface LiveConnection {
@@ -16,28 +17,32 @@ interface LiveConnection {
 const liveConnectionCounts = signal<Record<string, number>>({});
 const liveSites = signal<{ origin: string; hostname: string; count: number }[]>([]);
 
+function processLiveConnections(conns: LiveConnection[]) {
+  const counts: Record<string, number> = {};
+  const siteMap = new Map<string, number>();
+  const serverOrigin = window.location.origin;
+  for (const c of conns) {
+    const key = c.appId || '__unlinked__';
+    counts[key] = (counts[key] || 0) + 1;
+    if (c.url) {
+      try {
+        const u = new URL(c.url);
+        if (u.origin !== serverOrigin) {
+          siteMap.set(u.origin, (siteMap.get(u.origin) || 0) + 1);
+        }
+      } catch { /* invalid url */ }
+    }
+  }
+  liveConnectionCounts.value = counts;
+  liveSites.value = [...siteMap.entries()]
+    .map(([origin, count]) => ({ origin, hostname: new URL(origin).hostname, count }))
+    .sort((a, b) => a.hostname.localeCompare(b.hostname));
+}
+
 async function pollLiveConnections() {
   try {
     const conns: LiveConnection[] = await api.getLiveConnections();
-    const counts: Record<string, number> = {};
-    const siteMap = new Map<string, number>();
-    const serverOrigin = window.location.origin;
-    for (const c of conns) {
-      const key = c.appId || '__unlinked__';
-      counts[key] = (counts[key] || 0) + 1;
-      if (c.url) {
-        try {
-          const u = new URL(c.url);
-          if (u.origin !== serverOrigin) {
-            siteMap.set(u.origin, (siteMap.get(u.origin) || 0) + 1);
-          }
-        } catch { /* invalid url */ }
-      }
-    }
-    liveConnectionCounts.value = counts;
-    liveSites.value = [...siteMap.entries()]
-      .map(([origin, count]) => ({ origin, hostname: new URL(origin).hostname, count }))
-      .sort((a, b) => a.hostname.localeCompare(b.hostname));
+    processLiveConnections(conns);
   } catch {
     // ignore
   }
@@ -61,9 +66,10 @@ export function SidebarNavView() {
   const fbCounts = appFeedbackCounts.value;
 
   useEffect(() => {
-    pollLiveConnections();
-    const interval = setInterval(pollLiveConnections, 5_000);
-    return () => clearInterval(interval);
+    pollLiveConnections(); // initial load
+    return subscribeAdmin('live-connections', (conns: LiveConnection[]) => {
+      processLiveConnections(conns);
+    });
   }, []);
 
   return (
@@ -115,29 +121,22 @@ export function SidebarNavView() {
                   <a
                     href={`#/app/${app.id}/feedback`}
                     class={route === `/app/${app.id}/feedback` || route.startsWith(`/app/${app.id}/feedback/`) ? 'active' : ''}
-                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/feedback`); }}
+                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/feedback`); openPageView('view:feedback'); }}
                   >
                     {'\u{1F4CB}'} Feedback
                     {fbCounts[app.id]?.total > 0 && <span class="sidebar-count">{fbCounts[app.id].total}</span>}
                   </a>
                   <a
-                    href={`#/app/${app.id}/aggregate`}
-                    class={route === `/app/${app.id}/aggregate` ? 'active' : ''}
-                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/aggregate`); }}
-                  >
-                    {'\u{1F4CA}'} Aggregate
-                  </a>
-                  <a
                     href={`#/app/${app.id}/sessions`}
                     class={route === `/app/${app.id}/sessions` ? 'active' : ''}
-                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/sessions`); }}
+                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/sessions`); openPageView('view:sessions-page'); }}
                   >
                     {'\u26A1'} Sessions
                   </a>
                   <a
                     href={`#/app/${app.id}/live`}
                     class={route === `/app/${app.id}/live` ? 'active' : ''}
-                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/live`); }}
+                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/live`); openPageView('view:live'); }}
                   >
                     {'\u{1F310}'} Live
                     {(liveConnectionCounts.value[app.id] || 0) > 0 && (
@@ -147,7 +146,7 @@ export function SidebarNavView() {
                   <a
                     href={`#/app/${app.id}/settings`}
                     class={route === `/app/${app.id}/settings` ? 'active' : ''}
-                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/settings`); }}
+                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/settings`); openPageView('view:app-settings'); }}
                   >
                     {'\u2699'} Settings
                   </a>

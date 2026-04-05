@@ -176,6 +176,8 @@ npm run build --workspaces
 ## UI Conventions
 
 - **Never use `window.prompt()`, `window.alert()`, or `window.confirm()`** in the admin UI. These are ugly, block the thread, and break the UX. Instead, build proper in-app UI (modals, spotlight pickers, inline inputs).
+- **Strict lazy tab rendering**: In `LeafPane`, `GlobalTerminalPanel`, and `PopoutPanel`, only mount the **active tab** per container. Never render inactive tabs with `display:none` — each `AgentTerminal` creates an xterm.js instance + WebSocket + resize observers, and mounting multiple simultaneously will freeze Chrome. Use `tabs.filter(sid => sid === activeTabId).map(...)` instead of `tabs.map(...)`.
+- **RAF-debounced tree commits**: `commitTree()` in `pane-tree.ts` is debounced via `requestAnimationFrame` so multiple mutations within a frame coalesce into one signal update. Never set `layoutTree.value` directly outside of `commitTree` or `batch`.
 - For URL input, use the `TerminalPicker` in `{ kind: 'url' }` mode via `termPickerOpen.value = { kind: 'url' }`.
 - For terminal/companion selection, use the `TerminalPicker` in `{ kind: 'companion', sessionId }` or `{ kind: 'new' }` mode.
 - The `TerminalPicker` is a spotlight/command-palette component (`packages/admin/src/components/TerminalPicker.tsx`) that handles all picker interactions with keyboard navigation and categories.

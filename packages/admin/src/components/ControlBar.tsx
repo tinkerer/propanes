@@ -4,8 +4,6 @@ import { api } from '../lib/api.js';
 import {
   focusOrDockSession,
   spawnTerminal,
-  controlBarMinimized,
-  toggleControlBarMinimized,
   popoutPanels,
   paneMruHistory,
   bringToFront,
@@ -14,6 +12,7 @@ import {
   sessionMapComputed,
   getSessionLabel,
   openSession,
+  openPageView,
 } from '../lib/sessions.js';
 import type { PaneMruEntry } from '../lib/sessions.js';
 import { PopupMenu } from './PopupMenu.js';
@@ -40,7 +39,6 @@ export function ControlBar() {
   const app = appId ? apps.find((a: any) => a.id === appId) : null;
   const actions: { id: string; label: string; command: string; icon?: string }[] =
     app?.controlActions || [];
-  const minimized = controlBarMinimized.value;
 
   const [running, setRunning] = useState<string | null>(null);
   const [appDropdown, setAppDropdown] = useState(false);
@@ -72,20 +70,11 @@ export function ControlBar() {
     navigate(`/app/${id}/feedback`);
   }
 
-  if (minimized) {
-    return (
-      <div class="control-bar control-bar-minimized">
-        <button
-          class="control-bar-btn control-bar-app-btn"
-          onClick={toggleControlBarMinimized}
-          title="Expand control bar"
-        >
-          <span class="control-bar-icon">{'\u{1F4BB}'}</span>
-          {app?.name || 'Select App'}
-          <span class="control-bar-caret">{'\u25B8'}</span>
-        </button>
-      </div>
-    );
+  function openSetup() {
+    if (appId) {
+      navigate(`/app/${appId}/settings`);
+      openPageView('view:app-settings');
+    }
   }
 
   return (
@@ -123,19 +112,32 @@ export function ControlBar() {
 
       <div class="control-bar-sep" />
 
-      {/* Control actions */}
-      {actions.map((a) => (
+      {/* Control actions or setup assistant */}
+      {actions.length > 0 ? (
+        <div class="control-bar-actions">
+          {actions.map((a) => (
+            <button
+              key={a.id}
+              class="control-bar-btn"
+              onClick={() => run(a.id)}
+              disabled={running === a.id}
+              title={a.command}
+            >
+              {a.icon && <span class="control-bar-icon">{a.icon}</span>}
+              {running === a.id ? 'Running\u2026' : a.label}
+            </button>
+          ))}
+        </div>
+      ) : app ? (
         <button
-          key={a.id}
-          class="control-bar-btn"
-          onClick={() => run(a.id)}
-          disabled={running === a.id}
-          title={a.command}
+          class="control-bar-btn control-bar-setup-btn"
+          onClick={openSetup}
+          title="Configure control bar actions for this app"
         >
-          {a.icon && <span class="control-bar-icon">{a.icon}</span>}
-          {running === a.id ? 'Running\u2026' : a.label}
+          <span class="control-bar-icon">{'\u2699'}</span>
+          Setup Controls
         </button>
-      ))}
+      ) : null}
 
       {actions.length > 0 && <div class="control-bar-sep" />}
 
@@ -204,13 +206,6 @@ export function ControlBar() {
       )}
 
       <div style="flex:1" />
-      <button
-        class="control-bar-btn control-bar-minimize-btn"
-        onClick={toggleControlBarMinimized}
-        title="Minimize control bar"
-      >
-        {'\u2212'}
-      </button>
     </div>
   );
 }

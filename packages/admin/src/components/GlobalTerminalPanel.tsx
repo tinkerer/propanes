@@ -65,11 +65,12 @@ import {
   setJsonlSelectedFile,
   type JsonlFileInfo,
   buildTmuxAttachCmd,
+  openFeedbackItem,
 } from '../lib/sessions.js';
 import { renderTabContent } from './PaneContent.js';
 import { AdminAssistChat } from './AdminAssistChat.js';
 import { startTabDrag, type TabDragSource } from '../lib/tab-drag.js';
-import { navigate, selectedAppId } from '../lib/state.js';
+import { selectedAppId } from '../lib/state.js';
 import { showTabs, showHotkeyHints, popoutMode, type PopoutMode } from '../lib/settings.js';
 import { ctrlShiftHeld } from '../lib/shortcuts.js';
 import { api } from '../lib/api.js';
@@ -103,7 +104,7 @@ function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }
     };
     refresh();
     // Poll for new files every 10s (new continuations/subagents appear mid-session)
-    const interval = setInterval(() => refresh(true), 10_000);
+    const interval = setInterval(() => { if (!document.hidden) refresh(true); }, 10_000);
     return () => clearInterval(interval);
   }, [sessionId]);
 
@@ -278,7 +279,7 @@ function PaneHeader({
             })()
           )}
           {feedbackPath && (
-            <a href={`#${feedbackPath}`} onClick={(e) => { e.preventDefault(); navigate(feedbackPath); }} class="feedback-title-link" title={sess?.feedbackTitle || 'View feedback'}>{sess?.feedbackTitle || 'View feedback'}</a>
+            <a href={`#${feedbackPath}`} onClick={(e) => { e.preventDefault(); if (sess?.feedbackId) openFeedbackItem(sess.feedbackId); }} class="feedback-title-link" title={sess?.feedbackTitle || 'View feedback'}>{sess?.feedbackTitle || 'View feedback'}</a>
           )}
         </>
       )}
@@ -398,7 +399,7 @@ function PaneHeader({
           {feedbackPath && (
             <a
               href={`#${feedbackPath}`}
-              onClick={(e) => { e.preventDefault(); navigate(feedbackPath); }}
+              onClick={(e) => { e.preventDefault(); if (sess?.feedbackId) openFeedbackItem(sess.feedbackId); }}
               class="feedback-title-link"
               title={sess?.feedbackTitle || 'View feedback'}
             >
@@ -928,7 +929,7 @@ export function GlobalTerminalPanel() {
                 Clear name
               </button>
             )}
-            <button onClick={() => { statusMenuOpen.value = null; closeTab(menuSid); }}>
+            <button onClick={() => { closeTab(menuSid); statusMenuOpen.value = null; }}>
               Close tab {showHotkeyHints.value && <kbd>⌃⇧W</kbd>}
             </button>
             <div style="display:flex;gap:4px;padding:4px 8px;align-items:center">
@@ -999,7 +1000,7 @@ export function GlobalTerminalPanel() {
       )}
       {!minimized && !isSplit && (
         <div class="terminal-body">
-          {tabs.map((sid) => renderTabContent(sid, sid === activeId, sessionMap, (code, text) => markSessionExited(sid, code, text)))}
+          {tabs.filter((sid) => sid === activeId).map((sid) => renderTabContent(sid, true, sessionMap, (code, text) => markSessionExited(sid, code, text)))}
         </div>
       )}
       {!minimized && isSplit && (
@@ -1026,7 +1027,7 @@ export function GlobalTerminalPanel() {
             </div>
             <PaneHeader sessionId={activeId} sessionMap={sessionMap} exited={exited} />
             <div class="terminal-body">
-              {leftTabs.map((sid) => renderTabContent(sid, sid === activeId, sessionMap, (code, text) => markSessionExited(sid, code, text)))}
+              {leftTabs.filter((sid) => sid === activeId).map((sid) => renderTabContent(sid, true, sessionMap, (code, text) => markSessionExited(sid, code, text)))}
             </div>
           </div>
           <div class="terminal-split-divider" onMouseDown={onSplitDividerMouseDown} />
@@ -1057,7 +1058,7 @@ export function GlobalTerminalPanel() {
             </div>
             <PaneHeader sessionId={rightActive} sessionMap={sessionMap} exited={exited} />
             <div class="terminal-body">
-              {rightTabs.map((sid) => renderTabContent(sid, sid === rightActive, sessionMap, (code, text) => markSessionExited(sid, code, text)))}
+              {rightTabs.filter((sid) => sid === rightActive).map((sid) => renderTabContent(sid, true, sessionMap, (code, text) => markSessionExited(sid, code, text)))}
             </div>
           </div>
         </div>

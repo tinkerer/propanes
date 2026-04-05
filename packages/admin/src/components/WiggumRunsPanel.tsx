@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { api } from '../lib/api.js';
+import { subscribeAdmin } from '../lib/admin-ws.js';
 
 interface WiggumIteration {
   iteration: number;
@@ -57,9 +58,12 @@ export function WiggumRunsPanel({ sessionId }: { sessionId: string }) {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
-  }, [load]);
+    return subscribeAdmin('wiggum', (data: WiggumRun[]) => {
+      // Filter to only runs related to this parent session
+      const filtered = data.filter((r: any) => r.parentSessionId === sessionId);
+      setRuns(filtered);
+    });
+  }, [load, sessionId]);
 
   const handleAction = async (id: string, action: string) => {
     try {

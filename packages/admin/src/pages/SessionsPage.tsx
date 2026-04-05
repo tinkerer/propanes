@@ -1,8 +1,8 @@
 import { signal } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import { api } from '../lib/api.js';
-import { navigate, isEmbedded } from '../lib/state.js';
-import { allSessions, openSession, deleteSession, permanentlyDeleteSession, spawnTerminal, sessionInputStates, includeDeletedInPolling, termPickerOpen } from '../lib/sessions.js';
+import { isEmbedded } from '../lib/state.js';
+import { allSessions, openSession, deleteSession, permanentlyDeleteSession, spawnTerminal, sessionInputStates, includeDeletedInPolling, termPickerOpen, openFeedbackItem } from '../lib/sessions.js';
 import { DeletedItemsPanel, trackDeletion } from '../components/DeletedItemsPanel.js';
 import { cachedTargets, ensureTargetsLoaded } from '../components/DispatchTargetSelect.js';
 
@@ -336,7 +336,7 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
                 {feedbackTitle && (
                   <span
                     class="session-feedback-link"
-                    onClick={(e) => { e.stopPropagation(); navigate(`${feedbackPath}/${s.feedbackId}`); }}
+                    onClick={(e) => { e.stopPropagation(); openFeedbackItem(s.feedbackId); }}
                   >
                     feedback
                   </span>

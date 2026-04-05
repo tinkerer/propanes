@@ -1,12 +1,13 @@
 import { signal, effect } from '@preact/signals';
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useRef, useCallback } from 'preact/hooks';
 import { api } from '../lib/api.js';
-import { navigate, currentRoute } from '../lib/state.js';
+import { currentRoute } from '../lib/state.js';
 import { openSession, sessionInputStates, openFeedbackItem, feedbackTitleCache } from '../lib/sessions.js';
 import { openDispatchDialog, dispatchDialogResult } from '../components/DispatchDialog.js';
 import { copyWithTooltip } from '../lib/clipboard.js';
 import { DeletedItemsPanel, trackDeletion } from '../components/DeletedItemsPanel.js';
 import { formatDate } from '../lib/date-utils.js';
+import { AggregateWizard, openAggregateWizard } from '../components/AggregateWizard.js';
 
 const items = signal<any[]>([]);
 const total = signal(0);
@@ -27,6 +28,8 @@ const createLoading = signal(false);
 const isStuck = signal(false);
 const filtersCollapsed = signal(false);
 const sortMode = signal<string>('newest');
+const filterTag = signal('');
+const availableTags = signal<{ tag: string; count: number }[]>([]);
 const TYPES = ['', 'manual', 'ab_test', 'analytics', 'error_report', 'programmatic'];
 const STATUSES = ['', 'new', 'reviewed', 'running', 'completed', 'killed', 'failed', 'resolved', 'archived', 'deleted'];
 const DISPATCH_STATUSES = new Set(['running', 'completed', 'killed', 'failed']);
@@ -77,6 +80,7 @@ async function loadFeedback() {
       if (dispatchStatuses.length > 0) params.dispatchStatus = dispatchStatuses.join(',');
     }
     if (searchQuery.value) params.search = searchQuery.value;
+    if (filterTag.value) params.tag = filterTag.value;
     if (currentAppId.value) params.appId = currentAppId.value;
     const mode = sortMode.value;
     if (mode === 'oldest') { params.sortOrder = 'asc'; }
@@ -99,6 +103,7 @@ effect(() => {
   void currentAppId.value;
   void currentRoute.value;
   void sortMode.value;
+  void filterTag.value;
   loadFeedback();
 });
 
@@ -176,7 +181,7 @@ async function createFeedback() {
     createDescription.value = '';
     createType.value = 'manual';
     createTags.value = '';
-    navigate(`/app/${currentAppId.value}/feedback/${result.id}`);
+    openFeedbackItem(result.id);
   } catch (err: any) {
     console.error('Failed to create:', err.message);
   } finally {
@@ -278,6 +283,35 @@ function ActionCell({ item }: { item: any }) {
   );
 }
 
+function ColResizeHandle() {
+  const handleRef = useRef<HTMLDivElement>(null);
+
+  const onMouseDown = useCallback((e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const thEl = handleRef.current?.parentElement as HTMLTableCellElement | null;
+    if (!thEl) return;
+    const startX = e.clientX;
+    const startW = thEl.offsetWidth;
+    const handle = handleRef.current!;
+    handle.classList.add('dragging');
+
+    const onMove = (ev: MouseEvent) => {
+      const w = Math.max(40, startW + ev.clientX - startX);
+      thEl.style.width = w + 'px';
+    };
+    const onUp = () => {
+      handle.classList.remove('dragging');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, []);
+
+  return <div ref={handleRef} class="col-resize-handle" onMouseDown={onMouseDown} />;
+}
+
 export function FeedbackListPage({ appId }: { appId: string }) {
   if (currentAppId.value !== appId) {
     currentAppId.value = appId;
@@ -287,6 +321,7 @@ export function FeedbackListPage({ appId }: { appId: string }) {
 
   useEffect(() => {
     loadFeedback();
+    api.getFeedbackTags(appId).then(tags => { availableTags.value = tags; }).catch(() => {});
     const token = localStorage.getItem('pw-admin-token');
     if (!token) return;
     const es = new EventSource(`/api/v1/admin/feedback/events?token=${encodeURIComponent(token)}`);
@@ -294,6 +329,7 @@ export function FeedbackListPage({ appId }: { appId: string }) {
       const data = JSON.parse(e.data);
       if (!currentAppId.value || data.appId === currentAppId.value) {
         loadFeedback();
+        api.getFeedbackTags(appId).then(tags => { availableTags.value = tags; }).catch(() => {});
       }
     };
     es.addEventListener('new-feedback', onEvent);
@@ -334,6 +370,9 @@ export function FeedbackListPage({ appId }: { appId: string }) {
       <div class="page-header">
         <button class="btn btn-sm btn-primary" onClick={() => (showCreateForm.value = !showCreateForm.value)}>
           + New
+        </button>
+        <button class="btn btn-sm" onClick={() => openAggregateWizard(appId)} title="Cluster feedback by similarity and auto-tag">
+          Aggregate
         </button>
       </div>
 
@@ -425,6 +464,20 @@ export function FeedbackListPage({ appId }: { appId: string }) {
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
+        {availableTags.value.length > 0 && (
+          <select
+            value={filterTag.value}
+            onChange={(e) => {
+              filterTag.value = (e.target as HTMLSelectElement).value;
+              page.value = 1;
+            }}
+          >
+            <option value="">All tags</option>
+            {availableTags.value.map((t) => (
+              <option key={t.tag} value={t.tag}>{t.tag} ({t.count})</option>
+            ))}
+          </select>
+        )}
         <button
           class="btn-filter-toggle"
           onClick={() => (filtersCollapsed.value = !filtersCollapsed.value)}
@@ -499,10 +552,10 @@ export function FeedbackListPage({ appId }: { appId: string }) {
       </div>
 
       <div class="table-wrap">
-        <table class={hasSelection ? 'has-selection' : ''}>
+        <table class={`resizable-cols${hasSelection ? ' has-selection' : ''}`}>
           <thead>
             <tr>
-              <th>
+              <th style="width:40px">
                 <input
                   type="checkbox"
                   class="checkbox"
@@ -510,12 +563,12 @@ export function FeedbackListPage({ appId }: { appId: string }) {
                   onChange={toggleSelectAll}
                 />
               </th>
-              <th style="width:60px">ID</th>
-              <th>Title</th>
-              <th style="width:90px">Type</th>
-              <th style="width:110px">Status</th>
-              <th style="width:120px">Tags</th>
-              <th style="width:100px">Created</th>
+              <th style="width:60px">ID<ColResizeHandle /></th>
+              <th>Title<ColResizeHandle /></th>
+              <th style="width:90px">Type<ColResizeHandle /></th>
+              <th style="width:110px">Status<ColResizeHandle /></th>
+              <th style="width:120px">Tags<ColResizeHandle /></th>
+              <th style="width:100px">Created<ColResizeHandle /></th>
               <th style="width:120px">Actions</th>
             </tr>
           </thead>
@@ -564,7 +617,14 @@ export function FeedbackListPage({ appId }: { appId: string }) {
                 <td>
                   <div class="tags">
                     {(item.tags || []).map((t: string) => (
-                      <span class="tag">{t}</span>
+                      <span
+                        class="tag"
+                        style="cursor:pointer"
+                        onClick={(e) => { e.stopPropagation(); filterTag.value = t; page.value = 1; }}
+                        title={`Filter by tag: ${t}`}
+                      >
+                        {t}
+                      </span>
                     ))}
                   </div>
                 </td>
@@ -608,6 +668,7 @@ export function FeedbackListPage({ appId }: { appId: string }) {
         )}
       </div>
       <DeletedItemsPanel type="feedback" />
+      <AggregateWizard onTagFilter={(tag) => { filterTag.value = tag; page.value = 1; }} />
     </div>
   );
 }

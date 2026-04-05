@@ -142,6 +142,145 @@ applicationRoutes.post('/clone', async (c) => {
   return c.json({ id, apiKey, projectDir }, 201);
 });
 
+applicationRoutes.post('/onboard-assist', async (c) => {
+  const body = await c.req.json();
+  const { request } = body as { request?: string };
+
+  if (!request?.trim()) return c.json({ error: 'request text is required' }, 400);
+
+  // Find agent endpoint (default → any)
+  let agentEndpointId: string | null = null;
+  const defaultAgent = db.select().from(schema.agentEndpoints)
+    .where(eq(schema.agentEndpoints.isDefault, true)).get();
+  if (defaultAgent) {
+    agentEndpointId = defaultAgent.id;
+  } else {
+    const anyAgent = db.select().from(schema.agentEndpoints).get();
+    if (anyAgent) agentEndpointId = anyAgent.id;
+  }
+  if (!agentEndpointId) return c.json({ error: 'No agent endpoint configured' }, 400);
+
+  const agentRow = db.select().from(schema.agentEndpoints)
+    .where(eq(schema.agentEndpoints.id, agentEndpointId)).get();
+  if (!agentRow) return c.json({ error: 'Agent endpoint not found' }, 404);
+
+  const host = c.req.header('host') || 'localhost:3001';
+  const proto = c.req.header('x-forwarded-proto') || 'http';
+  const baseUrl = `${proto}://${host}`;
+
+  const prompt = buildOnboardPrompt(request.trim(), baseUrl);
+
+  // Find the admin app for linking feedback
+  const serverCwd = process.cwd();
+  const adminApp = db.select().from(schema.applications)
+    .where(eq(schema.applications.projectDir, serverCwd)).get();
+
+  const feedbackId = ulid();
+  const now = new Date().toISOString();
+  db.insert(schema.feedbackItems).values({
+    id: feedbackId,
+    type: 'request',
+    status: 'dispatched',
+    title: `[Onboard] ${request.trim().slice(0, 80)}`,
+    description: request.trim(),
+    appId: adminApp?.id || null,
+    dispatchedTo: agentRow.name,
+    dispatchedAt: now,
+    dispatchStatus: 'dispatched',
+    createdAt: now,
+    updatedAt: now,
+  }).run();
+
+  try {
+    const { sessionId } = await dispatchAgentSession({
+      feedbackId,
+      agentEndpointId,
+      prompt,
+      cwd: process.cwd(),
+      permissionProfile: 'interactive' as any,
+      allowedTools: agentRow.allowedTools,
+    });
+
+    return c.json({ sessionId, feedbackId });
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+    return c.json({ error: errorMsg }, 500);
+  }
+});
+
+function buildOnboardPrompt(request: string, baseUrl: string): string {
+  // Gather context: existing apps, machines, harness configs
+  const apps = db.select().from(schema.applications).all();
+  const machines = db.select().from(schema.machines).all();
+  const harnesses = db.select().from(schema.harnessConfigs).all();
+
+  const parts: string[] = [];
+  parts.push('# App Onboarding Assistant');
+  parts.push('');
+  parts.push('You are helping a user set up a new application in the prompt-widget system.');
+  parts.push('Based on their description, figure out the right approach: scaffold a new project, clone a repo, or register an existing directory.');
+  parts.push('Then create the app, embed the widget, and optionally set up Docker harnesses or remote machines.');
+  parts.push('');
+
+  parts.push('## User Request');
+  parts.push(request);
+  parts.push('');
+
+  parts.push('## Existing Context');
+  if (apps.length) {
+    parts.push(`### Applications (${apps.length})`);
+    for (const a of apps) parts.push(`- ${a.name} (${a.projectDir})`);
+  } else {
+    parts.push('No applications registered yet.');
+  }
+  if (machines.length) {
+    parts.push(`### Machines (${machines.length})`);
+    for (const m of machines) parts.push(`- ${m.name} (${m.hostname || m.address || 'local'})`);
+  }
+  if (harnesses.length) {
+    parts.push(`### Harness Configs (${harnesses.length})`);
+    for (const h of harnesses) parts.push(`- ${h.name}`);
+  }
+  parts.push('');
+
+  parts.push('## Available API Endpoints');
+  parts.push(`Base URL: ${baseUrl}`);
+  parts.push('');
+  parts.push('### Scaffold a new project');
+  parts.push('POST /api/v1/admin/applications/scaffold');
+  parts.push('Body: { name, parentDir, projectName }');
+  parts.push('Creates a hello-world project with widget already embedded.');
+  parts.push('');
+  parts.push('### Clone a git repo');
+  parts.push('POST /api/v1/admin/applications/clone');
+  parts.push('Body: { name, gitUrl, parentDir, dirName? }');
+  parts.push('Clones the repo and registers it.');
+  parts.push('');
+  parts.push('### Register existing directory');
+  parts.push('POST /api/v1/admin/applications');
+  parts.push('Body: { name, projectDir, serverUrl?, description?, hooks? }');
+  parts.push('');
+  parts.push('### Update an app');
+  parts.push('PATCH /api/v1/admin/applications/:id');
+  parts.push('Body: any subset of { name, projectDir, serverUrl, hooks, description, controlActions, requestPanel }');
+  parts.push('');
+
+  parts.push('## Widget Embed Snippet');
+  parts.push('After creating the app, you\'ll get an apiKey. Embed the widget with:');
+  parts.push(`<script src="${baseUrl}/widget.js" data-server="${baseUrl}" data-api-key="API_KEY"></script>`);
+  parts.push('');
+
+  parts.push('## Instructions');
+  parts.push('- Ask clarifying questions if the user request is ambiguous');
+  parts.push('- Use curl or the API to create the app');
+  parts.push('- If cloning, verify the git URL is valid');
+  parts.push('- After creating the app, show the widget embed snippet');
+  parts.push('- If the user mentions Docker, offer to set up a harness config');
+  parts.push('- If the user mentions a remote machine, offer to configure it');
+
+  return parts.join('\n');
+}
+
 applicationRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
   const app = await db.query.applications.findFirst({

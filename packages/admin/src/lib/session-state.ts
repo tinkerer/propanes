@@ -227,7 +227,15 @@ export function reorderGlobalTab(sessionId: string, insertBeforeId: string | nul
 // --- Session List ---
 
 export const allSessions = signal<any[]>([]);
-export const sessionMapComputed = computed(() => new Map(allSessions.value.map((s: any) => [s.id, s])));
+let _sessionMapCache: Map<string, any> | null = null;
+let _sessionMapSource: any[] | null = null;
+export const sessionMapComputed = computed(() => {
+  const sessions = allSessions.value;
+  if (sessions === _sessionMapSource && _sessionMapCache) return _sessionMapCache;
+  _sessionMapSource = sessions;
+  _sessionMapCache = new Map(sessions.map((s: any) => [s.id, s]));
+  return _sessionMapCache;
+});
 export const sessionsLoading = signal(false);
 
 // --- Session Status Filters ---

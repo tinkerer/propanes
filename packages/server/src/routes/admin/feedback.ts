@@ -7,12 +7,35 @@ import {
   adminFeedbackCreateSchema,
   batchOperationSchema,
 } from '@prompt-widget/shared';
-import { db, schema } from '../../db/index.js';
+import { db, schema, sqlite } from '../../db/index.js';
 import { hydrateFeedback } from '../../dispatch.js';
 import { feedbackEvents } from '../../events.js';
 import { verifyAdminToken } from '../../auth.js';
 
 export const feedbackRoutes = new Hono();
+
+feedbackRoutes.get('/feedback/tags', async (c) => {
+  const appId = c.req.query('appId');
+
+  let rows: { tag: string; count: number }[];
+  if (appId) {
+    if (appId === '__unlinked__') {
+      rows = sqlite.prepare(
+        `SELECT ft.tag, COUNT(*) as count FROM feedback_tags ft JOIN feedback_items fi ON ft.feedback_id = fi.id WHERE fi.app_id IS NULL GROUP BY ft.tag ORDER BY count DESC`
+      ).all() as { tag: string; count: number }[];
+    } else {
+      rows = sqlite.prepare(
+        `SELECT ft.tag, COUNT(*) as count FROM feedback_tags ft JOIN feedback_items fi ON ft.feedback_id = fi.id WHERE fi.app_id = ? GROUP BY ft.tag ORDER BY count DESC`
+      ).all(appId) as { tag: string; count: number }[];
+    }
+  } else {
+    rows = sqlite.prepare(
+      `SELECT tag, COUNT(*) as count FROM feedback_tags GROUP BY tag ORDER BY count DESC`
+    ).all() as { tag: string; count: number }[];
+  }
+
+  return c.json(rows);
+});
 
 feedbackRoutes.get('/feedback/events', async (c) => {
   const token = c.req.header('Authorization')?.replace('Bearer ', '') || c.req.query('token');

@@ -6,6 +6,7 @@
 
 import { signal } from '@preact/signals';
 import { api } from './api.js';
+import { subscribeAdmin } from './admin-ws.js';
 import { autoNavigateToFeedback, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpLogs } from './settings.js';
 import { navigate, selectedAppId } from './state.js';
 import { timed } from './perf.js';
@@ -69,6 +70,15 @@ import { setOpenSessionCallback } from './terminal-state.js';
 
 export function focusSessionTerminal(sessionId: string) {
   requestAnimationFrame(() => {
+    // Try to find the exact terminal container for this session first.
+    // Each AgentTerminal renders a div with data-session-id, and xterm.js
+    // creates its .xterm-helper-textarea inside it.
+    const sessionContainer = document.querySelector(`[data-session-id="${CSS.escape(sessionId)}"]`);
+    if (sessionContainer) {
+      const textarea = sessionContainer.querySelector('.xterm-helper-textarea') as HTMLElement | null;
+      if (textarea) { textarea.focus(); return; }
+    }
+    // Fallback: find the panel/pane container and grab the first textarea
     let container: Element | null = null;
     if (splitEnabled.value && rightPaneTabs.value.includes(sessionId)) {
       container = document.querySelector('[data-split-pane="split-right"]');
@@ -230,7 +240,6 @@ export function closeTab(sessionId: string) {
       });
     }
     persistPopoutState();
-    return;
   }
   if (rightPaneTabs.value.includes(sessionId)) {
     const remaining = rightPaneTabs.value.filter((id) => id !== sessionId);
@@ -359,6 +368,8 @@ export async function resumeSession(sessionId: string): Promise<string | null> {
     next.delete(sessionId);
     exitedSessions.value = next;
     persistTabs();
+    openSession(newId);
+    loadAllSessions();
     return newId;
   } catch (err: any) {
     console.error('Resume failed:', err.message);
@@ -493,24 +504,38 @@ export async function loadAllSessions(includeDeleted = false, isAutoPoll = false
 }
 
 export function startSessionPolling(): () => void {
+  // Initial load via REST, then subscribe to WS push updates
   loadAllSessions(includeDeletedInPolling.value);
-  let id = setInterval(() => loadAllSessions(includeDeletedInPolling.value, true), 5000);
 
-  function onVisibilityChange() {
-    clearInterval(id);
-    if (document.hidden) {
-      id = setInterval(() => loadAllSessions(includeDeletedInPolling.value, true), 30000);
-    } else {
-      loadAllSessions(includeDeletedInPolling.value);
-      id = setInterval(() => loadAllSessions(includeDeletedInPolling.value, true), 5000);
+  const unsub = subscribeAdmin('sessions', (sessions: any[]) => {
+    if (lastTerminalInput.value > 0 && Date.now() - lastTerminalInput.value < 5000) return;
+
+    const prevSessions = allSessions.value;
+    const sessionsChanged = sessions.length !== prevSessions.length || sessions.some((s, i) => {
+      const p = prevSessions[i];
+      return !p || s.id !== p.id || s.status !== p.status || s.inputState !== p.inputState
+        || s.paneTitle !== p.paneTitle || s.paneCommand !== p.paneCommand;
+    });
+    if (sessionsChanged) {
+      allSessions.value = sessions;
     }
-  }
-  document.addEventListener('visibilitychange', onVisibilityChange);
 
-  return () => {
-    clearInterval(id);
-    document.removeEventListener('visibilitychange', onVisibilityChange);
-  };
+    const prev = sessionInputStates.value;
+    const next = new Map(prev);
+    let changed = false;
+    for (const s of sessions) {
+      const had = prev.get(s.id);
+      if (s.inputState && s.inputState !== 'active') {
+        if (had !== s.inputState) { next.set(s.id, s.inputState); changed = true; }
+      } else {
+        if (had !== undefined) { next.delete(s.id); changed = true; }
+      }
+    }
+    if (changed) sessionInputStates.value = next;
+    syncAutoJumpPanel();
+  });
+
+  return unsub;
 }
 
 // --- Autojump Execution ---

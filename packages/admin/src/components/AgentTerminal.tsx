@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { lastTerminalInput } from '../lib/sessions.js';
@@ -7,6 +7,46 @@ import type { InputState } from '../lib/sessions.js';
 
 const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_BACKOFF_CAP_MS = 30_000;
+
+// Stagger terminal mounts to avoid overwhelming the browser on page load.
+// Only N terminals may initialize concurrently; the rest queue up.
+const MOUNT_CONCURRENCY = 2;
+const MOUNT_STAGGER_MS = 150;
+let _mountActive = 0;
+const _mountQueue: Array<() => void> = [];
+
+function requestMount(): Promise<void> {
+  if (_mountActive < MOUNT_CONCURRENCY) {
+    _mountActive++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => _mountQueue.push(resolve));
+}
+
+function releaseMount() {
+  _mountActive = Math.max(0, _mountActive - 1);
+  if (_mountQueue.length > 0) {
+    const next = _mountQueue.shift()!;
+    _mountActive++;
+    setTimeout(next, MOUNT_STAGGER_MS);
+  }
+}
+
+// Truncate history data to last N bytes before writing to terminal.
+// xterm.js has to parse every byte even with scrollback: 0, so writing
+// 500KB of escape sequences per terminal is very expensive on page load.
+const MAX_HISTORY_BYTES = 40_000;
+function truncateHistory(data: string): string {
+  if (data.length <= MAX_HISTORY_BYTES) return data;
+  return data.slice(-MAX_HISTORY_BYTES);
+}
+
+// Global resize ownership: only one terminal instance per session sends resize
+// commands to the server. When two AgentTerminals show the same session (e.g.
+// main pane + autojump popout), competing resizes with different dimensions
+// cause tmux to thrash and the content to blink. The most recently focused
+// terminal claims ownership.
+const resizeOwners = new Map<string, symbol>();
 
 interface AgentTerminalProps {
   sessionId: string;
@@ -23,11 +63,30 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
   const cleanedUp = useRef(false);
   const hasExited = useRef(false);
   const safeFitAndResizeRef = useRef<(bounce?: boolean) => void>(() => {});
+  const [mountReady, setMountReady] = useState(false);
+
+  // Staggered mount: wait for our turn in the queue
+  useEffect(() => {
+    let cancelled = false;
+    requestMount().then(() => {
+      if (!cancelled) setMountReady(true);
+    });
+    return () => {
+      cancelled = true;
+      releaseMount();
+    };
+  }, [sessionId]);
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!containerRef.current || !mountReady) return;
     cleanedUp.current = false;
     hasExited.current = false;
+
+    // Claim resize ownership for this session instance
+    const ownerToken = Symbol();
+    resizeOwners.set(sessionId, ownerToken);
+    const isResizeOwner = () => resizeOwners.get(sessionId) === ownerToken;
+    const claimResizeOwnership = () => { resizeOwners.set(sessionId, ownerToken); };
 
     const term = new Terminal({
       cursorBlink: true,
@@ -67,7 +126,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
     if (containerRef.current.offsetWidth > 0) {
       fit.fit();
     }
-    term.write('\x1b[90mConnecting...\x1b[0m');
+    // Silently connect — no visible text to avoid flash on mount
 
     termRef.current = term;
     fitRef.current = fit;
@@ -418,7 +477,6 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
       if (!gotFirstOutput) {
         gotFirstOutput = true;
         if (waitingDots) { clearInterval(waitingDots); waitingDots = null; }
-        term.clear();
         // tmux just started rendering — bounce resize so it picks up correct dimensions
         setTimeout(() => safeFitAndResize(true), 80);
       }
@@ -487,16 +545,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
               if (msg.data) {
                 if (waitingDots) { clearInterval(waitingDots); waitingDots = null; }
                 gotFirstOutput = true;
-                term.clear();
-                term.write(msg.data);
-              } else if (!gotFirstOutput) {
-                term.write('\r\x1b[2K\x1b[90mStarting session...\x1b[0m');
-                let dots = 0;
-                waitingDots = setInterval(() => {
-                  if (gotFirstOutput || cleanedUp.current) { clearInterval(waitingDots!); waitingDots = null; return; }
-                  dots = (dots + 1) % 4;
-                  term.write('\r\x1b[2K\x1b[90mStarting session' + '.'.repeat(dots + 1) + '\x1b[0m');
-                }, 500);
+                term.write(truncateHistory(msg.data));
               }
               break;
             case 'output':
@@ -600,6 +649,9 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
       const el = containerRef.current;
       if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return;
       fit.fit();
+      // Only the resize owner sends resize commands to the server.
+      // Another terminal instance for the same session may exist (e.g. autojump).
+      if (!isResizeOwner()) return;
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
         // On macOS, TIOCSWINSZ skips SIGWINCH when size is unchanged.
@@ -649,7 +701,8 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
     observer.observe(containerRef.current);
 
     // Bounce resize when terminal gets focus (click into it, tab into it, etc.)
-    function onTermFocus() { safeFitAndResize(true); }
+    // Also claim resize ownership — the focused terminal should control sizing.
+    function onTermFocus() { claimResizeOwnership(); safeFitAndResize(true); }
     term.textarea?.addEventListener('focus', onTermFocus);
 
     // Bounce resize when browser tab/window regains visibility
@@ -665,6 +718,8 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
     return () => {
       cleanedUp.current = true;
       safeFitAndResizeRef.current = () => {};
+      // Release resize ownership if we still hold it
+      if (resizeOwners.get(sessionId) === ownerToken) resizeOwners.delete(sessionId);
       onInputStateChange?.('active');
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (waitingDots) clearInterval(waitingDots);
@@ -692,7 +747,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
       wsRef.current = null;
       fitRef.current = null;
     };
-  }, [sessionId]);
+  }, [sessionId, mountReady]);
 
   useEffect(() => {
     if (!isActive || !fitRef.current || !termRef.current || !containerRef.current) return;

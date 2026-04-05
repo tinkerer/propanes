@@ -909,6 +909,12 @@ function isAutojumpPanelFocused(): boolean {
   return !!panelEl?.contains(el);
 }
 
+// Minimum time (ms) before the auto-jump panel can be removed after creation.
+// Prevents rapid create/destroy cycles when input state oscillates, which causes
+// terminal content to blink (remount → "Connecting..." → content → remount).
+const AUTOJUMP_PANEL_MIN_LIFETIME_MS = 10_000;
+let autojumpPanelCreatedAt = 0;
+
 export function syncAutoJumpPanel() {
   const existing = popoutPanels.value.find((p) => p.id === AUTOJUMP_PANEL_ID);
 
@@ -922,6 +928,8 @@ export function syncAutoJumpPanel() {
   if (existing) {
     const stillWaiting = existing.sessionIds.filter((id) => waitingIds.includes(id));
     if (stillWaiting.length === 0 && autoCloseWaitingPanel.value) {
+      // Don't destroy the panel too quickly — prevents terminal remount blinking
+      if (Date.now() - autojumpPanelCreatedAt < AUTOJUMP_PANEL_MIN_LIFETIME_MS) return;
       saveAutoJumpDimsForActiveSession();
       const activeSession = existing.activeSessionId;
       removePanel(AUTOJUMP_PANEL_ID);
@@ -989,6 +997,7 @@ export function syncAutoJumpPanel() {
       rightPaneActiveId: saved?.rightPaneActiveId ?? null,
       autoOpened: true,
     };
+    autojumpPanelCreatedAt = Date.now();
     popoutPanels.value = [panel, ...popoutPanels.value];
     if (!dismissed) queueMicrotask(() => bringToFront(AUTOJUMP_PANEL_ID));
     if (dismissed) queueMicrotask(() => triggerHandleBounce());

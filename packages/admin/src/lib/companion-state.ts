@@ -26,6 +26,7 @@ import {
   setFocusedLeaf,
   layoutTree,
   batch as batchTreeOps,
+  PAGE_LEAF_ID,
 } from './pane-tree.js';
 
 // --- Companion Types ---
@@ -239,6 +240,17 @@ const settingsLabelMap: Record<string, string> = {
 
 export function getSettingsLabel(key: string): string {
   return settingsLabelMap[key] || key;
+}
+
+export function openPageView(viewId: string) {
+  const existingLeaf = findLeafWithTab(viewId);
+  if (existingLeaf) {
+    setActiveTab(existingLeaf.id, viewId);
+    setFocusedLeaf(existingLeaf.id);
+    return;
+  }
+  addTabToLeaf(PAGE_LEAF_ID, viewId, true);
+  setFocusedLeaf(PAGE_LEAF_ID);
 }
 
 export function openSettingsPanel(settingsKey: string) {

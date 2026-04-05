@@ -16,21 +16,22 @@ import { PageView } from './PageView.js';
 import { ControlBar } from './ControlBar.js';
 import { FeedbackListPage } from '../pages/FeedbackListPage.js';
 import { FeedbackDetailPage } from '../pages/FeedbackDetailPage.js';
-import { AggregatePage } from '../pages/AggregatePage.js';
 import { SessionsPage } from '../pages/SessionsPage.js';
 import { LiveConnectionsPage } from '../pages/LiveConnectionsPage.js';
+import { AppSettingsPage } from '../pages/AppSettingsPage.js';
 import { AgentsPage } from '../pages/AgentsPage.js';
 import { InfrastructurePage } from '../pages/InfrastructurePage.js';
 import { UserGuidePage } from '../pages/UserGuidePage.js';
 import { GettingStartedPage } from '../pages/GettingStartedPage.js';
 import { SettingsPage } from '../pages/SettingsPage.js';
+import { WiggumPage } from '../pages/WiggumPage.js';
 import {
   getTerminalCompanion,
   getViewMode,
   setSessionInputState,
   markSessionExited,
 } from '../lib/sessions.js';
-import { applications, selectedAppId, currentRoute } from '../lib/state.js';
+import { applications, selectedAppId } from '../lib/state.js';
 
 export function renderTabContent(
   sid: string,
@@ -42,24 +43,21 @@ export function renderTabContent(
   const isView = sid.startsWith('view:');
   if (isView) {
     return (
-      <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0 }}>
+      <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0, overflow: 'auto' }}>
         {sid === 'view:page' ? (
           <PageView />
         ) : sid === 'view:feedback' ? (
           (() => {
             const aid = selectedAppId.value || applications.value[0]?.id;
             if (!aid) return <div style={{ padding: 16, color: 'var(--pw-text-muted)' }}>No apps configured</div>;
-            const route = currentRoute.value;
-            const detailMatch = route.match(/^\/app\/[^/]+\/feedback\/(.+)$/);
-            if (detailMatch) return <FeedbackDetailPage id={detailMatch[1]} appId={aid} />;
             return <FeedbackListPage appId={aid} />;
           })()
-        ) : sid === 'view:aggregate' ? (
-          (() => { const aid = selectedAppId.value || applications.value[0]?.id; return aid ? <AggregatePage appId={aid} /> : <div style={{ padding: 16, color: 'var(--pw-text-muted)' }}>No apps configured</div>; })()
         ) : sid === 'view:sessions-page' ? (
           <SessionsPage appId={selectedAppId.value} />
         ) : sid === 'view:live' ? (
           <LiveConnectionsPage appId={selectedAppId.value} />
+        ) : sid === 'view:app-settings' ? (
+          (() => { const aid = selectedAppId.value || applications.value[0]?.id; return aid ? <AppSettingsPage appId={aid} /> : <div style={{ padding: 16, color: 'var(--pw-text-muted)' }}>No apps configured</div>; })()
         ) : sid === 'view:controlbar' ? (
           <ControlBar />
         ) : sid === 'view:sessions-list' ? (
@@ -90,7 +88,7 @@ export function renderTabContent(
     const feedbackId = sid.slice(3);
     const aid = selectedAppId.value || applications.value[0]?.id || null;
     return (
-      <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0 }}>
+      <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0, overflow: 'auto' }}>
         <FeedbackDetailPage id={feedbackId} appId={aid} embedded />
       </div>
     );
@@ -103,6 +101,7 @@ export function renderTabContent(
       <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0, overflow: 'auto' }}>
         {key === 'agents' ? <AgentsPage />
           : key === 'infrastructure' ? <InfrastructurePage />
+          : key === 'wiggum' ? <WiggumPage />
           : key === 'user-guide' ? <UserGuidePage />
           : key === 'getting-started' ? <GettingStartedPage />
           : key === 'preferences' ? <SettingsPage />

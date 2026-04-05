@@ -14,6 +14,8 @@ import { dispatchAgentSession } from '../dispatch.js';
 
 export const aggregateRoutes = new Hono();
 
+// --- Reusable clustering helpers ---
+
 function normalizeForGrouping(title: string): string {
   return title
     .toLowerCase()
@@ -34,6 +36,62 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   let intersection = 0;
   for (const w of a) if (b.has(w)) intersection++;
   return intersection / (a.size + b.size - intersection);
+}
+
+export interface ClusterItem {
+  id: string;
+  title: string;
+  description: string;
+  type: string;
+  status: string;
+  created_at: string;
+}
+
+export interface ClusterGroup {
+  key: string;
+  sampleTitle: string;
+  items: ClusterItem[];
+}
+
+export function clusterItems(allItems: ClusterItem[], minCount = 2): ClusterGroup[] {
+  const titleGroups = new Map<string, ClusterItem[]>();
+  for (const item of allItems) {
+    const key = normalizeForGrouping(item.title);
+    const group = titleGroups.get(key);
+    if (group) group.push(item);
+    else titleGroups.set(key, [item]);
+  }
+
+  const groupEntries = [...titleGroups.entries()];
+  const merged = new Array<boolean>(groupEntries.length).fill(false);
+  const mergedGroups: ClusterGroup[] = [];
+
+  for (let i = 0; i < groupEntries.length; i++) {
+    if (merged[i]) continue;
+    const [keyI, itemsI] = groupEntries[i];
+    const wordsI = wordSet(keyI);
+    const combined = [...itemsI];
+    let mergedKey = keyI;
+
+    for (let j = i + 1; j < groupEntries.length; j++) {
+      if (merged[j]) continue;
+      const [keyJ, itemsJ] = groupEntries[j];
+      const wordsJ = wordSet(keyJ);
+      if (jaccardSimilarity(wordsI, wordsJ) >= 0.6) {
+        combined.push(...itemsJ);
+        merged[j] = true;
+        if (itemsJ.length > itemsI.length) mergedKey = keyJ;
+      }
+    }
+
+    mergedGroups.push({ key: mergedKey, sampleTitle: combined[0].title, items: combined });
+  }
+
+  return mergedGroups.filter((g) => g.items.length >= minCount).sort((a, b) => b.items.length - a.items.length);
+}
+
+function slugify(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
 }
 
 // GET / — group feedback by normalized title
@@ -83,52 +141,8 @@ aggregateRoutes.get('/', async (c) => {
     ...params
   ) as { id: string; title: string; description: string; type: string; status: string; created_at: string }[];
 
-  // Group by normalized title first, then merge similar groups
-  const titleGroups = new Map<string, typeof allItems>();
-  for (const item of allItems) {
-    const key = normalizeForGrouping(item.title);
-    const group = titleGroups.get(key);
-    if (group) {
-      group.push(item);
-    } else {
-      titleGroups.set(key, [item]);
-    }
-  }
-
-  // Merge groups with Jaccard similarity >= 0.6 on title words
-  const groupEntries = [...titleGroups.entries()];
-  const merged = new Array<boolean>(groupEntries.length).fill(false);
-  const mergedGroups: { key: string; sampleTitle: string; items: typeof allItems }[] = [];
-
-  for (let i = 0; i < groupEntries.length; i++) {
-    if (merged[i]) continue;
-    const [keyI, itemsI] = groupEntries[i];
-    const wordsI = wordSet(keyI);
-    const combined = [...itemsI];
-    let mergedKey = keyI;
-
-    for (let j = i + 1; j < groupEntries.length; j++) {
-      if (merged[j]) continue;
-      const [keyJ, itemsJ] = groupEntries[j];
-      const wordsJ = wordSet(keyJ);
-      if (jaccardSimilarity(wordsI, wordsJ) >= 0.6) {
-        combined.push(...itemsJ);
-        merged[j] = true;
-        if (itemsJ.length > itemsI.length) mergedKey = keyJ;
-      }
-    }
-
-    mergedGroups.push({
-      key: mergedKey,
-      sampleTitle: combined[0].title,
-      items: combined,
-    });
-  }
-
-  // Filter by minCount and sort by count descending
-  const filteredGroups = mergedGroups
-    .filter((g) => g.items.length >= minCount)
-    .sort((a, b) => b.items.length - a.items.length);
+  // Cluster using reusable function
+  const filteredGroups = clusterItems(allItems as ClusterItem[], minCount);
 
   const clusters = filteredGroups.map((group) => {
     const feedbackIds = group.items.map((r) => r.id);
@@ -438,6 +452,75 @@ ${itemsList}`;
     sessionId,
     feedbackId: analysisFeedbackId,
     itemCount: feedbackRows.length,
+  });
+});
+
+// POST /cluster-and-tag — run clustering and auto-tag items with theme + aggregated date
+aggregateRoutes.post('/cluster-and-tag', async (c) => {
+  const body = await c.req.json();
+  const { appId, excludeAlreadyAggregated } = body as { appId?: string; excludeAlreadyAggregated?: boolean };
+
+  if (!appId) return c.json({ error: 'appId is required' }, 400);
+
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+
+  if (appId === '__unlinked__') {
+    conditions.push('fi.app_id IS NULL');
+  } else {
+    conditions.push('fi.app_id = ?');
+    params.push(appId);
+  }
+  conditions.push("fi.status NOT IN ('resolved', 'archived', 'deleted')");
+
+  const whereClause = 'WHERE ' + conditions.join(' AND ');
+
+  const allItems = sqlite.prepare(
+    `SELECT id, title, description, type, status, created_at FROM feedback_items fi ${whereClause} ORDER BY created_at DESC`
+  ).all(...params) as ClusterItem[];
+
+  let itemsToCluster = allItems;
+
+  if (excludeAlreadyAggregated) {
+    const aggregatedIds = new Set(
+      (sqlite.prepare(
+        `SELECT DISTINCT feedback_id FROM feedback_tags WHERE tag LIKE 'aggregated:%'`
+      ).all() as { feedback_id: string }[]).map(r => r.feedback_id)
+    );
+    itemsToCluster = allItems.filter(i => !aggregatedIds.has(i.id));
+  }
+
+  const clusters = clusterItems(itemsToCluster);
+  const today = new Date().toISOString().slice(0, 10);
+  const themes: string[] = [];
+  let itemsTagged = 0;
+
+  for (const cluster of clusters) {
+    const themeSlug = slugify(cluster.sampleTitle);
+    const themeTag = `theme:${themeSlug}`;
+    const aggregatedTag = `aggregated:${today}`;
+    themes.push(themeTag);
+
+    for (const item of cluster.items) {
+      // Check existing tags to avoid duplicates
+      const existingTags = new Set(
+        (sqlite.prepare('SELECT tag FROM feedback_tags WHERE feedback_id = ?').all(item.id) as { tag: string }[]).map(r => r.tag)
+      );
+
+      if (!existingTags.has(themeTag)) {
+        sqlite.prepare('INSERT INTO feedback_tags (feedback_id, tag) VALUES (?, ?)').run(item.id, themeTag);
+      }
+      if (!existingTags.has(aggregatedTag)) {
+        sqlite.prepare('INSERT INTO feedback_tags (feedback_id, tag) VALUES (?, ?)').run(item.id, aggregatedTag);
+      }
+      itemsTagged++;
+    }
+  }
+
+  return c.json({
+    clustersFound: clusters.length,
+    itemsTagged,
+    themes,
   });
 });
 

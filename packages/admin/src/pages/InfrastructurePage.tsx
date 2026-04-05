@@ -1,6 +1,7 @@
 import { signal } from '@preact/signals';
 import { useEffect } from 'preact/hooks';
 import { api } from '../lib/api.js';
+import { subscribeAdmin } from '../lib/admin-ws.js';
 import { SetupAssistButton } from '../components/SetupAssistButton.js';
 import { DeletedItemsPanel } from '../components/DeletedItemsPanel.js';
 import { ensureTargetsLoaded } from '../components/DispatchTargetSelect.js';
@@ -185,8 +186,16 @@ export function InfrastructurePage() {
   useEffect(() => {
     loadAll();
     ensureTargetsLoaded();
-    const interval = setInterval(() => { loadAll(); ensureTargetsLoaded(); }, 10_000);
-    return () => clearInterval(interval);
+    return subscribeAdmin('infrastructure', (data: any) => {
+      if (data.machines) machines.value = data.machines;
+      if (data.harnessConfigs) harnessConfigs.value = data.harnessConfigs;
+      if (data.launchers) launchers.value = data.launchers;
+      if (data.harnesses) liveHarnesses.value = data.harnesses;
+      if (data.spriteConfigs) spriteConfigs.value = data.spriteConfigs;
+      if (data.applications) applications.value = data.applications;
+      loading.value = false;
+      probeAdminUrls();
+    });
   }, []);
 
   const showMachines = filter.value === 'all' || filter.value === 'machines';

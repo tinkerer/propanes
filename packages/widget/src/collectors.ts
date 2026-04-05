@@ -15,12 +15,19 @@ export function installConsoleCollector() {
   for (const level of levels) {
     const original = console[level];
     console[level] = (...args: unknown[]) => {
-      consoleLogs.push({
-        level,
-        message: args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '),
-        timestamp: Date.now(),
-      });
-      if (consoleLogs.length > MAX_ENTRIES) consoleLogs.shift();
+      try {
+        consoleLogs.push({
+          level,
+          message: args.map((a) => {
+            if (typeof a === 'string') return a;
+            try { return JSON.stringify(a); } catch { return String(a); }
+          }).join(' '),
+          timestamp: Date.now(),
+        });
+        if (consoleLogs.length > MAX_ENTRIES) consoleLogs.shift();
+      } catch {
+        // Never let collector errors break console output
+      }
       original.apply(console, args);
     };
   }

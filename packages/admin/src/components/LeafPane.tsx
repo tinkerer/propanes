@@ -1,4 +1,4 @@
-import { useRef, useCallback, useEffect } from 'preact/hooks';
+import { useRef, useCallback, useEffect, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { type ViewMode } from './SessionViewToggle.js';
 import type { LeafNode } from '../lib/pane-tree.js';
@@ -15,7 +15,6 @@ import {
   SIDEBAR_LEAF_ID,
   PAGE_LEAF_ID,
   SESSIONS_LEAF_ID,
-  CONTROLBAR_LEAF_ID,
 } from '../lib/pane-tree.js';
 import { renderTabContent } from './PaneContent.js';
 import {
@@ -59,11 +58,12 @@ import {
   popBackInToLeafWithSplit,
   feedbackTitleCache,
   getSettingsLabel,
+  openFeedbackItem,
 } from '../lib/sessions.js';
 import { startTabDrag, dragOverLeafZone } from '../lib/tab-drag.js';
 import { ctrlShiftHeld } from '../lib/shortcuts.js';
 import { showHotkeyHints, popoutMode, type PopoutMode } from '../lib/settings.js';
-import { navigate, selectedAppId, applications, appFeedbackCounts } from '../lib/state.js';
+import { selectedAppId, applications, appFeedbackCounts } from '../lib/state.js';
 import { api } from '../lib/api.js';
 import { copyWithTooltip } from '../lib/clipboard.js';
 import { useState } from 'preact/hooks';
@@ -134,7 +134,7 @@ function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }
       }).catch(() => {});
     };
     refresh();
-    const interval = setInterval(() => refresh(true), 10_000);
+    const interval = setInterval(() => { if (!document.hidden) refresh(true); }, 10_000);
     return () => clearInterval(interval);
   }, [sessionId]);
 
@@ -286,7 +286,7 @@ function PaneHeader({
             })()
           )}
           {feedbackPath && (
-            <a href={`#${feedbackPath}`} onClick={(e) => { e.preventDefault(); navigate(feedbackPath); }} class="feedback-title-link" title={sess?.feedbackTitle || 'View feedback'}>{sess?.feedbackTitle || 'View feedback'}</a>
+            <a href={`#${feedbackPath}`} onClick={(e) => { e.preventDefault(); if (sess?.feedbackId) openFeedbackItem(sess.feedbackId); }} class="feedback-title-link" title={sess?.feedbackTitle || 'View feedback'}>{sess?.feedbackTitle || 'View feedback'}</a>
           )}
         </>
       )}
@@ -413,7 +413,7 @@ function PaneHeader({
           {feedbackPath && (
             <a
               href={`#${feedbackPath}`}
-              onClick={(e) => { e.preventDefault(); navigate(feedbackPath); }}
+              onClick={(e) => { e.preventDefault(); if (sess?.feedbackId) openFeedbackItem(sess.feedbackId); }}
               class="feedback-title-link"
               title={sess?.feedbackTitle || 'View feedback'}
             >
@@ -513,12 +513,6 @@ function getSingletonMeta(sid: string): SingletonMeta {
           return '';
         },
       };
-    case 'view:aggregate':
-      return {
-        label: 'Aggregate',
-        plusKind: 'new',
-        appPrefix: () => app ? `${app.name} \u2014 ` : '',
-      };
     case 'view:sessions-page':
       return {
         label: 'Sessions',
@@ -531,12 +525,16 @@ function getSingletonMeta(sid: string): SingletonMeta {
         plusKind: 'new',
         appPrefix: () => app ? `${app.name} \u2014 ` : '',
       };
+    case 'view:app-settings':
+      return {
+        label: 'Settings',
+        plusKind: 'new',
+        appPrefix: () => app ? `${app.name} \u2014 ` : '',
+      };
     case 'view:nav':
-      return { label: 'Prompt Widget', plusKind: 'new' };
+      return { label: 'Applications', plusKind: 'new' };
     case 'view:files':
       return { label: 'Files', plusKind: 'new' };
-    case 'view:controlbar':
-      return { label: 'Control Bar', plusKind: 'new' };
     case 'view:page':
       return { label: 'Page', plusKind: 'new' };
     default:
@@ -553,15 +551,14 @@ function getSingletonLabel(sid: string): string {
 function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   // View tabs
   if (sid === 'view:page') return 'Page';
-  if (sid === 'view:controlbar') return 'Control Bar';
   if (sid === 'view:sessions-list') return 'Sessions';
   if (sid === 'view:terminals') return 'Terminals';
   if (sid === 'view:files') return 'Files';
   if (sid === 'view:nav') return 'Nav';
   if (sid === 'view:feedback') return 'Feedback';
-  if (sid === 'view:aggregate') return 'Aggregate';
   if (sid === 'view:sessions-page') return 'Sessions';
   if (sid === 'view:live') return 'Live';
+  if (sid === 'view:app-settings') return 'Settings';
   if (sid.startsWith('view:files:')) return 'Files';
   if (sid.startsWith('view:git:')) return 'Git Changes';
   if (sid.startsWith('view:')) return sid.slice(5);
@@ -690,6 +687,8 @@ interface LeafPaneProps {
 
 export function LeafPane({ leaf }: LeafPaneProps) {
   const tabsRef = useRef<HTMLDivElement>(null);
+  const hamburgerRef = useRef<HTMLButtonElement>(null);
+  const [paneMenuOpen] = useState(() => signal(false));
   // Only subscribe to session signals if this leaf has non-view tabs
   const hasSessionTabs = leaf.tabs.some(t => !t.startsWith('view:'));
   const sessionMap = hasSessionTabs ? sessionMapComputed.value : new Map<string, any>();
@@ -804,13 +803,18 @@ export function LeafPane({ leaf }: LeafPaneProps) {
     return () => document.removeEventListener('keydown', onKey, true);
   }, [idMenuOpen.value]);
 
-  // Hotkey hint menu (Ctrl+Shift)
+  // Hotkey hint menu (Ctrl+Shift) — also auto-opens pane hamburger menu
   useEffect(() => {
     const held = ctrlShiftHeld.value;
     if (!held || !activeId || !showHotkeyHints.value || !isFocused) {
-      if (isFocused) hotkeyMenuOpen.value = null;
+      if (isFocused) {
+        hotkeyMenuOpen.value = null;
+        paneMenuOpen.value = false;
+      }
       return;
     }
+
+    paneMenuOpen.value = true;
 
     function updatePos() {
       const dot = tabsRef.current?.querySelector('.pane-leaf-tab.active .status-dot') as HTMLElement | null;
@@ -904,6 +908,11 @@ export function LeafPane({ leaf }: LeafPaneProps) {
             onClick={(e) => { e.stopPropagation(); plusAction(); }}
             title="Add tab"
           >+</button>
+          <button
+            class="sidebar-new-terminal-btn"
+            onClick={(e) => { e.stopPropagation(); mergeLeaf(leaf.id); }}
+            title="Close pane"
+          >&times;</button>
         </div>
         {!collapsed && (
           <div class="pane-leaf-body" style={{ position: 'relative' }}>
@@ -939,13 +948,14 @@ export function LeafPane({ leaf }: LeafPaneProps) {
             const isTerminal = sid.startsWith('terminal:');
             const isIsolate = sid.startsWith('isolate:');
             const isUrl = sid.startsWith('url:');
+            const isFile = sid.startsWith('file:');
             const isSettings = sid.startsWith('settings:');
             const isWiggumRuns = sid.startsWith('wiggum-runs:');
-            const isCompanion = isView || isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isSettings || isWiggumRuns;
+            const isCompanion = isView || isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isSettings || isWiggumRuns;
             const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
             const isActive = sid === leaf.activeTabId;
             const isExited = exited.has(realSid);
-            const sess = (isView || isIsolate || isUrl) ? null : sessionMap.get(realSid);
+            const sess = (isView || isIsolate || isUrl || isFile) ? null : sessionMap.get(realSid);
             const isPlain = !isCompanion && sess?.permissionProfile === 'plain';
             const inputState = !isExited && !isCompanion ? (sessionInputStates.value.get(sid) || null) : null;
             const label = getTabLabel(sid, sessionMap);
@@ -1003,6 +1013,17 @@ export function LeafPane({ leaf }: LeafPaneProps) {
                     <TabBadge tabNum={tabNum} />
                   )}
                 </span>}
+                {isCompanion && !isView && <span class="companion-icon">{
+                  isFeedback ? '\u{1F4AC}' :
+                  isJsonl ? '\u{1F4DC}' :
+                  isIframe ? '\u{1F310}' :
+                  isTerminal ? '\u{25B8}' :
+                  isUrl ? '\u{1F517}' :
+                  isFile ? '\u{1F4C4}' :
+                  isWiggumRuns ? '\u{1F43B}' :
+                  isSettings ? '\u2699' :
+                  '\u25C6'
+                }</span>}
                 {renamingSessionId.value === sid ? (
                   <input
                     type="text"
@@ -1028,39 +1049,31 @@ export function LeafPane({ leaf }: LeafPaneProps) {
         </div>
         <div class="terminal-tab-actions">
           <button
-            class="terminal-collapse-btn"
-            title="Split right (Ctrl+Shift+&quot;)"
+            ref={hamburgerRef}
+            class="terminal-collapse-btn pane-hamburger-btn"
+            title="Pane actions"
             onClick={(e) => {
               e.stopPropagation();
-              splitLeaf(leaf.id, 'horizontal', 'second', [], 0.5, true);
+              paneMenuOpen.value = !paneMenuOpen.value;
             }}
-          >{'\u2502'}</button>
-          <button
-            class="terminal-collapse-btn"
-            title="Split down (Ctrl+Shift+-)"
-            onClick={(e) => {
-              e.stopPropagation();
-              splitLeaf(leaf.id, 'vertical', 'second', [], 0.5, true);
-            }}
-          >{'\u2500'}</button>
-          {leaf.id !== SIDEBAR_LEAF_ID && leaf.id !== PAGE_LEAF_ID && leaf.id !== SESSIONS_LEAF_ID && leaf.id !== CONTROLBAR_LEAF_ID && (
-            <button
-              class="terminal-collapse-btn"
-              title="Close pane (Ctrl+Shift+Backspace)"
-              onClick={(e) => {
-                e.stopPropagation();
-                mergeLeaf(leaf.id);
-              }}
-            >{'\u00D7'}</button>
+          >{'\u2630'}</button>
+          {paneMenuOpen.value && (
+            <PopupMenu anchorRef={hamburgerRef} align="right" onClose={() => { paneMenuOpen.value = false; }}>
+              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; splitLeaf(leaf.id, 'horizontal', 'second', [], 0.5, true); }}>
+                <span class="pane-action-icon">{'\u2502'}</span> Split Right <kbd>{'\u2303\u21E7'}"</kbd>
+              </button>
+              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; splitLeaf(leaf.id, 'vertical', 'second', [], 0.5, true); }}>
+                <span class="pane-action-icon">{'\u2500'}</span> Split Down <kbd>{'\u2303\u21E7'}-</kbd>
+              </button>
+              <div class="popup-menu-divider" />
+              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; mergeLeaf(leaf.id); }}>
+                <span class="pane-action-icon">{'\u00D7'}</span> Close Pane <kbd>{'\u2303\u21E7\u232B'}</kbd>
+              </button>
+              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; termPickerOpen.value = { kind: 'new' }; }}>
+                <span class="pane-action-icon">+</span> New Terminal <kbd>{'\u2303\u21E7'}=</kbd>
+              </button>
+            </PopupMenu>
           )}
-          <button
-            class="terminal-collapse-btn"
-            title="New terminal"
-            onClick={(e) => {
-              e.stopPropagation();
-              termPickerOpen.value = { kind: 'new' };
-            }}
-          >+</button>
         </div>
       </div>
 
@@ -1111,7 +1124,7 @@ export function LeafPane({ leaf }: LeafPaneProps) {
                 Clear name
               </button>
             )}
-            <button onClick={() => { statusMenuOpen.value = null; handleClose(menuSid); }}>
+            <button onClick={() => { handleClose(menuSid); statusMenuOpen.value = null; }}>
               Close tab {showHotkeyHints.value && <kbd>{'\u2303\u21E7'}W</kbd>}
             </button>
             <div style="display:flex;gap:4px;padding:4px 8px;align-items:center">
@@ -1181,8 +1194,8 @@ export function LeafPane({ leaf }: LeafPaneProps) {
         />
       )}
       <div class="pane-leaf-body" style={{ position: 'relative' }}>
-        {leaf.tabs.map((sid) =>
-          renderTabContent(sid, sid === leaf.activeTabId, sessionMap, (code, text) => markSessionExited(sid, code, text))
+        {leaf.tabs.filter((sid) => sid === leaf.activeTabId).map((sid) =>
+          renderTabContent(sid, true, sessionMap, (code, text) => markSessionExited(sid, code, text))
         )}
         <DiagonalDropZone leafId={leaf.id} />
       </div>

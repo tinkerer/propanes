@@ -18,6 +18,7 @@ import {
   listPwTmuxSessions,
   detachTmuxClients,
   attachDefaultTmuxSession,
+  safeDir,
 } from './tmux-pty.js';
 
 const PORT = parseInt(process.env.SESSION_SERVICE_PORT || '3002', 10);
@@ -147,6 +148,8 @@ interface AgentProcess {
   hasStarted: boolean;
   /** Timer for debouncing transitions away from 'waiting' state */
   waitingDebounce: ReturnType<typeof setTimeout> | null;
+  /** Timestamp of last state broadcast (for throttling) */
+  lastStateBroadcast: number;
 }
 
 const activeSessions = new Map<string, AgentProcess>();
@@ -156,6 +159,10 @@ const pendingConnections = new Map<string, Set<WebSocket>>();
 // Claude Code briefly flashes spinner titles even while at a permission prompt,
 // causing rapid waiting→active→waiting flicker on the UI status dots.
 const WAITING_EXIT_DEBOUNCE_MS = 1500;
+
+// Minimum interval between any state broadcasts to prevent rapid blinking.
+// Real-time OSC detection can fire many times per second; throttle to ~2 updates/sec.
+const STATE_BROADCAST_MIN_INTERVAL_MS = 500;
 
 function applyInputState(proc: AgentProcess, newState: InputState): void {
   if (newState === proc.inputState) {
@@ -170,16 +177,38 @@ function applyInputState(proc: AgentProcess, newState: InputState): void {
         proc.waitingDebounce = null;
         // Re-check: if still not waiting after debounce, apply
         if (proc.inputState === 'waiting') {
-          proc.inputState = newState;
-          sendSequenced(proc, { kind: 'input_state', state: newState });
+          commitInputState(proc, newState);
         }
       }, WAITING_EXIT_DEBOUNCE_MS);
     }
     return;
   }
-  // Transitioning TO waiting (or between active/idle) — apply immediately
+  // Transitioning TO waiting (or between active/idle) — apply with throttle
   if (proc.waitingDebounce) { clearTimeout(proc.waitingDebounce); proc.waitingDebounce = null; }
+  commitInputState(proc, newState);
+}
+
+/** Actually update state + broadcast, but throttle to avoid flooding the client. */
+function commitInputState(proc: AgentProcess, newState: InputState): void {
+  const now = Date.now();
+  const elapsed = now - (proc.lastStateBroadcast || 0);
+  if (elapsed < STATE_BROADCAST_MIN_INTERVAL_MS) {
+    // Schedule a deferred broadcast if not already pending
+    if (!proc.waitingDebounce) {
+      proc.waitingDebounce = setTimeout(() => {
+        proc.waitingDebounce = null;
+        // Apply whatever the latest desired state is at fire time
+        if (proc.inputState !== newState) {
+          proc.inputState = newState;
+          proc.lastStateBroadcast = Date.now();
+          sendSequenced(proc, { kind: 'input_state', state: newState });
+        }
+      }, STATE_BROADCAST_MIN_INTERVAL_MS - elapsed);
+    }
+    return;
+  }
   proc.inputState = newState;
+  proc.lastStateBroadcast = now;
   sendSequenced(proc, { kind: 'input_state', state: newState });
 }
 
@@ -359,7 +388,7 @@ function spawnSession(params: {
         name: 'xterm-256color',
         cols: 120,
         rows: 40,
-        cwd,
+        cwd: safeDir(cwd),
         env: { ...cleanedEnv, TERM: 'xterm-256color' },
       });
     }
@@ -382,6 +411,7 @@ function spawnSession(params: {
     panePath: '',
     hasStarted: false,
     waitingDebounce: null,
+    lastStateBroadcast: 0,
   };
 
   activeSessions.set(sessionId, proc);
@@ -576,6 +606,7 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
       panePath: '',
       hasStarted: (session.outputBytes || 0) > 100,
       waitingDebounce: null,
+    lastStateBroadcast: 0,
     };
     activeSessions.set(session.id, proc);
 

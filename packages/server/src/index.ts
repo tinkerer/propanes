@@ -28,6 +28,7 @@ import { registerAutoDispatch } from './auto-dispatch.js';
 import { updateFeedbackOnSessionEnd, fixStaleDispatchStatuses } from './feedback-status.js';
 import { cleanupSyncBranch } from './dispatch.js';
 import { detectAndStoreJsonlContinuations } from './jsonl-utils.js';
+import { registerAdminClient, unregisterAdminClient } from './admin-push.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const LAUNCHER_AUTH_TOKEN = process.env.LAUNCHER_AUTH_TOKEN || '';
@@ -214,6 +215,37 @@ agentWss.on('connection', async (ws, req) => {
   ws.on('close', () => {
     detachAdmin(sessionId, ws);
     console.log(`Admin detached from agent session: ${sessionId}`);
+  });
+});
+
+// Admin push WebSocket — broadcasts state updates to admin UI
+const adminWss = new WebSocketServer({ noServer: true });
+
+adminWss.on('connection', async (ws, req) => {
+  const url = new URL(req.url || '/', `http://localhost:${PORT}`);
+  const token = url.searchParams.get('token');
+
+  if (!token) {
+    ws.close(4001, 'Missing token');
+    return;
+  }
+
+  const isValid = await verifyAdminToken(token);
+  if (!isValid) {
+    ws.close(4003, 'Invalid token');
+    return;
+  }
+
+  registerAdminClient(ws);
+  console.log(`[admin-ws] Client connected`);
+
+  ws.on('close', () => {
+    unregisterAdminClient(ws);
+    console.log(`[admin-ws] Client disconnected`);
+  });
+
+  ws.on('error', () => {
+    unregisterAdminClient(ws);
   });
 });
 
@@ -411,7 +443,11 @@ launcherWss.on('connection', (ws, req) => {
 (server as unknown as Server).on('upgrade', (req, socket, head) => {
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
 
-  if (url.pathname === '/ws/agent-session') {
+  if (url.pathname === '/ws/admin') {
+    adminWss.handleUpgrade(req, socket, head, (ws) => {
+      adminWss.emit('connection', ws, req);
+    });
+  } else if (url.pathname === '/ws/agent-session') {
     agentWss.handleUpgrade(req, socket, head, (ws) => {
       agentWss.emit('connection', ws, req);
     });

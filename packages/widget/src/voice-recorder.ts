@@ -88,6 +88,7 @@ export class VoiceRecorder {
   private _consoleLogs: ConsoleEntry[] = [];
   private _screenshots: ScreenshotCapture[] = [];
   private cleanupFns: (() => void)[] = [];
+  private gestureCleanupFn: (() => void) | null = null;
   private originalConsole: Record<string, Function> = {};
   private interactionCounter = 0;
   private screenshotCounter = 0;
@@ -204,6 +205,7 @@ export class VoiceRecorder {
     });
 
     // Cleanup
+    this.disableScreenCaptures();
     for (const fn of this.cleanupFns) fn();
     this.cleanupFns = [];
     this.mediaRecorder = null;
@@ -228,6 +230,18 @@ export class VoiceRecorder {
     if (idx >= 0) this._screenshots.splice(idx, 1);
   }
 
+  enableScreenCaptures() {
+    if (!this._recording || this.gestureCleanupFn) return;
+    this.installGestureDetection();
+  }
+
+  disableScreenCaptures() {
+    if (this.gestureCleanupFn) {
+      this.gestureCleanupFn();
+      this.gestureCleanupFn = null;
+    }
+  }
+
   private installDomListeners() {
     const addInteraction = (type: InteractionEvent['type'], el: Element, details?: Record<string, unknown>) => {
       if (el.closest('prompt-widget-host')) return;
@@ -239,6 +253,7 @@ export class VoiceRecorder {
         details,
       };
       if (type === 'hover') {
+        this._interactions.push(event);
         this.onHover?.(event);
         return;
       }
@@ -277,17 +292,22 @@ export class VoiceRecorder {
       addInteraction('navigation', document.body, { url: location.href });
     };
 
-    // Throttled hover
+    // Throttled hover — only emit when hovered element changes
     let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastHoverSelector = '';
     const onMousemove = (e: MouseEvent) => {
       if (hoverTimer) return;
       hoverTimer = setTimeout(() => {
         hoverTimer = null;
         const el = document.elementFromPoint(e.clientX, e.clientY);
         if (el && !el.closest('prompt-widget-host')) {
-          addInteraction('hover', el);
+          const info = getTargetInfo(el);
+          if (info.selector !== lastHoverSelector) {
+            lastHoverSelector = info.selector;
+            addInteraction('hover', el);
+          }
         }
-      }, 200);
+      }, 300);
     };
 
     document.addEventListener('click', onClick, true);
@@ -483,13 +503,13 @@ export class VoiceRecorder {
     document.addEventListener('mouseup', onMouseup, true);
     document.addEventListener('click', onClickCapture, true);
 
-    this.cleanupFns.push(() => {
+    this.gestureCleanupFn = () => {
       document.removeEventListener('mousedown', onMousedown, true);
       document.removeEventListener('mousemove', onMousemove, true);
       document.removeEventListener('mouseup', onMouseup, true);
       document.removeEventListener('click', onClickCapture, true);
       if (canvas) canvas.remove();
       stopScreencastStream();
-    });
+    };
   }
 }

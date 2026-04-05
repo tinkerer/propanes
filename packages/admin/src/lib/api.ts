@@ -186,6 +186,12 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  onboardAssist: (data: { request: string }) =>
+    request<{ sessionId: string; feedbackId: string }>('/admin/applications/onboard-assist', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   regenerateApplicationKey: (id: string) =>
     request<{ id: string; apiKey: string }>(`/admin/applications/${id}/regenerate-key`, {
       method: 'POST',
@@ -316,6 +322,17 @@ export const api = {
       totalGroups: number;
       totalItems: number;
     }>(`/admin/aggregate?${qs}`);
+  },
+
+  clusterAndTag: (data: { appId: string; excludeAlreadyAggregated?: boolean }) =>
+    request<{ clustersFound: number; itemsTagged: number; themes: string[] }>('/admin/aggregate/cluster-and-tag', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  getFeedbackTags: (appId?: string) => {
+    const qs = appId ? `?appId=${encodeURIComponent(appId)}` : '';
+    return request<{ tag: string; count: number }[]>(`/admin/feedback/tags${qs}`);
   },
 
   analyzeAggregate: (data: { appId: string; agentEndpointId: string }) =>

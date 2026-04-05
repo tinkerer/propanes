@@ -1417,6 +1417,7 @@ export const WIDGET_CSS = `
 .pw-tl-badge-input { background: #f59e0b; color: #1e293b; }
 .pw-tl-badge-focus { background: #22d3ee; color: #1e293b; }
 .pw-tl-badge-navigation { background: #10b981; color: white; }
+.pw-tl-badge-hover { background: #64748b; color: white; }
 
 .pw-tl-selector {
   color: #a5b4fc;
@@ -1455,14 +1456,7 @@ export const WIDGET_CSS = `
 
 /* Hover entries */
 .pw-tl-hover {
-  opacity: 0.5;
-  transition: opacity 0.3s;
-}
-
-.pw-tl-hover .pw-tl-content {
-  font-family: monospace;
-  font-size: 11px;
-  color: #64748b;
+  opacity: 0.6;
 }
 
 /* Screenshot entries */

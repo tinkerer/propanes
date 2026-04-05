@@ -1,10 +1,17 @@
 import { execSync, execFileSync, spawnSync } from 'node:child_process';
-import { writeFileSync, unlinkSync, chmodSync } from 'node:fs';
+import { writeFileSync, unlinkSync, chmodSync, existsSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import * as pty from 'node-pty';
+
+export function safeDir(dir: string): string {
+  if (existsSync(dir)) return dir;
+  const home = homedir();
+  if (existsSync(home)) return home;
+  return tmpdir();
+}
 
 const TMUX_PREFIX = 'pw-';
 const PW_TMUX_CONF = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'tmux-pw.conf');
@@ -87,16 +94,25 @@ export function spawnInTmux(params: {
       stdio: 'pipe',
       env: cleanEnv(env),
     });
+    // The -f flag only applies when the tmux server first starts. If the
+    // server was already running, source the config explicitly so every
+    // session gets the latest settings (mouse passthrough, no copy-mode, etc.)
+    try {
+      execFileSync('tmux', [...TMUX_SOCKET, 'source-file', PW_TMUX_CONF], { stdio: 'pipe' });
+    } catch {}
   } catch (err) {
     if (scriptPath) try { unlinkSync(scriptPath); } catch {}
     throw err;
   }
 
+  // Use a safe CWD for the attach process — the original cwd may not exist locally
+  // (e.g. remote project dirs). The tmux session itself already has the correct cwd.
+  const attachCwd = safeDir(cwd);
   const ptyProcess = pty.spawn('tmux', [...TMUX_SOCKET, 'attach-session', '-t', name], {
     name: 'xterm-256color',
     cols,
     rows,
-    cwd,
+    cwd: attachCwd,
     env: cleanEnv(env),
   });
 
@@ -217,6 +233,9 @@ export function attachDefaultTmuxSession(params: {
     stdio: 'pipe',
     env: cleanEnv(),
   });
+  try {
+    execFileSync('tmux', [...TMUX_SOCKET, 'source-file', PW_TMUX_CONF], { stdio: 'pipe' });
+  } catch {}
 
   const ptyProcess = pty.spawn('tmux', [...TMUX_SOCKET, 'attach-session', '-t', pwName], {
     name: 'xterm-256color',

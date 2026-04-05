@@ -93,15 +93,6 @@ export function setSidebarSplitRatio(ratio: number) {
   localStorage.setItem('pw-sidebar-split-ratio', JSON.stringify(clamped));
 }
 
-// --- Control Bar ---
-
-export const controlBarMinimized = signal(loadJson('pw-control-bar-minimized', false));
-
-export function toggleControlBarMinimized() {
-  controlBarMinimized.value = !controlBarMinimized.value;
-  localStorage.setItem('pw-control-bar-minimized', JSON.stringify(controlBarMinimized.value));
-}
-
 // --- Hotkey Menu ---
 
 export const hotkeyMenuOpen = signal<{ sessionId: string; x: number; y: number } | null>(null);

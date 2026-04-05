@@ -1,4 +1,5 @@
 import { signal, effect } from '@preact/signals';
+import { useRef } from 'preact/hooks';
 import { marked } from 'marked';
 import { api } from '../lib/api.js';
 import { navigate } from '../lib/state.js';
@@ -9,6 +10,9 @@ import { DispatchTargetButton } from '../components/DispatchPicker.js';
 import { VoicePlayback } from '../components/VoicePlayback.js';
 import { cachedTargets, parseTargetKey } from '../components/DispatchTargetSelect.js';
 import { formatDate } from '../lib/date-utils.js';
+import { ElementCard } from '../components/ElementCard.js';
+import { SpecView, SpecToolbar } from '../components/SpecView.js';
+import { fetchParent, fetchChildren, fetchSiblings, fetchComputedStyles } from '../lib/dom-traversal.js';
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -34,6 +38,9 @@ const editingDescription = signal(false);
 const editDescValue = signal('');
 const liveConnections = signal<any[]>([]);
 const enrichLoading = signal<string | null>(null);
+const expandedElements = signal<Set<number>>(new Set());
+const specViewMode = signal<'inline' | 'side'>('inline');
+const domTraversalLoading = signal<string | null>(null);
 
 const STATUSES = ['new', 'reviewed', 'dispatched', 'resolved', 'archived'];
 
@@ -317,6 +324,161 @@ effect(() => {
   return () => document.removeEventListener('paste', handler as EventListener);
 });
 
+function DescriptionEditor({ value, onChange, onCancel, onSave, elements, screenshots }: {
+  value: string;
+  onChange: (v: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+  elements: any[];
+  screenshots: { id: string; filename?: string }[];
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  return (
+    <div style="margin-bottom:16px">
+      {(elements.length > 0 || screenshots.length > 0) && (
+        <SpecToolbar
+          elements={elements}
+          screenshots={screenshots}
+          textareaRef={textareaRef}
+          onInsert={(newVal) => onChange(newVal)}
+        />
+      )}
+      <textarea
+        value={value}
+        onInput={(e) => onChange((e.target as HTMLTextAreaElement).value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') onCancel();
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onSave();
+        }}
+        style="width:100%;padding:10px 12px;font-size:14px;min-height:80px;resize:vertical;font-family:inherit;background:var(--pw-input-bg);color:var(--pw-primary-text);border:1px solid var(--pw-accent);border-radius:6px;box-sizing:border-box"
+        ref={(el) => { if (el) { textareaRef.current = el; el.focus(); } }}
+      />
+      <div style="display:flex;gap:4px;justify-content:flex-end;margin-top:6px">
+        <button class="btn btn-sm" onClick={onCancel}>Cancel</button>
+        <button class="btn btn-sm btn-primary" onClick={onSave}>Save</button>
+      </div>
+    </div>
+  );
+}
+
+function DescriptionDisplay({ fb, onEdit, onScreenshotClick }: {
+  fb: any;
+  onEdit: () => void;
+  onScreenshotClick: (ss: any) => void;
+}) {
+  const elements: any[] = fb.data?.selectedElements || (fb.data?.selectedElement ? [fb.data.selectedElement] : []);
+  const screenshots: { id: string; filename?: string }[] = fb.screenshots || [];
+  const hasTokens = fb.description && /\{\{(element|screenshot):[^}]+\}\}/.test(fb.description);
+  const hasLive = liveConnections.value.length > 0;
+  const liveSessionId = liveConnections.value[0]?.sessionId;
+
+  if (!hasTokens && !elements.length) {
+    return (
+      <div
+        class={`detail-description markdown-body${!fb.description ? ' detail-description-empty' : ''}`}
+        title="Click to edit"
+        onClick={onEdit}
+        dangerouslySetInnerHTML={fb.description ? { __html: marked.parse(fb.description) as string } : undefined}
+      >
+        {fb.description ? undefined : 'No description'}
+      </div>
+    );
+  }
+
+  return (
+    <div style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <button
+          class="btn btn-sm"
+          onClick={onEdit}
+          title="Edit description"
+        >
+          Edit
+        </button>
+        <div class="spec-mode-toggle">
+          <button
+            class={`btn btn-sm${specViewMode.value === 'inline' ? ' btn-primary' : ''}`}
+            onClick={() => (specViewMode.value = 'inline')}
+          >Inline</button>
+          <button
+            class={`btn btn-sm${specViewMode.value === 'side' ? ' btn-primary' : ''}`}
+            onClick={() => (specViewMode.value = 'side')}
+          >Side</button>
+        </div>
+      </div>
+      <SpecView
+        description={fb.description || ''}
+        elements={elements}
+        screenshots={screenshots}
+        expandedElements={expandedElements.value}
+        onToggleElement={(idx) => {
+          const next = new Set(expandedElements.value);
+          if (next.has(idx)) next.delete(idx); else next.add(idx);
+          expandedElements.value = next;
+        }}
+        onFetchParent={hasLive ? async (idx) => {
+          if (!liveSessionId || !elements[idx]?.selector) return;
+          domTraversalLoading.value = `parent-${idx}`;
+          try {
+            const parent = await fetchParent(liveSessionId, elements[idx].selector);
+            if (parent) {
+              const updated = [...elements, parent];
+              await api.updateFeedback(fb.id, { data: { ...fb.data, selectedElements: updated } });
+              fb.data = { ...fb.data, selectedElements: updated };
+              feedback.value = { ...fb };
+            }
+          } finally { domTraversalLoading.value = null; }
+        } : undefined}
+        onFetchChildren={hasLive ? async (idx) => {
+          if (!liveSessionId || !elements[idx]?.selector) return;
+          domTraversalLoading.value = `children-${idx}`;
+          try {
+            const children = await fetchChildren(liveSessionId, elements[idx].selector);
+            if (children.length) {
+              const updated = [...elements, ...children];
+              await api.updateFeedback(fb.id, { data: { ...fb.data, selectedElements: updated } });
+              fb.data = { ...fb.data, selectedElements: updated };
+              feedback.value = { ...fb };
+            }
+          } finally { domTraversalLoading.value = null; }
+        } : undefined}
+        onFetchSiblings={hasLive ? async (idx) => {
+          if (!liveSessionId || !elements[idx]?.selector) return;
+          domTraversalLoading.value = `siblings-${idx}`;
+          try {
+            const siblings = await fetchSiblings(liveSessionId, elements[idx].selector);
+            if (siblings.length) {
+              const updated = [...elements, ...siblings];
+              await api.updateFeedback(fb.id, { data: { ...fb.data, selectedElements: updated } });
+              fb.data = { ...fb.data, selectedElements: updated };
+              feedback.value = { ...fb };
+            }
+          } finally { domTraversalLoading.value = null; }
+        } : undefined}
+        onFetchStyles={hasLive ? async (idx) => {
+          if (!liveSessionId || !elements[idx]?.selector) return;
+          domTraversalLoading.value = `styles-${idx}`;
+          try {
+            const styles = await fetchComputedStyles(liveSessionId, elements[idx].selector);
+            if (Object.keys(styles).length) {
+              elements[idx].computedStyles = styles;
+              const updated = [...elements];
+              await api.updateFeedback(fb.id, { data: { ...fb.data, selectedElements: updated } });
+              fb.data = { ...fb.data, selectedElements: updated };
+              feedback.value = { ...fb };
+            }
+          } finally { domTraversalLoading.value = null; }
+        } : undefined}
+        onScreenshotClick={onScreenshotClick}
+        hasLiveSession={hasLive}
+        traversalLoading={domTraversalLoading.value}
+        mode={specViewMode.value}
+        cacheBuster={cacheBuster.value}
+      />
+    </div>
+  );
+}
+
 export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId: string | null; embedded?: boolean }) {
   if (lastLoadedId.value !== id) {
     load(id, appId);
@@ -426,31 +588,25 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
             </div>
 
             {editingDescription.value ? (
-              <div style="margin-bottom:16px">
-                <textarea
-                  value={editDescValue.value}
-                  onInput={(e) => (editDescValue.value = (e.target as HTMLTextAreaElement).value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') (editingDescription.value = false);
-                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveDescription();
-                  }}
-                  style="width:100%;padding:10px 12px;font-size:14px;min-height:80px;resize:vertical;font-family:inherit;background:var(--pw-input-bg);color:var(--pw-primary-text);border:1px solid var(--pw-accent);border-radius:6px;box-sizing:border-box"
-                  ref={(el) => el?.focus()}
-                />
-                <div style="display:flex;gap:4px;justify-content:flex-end;margin-top:6px">
-                  <button class="btn btn-sm" onClick={() => (editingDescription.value = false)}>Cancel</button>
-                  <button class="btn btn-sm btn-primary" onClick={saveDescription}>Save</button>
-                </div>
-              </div>
+              <DescriptionEditor
+                value={editDescValue.value}
+                onChange={(v: string) => (editDescValue.value = v)}
+                onCancel={() => (editingDescription.value = false)}
+                onSave={saveDescription}
+                elements={fb.data?.selectedElements || (fb.data?.selectedElement ? [fb.data.selectedElement] : [])}
+                screenshots={fb.screenshots || []}
+              />
             ) : (
-              <div
-                class={`detail-description markdown-body${!fb.description ? ' detail-description-empty' : ''}`}
-                title="Click to edit"
-                onClick={() => { editDescValue.value = fb.description || ''; editingDescription.value = true; }}
-                dangerouslySetInnerHTML={fb.description ? { __html: marked.parse(fb.description) as string } : undefined}
-              >
-                {fb.description ? undefined : 'No description'}
-              </div>
+              <DescriptionDisplay
+                fb={fb}
+                onEdit={() => { editDescValue.value = fb.description || ''; editingDescription.value = true; }}
+                onScreenshotClick={(ss: any) => {
+                  lightboxSrc.value = `/api/v1/images/${ss.id}${cacheBuster.value ? `?t=${cacheBuster.value}` : ''}`;
+                  lightboxImageId.value = ss.id;
+                  lightboxFeedbackId.value = fb.id;
+                  cropMode.value = false;
+                }}
+              />
             )}
 
             <div class="detail-meta-row">
@@ -586,56 +742,108 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
               const elements: any[] = fb.data.selectedElements
                 ? fb.data.selectedElements
                 : [fb.data.selectedElement];
+              const hasLive = liveConnections.value.length > 0;
+              const liveSessionId = liveConnections.value[0]?.sessionId;
+
+              async function handleFetchParent(idx: number) {
+                if (!liveSessionId || !elements[idx]?.selector) return;
+                domTraversalLoading.value = `parent-${idx}`;
+                try {
+                  const parent = await fetchParent(liveSessionId, elements[idx].selector);
+                  if (parent) {
+                    const updated = [...elements, parent];
+                    await api.updateFeedback(fb.id, { data: { ...fb.data, selectedElements: updated } });
+                    fb.data.selectedElements = updated;
+                    feedback.value = { ...fb };
+                  }
+                } finally { domTraversalLoading.value = null; }
+              }
+
+              async function handleFetchChildren(idx: number) {
+                if (!liveSessionId || !elements[idx]?.selector) return;
+                domTraversalLoading.value = `children-${idx}`;
+                try {
+                  const children = await fetchChildren(liveSessionId, elements[idx].selector);
+                  if (children.length) {
+                    const updated = [...elements, ...children];
+                    await api.updateFeedback(fb.id, { data: { ...fb.data, selectedElements: updated } });
+                    fb.data.selectedElements = updated;
+                    feedback.value = { ...fb };
+                  }
+                } finally { domTraversalLoading.value = null; }
+              }
+
+              async function handleFetchSiblings(idx: number) {
+                if (!liveSessionId || !elements[idx]?.selector) return;
+                domTraversalLoading.value = `siblings-${idx}`;
+                try {
+                  const siblings = await fetchSiblings(liveSessionId, elements[idx].selector);
+                  if (siblings.length) {
+                    const updated = [...elements, ...siblings];
+                    await api.updateFeedback(fb.id, { data: { ...fb.data, selectedElements: updated } });
+                    fb.data.selectedElements = updated;
+                    feedback.value = { ...fb };
+                  }
+                } finally { domTraversalLoading.value = null; }
+              }
+
+              async function handleFetchStyles(idx: number) {
+                if (!liveSessionId || !elements[idx]?.selector) return;
+                domTraversalLoading.value = `styles-${idx}`;
+                try {
+                  const styles = await fetchComputedStyles(liveSessionId, elements[idx].selector);
+                  if (Object.keys(styles).length) {
+                    elements[idx].computedStyles = styles;
+                    const updated = [...elements];
+                    await api.updateFeedback(fb.id, { data: { ...fb.data, selectedElements: updated } });
+                    fb.data.selectedElements = updated;
+                    feedback.value = { ...fb };
+                  }
+                } finally { domTraversalLoading.value = null; }
+              }
+
+              async function handleRemoveElement(idx: number) {
+                const updated = elements.filter((_: any, i: number) => i !== idx);
+                await api.updateFeedback(fb.id, { data: { ...fb.data, selectedElements: updated } });
+                fb.data.selectedElements = updated;
+                expandedElements.value = new Set([...expandedElements.value].filter((i) => i !== idx).map((i) => i > idx ? i - 1 : i));
+                feedback.value = { ...fb };
+              }
+
+              function handleInsertIntoSpec(idx: number) {
+                const token = `{{element:${idx}}}`;
+                const desc = fb.description || '';
+                const newDesc = desc ? desc + '\n\n' + token : token;
+                editDescValue.value = newDesc;
+                editingDescription.value = true;
+              }
+
               return (
                 <section class="detail-section">
                   <h4>Selected Element{elements.length > 1 ? 's' : ''} ({elements.length})</h4>
-                  {elements.map((el: any, i: number) => (
-                    <div key={i} style={elements.length > 1 ? "padding:8px 0;border-bottom:1px solid var(--pw-border)" : ""}>
-                      <div class="field-row">
-                        <span class="field-label">Tag</span>
-                        <span class="field-value"><code style="background:var(--pw-code-block-bg);padding:1px 6px;border-radius:3px">{el.tagName}</code></span>
-                      </div>
-                      {el.id && (
-                        <div class="field-row">
-                          <span class="field-label">ID</span>
-                          <span class="field-value" style="font-family:monospace">#{el.id}</span>
-                        </div>
-                      )}
-                      {el.classes?.length > 0 && (
-                        <div class="field-row">
-                          <span class="field-label">Classes</span>
-                          <span class="field-value" style="font-family:monospace">.{el.classes.join(' .')}</span>
-                        </div>
-                      )}
-                      <div class="field-row">
-                        <span class="field-label">Selector</span>
-                        <span class="field-value" style="font-family:monospace;word-break:break-all;font-size:12px">{el.selector}</span>
-                      </div>
-                      {el.textContent && (
-                        <div class="field-row">
-                          <span class="field-label">Text</span>
-                          <span class="field-value" style="font-size:12px;color:var(--pw-text-muted)">{el.textContent}</span>
-                        </div>
-                      )}
-                      {el.boundingRect && (
-                        <div class="field-row">
-                          <span class="field-label">Position</span>
-                          <span class="field-value" style="font-size:12px">{Math.round(el.boundingRect.x)},{Math.round(el.boundingRect.y)} &mdash; {Math.round(el.boundingRect.width)}&times;{Math.round(el.boundingRect.height)}</span>
-                        </div>
-                      )}
-                      {Object.keys(el.attributes || {}).length > 0 && (
-                        <div style="margin-top:8px">
-                          <div style="font-size:11px;color:var(--pw-text-faint);margin-bottom:4px">Attributes</div>
-                          {Object.entries(el.attributes).map(([k, v]) => (
-                            <div class="field-row" key={k}>
-                              <span class="field-label" style="font-family:monospace;font-size:11px">{k}</span>
-                              <span class="field-value" style="font-size:12px;word-break:break-all">{v as string}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                  <div style="display:flex;flex-direction:column;gap:6px">
+                    {elements.map((el: any, i: number) => (
+                      <ElementCard
+                        key={i}
+                        element={el}
+                        index={i}
+                        expanded={expandedElements.value.has(i)}
+                        onToggle={() => {
+                          const next = new Set(expandedElements.value);
+                          if (next.has(i)) next.delete(i); else next.add(i);
+                          expandedElements.value = next;
+                        }}
+                        onFetchParent={() => handleFetchParent(i)}
+                        onFetchChildren={() => handleFetchChildren(i)}
+                        onFetchSiblings={() => handleFetchSiblings(i)}
+                        onFetchStyles={() => handleFetchStyles(i)}
+                        onRemove={() => handleRemoveElement(i)}
+                        onInsertIntoSpec={() => handleInsertIntoSpec(i)}
+                        hasLiveSession={hasLive}
+                        traversalLoading={domTraversalLoading.value}
+                      />
+                    ))}
+                  </div>
                 </section>
               );
             })()}

@@ -26,6 +26,8 @@ import {
   getSessionLabel,
   getSessionColor,
   bringToFront,
+  activePanelId,
+  setFocusedPanel,
   termPickerOpen,
   rightPaneActiveId,
   cycleWaitingSession,
@@ -36,6 +38,7 @@ import {
   sidebarStatusMenu,
   sidebarItemMenu,
 } from '../lib/sessions.js';
+import { setFocusedLeaf } from '../lib/pane-tree.js';
 import { ctrlShiftHeld } from '../lib/shortcuts.js';
 import { autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce } from '../lib/settings.js';
 import { selectedAppId } from '../lib/state.js';
@@ -181,11 +184,16 @@ export function SessionsListView() {
               if (panel) {
                 updatePanel(panel.id, { activeSessionId: s.id, visible: true });
                 bringToFront(panel.id);
+                activePanelId.value = panel.id;
+                setFocusedPanel(panel.id);
+                setFocusedLeaf(null);
                 persistPopoutState();
                 focusSessionTerminal(s.id);
+                setTimeout(() => focusSessionTerminal(s.id), 100);
               } else {
                 openSession(s.id);
                 focusSessionTerminal(s.id);
+                setTimeout(() => focusSessionTerminal(s.id), 100);
               }
             }
           }}
@@ -245,7 +253,7 @@ export function SessionsListView() {
   };
 
   return (
-    <div class="sessions-list-view" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <div class="sessions-list-view" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflow: 'hidden' }}>
       <div class="sidebar-sessions-filters">
         <input
           type="text"

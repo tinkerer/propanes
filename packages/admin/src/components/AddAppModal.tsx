@@ -1,6 +1,7 @@
-import { useState } from 'preact/hooks';
+import { useState, useRef, useEffect } from 'preact/hooks';
 import { api } from '../lib/api.js';
 import { loadApplications, navigate } from '../lib/state.js';
+import { openSession, loadAllSessions } from '../lib/sessions.js';
 import { DirPicker } from './DirPicker.js';
 import { copyText } from '../lib/clipboard.js';
 
@@ -104,11 +105,58 @@ export function AddAppModal({ onClose }: { onClose: () => void }) {
     );
   }
 
+  const [assistText, setAssistText] = useState('');
+  const assistRef = useRef<HTMLTextAreaElement>(null);
+
+  function submitAssist() {
+    const text = assistText.trim();
+    if (!text) return;
+    onClose();
+    (async () => {
+      try {
+        const { sessionId } = await api.onboardAssist({ request: text });
+        await loadAllSessions();
+        openSession(sessionId);
+      } catch (err: any) {
+        console.error('Onboard assist failed:', err.message);
+      }
+    })();
+  }
+
   if (mode === null) {
     return (
       <div class="modal-overlay" onClick={onClose}>
         <div class="modal" onClick={(e) => e.stopPropagation()}>
           <h3>Add App</h3>
+          <div class="add-app-assist">
+            <textarea
+              ref={assistRef}
+              class="request-panel-textarea"
+              placeholder="Describe your project and how you'd like to set it up..."
+              value={assistText}
+              onInput={(e) => setAssistText((e.target as HTMLTextAreaElement).value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  submitAssist();
+                }
+              }}
+              rows={3}
+            />
+            <div class="add-app-assist-footer">
+              <button
+                class="btn btn-sm btn-primary"
+                disabled={!assistText.trim()}
+                onClick={submitAssist}
+              >
+                Go
+              </button>
+              <span class="request-panel-hint">{'\u2318'}+Enter</span>
+            </div>
+          </div>
+          <div class="add-app-divider">
+            <hr /><span>or set up manually</span><hr />
+          </div>
           <div class="add-app-cards">
             <button class="add-app-card" onClick={() => setMode('create')}>
               <span class="add-app-card-icon">{'\u{1F4C1}'}</span>

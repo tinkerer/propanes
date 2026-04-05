@@ -102,6 +102,14 @@ prompt-widget-host{pointer-events:auto;}</style></head>
 app.use('/widget/*', serveStatic({ root: '../widget/dist/', rewriteRequestPath: (path) => path.replace('/widget', '') }));
 
 // Serve admin SPA from the admin package build output
+// Prevent caching of index.html so new builds are picked up immediately
+app.use('/admin/*', async (c, next) => {
+  await next();
+  const path = c.req.path.replace('/admin', '') || '/';
+  if (path === '/' || path === '/index.html' || !path.includes('.')) {
+    c.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+  }
+});
 app.use('/admin/*', serveStatic({ root: '../admin/dist/', rewriteRequestPath: (path) => path.replace('/admin', '') }));
 // SPA fallback for admin routes
 app.get('/admin/*', serveStatic({ root: '../admin/dist/', path: 'index.html' }));

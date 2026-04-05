@@ -1,6 +1,7 @@
 import { useEffect } from 'preact/hooks';
 import { ComponentChildren } from 'preact';
-import { isAuthenticated, currentRoute, loadApplications, isEmbedded, isCompanion } from '../lib/state.js';
+import { isAuthenticated, currentRoute, loadApplications, isEmbedded, isCompanion, clearToken } from '../lib/state.js';
+import { connectAdminWs } from '../lib/admin-ws.js';
 import { isolatedComponent, getIsolateEntry, getIsolateParams } from '../lib/isolate.js';
 import { Layout } from './Layout.js';
 import { GlobalTerminalPanel } from './GlobalTerminalPanel.js';
@@ -33,6 +34,13 @@ function CompanionRoot({ children }: { children: ComponentChildren }) {
 
 export function App() {
   const embedded = isEmbedded.value;
+  const route = currentRoute.value;
+
+  if (route === '/logout') {
+    clearToken();
+    window.location.hash = '/';
+    return <LoginPage />;
+  }
 
   if (!isAuthenticated.value) {
     return <LoginPage />;
@@ -40,6 +48,7 @@ export function App() {
 
   useEffect(() => {
     loadApplications();
+    connectAdminWs();
   }, []);
 
   // Isolate mode: render a single component with no admin chrome
@@ -54,8 +63,6 @@ export function App() {
     }
     return <div class="pw-isolate-root">{entry.render(getIsolateParams())}</div>;
   }
-
-  const route = currentRoute.value;
 
   // Standalone session page — no layout chrome
   if (route.startsWith('/session/')) {
