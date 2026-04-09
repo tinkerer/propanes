@@ -48,6 +48,8 @@ import {
 import {
   getTerminalCompanion,
   setTerminalCompanion,
+  getCompanions,
+  toggleCompanion,
   syncCompanionsToRightPane,
 } from './companion-state.js';
 
@@ -141,6 +143,14 @@ export function openSession(sessionId: string) {
   const sess = allSessions.value.find((s) => s.id === sessionId);
   if (sess?.companionSessionId && !getTerminalCompanion(sessionId)) {
     setTerminalCompanion(sessionId, sess.companionSessionId);
+  }
+
+  // Auto-open JSONL companion for headless sessions (raw JSON terminal is not useful)
+  if (sess && sess.permissionProfile !== 'plain') {
+    const companions = getCompanions(sessionId);
+    if (!companions.includes('jsonl')) {
+      toggleCompanion(sessionId, 'jsonl');
+    }
   }
 
   syncCompanionsToRightPane(sessionId, current);
@@ -343,9 +353,18 @@ export function markSessionExited(sessionId: string, exitCode?: number, terminal
   }
 }
 
-export async function resumeSession(sessionId: string): Promise<string | null> {
+export async function resumeSession(sessionId: string, opts?: { permissionProfile?: string }): Promise<string | null> {
   try {
-    const { sessionId: newId } = await api.resumeAgentSession(sessionId);
+    // Kill running session first before resuming with new profile
+    const sess = allSessions.value.find((s) => s.id === sessionId);
+    if (sess && (sess.status === 'running' || sess.status === 'pending')) {
+      await api.killAgentSession(sessionId);
+      allSessions.value = allSessions.value.map((s) =>
+        s.id === sessionId ? { ...s, status: 'killed' } : s
+      );
+      markSessionExited(sessionId);
+    }
+    const { sessionId: newId } = await api.resumeAgentSession(sessionId, opts);
     const panel = findPanelForSession(sessionId);
     if (panel) {
       updatePanel(panel.id, {

@@ -22,6 +22,7 @@ import { db, schema } from './db/index.js';
 import { spawnAgentSession } from './agent-sessions.js';
 import { getLauncher, addSessionToLauncher, sendAndWait } from './launcher-registry.js';
 import { feedbackEvents } from './events.js';
+import { getSession } from './sessions.js';
 import { extractArtifactPaths, exportSessionFiles } from './jsonl-utils.js';
 import { launchSpriteSession } from './sprite-sessions.js';
 
@@ -89,6 +90,9 @@ export function renderPromptTemplate(
     screenshotText += '\n\nconsider screenshot';
   }
 
+  // Look up live widget session for real-time URL/viewport
+  const liveSession = fb.sessionId ? getSession(fb.sessionId) : undefined;
+
   const vars: Record<string, string> = {
     'feedback.id': fb.id,
     'feedback.title': fb.title || '',
@@ -103,6 +107,9 @@ export function renderPromptTemplate(
     'app.name': app?.name || '',
     'app.projectDir': app?.projectDir || '',
     'app.description': app?.description || '',
+    'app.hooks': app?.hooks ? (typeof app.hooks === 'string' ? app.hooks : JSON.stringify(app.hooks)) : '',
+    'session.url': liveSession?.url || fb.sourceUrl || '',
+    'session.viewport': liveSession?.viewport || fb.viewport || '',
     'instructions': instructions || '',
   };
 
@@ -646,7 +653,7 @@ export async function dispatchCompanionTerminal(params: {
   return { sessionId };
 }
 
-export async function resumeAgentSession(parentSessionId: string, targetLauncherId?: string | null): Promise<{ sessionId: string }> {
+export async function resumeAgentSession(parentSessionId: string, targetLauncherId?: string | null, overridePermissionProfile?: PermissionProfile | null): Promise<{ sessionId: string }> {
   const parent = db
     .select()
     .from(schema.agentSessions)
@@ -731,8 +738,8 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
   const sessionId = ulid();
   const now = new Date().toISOString();
 
-  // Always resume in interactive mode so the user gets an immediate terminal
-  const permissionProfile: PermissionProfile = 'interactive';
+  // Default to interactive for resume, but allow override (e.g. yolo for dangerously-skip-permissions)
+  const permissionProfile: PermissionProfile = overridePermissionProfile || 'interactive';
 
   // If parent has a Claude session ID, use --resume for full context restoration
   if (parent.claudeSessionId) {

@@ -34,6 +34,12 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
 
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
   getFeedback: (params: Record<string, string | number> = {}) => {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {
@@ -238,9 +244,10 @@ export const api = {
       method: 'POST',
     }),
 
-  resumeAgentSession: (id: string) =>
+  resumeAgentSession: (id: string, opts?: { permissionProfile?: string }) =>
     request<{ sessionId: string }>(`/admin/agent-sessions/${id}/resume`, {
       method: 'POST',
+      body: opts ? JSON.stringify(opts) : undefined,
     }),
 
   archiveAgentSession: (id: string) =>

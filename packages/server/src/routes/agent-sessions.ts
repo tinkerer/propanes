@@ -494,8 +494,9 @@ agentSessionRoutes.post('/:id/resume', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => ({}));
   const targetLauncherId = body.launcherId || undefined;
+  const permissionProfile = body.permissionProfile || undefined;
   try {
-    const { sessionId } = await resumeAgentSession(id, targetLauncherId);
+    const { sessionId } = await resumeAgentSession(id, targetLauncherId, permissionProfile);
     return c.json({ sessionId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Resume failed';

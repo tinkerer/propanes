@@ -59,6 +59,7 @@ export const feedbackSubmitSchema = z.object({
   autoDispatch: z.boolean().optional(),
   appId: z.string().optional(),
   launcherId: z.string().optional(),
+  agentEndpointId: z.string().optional(),
 });
 
 export type FeedbackSubmitInput = z.infer<typeof feedbackSubmitSchema>;
@@ -268,4 +269,9 @@ export const analyzeClusterSchema = z.object({
 export const loginSchema = z.object({
   username: z.string().min(1),
   password: z.string().min(1),
+});
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(6),
 });

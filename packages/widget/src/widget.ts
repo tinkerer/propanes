@@ -25,6 +25,22 @@ type EventHandler = (data: unknown) => void;
 const HISTORY_KEY = 'pw-history';
 const MAX_HISTORY = 50;
 
+function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(text);
+  }
+  // Fallback for non-secure contexts (HTTP)
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  return Promise.resolve();
+}
+
 export class PromptWidgetElement {
   private shadow: ShadowRoot;
   private host: HTMLElement;
@@ -217,6 +233,48 @@ export class PromptWidgetElement {
     const divider = document.createElement('div');
     divider.className = 'pw-send-menu-divider';
     menu.appendChild(divider);
+
+    // Agent selector
+    const agentRow = document.createElement('div');
+    agentRow.className = 'pw-send-menu-target';
+    const agentLabel = document.createElement('span');
+    agentLabel.textContent = 'Agent:';
+    agentLabel.style.cssText = 'font-size:11px;color:#94a3b8;flex-shrink:0';
+    const agentSel = document.createElement('select');
+    agentSel.className = 'pw-send-menu-target-select';
+    agentSel.innerHTML = '<option value="">Default</option>';
+    agentSel.value = localStorage.getItem('pw-dispatch-agent') || '';
+    agentSel.addEventListener('change', () => {
+      if (agentSel.value) localStorage.setItem('pw-dispatch-agent', agentSel.value);
+      else localStorage.removeItem('pw-dispatch-agent');
+    });
+    const agentSettingsLink = document.createElement('a');
+    agentSettingsLink.textContent = '\u2699';
+    agentSettingsLink.title = 'Agent settings';
+    agentSettingsLink.style.cssText = 'font-size:13px;color:#94a3b8;cursor:pointer;text-decoration:none;flex-shrink:0';
+    agentSettingsLink.href = `${new URL(this.config.endpoint, window.location.origin).origin}/admin/#/agents`;
+    agentSettingsLink.target = '_blank';
+    agentSettingsLink.addEventListener('click', (e) => e.stopPropagation());
+    agentRow.append(agentLabel, agentSel, agentSettingsLink);
+    menu.appendChild(agentRow);
+
+    // Populate agents from API
+    const agentOrigin = new URL(this.config.endpoint, window.location.origin).origin;
+    fetch(`${agentOrigin}/api/v1/admin/agents${this.appId ? `?appId=${this.appId}` : ''}`)
+      .then(r => r.json())
+      .then((agents: any[]) => {
+        if (!agents?.length) return;
+        for (const a of agents) {
+          const opt = document.createElement('option');
+          opt.value = a.id;
+          const modeIcon = a.mode === 'headless' ? '\uD83D\uDCE6' : a.mode === 'webhook' ? '\uD83C\uDF10' : '\uD83D\uDCBB';
+          const profileIcon = a.permissionProfile === 'yolo' ? ' \u26A1' : '';
+          opt.textContent = `${modeIcon} ${a.name}${profileIcon}${a.isDefault ? ' \u2605' : ''}`;
+          agentSel.appendChild(opt);
+        }
+        agentSel.value = localStorage.getItem('pw-dispatch-agent') || '';
+      })
+      .catch(() => {});
 
     // Dispatch target selector
     const targetRow = document.createElement('div');
@@ -773,7 +831,7 @@ export class PromptWidgetElement {
     const sid = this.getSessionId();
     sidRow.innerHTML = `<span class="pw-session-id-label">Session:</span><code class="pw-session-id-value">${sid}</code>`;
     sidRow.addEventListener('click', () => {
-      navigator.clipboard.writeText(sid).then(() => {
+      copyText(sid).then(() => {
         const val = sidRow.querySelector('.pw-session-id-value') as HTMLElement;
         val.textContent = 'Copied!';
         setTimeout(() => { val.textContent = sid; }, 1200);
@@ -1608,7 +1666,7 @@ export class PromptWidgetElement {
 
       const endpointUrl = new URL(this.config.endpoint, window.location.origin);
       const feedbackUrl = `${endpointUrl.origin}/admin/#/app/${result.appId}/feedback/${result.id}`;
-      try { await navigator.clipboard.writeText(feedbackUrl); } catch {}
+      try { await copyText(feedbackUrl); } catch {}
       this.showFlash(feedbackUrl);
     } catch (err) {
       errorEl.textContent = err instanceof Error ? err.message : 'Submission failed';
@@ -1654,6 +1712,10 @@ export class PromptWidgetElement {
       const dispatchTarget = localStorage.getItem('pw-dispatch-target');
       if (dispatchTarget) {
         feedbackPayload.launcherId = dispatchTarget;
+      }
+      const dispatchAgent = localStorage.getItem('pw-dispatch-agent');
+      if (dispatchAgent) {
+        feedbackPayload.agentEndpointId = dispatchAgent;
       }
     }
     const dataObj: Record<string, unknown> = {};

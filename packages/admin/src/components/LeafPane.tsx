@@ -384,6 +384,20 @@ function PaneHeader({
                     <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'tab'); }}>Browser Tab <kbd>B</kbd></button>
                   </div>
                 </div>
+                <div class="id-submenu-group" onClick={(e: any) => e.stopPropagation()}>
+                  <div class="id-submenu-trigger">{isExited ? 'Resume as...' : 'Restart as...'}</div>
+                  <div class="id-submenu">
+                    <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; resumeSession(sessionId, { permissionProfile: 'interactive' }); }}>
+                      {sess?.permissionProfile === 'interactive' ? '\u2713 ' : ''}{'\uD83D\uDC41'} Supervised
+                    </button>
+                    <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; resumeSession(sessionId, { permissionProfile: 'auto' }); }}>
+                      {sess?.permissionProfile === 'auto' ? '\u2713 ' : ''}{'\uD83E\uDD16'} Autonomous
+                    </button>
+                    <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; resumeSession(sessionId, { permissionProfile: 'yolo' }); }}>
+                      {sess?.permissionProfile === 'yolo' ? '\u2713 ' : ''}{'\u26A1'} Full Auto (skip permissions)
+                    </button>
+                  </div>
+                </div>
               </PopupMenu>
             )}
           </div>

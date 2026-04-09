@@ -168,9 +168,13 @@ function buildClaudeArgs(
   claudeSessionId?: string,
   resumeSessionId?: string,
 ): { command: string; args: string[] } {
-  // When resuming, use --resume only — no --session-id (it conflicts)
+  // When resuming, use --resume — no --session-id (it conflicts)
   if (resumeSessionId) {
     const args = ['--resume', resumeSessionId];
+    if (permissionProfile === 'yolo') args.push('--dangerously-skip-permissions');
+    if (permissionProfile === 'auto' || permissionProfile === 'yolo') {
+      args.push('--output-format', 'stream-json', '--verbose');
+    }
     if (prompt) args.push(prompt);
     return { command: 'claude', args };
   }
