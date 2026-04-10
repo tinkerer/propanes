@@ -6707,6 +6707,29 @@ body.pw-embed .global-terminal-panel {
   border-top: none;
 }
 
+/* Workbench mode — full pane-tree layout in iframe */
+body.pw-workbench {
+  margin: 0;
+  padding: 0;
+  background: var(--pw-bg-body);
+  overflow: hidden;
+}
+
+body.pw-workbench .layout {
+  height: 100vh;
+  width: 100vw;
+}
+
+body.pw-workbench .login-page {
+  min-height: 100vh;
+  background: var(--pw-bg-body);
+}
+
+body.pw-workbench .login-card {
+  box-shadow: none;
+  border: 1px solid var(--pw-border);
+}
+
 /* Companion mode — page content only, no shell chrome */
 body.pw-companion {
   margin: 0;

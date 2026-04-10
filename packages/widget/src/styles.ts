@@ -1033,6 +1033,7 @@ export const WIDGET_CSS = `
 
 .pw-admin-options {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 6px 10px 2px;
   border-top: 1px solid #334155;
@@ -1065,6 +1066,43 @@ export const WIDGET_CSS = `
 .pw-admin-option-icon {
   font-size: 15px;
   line-height: 1;
+}
+
+/* Workbench button — primary action, full width */
+.pw-workbench-btn {
+  width: 100% !important;
+  height: 32px !important;
+  gap: 6px;
+  border-color: #4f46e5;
+  background: linear-gradient(135deg, #1e1b4b, #312e81);
+}
+
+.pw-workbench-btn:hover {
+  background: linear-gradient(135deg, #312e81, #4338ca);
+  border-color: #818cf8;
+}
+
+.pw-workbench-label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* Smaller legacy panel buttons */
+.pw-admin-more-row {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+}
+
+.pw-admin-option-small {
+  width: 26px !important;
+  height: 26px !important;
+  opacity: 0.7;
+}
+
+.pw-admin-option-small:hover {
+  opacity: 1;
 }
 
 .pw-append-banner {

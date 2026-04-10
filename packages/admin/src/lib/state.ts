@@ -6,11 +6,14 @@ import { openPageView, openSettingsPanel } from './companion-state.js';
 
 // Embed mode detection
 const params = new URLSearchParams(window.location.search);
-export const isEmbedded = signal(params.get('embed') === 'true');
+export const isWorkbench = signal(params.get('embed') === 'workbench');
+export const isEmbedded = signal(params.get('embed') === 'true' || isWorkbench.value);
 export const isCompanion = signal(params.get('companion') === 'true');
 const embedAppId = params.get('appId');
 
-if (isEmbedded.value) {
+if (isWorkbench.value) {
+  document.body.classList.add('pw-workbench');
+} else if (isEmbedded.value) {
   document.body.classList.add('pw-embed');
 }
 if (isCompanion.value) {

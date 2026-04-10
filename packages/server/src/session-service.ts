@@ -72,6 +72,10 @@ function classifyFromTitle(title: string, visibleText: string): InputState {
 
   if (/Do you want to .+\?/.test(tail)) return 'waiting';
   if (tail.includes('Would you like to proceed')) return 'waiting';
+  // Claude Code tool permission prompts (Allow/Deny buttons, Yes/No)
+  if (/\bAllow\b.*\bDeny\b/.test(tail)) return 'waiting';
+  if (/\bYes\b.*\bNo\b/.test(tail)) return 'waiting';
+  if (/Esc to cancel/i.test(tail)) return 'waiting';
   // Interactive selection prompts (fzf, inquirer, Claude Code menus)
   if (/enter to select/i.test(tail)) return 'waiting';
   if (/arrow keys/i.test(tail)) return 'waiting';
@@ -95,6 +99,8 @@ interface AgentProcess {
   flushTimer: ReturnType<typeof setInterval>;
   inputState: InputState;
   hasStarted: boolean;
+  /** Last OSC title seen — used to re-classify when new output arrives without a title change */
+  lastTitle: string;
   /** Timer for debouncing transitions away from 'waiting' state */
   waitingDebounce: ReturnType<typeof setTimeout> | null;
   /** Timestamp of last state broadcast (for throttling) */
@@ -329,6 +335,7 @@ function spawnSession(params: {
     flushTimer: setInterval(() => flushOutput(sessionId), FLUSH_INTERVAL),
     inputState: 'active' as InputState,
     hasStarted: false,
+    lastTitle: '',
     waitingDebounce: null,
     lastStateBroadcast: 0,
   };
@@ -384,14 +391,20 @@ function wireOnData(proc: AgentProcess, ptyProcess: pty.IPty): void {
     if (proc.permissionProfile !== 'plain') {
       const title = extractOscTitle(data);
       if (title !== null) {
-        // Strip ANSI/terminal escape sequences to get readable text for matching
+        proc.lastTitle = title;
+      }
+      // Classify when we have a new title OR when stuck in 'idle' (re-check with
+      // updated buffer). This handles the race where the ✳ title arrives in one
+      // chunk (→ idle) but the permission prompt text arrives in a later chunk.
+      // Without re-classifying on subsequent data, the session stays stuck in 'idle'.
+      if (title !== null || (proc.lastTitle && proc.inputState === 'idle')) {
         const visibleTail = proc.outputBuffer.slice(-4000)
           .replace(/\x1b\[\??[0-9;]*[a-zA-Z]/g, '')  // CSI sequences (including DECSET ?-prefixed)
           .replace(/\x1b\][^\x07]*\x07/g, '')         // OSC sequences
           .replace(/\x1b\([A-Z]/g, '')                 // character set designators
           .replace(/\x1b[>=][0-9;]*[a-zA-Z]/g, '')    // DEC private sequences (DA2 etc.)
           .replace(/\x1b[\x20-\x2F]*[\x30-\x7E]/g, ''); // remaining 2-char ESC sequences
-        const newState = classifyFromTitle(title, visibleTail);
+        const newState = classifyFromTitle(proc.lastTitle, visibleTail);
         applyInputState(proc, newState);
       }
     }

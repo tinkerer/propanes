@@ -1,6 +1,6 @@
 import { useEffect } from 'preact/hooks';
 import { ComponentChildren } from 'preact';
-import { isAuthenticated, currentRoute, loadApplications, isEmbedded, isCompanion, clearToken } from '../lib/state.js';
+import { isAuthenticated, currentRoute, loadApplications, isEmbedded, isCompanion, isWorkbench, clearToken } from '../lib/state.js';
 import { connectAdminWs } from '../lib/admin-ws.js';
 import { isolatedComponent, getIsolateEntry, getIsolateParams } from '../lib/isolate.js';
 import { Layout } from './Layout.js';
@@ -72,6 +72,16 @@ export function App() {
 
   if (isCompanion.value) {
     return <CompanionRoot><PageView /></CompanionRoot>;
+  }
+
+  // Workbench mode: full pane-tree layout in iframe
+  if (isWorkbench.value) {
+    return (
+      <>
+        <Layout />
+        <DispatchDialog />
+      </>
+    );
   }
 
   if (embedded) {

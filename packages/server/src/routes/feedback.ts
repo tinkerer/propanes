@@ -1,8 +1,26 @@
 import { Hono } from 'hono';
 import { ulid } from 'ulidx';
 import { eq } from 'drizzle-orm';
-import { writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { writeFile, mkdir, symlink, unlink } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+
+const TMP_LINK_DIR = '/tmp';
+
+async function linkToTmp(absPath: string, filename: string): Promise<string> {
+  const tmpPath = join(TMP_LINK_DIR, filename);
+  try {
+    await unlink(tmpPath);
+  } catch {
+    // not present, fine
+  }
+  try {
+    await symlink(absPath, tmpPath);
+    return tmpPath;
+  } catch {
+    // symlink failed (e.g. cross-device, permissions) — fall back to the real path
+    return absPath;
+  }
+}
 import { feedbackSubmitSchema } from '@prompt-widget/shared';
 import { db, schema } from '../db/index.js';
 import { getSession } from '../sessions.js';
@@ -84,7 +102,10 @@ feedbackRoutes.post('/', async (c) => {
   const now = new Date().toISOString();
   const id = ulid();
   const input = parsed.data;
-  const title = input.title || input.description.slice(0, 200) || 'Untitled';
+  const screenshotOnly = !input.title && !input.description.trim() && imageFiles.length > 0;
+  const title = input.title
+    || input.description.slice(0, 200)
+    || (screenshotOnly ? `${imageFiles.length} screenshot${imageFiles.length === 1 ? '' : 's'}` : 'Untitled');
 
   const apiKey = c.req.header('x-api-key');
   const appId = resolveAppId(apiKey, input.sessionId, input.appId);
@@ -116,13 +137,15 @@ feedbackRoutes.post('/', async (c) => {
     );
   }
 
+  const screenshotResults: { id: string; filename: string; path: string }[] = [];
   if (imageFiles.length > 0 || audioFiles.length > 0) {
     await mkdir(UPLOAD_DIR, { recursive: true });
     for (const file of imageFiles) {
       const screenshotId = ulid();
       const ext = file.type.split('/')[1] || 'png';
       const filename = `${screenshotId}.${ext}`;
-      await writeFile(join(UPLOAD_DIR, filename), Buffer.from(file.data));
+      const absPath = resolve(UPLOAD_DIR, filename);
+      await writeFile(absPath, Buffer.from(file.data));
       await db.insert(schema.feedbackScreenshots).values({
         id: screenshotId,
         feedbackId: id,
@@ -131,6 +154,8 @@ feedbackRoutes.post('/', async (c) => {
         size: file.data.byteLength,
         createdAt: now,
       });
+      const tmpPath = await linkToTmp(absPath, filename);
+      screenshotResults.push({ id: screenshotId, filename, path: tmpPath });
     }
     for (const file of audioFiles) {
       const audioId = ulid();
@@ -151,7 +176,7 @@ feedbackRoutes.post('/', async (c) => {
   }
 
   feedbackEvents.emit('new', { id, appId, autoDispatch: !!input.autoDispatch, launcherId: input.launcherId, agentEndpointId: input.agentEndpointId });
-  return c.json({ id, appId, status: 'new', createdAt: now }, 201);
+  return c.json({ id, appId, status: 'new', createdAt: now, screenshots: screenshotResults }, 201);
 });
 
 feedbackRoutes.post('/:id/append', async (c) => {
@@ -251,13 +276,15 @@ feedbackRoutes.post('/:id/append', async (c) => {
     .run();
 
   // Handle screenshots
+  const appendedScreenshots: { id: string; filename: string; path: string }[] = [];
   if (imageFiles.length > 0) {
     await mkdir(UPLOAD_DIR, { recursive: true });
     for (const file of imageFiles) {
       const screenshotId = ulid();
       const ext = file.type.split('/')[1] || 'png';
       const filename = `${screenshotId}.${ext}`;
-      await writeFile(join(UPLOAD_DIR, filename), Buffer.from(file.data));
+      const absPath = resolve(UPLOAD_DIR, filename);
+      await writeFile(absPath, Buffer.from(file.data));
       await db.insert(schema.feedbackScreenshots).values({
         id: screenshotId,
         feedbackId,
@@ -266,10 +293,12 @@ feedbackRoutes.post('/:id/append', async (c) => {
         size: file.data.byteLength,
         createdAt: now,
       });
+      const tmpPath = await linkToTmp(absPath, filename);
+      appendedScreenshots.push({ id: screenshotId, filename, path: tmpPath });
     }
   }
 
-  return c.json({ id: feedbackId, appended: true });
+  return c.json({ id: feedbackId, appended: true, screenshots: appendedScreenshots });
 });
 
 feedbackRoutes.post('/programmatic', async (c) => {

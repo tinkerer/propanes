@@ -91,9 +91,21 @@ export class PromptWidgetElement {
     this.shadow = this.host.attachShadow({ mode: 'open' });
     document.body.appendChild(this.host);
 
-    const script = document.querySelector('script[data-endpoint]') as HTMLScriptElement | null;
+    const script = (document.querySelector('script[data-endpoint]') ||
+      document.currentScript) as HTMLScriptElement | null;
+    // If no explicit endpoint, derive from the script's src origin so the widget
+    // works when embedded cross-origin (e.g. workbench loading widget from :3001)
+    let endpoint = script?.dataset.endpoint || '/api/v1/feedback';
+    if (!script?.dataset.endpoint && script?.src) {
+      try {
+        const scriptOrigin = new URL(script.src).origin;
+        if (scriptOrigin !== window.location.origin) {
+          endpoint = `${scriptOrigin}/api/v1/feedback`;
+        }
+      } catch {}
+    }
     this.config = {
-      endpoint: script?.dataset.endpoint || '/api/v1/feedback',
+      endpoint,
       mode: (script?.dataset.mode as WidgetMode) || DEFAULT_MODE,
       position: (script?.dataset.position as WidgetPosition) || DEFAULT_POSITION,
       shortcut: script?.dataset.shortcut || DEFAULT_SHORTCUT,
@@ -128,6 +140,34 @@ export class PromptWidgetElement {
     this.sessionBridge.connect();
 
     this.overlayManager = new OverlayPanelManager(this.shadow, this.config.endpoint, this.appId);
+
+    // Auto-jump: when a session enters waiting state, reveal the workbench
+    this.overlayManager.onWaitingChange = (_sessionId, state, waitingCount) => {
+      if (state === 'waiting' && waitingCount > 0 && this.overlayManager.hasWorkbench) {
+        this.overlayManager.revealWorkbench();
+        // Update drawer badge if collapsed
+        this.updateWorkbenchBadge(waitingCount);
+      } else {
+        this.updateWorkbenchBadge(waitingCount);
+      }
+    };
+  }
+
+  private updateWorkbenchBadge(waitingCount: number) {
+    const handles = this.shadow.querySelectorAll('.pw-drawer-handle');
+    for (const handle of handles) {
+      let badge = handle.querySelector('.pw-drawer-badge') as HTMLElement | null;
+      if (waitingCount > 0) {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'pw-drawer-badge';
+          handle.appendChild(badge);
+        }
+        badge.textContent = String(waitingCount);
+      } else if (badge) {
+        badge.remove();
+      }
+    }
   }
 
   private extractAppId(appKey?: string): string | null {
@@ -188,15 +228,25 @@ export class PromptWidgetElement {
     if (sendBtn) this.updateSendButtonTitle(sendBtn);
   }
 
-  private updateSendButtonTitle(sendBtn: HTMLButtonElement) {
+  private updateSendButtonTitle(sendBtn?: HTMLButtonElement | null) {
+    const btn = sendBtn ?? (this.shadow.querySelector('#pw-send-btn') as HTMLButtonElement | null);
+    if (!btn) return;
     const group = this.shadow.querySelector('.pw-send-group');
+    const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement | null;
+    const description = (input?.value || '').trim();
+    const imageOnly = !description && this.pendingScreenshots.length > 0 && !this.voiceResult && this.timelineItems.length === 0;
+    const imgCount = this.pendingScreenshots.length;
     if (this.dispatchMode === 'auto') {
-      sendBtn.title = 'Submit & dispatch (auto)';
-      sendBtn.classList.add('pw-dispatch-active');
+      btn.title = 'Submit & dispatch (auto)';
+      btn.classList.add('pw-dispatch-active');
       group?.querySelector('.pw-send-dropdown-toggle')?.classList.add('pw-dispatch-active');
     } else {
-      sendBtn.title = 'Send feedback';
-      sendBtn.classList.remove('pw-dispatch-active');
+      if (this.appendTargetId) {
+        btn.title = imageOnly ? `Append image${imgCount === 1 ? '' : 's'}` : 'Append to feedback';
+      } else {
+        btn.title = imageOnly ? `Submit image${imgCount === 1 ? '' : 's'}` : 'Send feedback';
+      }
+      btn.classList.remove('pw-dispatch-active');
       group?.querySelector('.pw-send-dropdown-toggle')?.classList.remove('pw-dispatch-active');
     }
   }
@@ -797,33 +847,40 @@ export class PromptWidgetElement {
     const options = document.createElement('div');
     options.className = 'pw-admin-options';
 
-    const items: Array<{ icon: string; label: string; type: PanelType }> = [
-      { icon: '\u{1F4CB}', label: 'Feedback List', type: 'feedback' },
-      { icon: '\u26A1', label: 'Sessions', type: 'sessions' },
-      { icon: '\u{1F4C2}', label: 'Files', type: 'files' },
+    // Single Workbench button — opens/focuses the full pane-tree workbench
+    const wbBtn = document.createElement('button');
+    wbBtn.className = 'pw-admin-option pw-workbench-btn';
+    wbBtn.innerHTML = `<span class="pw-admin-option-icon">\u2B1A</span><span class="pw-workbench-label">Workbench</span>`;
+    wbBtn.title = 'Open workbench (sessions, terminals, feedback)';
+    wbBtn.addEventListener('click', () => {
+      this.overlayManager.openWorkbench();
+    });
+    options.appendChild(wbBtn);
+
+    // Quick-open legacy panels (collapsed behind a "more" toggle)
+    const moreRow = document.createElement('div');
+    moreRow.className = 'pw-admin-more-row';
+    const moreItems: Array<{ icon: string; label: string; type: PanelType }> = [
+      { icon: '\u{1F4CB}', label: 'Feedback', type: 'feedback' },
       { icon: '\u{1F4BB}', label: 'Terminal', type: 'terminal' },
       { icon: '\u2699', label: 'Settings', type: 'settings' },
     ];
-
-    for (const item of items) {
+    for (const item of moreItems) {
       const btn = document.createElement('button');
-      btn.className = 'pw-admin-option';
+      btn.className = 'pw-admin-option pw-admin-option-small';
       btn.innerHTML = `<span class="pw-admin-option-icon">${item.icon}</span>`;
       btn.title = item.label;
       btn.addEventListener('click', () => {
-        if (this.isOnAdminPage()) {
-          this.navigateAdmin(item.type);
-        } else {
-          const opts: { launcherId?: string } = {};
-          if (item.type === 'terminal') {
-            const stored = localStorage.getItem('pw-dispatch-target');
-            if (stored) opts.launcherId = stored;
-          }
-          this.overlayManager.openPanel(item.type, opts);
+        const opts: { launcherId?: string } = {};
+        if (item.type === 'terminal') {
+          const stored = localStorage.getItem('pw-dispatch-target');
+          if (stored) opts.launcherId = stored;
         }
+        this.overlayManager.openPanel(item.type, opts);
       });
-      options.appendChild(btn);
+      moreRow.appendChild(btn);
     }
+    options.appendChild(moreRow);
 
     // Session ID row
     const sidRow = document.createElement('div');
@@ -963,9 +1020,6 @@ export class PromptWidgetElement {
 
       const textarea = panel.querySelector('#pw-chat-input') as HTMLTextAreaElement;
       if (textarea) textarea.placeholder = 'Add notes, select elements, capture screenshots...';
-
-      const send = panel.querySelector('#pw-send-btn') as HTMLButtonElement;
-      if (send) send.title = 'Append to feedback';
     }
 
     this.shadow.appendChild(panel);
@@ -1003,13 +1057,15 @@ export class PromptWidgetElement {
     const dropdownBtn = panel.querySelector('#pw-send-dropdown') as HTMLButtonElement | null;
     dropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleSendMenu(); });
 
-    this.updateSendButtonTitle(sendBtn);
-
     // Restore saved state
     if (this.savedDraft) input.value = this.savedDraft;
     // Restore screenshots and selected elements
     this.renderScreenshotThumbs();
     this.renderSelectedElementChips();
+
+    this.updateSendButtonTitle(sendBtn);
+
+    input.addEventListener('input', () => this.updateSendButtonTitle(sendBtn));
 
     input.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -1124,6 +1180,7 @@ export class PromptWidgetElement {
   private addScreenshot(blob: Blob) {
     this.pendingScreenshots.push(blob);
     this.renderScreenshotThumbs();
+    this.updateSendButtonTitle();
   }
 
   private renderScreenshotThumbs() {
@@ -1154,6 +1211,7 @@ export class PromptWidgetElement {
       removeBtn.addEventListener('click', () => {
         this.pendingScreenshots.splice(i, 1);
         this.renderScreenshotThumbs();
+        this.updateSendButtonTitle();
       });
 
       wrap.appendChild(img);
@@ -1626,13 +1684,21 @@ export class PromptWidgetElement {
 
     if (this.appendTargetId) {
       try {
-        await this.submitAppend(this.appendTargetId, description);
+        const appendResult = await this.submitAppend(this.appendTargetId, description);
         this.pendingScreenshots = [];
         this.selectedElements = [];
         input.value = '';
         this.savedDraft = '';
         this.appendTargetId = null;
-        this.showFlash(undefined, 'Appended');
+        const appendedPaths: string[] = Array.isArray(appendResult?.screenshots)
+          ? appendResult.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
+          : [];
+        if (!description && appendedPaths.length > 0) {
+          try { await copyText(appendedPaths.join(' ')); } catch {}
+          this.showFlash(undefined, `${appendedPaths.length} path${appendedPaths.length === 1 ? '' : 's'} copied`);
+        } else {
+          this.showFlash(undefined, 'Appended');
+        }
       } catch (err) {
         errorEl.textContent = err instanceof Error ? err.message : 'Append failed';
         errorEl.classList.remove('pw-hidden');
@@ -1666,8 +1732,16 @@ export class PromptWidgetElement {
 
       const endpointUrl = new URL(this.config.endpoint, window.location.origin);
       const feedbackUrl = `${endpointUrl.origin}/admin/#/app/${result.appId}/feedback/${result.id}`;
-      try { await copyText(feedbackUrl); } catch {}
-      this.showFlash(feedbackUrl);
+      const screenshotPaths: string[] = Array.isArray(result?.screenshots)
+        ? result.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
+        : [];
+      if (!description && screenshotPaths.length > 0) {
+        try { await copyText(screenshotPaths.join(' ')); } catch {}
+        this.showFlash(undefined, `${screenshotPaths.length} path${screenshotPaths.length === 1 ? '' : 's'} copied`);
+      } else {
+        try { await copyText(feedbackUrl); } catch {}
+        this.showFlash(feedbackUrl);
+      }
     } catch (err) {
       errorEl.textContent = err instanceof Error ? err.message : 'Submission failed';
       errorEl.classList.remove('pw-hidden');
@@ -1845,39 +1919,6 @@ export class PromptWidgetElement {
     return sid;
   }
 
-  private isOnAdminPage(): boolean {
-    // Check pathname for /admin (works for both /admin and /admin/)
-    if (window.location.pathname.startsWith('/admin')) return true;
-    // Also check if hash routes look like admin SPA routes
-    const hash = window.location.hash;
-    if (hash.startsWith('#/app/') || hash.startsWith('#/settings/')) return true;
-    return false;
-  }
-
-  private getAdminAppId(): string {
-    // Extract the active app ID from the admin SPA's hash route
-    const hash = window.location.hash.slice(1);
-    const m = hash.match(/^\/app\/([^/]+)\//);
-    if (m) return m[1];
-    return this.appId;
-  }
-
-  private navigateAdmin(type: PanelType) {
-    const appId = this.getAdminAppId();
-    if (type === 'files') {
-      window.dispatchEvent(new CustomEvent('pw-navigate-view', { detail: { viewId: `view:files:${appId}` } }));
-      return;
-    }
-    const routes: Record<string, string> = {
-      feedback: `/app/${appId}/feedback`,
-      detail: `/app/${appId}/feedback`,
-      sessions: `/app/${appId}/sessions`,
-      settings: '/settings/preferences',
-      terminal: `/app/${appId}/sessions`,
-    };
-    window.location.hash = routes[type] || `/app/${appId}/sessions`;
-  }
-
   private bindShortcut() {
     const parts = this.config.shortcut.toLowerCase().split('+');
     document.addEventListener('keydown', (e) => {
@@ -2007,11 +2048,7 @@ export class PromptWidgetElement {
 
   openAdmin(panel?: PanelType, opts?: { param?: string }) {
     if (panel) {
-      if (this.isOnAdminPage()) {
-        this.navigateAdmin(panel);
-      } else {
-        this.overlayManager.openPanel(panel, opts);
-      }
+      this.overlayManager.openPanel(panel, opts);
     } else {
       if (!this.isOpen) this.open();
       this.toggleAdminOptions();

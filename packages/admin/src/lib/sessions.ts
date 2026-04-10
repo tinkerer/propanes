@@ -8,7 +8,7 @@ import { signal } from '@preact/signals';
 import { api } from './api.js';
 import { subscribeAdmin } from './admin-ws.js';
 import { autoNavigateToFeedback, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpLogs } from './settings.js';
-import { navigate, selectedAppId } from './state.js';
+import { navigate, selectedAppId, isEmbedded } from './state.js';
 import { timed } from './perf.js';
 import {
   findLeafWithTab,
@@ -700,6 +700,17 @@ export function setSessionInputState(sessionId: string, state: import('./session
     }
   }
   syncAutoJumpPanel();
+
+  // Notify widget parent about waiting session changes
+  if (isEmbedded.value && window.parent !== window) {
+    const waitingCount = Array.from(next.values()).filter(s => s === 'waiting').length;
+    window.parent.postMessage({
+      type: 'pw-embed-waiting',
+      sessionId,
+      state,
+      waitingCount,
+    }, '*');
+  }
 }
 
 // --- Cycle Waiting Session ---
