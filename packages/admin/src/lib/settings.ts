@@ -38,10 +38,9 @@ export interface RecentResult {
 
 export const recentResults = signal<RecentResult[]>(loadSetting('pw-recent-results', []));
 
-export type PopoutMode = 'panel' | 'window' | 'tab' | 'terminal';
+export type PopoutMode = 'panel' | 'window' | 'tab';
 export const popoutMode = signal<PopoutMode>(loadSetting('pw-popout-mode', 'panel'));
 
-export const localBridgeEnabled = signal<boolean>(loadSetting('pw-local-bridge-enabled', false));
 export const localBridgeUrl = signal<string>(loadSetting('pw-local-bridge-url', 'http://localhost:3001'));
 
 export interface SshConfig {
@@ -142,10 +141,6 @@ effect(() => {
 
 effect(() => {
   localStorage.setItem('pw-recent-results', JSON.stringify(recentResults.value));
-});
-
-effect(() => {
-  localStorage.setItem('pw-local-bridge-enabled', JSON.stringify(localBridgeEnabled.value));
 });
 
 effect(() => {
