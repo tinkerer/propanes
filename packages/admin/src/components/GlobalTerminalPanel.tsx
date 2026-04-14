@@ -65,6 +65,7 @@ import {
   setJsonlSelectedFile,
   type JsonlFileInfo,
   openFeedbackItem,
+  openLocalTerminal,
 } from '../lib/sessions.js';
 import { renderTabContent } from './PaneContent.js';
 import { AdminAssistChat } from './AdminAssistChat.js';
@@ -440,6 +441,9 @@ function executePopout(sessionId: string, mode: PopoutMode) {
       break;
     case 'tab':
       window.open(`#/session/${sessionId}`, '_blank');
+      break;
+    case 'terminal':
+      openLocalTerminal(sessionId);
       break;
   }
 }

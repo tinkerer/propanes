@@ -58,13 +58,13 @@ import {
   feedbackTitleCache,
   getSettingsLabel,
   openFeedbackItem,
+  openLocalTerminal,
 } from '../lib/sessions.js';
 import { startTabDrag, dragOverLeafZone } from '../lib/tab-drag.js';
 import { ctrlShiftHeld } from '../lib/shortcuts.js';
 import { showHotkeyHints, popoutMode, type PopoutMode } from '../lib/settings.js';
 import { selectedAppId, applications, appFeedbackCounts } from '../lib/state.js';
 import { copyWithTooltip } from '../lib/clipboard.js';
-import { useState } from 'preact/hooks';
 
 // --- Shared signals (also used by Layout.tsx for keyboard shortcuts) ---
 export const statusMenuOpen = signal<{ sessionId: string; x: number; y: number } | null>(null);
@@ -85,6 +85,9 @@ function executePopout(sessionId: string, mode: PopoutMode) {
       break;
     case 'tab':
       window.open(`#/session/${sessionId}`, '_blank');
+      break;
+    case 'terminal':
+      openLocalTerminal(sessionId);
       break;
   }
 }

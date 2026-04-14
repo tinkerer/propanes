@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'preact/hooks';
-import { theme, setTheme, shortcutsEnabled, tooltipsEnabled, showTabs, arrowTabSwitching, multiDigitTabs, autoNavigateToFeedback, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, popoutMode, type Theme, type PopoutMode } from '../lib/settings.js';
+import { theme, setTheme, shortcutsEnabled, tooltipsEnabled, showTabs, arrowTabSwitching, multiDigitTabs, autoNavigateToFeedback, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, popoutMode, localBridgeUrl, sshConfigs, type Theme, type PopoutMode, type SshConfig } from '../lib/settings.js';
 import { perfOverlayEnabled, perfServerEnabled } from '../lib/perf.js';
 import { getAllShortcuts } from '../lib/shortcuts.js';
 import { Guide, GUIDES, resetGuide } from '../components/Guide.js';
@@ -68,6 +68,88 @@ function PanelPresetManager() {
   );
 }
 
+
+function SshConfigManager() {
+  const [hostname, setHostname] = useState('');
+  const [user, setUser] = useState('');
+  const [host, setHost] = useState('');
+  const [port, setPort] = useState('');
+  const configs = sshConfigs.value;
+
+  const addConfig = () => {
+    if (!hostname.trim() || !user.trim() || !host.trim()) return;
+    const entry: SshConfig = { sshUser: user.trim(), sshHost: host.trim() };
+    if (port.trim()) entry.sshPort = parseInt(port.trim(), 10);
+    sshConfigs.value = { ...configs, [hostname.trim()]: entry };
+    setHostname('');
+    setUser('');
+    setHost('');
+    setPort('');
+  };
+
+  const removeConfig = (key: string) => {
+    const next = { ...configs };
+    delete next[key];
+    sshConfigs.value = next;
+  };
+
+  return (
+    <div style="margin-top:12px">
+      <div class="settings-toggle-label" style="margin-bottom:8px">SSH Configs (per remote hostname)</div>
+      <div class="settings-toggle-desc" style="margin-bottom:8px">
+        Map each remote admin hostname to its SSH connection details.
+      </div>
+      {Object.entries(configs).map(([key, cfg]) => (
+        <div key={key} class="preset-row" style="align-items:center">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600">{key}</div>
+            <div style="font-size:11px;color:var(--pw-text-faint)">
+              {cfg.sshUser}@{cfg.sshHost}{cfg.sshPort ? `:${cfg.sshPort}` : ''}
+            </div>
+          </div>
+          <button class="btn btn-sm btn-danger" onClick={() => removeConfig(key)}>Remove</button>
+        </div>
+      ))}
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <input
+          type="text"
+          placeholder="Hostname (e.g. staging.example.com)"
+          value={hostname}
+          onInput={(e) => setHostname((e.target as HTMLInputElement).value)}
+          style="flex:2;min-width:180px;padding:4px 8px;font-size:12px;border:1px solid var(--pw-border);border-radius:4px;background:var(--pw-bg-secondary);color:var(--pw-text)"
+        />
+        <input
+          type="text"
+          placeholder="SSH user"
+          value={user}
+          onInput={(e) => setUser((e.target as HTMLInputElement).value)}
+          style="flex:1;min-width:80px;padding:4px 8px;font-size:12px;border:1px solid var(--pw-border);border-radius:4px;background:var(--pw-bg-secondary);color:var(--pw-text)"
+        />
+        <input
+          type="text"
+          placeholder="SSH host/IP"
+          value={host}
+          onInput={(e) => setHost((e.target as HTMLInputElement).value)}
+          style="flex:1;min-width:100px;padding:4px 8px;font-size:12px;border:1px solid var(--pw-border);border-radius:4px;background:var(--pw-bg-secondary);color:var(--pw-text)"
+        />
+        <input
+          type="text"
+          placeholder="Port"
+          value={port}
+          onInput={(e) => setPort((e.target as HTMLInputElement).value)}
+          style="width:60px;padding:4px 8px;font-size:12px;border:1px solid var(--pw-border);border-radius:4px;background:var(--pw-bg-secondary);color:var(--pw-text)"
+        />
+        <button
+          class="btn btn-sm btn-primary"
+          disabled={!hostname.trim() || !user.trim() || !host.trim()}
+          onClick={addConfig}
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function ChangePasswordSection() {
   const [currentPassword, setCurrentPassword] = useState('');
@@ -374,6 +456,31 @@ export function SettingsPage() {
               <option value="terminal">Terminal.app</option>
             </select>
           </div>
+          {popoutMode.value === 'terminal' && !(location.hostname === 'localhost' || location.hostname === '127.0.0.1') && (
+            <div style="margin-top:8px;padding:12px;background:var(--pw-bg-secondary);border-radius:8px;border:1px solid var(--pw-border)">
+              <div style="font-size:13px;font-weight:600;margin-bottom:4px">Local Terminal Bridge</div>
+              <div class="settings-toggle-desc" style="margin-bottom:10px">
+                Opens a bridge page on your local prompt-widget to launch Terminal.app via SSH+tmux.
+              </div>
+              <div class="settings-toggle-row" style="margin-bottom:8px">
+                <div>
+                  <div class="settings-toggle-label">Local prompt-widget URL</div>
+                </div>
+                <input
+                  type="text"
+                  value={localBridgeUrl.value}
+                  onInput={(e) => (localBridgeUrl.value = (e.target as HTMLInputElement).value)}
+                  style="width:250px;padding:4px 8px;border:1px solid var(--pw-border);border-radius:4px;background:var(--pw-bg);color:var(--pw-text);font-size:13px"
+                />
+              </div>
+              <SshConfigManager />
+            </div>
+          )}
+          {popoutMode.value === 'terminal' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1') && (
+            <div style="margin-top:8px;padding:8px 12px;background:var(--pw-bg-secondary);border-radius:8px;border:1px solid var(--pw-border);font-size:12px;color:var(--pw-text-muted)">
+              Running locally — sessions will attach directly via tmux (no SSH needed).
+            </div>
+          )}
         </div>
 
         <div class="settings-section">
