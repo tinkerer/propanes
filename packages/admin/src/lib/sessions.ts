@@ -7,7 +7,7 @@
 import { signal } from '@preact/signals';
 import { api } from './api.js';
 import { subscribeAdmin } from './admin-ws.js';
-import { autoNavigateToFeedback, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpLogs } from './settings.js';
+import { autoNavigateToFeedback, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpLogs, localBridgeUrl, sshConfigs } from './settings.js';
 import { navigate, selectedAppId, isEmbedded } from './state.js';
 import { timed } from './perf.js';
 import {
@@ -728,6 +728,35 @@ export function cycleWaitingSession() {
   const currentIdx = waiting.findIndex((s: any) => s.id === current);
   const next = waiting[(currentIdx + 1) % waiting.length];
   activateSessionInPlace(next.id);
+}
+
+// --- Local Terminal Bridge ---
+
+export function openLocalTerminal(sessionId: string) {
+  const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+
+  if (isLocal) {
+    fetch('/api/v1/local/open-terminal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    }).catch((err) => {
+      console.error('[local-bridge] Failed to open terminal:', err.message);
+      showActionToast('\u2715', 'Failed to open terminal', 'var(--pw-error)');
+    });
+  } else {
+    const config = sshConfigs.value[location.hostname];
+    if (!config) {
+      console.error(`[local-bridge] No SSH config for hostname "${location.hostname}". Configure in Settings > Local Terminal Bridge.`);
+      showActionToast('\u2715', `No SSH config for ${location.hostname}`, 'var(--pw-error)');
+      return;
+    }
+    // Use window.open to a bridge page on localhost — avoids Private Network Access CORS block.
+    // Params go in the hash (never sent to server), parsed client-side, then POSTed same-origin.
+    const bridgeUrl = localBridgeUrl.value;
+    const params = encodeURIComponent(JSON.stringify({ ...config, sessionId }));
+    window.open(`${bridgeUrl}/api/v1/local/bridge#${params}`, '_blank', 'width=400,height=200,menubar=no,toolbar=no');
+  }
 }
 
 // --- Re-exports ---

@@ -573,7 +573,31 @@ agentSessionRoutes.post('/:id/archive', async (c) => {
 });
 
 agentSessionRoutes.post('/:id/open-terminal', async (c) => {
-  return c.json({ error: 'Open in Terminal.app is no longer supported (tmux removed)' }, 410);
+  if (process.platform !== 'darwin') {
+    return c.json({ error: 'Open in Terminal.app is only supported on macOS' }, 400);
+  }
+  const sessionId = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const { sshUser, sshHost, sshPort } = body as { sshUser?: string; sshHost?: string; sshPort?: number };
+
+  let command: string;
+  if (sshUser && sshHost) {
+    if (!/^[a-zA-Z0-9._-]+$/.test(sshUser) || !/^[a-zA-Z0-9._-]+$/.test(sshHost)) {
+      return c.json({ error: 'Invalid sshUser or sshHost' }, 400);
+    }
+    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+      return c.json({ error: 'Invalid sessionId' }, 400);
+    }
+    const portFlag = sshPort ? ` -p ${Number(sshPort)}` : '';
+    command = `ssh ${sshUser}@${sshHost}${portFlag} -t "tmux -L prompt-widget attach-session -t pw-${sessionId}"`;
+  } else {
+    command = `tmux -L prompt-widget attach-session -t pw-${sessionId}`;
+  }
+
+  const { exec } = await import('node:child_process');
+  const escaped = command.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  exec(`osascript -e 'tell application "Terminal" to do script "${escaped}"' -e 'tell application "Terminal" to activate'`);
+  return c.json({ ok: true, command });
 });
 
 agentSessionRoutes.post('/:id/send-keys', async (c) => {

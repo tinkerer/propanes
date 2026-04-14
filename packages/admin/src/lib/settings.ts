@@ -41,6 +41,16 @@ export const recentResults = signal<RecentResult[]>(loadSetting('pw-recent-resul
 export type PopoutMode = 'panel' | 'window' | 'tab' | 'terminal';
 export const popoutMode = signal<PopoutMode>(loadSetting('pw-popout-mode', 'panel'));
 
+export const localBridgeEnabled = signal<boolean>(loadSetting('pw-local-bridge-enabled', false));
+export const localBridgeUrl = signal<string>(loadSetting('pw-local-bridge-url', 'http://localhost:3001'));
+
+export interface SshConfig {
+  sshUser: string;
+  sshHost: string;
+  sshPort?: number;
+}
+export const sshConfigs = signal<Record<string, SshConfig>>(loadSetting('pw-ssh-configs', {}));
+
 export function getEffectiveTheme(): 'light' | 'dark' {
   if (theme.value !== 'system') return theme.value;
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -132,6 +142,18 @@ effect(() => {
 
 effect(() => {
   localStorage.setItem('pw-recent-results', JSON.stringify(recentResults.value));
+});
+
+effect(() => {
+  localStorage.setItem('pw-local-bridge-enabled', JSON.stringify(localBridgeEnabled.value));
+});
+
+effect(() => {
+  localStorage.setItem('pw-local-bridge-url', JSON.stringify(localBridgeUrl.value));
+});
+
+effect(() => {
+  localStorage.setItem('pw-ssh-configs', JSON.stringify(sshConfigs.value));
 });
 
 // Listen for system theme changes
