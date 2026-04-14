@@ -453,33 +453,35 @@ export function SettingsPage() {
               <option value="panel">Panel</option>
               <option value="window">Window</option>
               <option value="tab">Tab</option>
-              <option value="terminal">Terminal.app</option>
             </select>
           </div>
-          {popoutMode.value === 'terminal' && !(location.hostname === 'localhost' || location.hostname === '127.0.0.1') && (
-            <div style="margin-top:8px;padding:12px;background:var(--pw-bg-secondary);border-radius:8px;border:1px solid var(--pw-border)">
-              <div style="font-size:13px;font-weight:600;margin-bottom:4px">Local Terminal Bridge</div>
-              <div class="settings-toggle-desc" style="margin-bottom:10px">
-                Opens a bridge page on your local prompt-widget to launch Terminal.app via SSH+tmux.
-              </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Local Terminal Bridge</h3>
+          <div class="settings-toggle-desc" style="margin-bottom:10px">
+            Open sessions in Terminal.app via SSH+tmux. Available from the "Open In" menu on each session tab.
+          </div>
+          {(location.hostname === 'localhost' || location.hostname === '127.0.0.1') ? (
+            <div style="padding:8px 12px;background:var(--pw-bg-secondary);border-radius:8px;border:1px solid var(--pw-border);font-size:12px;color:var(--pw-text-muted)">
+              Running locally — sessions will attach directly via tmux (no SSH needed).
+            </div>
+          ) : (
+            <>
               <div class="settings-toggle-row" style="margin-bottom:8px">
                 <div>
                   <div class="settings-toggle-label">Local prompt-widget URL</div>
+                  <div class="settings-toggle-desc">Your local server that opens Terminal.app</div>
                 </div>
                 <input
                   type="text"
                   value={localBridgeUrl.value}
                   onInput={(e) => (localBridgeUrl.value = (e.target as HTMLInputElement).value)}
-                  style="width:250px;padding:4px 8px;border:1px solid var(--pw-border);border-radius:4px;background:var(--pw-bg);color:var(--pw-text);font-size:13px"
+                  style="width:250px;padding:4px 8px;border:1px solid var(--pw-border);border-radius:4px;background:var(--pw-bg-secondary);color:var(--pw-text);font-size:13px"
                 />
               </div>
               <SshConfigManager />
-            </div>
-          )}
-          {popoutMode.value === 'terminal' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1') && (
-            <div style="margin-top:8px;padding:8px 12px;background:var(--pw-bg-secondary);border-radius:8px;border:1px solid var(--pw-border);font-size:12px;color:var(--pw-text-muted)">
-              Running locally — sessions will attach directly via tmux (no SSH needed).
-            </div>
+            </>
           )}
         </div>
 
