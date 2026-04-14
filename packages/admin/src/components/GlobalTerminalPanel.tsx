@@ -369,6 +369,7 @@ function PaneHeader({
                     <button onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'panel'); }}>Panel <kbd>P</kbd></button>
                     <button onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'window'); }}>Window <kbd>W</kbd></button>
                     <button onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'tab'); }}>Browser Tab <kbd>B</kbd></button>
+                    <button onClick={() => { idMenuOpen.value = null; openLocalTerminal(sessionId); }}>Terminal.app <kbd>T</kbd></button>
                     {canSplit && (
                       <button onClick={() => { idMenuOpen.value = null; enableSplit(); }}>{'\u2AFF'} Split Panes <kbd>S</kbd></button>
                     )}
@@ -441,9 +442,6 @@ function executePopout(sessionId: string, mode: PopoutMode) {
       break;
     case 'tab':
       window.open(`#/session/${sessionId}`, '_blank');
-      break;
-    case 'terminal':
-      openLocalTerminal(sessionId);
       break;
   }
 }

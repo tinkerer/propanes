@@ -86,9 +86,6 @@ function executePopout(sessionId: string, mode: PopoutMode) {
     case 'tab':
       window.open(`#/session/${sessionId}`, '_blank');
       break;
-    case 'terminal':
-      openLocalTerminal(sessionId);
-      break;
   }
 }
 
@@ -385,6 +382,7 @@ function PaneHeader({
                     <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'panel'); }}>Panel <kbd>P</kbd></button>
                     <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'window'); }}>Window <kbd>W</kbd></button>
                     <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'tab'); }}>Browser Tab <kbd>B</kbd></button>
+                    <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; openLocalTerminal(sessionId); }}>Terminal.app <kbd>T</kbd></button>
                   </div>
                 </div>
                 <div class="id-submenu-group" onClick={(e: any) => e.stopPropagation()}>
