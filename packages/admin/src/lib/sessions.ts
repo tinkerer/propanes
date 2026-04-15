@@ -732,6 +732,14 @@ export function cycleWaitingSession() {
 
 // --- Local Terminal Bridge ---
 
+export const sshSetupDialog = signal<{ hostname: string; sessionId: string } | null>(null);
+
+function openBridgeWindow(config: import('./settings.js').SshConfig, sessionId: string) {
+  const bridgeUrl = localBridgeUrl.value;
+  const params = encodeURIComponent(JSON.stringify({ ...config, sessionId }));
+  window.open(`${bridgeUrl}/api/v1/local/bridge#${params}`, '_blank', 'width=400,height=200,menubar=no,toolbar=no');
+}
+
 export function openLocalTerminal(sessionId: string) {
   const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
@@ -747,16 +755,17 @@ export function openLocalTerminal(sessionId: string) {
   } else {
     const config = sshConfigs.value[location.hostname];
     if (!config) {
-      console.error(`[local-bridge] No SSH config for hostname "${location.hostname}". Configure in Settings > Local Terminal Bridge.`);
-      showActionToast('\u2715', `No SSH config for ${location.hostname}`, 'var(--pw-error)');
+      sshSetupDialog.value = { hostname: location.hostname, sessionId };
       return;
     }
-    // Use window.open to a bridge page on localhost — avoids Private Network Access CORS block.
-    // Params go in the hash (never sent to server), parsed client-side, then POSTed same-origin.
-    const bridgeUrl = localBridgeUrl.value;
-    const params = encodeURIComponent(JSON.stringify({ ...config, sessionId }));
-    window.open(`${bridgeUrl}/api/v1/local/bridge#${params}`, '_blank', 'width=400,height=200,menubar=no,toolbar=no');
+    openBridgeWindow(config, sessionId);
   }
+}
+
+export function completeSshSetup(hostname: string, config: import('./settings.js').SshConfig, sessionId: string) {
+  sshConfigs.value = { ...sshConfigs.value, [hostname]: config };
+  sshSetupDialog.value = null;
+  openBridgeWindow(config, sessionId);
 }
 
 // --- Re-exports ---
