@@ -11,3 +11,5 @@ uploads/
 .DS_Store
 .metadata_never_index
 packages/harness/artifacts/
+.claude/settings.local.json
+.claude/worktrees/
