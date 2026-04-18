@@ -5,7 +5,7 @@ import type { Server } from 'node:http';
 import * as pty from 'node-pty';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from './db/index.js';
-import type { PermissionProfile, SequencedOutput, SessionOutputData } from '@prompt-widget/shared';
+import type { PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
 import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane } from './tmux-pty.js';
 

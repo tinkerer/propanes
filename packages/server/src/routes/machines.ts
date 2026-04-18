@@ -123,7 +123,7 @@ app.post('/:id/admin-start', async (c) => {
     return c.json({ error: 'No connected launcher for this machine' }, 400);
   }
 
-  const pwDir = row.defaultCwd || '~/work/github.com/prompt-widget';
+  const pwDir = row.defaultCwd || '~/work/github.com/propanes';
   const cmd = `cd ${pwDir}/packages/server && tmux new-session -d -s pw-server 'npm start 2>&1 | tee /tmp/pw-server.log'`;
 
   // Spawn a short-lived terminal to run the command

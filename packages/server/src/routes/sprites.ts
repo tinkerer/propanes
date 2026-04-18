@@ -5,7 +5,7 @@ import { db, schema } from '../db/index.js';
 import { createSprite, getSprite, deleteSprite } from '../sprite-client.js';
 import { countActiveSpriteSessions } from '../sprite-sessions.js';
 import { dispatchDirectSpriteSession } from '../dispatch.js';
-import type { PermissionProfile } from '@prompt-widget/shared';
+import type { PermissionProfile } from '@propanes/shared';
 
 const app = new Hono();
 

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { SignJWT } from 'jose';
-import { loginSchema, changePasswordSchema } from '@prompt-widget/shared';
+import { loginSchema, changePasswordSchema } from '@propanes/shared';
 import { JWT_SECRET, verifyAdminToken } from '../auth.js';
 
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';

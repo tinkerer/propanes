@@ -1,8 +1,8 @@
-# prompt-widget
+# propanes
 
 Full-stack feedback overlay + agent session bridge. Four packages: `widget` (embeddable JS overlay), `server` (Hono API + SQLite), `admin` (Preact SPA dashboard), `shared` (types/schemas).
 
-## Prompt Widget API (localhost:3001)
+## ProPanes API (localhost:3001)
 
 The server exposes a REST API. Use `curl` to query feedback, sessions, applications, and aggregate clusters directly.
 

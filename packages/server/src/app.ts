@@ -77,9 +77,9 @@ app.get('/widget/bookmarklet.html', (c) => {
   return c.html(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>html,body{margin:0;padding:0;background:transparent;overflow:hidden;pointer-events:none;}
-prompt-widget-host{pointer-events:auto;}</style></head>
+propanes-host{pointer-events:auto;}</style></head>
 <body>
-<script src="${baseUrl}/widget/prompt-widget.js"
+<script src="${baseUrl}/widget/propanes.js"
   data-endpoint="${baseUrl}/api/v1/feedback"
   data-mode="always"
   data-bookmarklet-host-url></script>

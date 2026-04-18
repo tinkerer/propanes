@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import type { LauncherCapabilities, HarnessMetadata, ServerToLauncherMessage, LauncherToServerMessage } from '@prompt-widget/shared';
+import type { LauncherCapabilities, HarnessMetadata, ServerToLauncherMessage, LauncherToServerMessage } from '@propanes/shared';
 import { eq } from 'drizzle-orm';
 import { db, schema } from './db/index.js';
 

@@ -19,7 +19,7 @@
   --pw-sidebar-input-bg: #0f172a;
   --pw-sidebar-count-bg: #475569;
   --pw-sidebar-count-text: #cbd5e1;
-  --pw-sidebar-title: #a5b4fc;
+  --pw-sidebar-title: #ffb347;
 
   /* Text */
   --pw-text-primary: #1a1a2e;
@@ -32,11 +32,11 @@
   --pw-border-light: #f1f5f9;
 
   /* Primary */
-  --pw-primary: #6366f1;
-  --pw-primary-hover: #4f46e5;
-  --pw-primary-soft: #eef2ff;
-  --pw-primary-text: #6366f1;
-  --pw-primary-muted: #c7d2fe;
+  --pw-primary: #1d9bf0;
+  --pw-primary-hover: #0f7ac7;
+  --pw-primary-soft: #e0f2fe;
+  --pw-primary-text: #1d9bf0;
+  --pw-primary-muted: #bae6fd;
 
   /* Danger */
   --pw-danger: #dc2626;
@@ -66,7 +66,7 @@
 
   /* Code in content */
   --pw-code-bg: #f1f5f9;
-  --pw-code-text: #6366f1;
+  --pw-code-text: #1d9bf0;
   --pw-code-block-bg: #1e293b;
   --pw-code-block-text: #e2e8f0;
 
@@ -102,9 +102,9 @@ html[data-theme="dark"] {
   --pw-border: #334155;
   --pw-border-light: #1e293b;
 
-  --pw-primary-soft: #312e81;
-  --pw-primary-text: #818cf8;
-  --pw-primary-muted: #4338ca;
+  --pw-primary-soft: #0c4a6e;
+  --pw-primary-text: #38bdf8;
+  --pw-primary-muted: #075985;
 
   --pw-danger-soft: #450a0a;
   --pw-danger-border: #7f1d1d;
@@ -124,7 +124,7 @@ html[data-theme="dark"] {
   --pw-overlay: rgba(0, 0, 0, 0.6);
 
   --pw-code-bg: #334155;
-  --pw-code-text: #818cf8;
+  --pw-code-text: #38bdf8;
   --pw-code-block-bg: #0f172a;
   --pw-code-block-text: #e2e8f0;
 
@@ -158,9 +158,9 @@ html[data-theme="dark"] {
     --pw-border: #334155;
     --pw-border-light: #1e293b;
 
-    --pw-primary-soft: #312e81;
-    --pw-primary-text: #818cf8;
-    --pw-primary-muted: #4338ca;
+    --pw-primary-soft: #0c4a6e;
+    --pw-primary-text: #38bdf8;
+    --pw-primary-muted: #075985;
 
     --pw-danger-soft: #450a0a;
     --pw-danger-border: #7f1d1d;
@@ -180,7 +180,7 @@ html[data-theme="dark"] {
     --pw-overlay: rgba(0, 0, 0, 0.6);
 
     --pw-code-bg: #334155;
-    --pw-code-text: #818cf8;
+    --pw-code-text: #38bdf8;
     --pw-code-block-bg: #0f172a;
     --pw-code-block-text: #e2e8f0;
 
@@ -332,6 +332,13 @@ body {
   flex-shrink: 0;
 }
 
+.sidebar-brand {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
 .sidebar-toggle {
   background: none;
   border: none;
@@ -360,7 +367,14 @@ body {
   font-weight: 700;
 }
 
-.sidebar.collapsed .sidebar-title { display: none; }
+.sidebar-tagline {
+  color: var(--pw-sidebar-text);
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.sidebar.collapsed .sidebar-brand { display: none; }
 
 .bookmarklet-link {
   margin-left: auto;

@@ -11,7 +11,7 @@ services:
       - ${CLAUDE_HOME:-pw-claude-config}:/root/.claude
     environment:
       - PORT=3001
-      - DB_PATH=/data/prompt-widget.db
+      - DB_PATH=/data/propanes.db
       - HARNESS_MODE=true
       - HARNESS_ID=${HARNESS_ID:-docker-harness}
       - HARNESS_NAME=${HARNESS_NAME:-Docker Harness}

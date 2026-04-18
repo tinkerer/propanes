@@ -13,7 +13,7 @@ import {
 } from '../launcher-registry.js';
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
-import type { LauncherHealthCheckResult } from '@prompt-widget/shared';
+import type { LauncherHealthCheckResult } from '@propanes/shared';
 
 const app = new Hono();
 

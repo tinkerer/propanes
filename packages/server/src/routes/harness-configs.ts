@@ -4,7 +4,7 @@ import { ulid } from 'ulidx';
 import { db, schema } from '../db/index.js';
 import { listLaunchers, getLauncher, sendAndWait } from '../launcher-registry.js';
 import { dispatchHarnessSession } from '../dispatch.js';
-import type { StartHarness, StopHarness, PermissionProfile, CheckClaudeAuth, CheckClaudeAuthResult, CheckContainerClaude, CheckContainerClaudeResult } from '@prompt-widget/shared';
+import type { StartHarness, StopHarness, PermissionProfile, CheckClaudeAuth, CheckClaudeAuthResult, CheckContainerClaude, CheckContainerClaudeResult } from '@propanes/shared';
 
 const app = new Hono();
 

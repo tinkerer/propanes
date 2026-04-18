@@ -1,0 +1,17 @@
+{
+  "name": "prompt-widget-monorepo",
+  "private": true,
+  "packageManager": "pnpm@9.14.2",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "test": "turbo test",
+    "lint": "turbo lint",
+    "clean": "turbo clean"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -30,7 +30,7 @@ import type {
   SendKeysResult,
   CapturePaneResult,
   ExecInHarnessResult,
-} from '@prompt-widget/shared';
+} from '@propanes/shared';
 import {
   computeJsonlDir,
   exportSessionFiles as exportSessionFilesLocal,

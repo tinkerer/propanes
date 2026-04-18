@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prompt Widget - Test Page</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 40px 20px;
+      background: #f8fafc;
+      color: #1a1a2e;
+    }
+    h1 { margin-bottom: 8px; }
+    p.subtitle { color: #64748b; margin-bottom: 32px; }
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .card h2 { font-size: 18px; margin-bottom: 12px; }
+    button {
+      padding: 8px 16px;
+      border-radius: 6px;
+      border: 1px solid #e2e8f0;
+      background: white;
+      cursor: pointer;
+      font-size: 14px;
+      margin-right: 8px;
+      margin-bottom: 8px;
+    }
+    button:hover { background: #f1f5f9; }
+    button.primary {
+      background: #6366f1;
+      color: white;
+      border-color: #6366f1;
+    }
+    button.primary:hover { background: #4f46e5; }
+    pre {
+      background: #1e293b;
+      color: #e2e8f0;
+      padding: 16px;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 13px;
+    }
+    #log {
+      max-height: 200px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12px;
+      background: #f1f5f9;
+      padding: 12px;
+      border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Prompt Widget Test Page</h1>
+  <p class="subtitle">The feedback widget should appear as a purple button in the bottom-right corner.</p>
+
+  <div class="card">
+    <h2>Manual Controls</h2>
+    <button onclick="window.promptWidget.open()">Open Widget</button>
+    <button onclick="window.promptWidget.close()">Close Widget</button>
+    <button onclick="window.promptWidget.toggle()">Toggle Widget</button>
+  </div>
+
+  <div class="card">
+    <h2>Programmatic Submission</h2>
+    <button class="primary" onclick="submitProgrammatic()">Submit A/B Test Result</button>
+    <button onclick="submitError()">Submit Error Report</button>
+    <button onclick="submitWithScreenshot()">Submit with Screenshot</button>
+  </div>
+
+  <div class="card">
+    <h2>Identify User</h2>
+    <button onclick="window.promptWidget.identify({ id: 'user-123', email: 'test@example.com', name: 'Test User' })">
+      Set User Identity
+    </button>
+  </div>
+
+  <div class="card">
+    <h2>Generate Test Data</h2>
+    <button onclick="console.log('Test log message')">Console Log</button>
+    <button onclick="console.warn('Test warning')">Console Warn</button>
+    <button onclick="console.error('Test error')">Console Error</button>
+    <button onclick="fetch('/api/v1/nonexistent')">Trigger 404</button>
+  </div>
+
+  <div class="card">
+    <h2>Event Log</h2>
+    <div id="log"></div>
+  </div>
+
+  <script
+    src="/widget/prompt-widget.js"
+    data-endpoint="/api/v1/feedback"
+    data-mode="always"
+    data-position="bottom-right"
+    data-shortcut="ctrl+shift+f"
+    data-collectors="console,network,performance,environment">
+  </script>
+
+  <script>
+    function log(msg) {
+      const el = document.getElementById('log');
+      el.innerHTML += new Date().toLocaleTimeString() + ' - ' + msg + '<br>';
+      el.scrollTop = el.scrollHeight;
+    }
+
+    window.promptWidget.on('submit', (data) => {
+      log('Submitted: ' + JSON.stringify(data));
+    });
+
+    async function submitProgrammatic() {
+      try {
+        const result = await window.promptWidget.submit({
+          type: 'ab_test',
+          title: 'Button Color Test',
+          description: 'Testing blue vs green CTA button',
+          data: { variant: 'blue', conversion: 0.12, sampleSize: 1000 },
+          tags: ['experiment', 'cta'],
+        });
+        log('Programmatic submit OK: ' + result.id);
+      } catch (err) {
+        log('Error: ' + err.message);
+      }
+    }
+
+    async function submitError() {
+      try {
+        const result = await window.promptWidget.submit({
+          type: 'error_report',
+          title: 'Uncaught TypeError',
+          description: 'Cannot read property "foo" of undefined at line 42',
+          data: { stack: 'TypeError: ...', componentName: 'UserProfile' },
+          tags: ['bug', 'critical'],
+        });
+        log('Error report submitted: ' + result.id);
+      } catch (err) {
+        log('Error: ' + err.message);
+      }
+    }
+
+    async function submitWithScreenshot() {
+      try {
+        const result = await window.promptWidget.submit({
+          type: 'manual',
+          title: 'Visual Bug Report',
+          description: 'Layout is broken on mobile viewport',
+          screenshot: true,
+          tags: ['visual', 'mobile'],
+        });
+        log('Screenshot submit OK: ' + result.id);
+      } catch (err) {
+        log('Error: ' + err.message);
+      }
+    }
+
+    log('Widget loaded, ready for testing');
+  </script>
+</body>
+</html>

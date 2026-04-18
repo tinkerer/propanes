@@ -19,7 +19,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const BASE = 'http://localhost:3001/api/v1';
-const TMUX_SOCKET = 'prompt-widget';
+const TMUX_SOCKET = 'propanes';
 const count = parseInt(process.argv[2] || '3', 10);
 
 const sessionIds = [];

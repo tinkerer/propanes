@@ -1,11 +1,11 @@
 {
-  "name": "@prompt-widget/widget",
+  "name": "@propanes/widget",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "./dist/prompt-widget.js",
+  "main": "./dist/propanes.js",
   "exports": {
-    ".": "./dist/prompt-widget.js",
+    ".": "./dist/propanes.js",
     "./image-editor": "./src/image-editor.ts"
   },
   "scripts": {
@@ -14,7 +14,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@prompt-widget/shared": "workspace:*",
+    "@propanes/shared": "workspace:*",
     "html-to-image": "^1.11.0"
   },
   "devDependencies": {

@@ -1,0 +1,23 @@
+[Unit]
+Description=Prompt Widget Launcher Daemon ({{LAUNCHER_ID}})
+After=network.target
+
+[Service]
+Type=simple
+User={{USER}}
+WorkingDirectory={{WORKING_DIR}}
+Environment=SERVER_WS_URL={{SERVER_WS_URL}}
+Environment=LAUNCHER_ID={{LAUNCHER_ID}}
+Environment=LAUNCHER_NAME={{LAUNCHER_NAME}}
+Environment=LAUNCHER_AUTH_TOKEN={{LAUNCHER_AUTH_TOKEN}}
+Environment=MACHINE_ID={{MACHINE_ID}}
+Environment=MAX_SESSIONS={{MAX_SESSIONS}}
+ExecStart=/usr/bin/node {{LAUNCHER_PATH}}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pw-launcher-{{LAUNCHER_ID}}
+
+[Install]
+WantedBy=multi-user.target

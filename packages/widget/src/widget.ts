@@ -5,12 +5,12 @@ import type {
   Collector,
   SubmitOptions,
   UserIdentity,
-} from '@prompt-widget/shared';
+} from '@propanes/shared';
 import {
   DEFAULT_POSITION,
   DEFAULT_MODE,
   DEFAULT_SHORTCUT,
-} from '@prompt-widget/shared';
+} from '@propanes/shared';
 import { WIDGET_CSS } from './styles.js';
 import { ImageEditor } from './image-editor.js';
 import { installCollectors, collectContext } from './collectors.js';
@@ -108,7 +108,7 @@ function clearWidgetDraftStorage() {
   } catch {}
 }
 
-export class PromptWidgetElement {
+export class ProPanesElement {
   private shadow: ShadowRoot;
   private host: HTMLElement;
   private config: WidgetConfig;
@@ -156,7 +156,7 @@ export class PromptWidgetElement {
   };
 
   constructor() {
-    this.host = document.createElement('prompt-widget-host');
+    this.host = document.createElement('propanes-host');
     this.shadow = this.host.attachShadow({ mode: 'open' });
     document.body.appendChild(this.host);
 

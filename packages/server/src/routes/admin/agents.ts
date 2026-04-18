@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { ulid } from 'ulidx';
 import { eq, and, or, isNull, sql } from 'drizzle-orm';
-import { agentEndpointSchema, dispatchSchema } from '@prompt-widget/shared';
+import { agentEndpointSchema, dispatchSchema } from '@propanes/shared';
 import { db, schema } from '../../db/index.js';
 import {
   dispatchFeedbackToAgent,
