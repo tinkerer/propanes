@@ -5,7 +5,7 @@ import { db, schema } from './db/index.js';
 import { getActiveRunIds } from './wiggum-controller.js';
 import { buildSessionList } from './routes/agent-sessions.js';
 import { listNotifications } from './notifications.js';
-import { NOTIFICATIONS_TOPIC } from '@prompt-widget/shared';
+import { NOTIFICATIONS_TOPIC } from '@propanes/shared';
 
 const adminClients = new Set<WebSocket>();
 

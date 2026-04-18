@@ -21,7 +21,7 @@ async function linkToTmp(absPath: string, filename: string): Promise<string> {
     return absPath;
   }
 }
-import { feedbackSubmitSchema } from '@prompt-widget/shared';
+import { feedbackSubmitSchema } from '@propanes/shared';
 import { db, schema } from '../db/index.js';
 import { getSession } from '../sessions.js';
 import { feedbackEvents } from '../events.js';

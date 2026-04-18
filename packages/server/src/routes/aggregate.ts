@@ -7,8 +7,8 @@ import {
   planUpdateSchema,
   analyzeSchema,
   analyzeClusterSchema,
-} from '@prompt-widget/shared';
-import type { PermissionProfile } from '@prompt-widget/shared';
+} from '@propanes/shared';
+import type { PermissionProfile } from '@propanes/shared';
 import { db, schema, sqlite } from '../db/index.js';
 import { dispatchAgentSession } from '../dispatch.js';
 

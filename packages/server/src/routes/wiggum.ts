@@ -15,7 +15,7 @@ import {
 import { getLauncher, listLaunchers, sendAndWait } from '../launcher-registry.js';
 import { startFAFOGeneration, cleanupWorktrees } from '../fafo-controller.js';
 import { dispatchAgentSession } from '../dispatch.js';
-import type { ExecInHarness, ExecInHarnessResult } from '@prompt-widget/shared';
+import type { ExecInHarness, ExecInHarnessResult } from '@propanes/shared';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 const DEFAULT_PROMPT_DIR = '/data/altiumingest/viewer';

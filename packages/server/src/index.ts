@@ -24,7 +24,7 @@ import {
   resolveLauncherResponse,
   getLauncher,
 } from './launcher-registry.js';
-import type { LauncherToServerMessage, LauncherRegistered } from '@prompt-widget/shared';
+import type { LauncherToServerMessage, LauncherRegistered } from '@propanes/shared';
 import { registerAutoDispatch } from './auto-dispatch.js';
 import { updateFeedbackOnSessionEnd, fixStaleDispatchStatuses } from './feedback-status.js';
 import { cleanupSyncBranch } from './dispatch.js';
@@ -77,7 +77,7 @@ setTimeout(() => {
 
 import { hostname } from 'node:os';
 import { ulid } from 'ulidx';
-import type { HarnessMetadata } from '@prompt-widget/shared';
+import type { HarnessMetadata } from '@propanes/shared';
 
 function ensureLocalMachine(): string {
   const existing = db.select().from(schema.machines).where(eq(schema.machines.type, 'local')).get();

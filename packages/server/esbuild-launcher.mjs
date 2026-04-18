@@ -12,7 +12,7 @@ await build({
   outfile: 'dist/launcher-bundle.mjs',
   external: ['node-pty', 'ws'],
   banner: {
-    js: '// prompt-widget launcher daemon bundle\n// Deploy: scp dist/launcher-bundle.mjs remote:~/ && node launcher-bundle.mjs',
+    js: '// propanes launcher daemon bundle\n// Deploy: scp dist/launcher-bundle.mjs remote:~/ && node launcher-bundle.mjs',
   },
   define: {
     '__LAUNCHER_VERSION__': JSON.stringify(pkg.version),

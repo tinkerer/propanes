@@ -589,9 +589,9 @@ agentSessionRoutes.post('/:id/open-terminal', async (c) => {
       return c.json({ error: 'Invalid sessionId' }, 400);
     }
     const portFlag = sshPort ? ` -p ${Number(sshPort)}` : '';
-    command = `ssh ${sshUser}@${sshHost}${portFlag} -t "tmux -L prompt-widget attach-session -t pw-${sessionId}"`;
+    command = `ssh ${sshUser}@${sshHost}${portFlag} -t "tmux -L propanes attach-session -t pw-${sessionId}"`;
   } else {
-    command = `tmux -L prompt-widget attach-session -t pw-${sessionId}`;
+    command = `tmux -L propanes attach-session -t pw-${sessionId}`;
   }
 
   const { exec } = await import('node:child_process');

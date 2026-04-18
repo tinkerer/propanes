@@ -470,7 +470,7 @@ export function SettingsPage() {
             <>
               <div class="settings-toggle-row" style="margin-bottom:8px">
                 <div>
-                  <div class="settings-toggle-label">Local prompt-widget URL</div>
+                  <div class="settings-toggle-label">Local ProPanes URL</div>
                   <div class="settings-toggle-desc">Your local server that opens Terminal.app</div>
                 </div>
                 <input
@@ -615,7 +615,10 @@ export function SettingsPage() {
         <div class="settings-section">
           <h3>About</h3>
           <div style="font-size:13px;color:var(--pw-text-muted)">
-            Prompt Widget Admin v1.0
+            ProPanes Admin v1.0
+          </div>
+          <div style="font-size:12px;color:var(--pw-text-faint);margin-top:4px">
+            Now you&apos;re cooking with gases.
           </div>
         </div>
       </div>

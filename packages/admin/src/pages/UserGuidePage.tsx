@@ -55,7 +55,7 @@ export function UserGuidePage() {
       icon: '\u{1F680}',
       content: () => (
         <div class="guide-section-body">
-          <p>Prompt Widget is your admin dashboard for managing user feedback, dispatching agent sessions, and monitoring live connections.</p>
+          <p>ProPanes is your admin dashboard for managing user feedback, dispatching agent sessions, and monitoring live connections. Now you&apos;re cooking with gases.</p>
           <ul>
             <li><strong>Register an app</strong> &mdash; Click the + button in the sidebar under "Apps" to register your first application.</li>
             <li><strong>Embed the widget</strong> &mdash; Add the feedback overlay to your site with a script tag or the bookmarklet (drag the bookmark icon from the sidebar header).</li>

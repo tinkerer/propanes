@@ -1,0 +1,42 @@
+{
+  "name": "@prompt-widget/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "dev": "concurrently --names server,sessions --prefix-colors blue,green \"NODE_OPTIONS='--conditions=@prompt-widget/source' tsx watch --ignore src/session-service.ts src/index.ts\" \"NODE_OPTIONS='--conditions=@prompt-widget/source' tsx src/session-service.ts\"",
+    "dev:server": "NODE_OPTIONS='--conditions=@prompt-widget/source' tsx watch src/index.ts",
+    "dev:sessions": "NODE_OPTIONS='--conditions=@prompt-widget/source' tsx src/session-service.ts",
+    "start": "concurrently \"node dist/index.js\" \"node dist/session-service.js\"",
+    "start:sessions": "node dist/session-service.js",
+    "dev:launcher": "NODE_OPTIONS='--conditions=@prompt-widget/source' tsx src/launcher-daemon.ts",
+    "start:launcher": "node dist/launcher-daemon.js",
+    "build:launcher": "node esbuild-launcher.mjs",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@prompt-widget/shared": "workspace:*",
+    "better-sqlite3": "^11.7.0",
+    "drizzle-orm": "^0.38.0",
+    "hono": "^4.6.0",
+    "jose": "^5.9.0",
+    "node-pty": "1.2.0-beta.11",
+    "ulidx": "^2.4.0",
+    "ws": "^8.19.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^25.2.2",
+    "@types/ws": "^8.18.1",
+    "concurrently": "^9.1.0",
+    "esbuild": "^0.24.0",
+    "drizzle-kit": "^0.30.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,14 +1,16 @@
-# Prompt Widget
+# ProPanes
 
 Feedback overlay + agent session bridge for web apps. Drop a script tag into your app, collect feedback with screenshots, and dispatch AI agents that can see and interact with live browser sessions.
+
+Now you're cooking with gases.
 
 Four packages: **widget** (embeddable JS overlay), **server** (Hono API + SQLite), **admin** (Preact SPA dashboard), **shared** (types/schemas).
 
 ## Quick start
 
 ```bash
-git clone https://github.com/tinkerer/prompt-widget.git
-cd prompt-widget
+git clone https://github.com/tinkerer/propanes.git
+cd propanes
 npm install
 npm run dev
 ```
@@ -20,7 +22,7 @@ This starts both the API server and the session service. Admin dashboard at `htt
 ```
 Browser (your app)          Server (:3001)              Agent
 ┌──────────────┐     WS     ┌──────────────┐     PTY    ┌──────────┐
-│ prompt-widget │ ─────────> │  session mgr │ ─────────> │ claude   │
+│ ProPanes │ ─────────> │  session mgr │ ─────────> │ claude   │
 │   overlay     │ <───────── │  + REST API  │ <───────── │   CLI    │
 └──────────────┘  commands   └──────────────┘  output    └──────────┘
                                    │
@@ -34,7 +36,7 @@ The widget opens a WebSocket to the server. Agents interact with the live page t
 The `<script>` tag creates a feedback button overlay. Configure via data attributes:
 
 ```html
-<script src="http://localhost:3001/widget/prompt-widget.js"
+<script src="http://localhost:3001/widget/propanes.js"
   data-endpoint="http://localhost:3001"
   data-app-key="pw_YOUR_KEY"
   data-position="bottom-right"

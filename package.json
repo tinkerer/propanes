@@ -1,5 +1,5 @@
 {
-  "name": "prompt-widget-monorepo",
+  "name": "propanes-monorepo",
   "private": true,
   "packageManager": "pnpm@9.14.2",
   "scripts": {
