@@ -37,6 +37,10 @@ export function App() {
   const embedded = isEmbedded.value;
   const route = currentRoute.value;
 
+  useEffect(() => {
+    document.title = 'ProPanes Admin';
+  }, []);
+
   if (route === '/logout') {
     clearToken();
     window.location.hash = '/';
