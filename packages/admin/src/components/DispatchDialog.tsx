@@ -73,6 +73,18 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
     instructionsRef.current?.focus();
   }, []);
 
+  useEffect(() => {
+    function onDocKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    }
+    document.addEventListener('keydown', onDocKeyDown, true);
+    return () => document.removeEventListener('keydown', onDocKeyDown, true);
+  }, [onClose]);
+
   const targets = cachedTargets.value;
   const machines = targets.filter(t => !t.isHarness && !t.isSprite);
   const harnesses = targets.filter(t => t.isHarness);
@@ -142,11 +154,6 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
   }
 
   function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-    }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       runAction('interactive');
@@ -267,7 +274,7 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
             <ActionButton
               kind="assistant"
               icon={'\u{1F3AF}'}
-              label="Setup Assistant\u2026"
+              label={'Setup Assistant\u2026'}
               subtitle="Plan first: ask Q/A, choose branch/tests/env"
               accent="neutral"
               disabled={!fallbackAgent}
