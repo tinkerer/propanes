@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { listSessions, getSession, sendCommand, resolveSessionId, setAlias, removeAlias, getAliasesForSession } from '../sessions.js';
-import { agentBatchRequestSchema, sessionAliasSchema } from '@prompt-widget/shared';
+import { agentBatchRequestSchema, sessionAliasSchema } from '@propanes/shared';
 
 export const agentRoutes = new Hono();
 

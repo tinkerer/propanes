@@ -1,6 +1,6 @@
 # Headless Browser Harness
 
-Docker-based harness for AI agents to interact with web UIs via Playwright MCP + prompt-widget. Provides a sandboxed headless Chromium with the widget auto-injected into every page.
+Docker-based harness for AI agents to interact with web UIs via Playwright MCP + propanes. Provides a sandboxed headless Chromium with the widget auto-injected into every page.
 
 ## Architecture
 
@@ -8,7 +8,7 @@ Docker-based harness for AI agents to interact with web UIs via Playwright MCP +
 ┌─── Docker Compose (pw-net) ───────────────────────────────────┐
 │                                                                │
 │  pw-server (:3001)     pw-browser (:8931)   pw-app (:8080)   │
-│  ├─ prompt-widget API  ├─ Playwright MCP    ├─ your app      │
+│  ├─ propanes API  ├─ Playwright MCP    ├─ your app      │
 │  ├─ admin UI           ├─ headless Chromium │  (any image)    │
 │  ├─ widget JS          └─ widget auto-      └─ opt-in via    │
 │  └─ SQLite DB              injected             --profile app │
@@ -86,7 +86,7 @@ curl -X POST http://localhost:3001/api/v1/agent/sessions/SESSION_ID/keyboard/typ
 2. Agent navigates to `http://pw-server:3001/admin/` via Playwright MCP
 3. Widget auto-injects and connects back to the server
 4. Agent uses Playwright MCP for navigation and DOM snapshots
-5. Agent uses prompt-widget API for screenshots and virtual input
+5. Agent uses propanes API for screenshots and virtual input
 6. Traces and videos are saved to `./artifacts/`
 
 ## Collecting Artifacts
@@ -119,7 +119,7 @@ The browser can navigate to `http://pw-app:80` (or whatever port your app expose
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SERVER_PORT` | `3001` | Host port for prompt-widget server |
+| `SERVER_PORT` | `3001` | Host port for propanes server |
 | `BROWSER_MCP_PORT` | `8931` | Host port for Playwright MCP |
 | `PW_SERVER_URL` | `http://pw-server:3001` | Server URL from browser's perspective |
 | `PW_APP_KEY` | _(empty)_ | App API key for widget auth |
@@ -142,7 +142,7 @@ docker compose logs pw-browser
 docker compose build pw-server && docker compose up -d
 
 # Reset DB
-docker volume rm prompt-widget_pw-data
+docker volume rm propanes_pw-data
 docker compose up -d
 
 # Shell into browser container

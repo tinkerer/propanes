@@ -1,5 +1,5 @@
 {
-  "name": "@prompt-widget/shared",
+  "name": "@propanes/shared",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "@prompt-widget/source": "./src/index.ts",
+      "@propanes/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }

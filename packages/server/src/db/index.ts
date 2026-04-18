@@ -6,7 +6,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { ulid } from 'ulidx';
 import * as schema from './schema.js';
 
-const DB_PATH = process.env.DB_PATH || 'prompt-widget.db';
+const DB_PATH = process.env.DB_PATH || 'propanes.db';
 
 const sqlite: DatabaseType = new Database(DB_PATH);
 sqlite.pragma('journal_mode = WAL');
@@ -172,10 +172,13 @@ export function runMigrations() {
     `ALTER TABLE agent_sessions ADD COLUMN sprite_config_id TEXT`,
     `ALTER TABLE agent_sessions ADD COLUMN sprite_exec_session_id TEXT`,
     `ALTER TABLE agent_sessions ADD COLUMN cwd TEXT`,
+    `ALTER TABLE machines ADD COLUMN admin_url TEXT`,
     `ALTER TABLE wiggum_runs ADD COLUMN prompt_file TEXT`,
     `ALTER TABLE wiggum_runs ADD COLUMN log_file TEXT`,
     `ALTER TABLE wiggum_runs ADD COLUMN agent_label TEXT`,
+    `ALTER TABLE wiggum_runs ADD COLUMN fitness_detail TEXT`,
     `ALTER TABLE feedback_items ADD COLUMN title_history TEXT NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE wiggum_swarms ADD COLUMN max_generations INTEGER`,
   ];
 
   for (const stmt of alterStatements) {

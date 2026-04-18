@@ -69,7 +69,7 @@ localRoutes.post('/open-terminal', async (c) => {
     if (!/^[a-zA-Z0-9._-]+$/.test(sshHost)) return c.json({ error: 'Invalid sshHost' }, 400);
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) return c.json({ error: 'Invalid sessionId' }, 400);
     const portFlag = sshPort ? ` -p ${Number(sshPort)}` : '';
-    finalCommand = `ssh ${sshUser}@${sshHost}${portFlag} -t "tmux -L prompt-widget attach-session -t pw-${sessionId}"`;
+    finalCommand = `ssh ${sshUser}@${sshHost}${portFlag} -t "tmux -L propanes attach-session -t pw-${sessionId}"`;
   } else if (command) {
     // Validate it looks like an SSH+tmux command (not arbitrary shell)
     if (!/^ssh\s/.test(command) && !/^tmux\s/.test(command)) {
@@ -78,7 +78,7 @@ localRoutes.post('/open-terminal', async (c) => {
     finalCommand = command;
   } else if (sessionId) {
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) return c.json({ error: 'Invalid sessionId' }, 400);
-    finalCommand = `tmux -L prompt-widget attach-session -t pw-${sessionId}`;
+    finalCommand = `tmux -L propanes attach-session -t pw-${sessionId}`;
   } else {
     return c.json({ error: 'Provide {command} or {sshUser, sshHost, sessionId}' }, 400);
   }

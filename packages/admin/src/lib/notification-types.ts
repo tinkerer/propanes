@@ -1,6 +1,6 @@
 /**
  * Local mirror of the notification types in packages/shared/src/notifications.ts.
- * Admin doesn't currently take a dependency on @prompt-widget/shared, so
+ * Admin doesn't currently take a dependency on @propanes/shared, so
  * shared types are duplicated. Keep in sync when editing either side.
  */
 

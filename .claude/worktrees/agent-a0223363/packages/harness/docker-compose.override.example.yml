@@ -1,0 +1,11 @@
+# Example: build pw-app from a custom Dockerfile instead of a pre-built image.
+# Copy this to docker-compose.override.yml and adjust paths.
+#
+# Usage: docker compose --profile app up -d
+
+services:
+  pw-app:
+    build:
+      context: /path/to/your/app
+      dockerfile: Dockerfile
+    image: ""   # clear the default image so build is used

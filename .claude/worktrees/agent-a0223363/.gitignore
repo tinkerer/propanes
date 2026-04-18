@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.turbo/
+*.db
+*.sqlite
+uploads/
+.env
+.env.local

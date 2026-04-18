@@ -1,4 +1,4 @@
-import { MAX_PENDING_MESSAGES, MESSAGE_TTL_MS } from '@prompt-widget/shared';
+import { MAX_PENDING_MESSAGES, MESSAGE_TTL_MS } from '@propanes/shared';
 import { sqlite } from './db/index.js';
 
 interface PendingEntry {

@@ -1,0 +1,10 @@
+node_modules/
+.turbo/
+dist/
+*.db
+*.db-shm
+*.db-wal
+.git/
+.env
+.env.local
+packages/harness/artifacts/

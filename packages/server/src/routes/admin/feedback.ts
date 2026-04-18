@@ -6,7 +6,7 @@ import {
   feedbackUpdateSchema,
   adminFeedbackCreateSchema,
   batchOperationSchema,
-} from '@prompt-widget/shared';
+} from '@propanes/shared';
 import { db, schema, sqlite } from '../../db/index.js';
 import { hydrateFeedback } from '../../dispatch.js';
 import { feedbackEvents } from '../../events.js';

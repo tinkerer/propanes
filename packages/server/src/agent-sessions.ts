@@ -1,7 +1,7 @@
 import { WebSocket as WsWebSocket } from 'ws';
 import { eq } from 'drizzle-orm';
 import { db, schema } from './db/index.js';
-import type { PermissionProfile, InputToSession } from '@prompt-widget/shared';
+import type { PermissionProfile, InputToSession } from '@propanes/shared';
 import {
   spawnSessionRemote,
   killSessionRemote,

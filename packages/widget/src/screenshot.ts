@@ -95,7 +95,7 @@ export interface CaptureOptions {
 
 /* ── html-to-image capture ── */
 async function captureHtmlToImage(opts?: CaptureOptions): Promise<Blob | null> {
-  const host = opts?.excludeWidget ? document.querySelector('prompt-widget-host') as HTMLElement | null : null;
+  const host = opts?.excludeWidget ? document.querySelector('propanes-host') as HTMLElement | null : null;
   if (host) host.style.display = 'none';
 
   const cursor = opts?.excludeCursor ? document.getElementById('__pw-virtual-cursor') : null;
@@ -198,7 +198,7 @@ async function captureHtmlToImage(opts?: CaptureOptions): Promise<Blob | null> {
       filter: (node: HTMLElement) => {
         if (!node.tagName) return true;
         const tag = node.tagName.toLowerCase();
-        if (tag === 'prompt-widget-host') return false;
+        if (tag === 'propanes-host') return false;
         if (tag === 'canvas') return false;
         if (tag === 'video') return false;
         if (tag === 'iframe') return false;
@@ -260,7 +260,7 @@ async function captureHtmlToImage(opts?: CaptureOptions): Promise<Blob | null> {
 
 /* ── getDisplayMedia one-shot capture ── */
 async function captureOneShot(opts?: CaptureOptions): Promise<Blob | null> {
-  const host = opts?.excludeWidget ? document.querySelector('prompt-widget-host') as HTMLElement | null : null;
+  const host = opts?.excludeWidget ? document.querySelector('propanes-host') as HTMLElement | null : null;
   if (host) host.style.display = 'none';
 
   const cursor = opts?.excludeCursor ? document.getElementById('__pw-virtual-cursor') : null;
@@ -301,7 +301,7 @@ async function captureOneShot(opts?: CaptureOptions): Promise<Blob | null> {
 
 /* ── getDisplayMedia persistent-stream capture ── */
 async function capturePersistent(opts?: CaptureOptions): Promise<Blob | null> {
-  const host = opts?.excludeWidget ? document.querySelector('prompt-widget-host') as HTMLElement | null : null;
+  const host = opts?.excludeWidget ? document.querySelector('propanes-host') as HTMLElement | null : null;
   if (host) host.style.display = 'none';
 
   const cursor = opts?.excludeCursor ? document.getElementById('__pw-virtual-cursor') : null;

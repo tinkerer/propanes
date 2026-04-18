@@ -5,7 +5,7 @@ import {
   dispatchMouseDown, dispatchMouseUp, dispatchPressKey, dispatchKeyDown,
   dispatchKeyUp, dispatchTypeText,
 } from './input-events.js';
-import type { Collector } from '@prompt-widget/shared';
+import type { Collector } from '@propanes/shared';
 
 interface CommandMessage {
   type: 'command';

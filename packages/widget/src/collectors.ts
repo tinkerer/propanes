@@ -1,4 +1,4 @@
-import type { ConsoleEntry, NetworkError, PerformanceTiming, EnvironmentInfo, FeedbackContext, Collector } from '@prompt-widget/shared';
+import type { ConsoleEntry, NetworkError, PerformanceTiming, EnvironmentInfo, FeedbackContext, Collector } from '@propanes/shared';
 
 const consoleLogs: ConsoleEntry[] = [];
 const networkErrors: NetworkError[] = [];

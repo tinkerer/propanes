@@ -1,4 +1,4 @@
-# Polling Audit — Prompt Widget
+# Polling Audit — ProPanes
 
 ## Executive Summary
 

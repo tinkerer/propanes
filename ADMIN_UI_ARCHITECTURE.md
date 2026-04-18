@@ -1,4 +1,4 @@
-# Prompt Widget Admin UI - Agent Management Architecture
+# ProPanes Admin UI - Agent Management Architecture
 
 ## Overview
 

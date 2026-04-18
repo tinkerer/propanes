@@ -1,0 +1,24 @@
+{
+  "name": "@prompt-widget/widget",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/prompt-widget.js",
+  "exports": {
+    ".": "./dist/prompt-widget.js",
+    "./image-editor": "./src/image-editor.ts"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@prompt-widget/shared": "workspace:*",
+    "html-to-image": "^1.11.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0"
+  }
+}

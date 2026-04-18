@@ -1,5 +1,5 @@
 export function gettingStartedMarkdown(baseUrl: string): string {
-  return `# Prompt Widget — Agent Getting Started
+  return `# ProPanes — Agent Getting Started
 
 Quickest way to start is to paste this into a claude code session running in your project directory:
 
@@ -54,7 +54,7 @@ curl -X POST ${baseUrl}/api/v1/admin/agents \\
     "mode": "headless",
     "appId": "<APP_ID>",
     "isDefault": true,
-    "promptTemplate": "You are working on {{app.name}}.\\n\\nApp description: {{app.description}}\\n\\nThe user reported feedback from their browser session at {{session.url}} (viewport {{session.viewport}}).\\n\\nTitle: {{feedback.title}}\\nDescription: {{feedback.description}}\\n\\nConsole logs:\\n{{feedback.consoleLogs}}\\n\\nNetwork errors:\\n{{feedback.networkErrors}}\\n\\nCustom data:\\n{{feedback.data}}\\n\\nTags: {{feedback.tags}}\\n\\nAdditional instructions:\\n{{instructions}}\\n\\nThe prompt-widget server is at ${baseUrl}. The browser session may still be live — you can interact with it via the agent API (see below).\\n\\nAvailable hooks the app exposes: {{app.hooks}}"
+    "promptTemplate": "You are working on {{app.name}}.\\n\\nApp description: {{app.description}}\\n\\nThe user reported feedback from their browser session at {{session.url}} (viewport {{session.viewport}}).\\n\\nTitle: {{feedback.title}}\\nDescription: {{feedback.description}}\\n\\nConsole logs:\\n{{feedback.consoleLogs}}\\n\\nNetwork errors:\\n{{feedback.networkErrors}}\\n\\nCustom data:\\n{{feedback.data}}\\n\\nTags: {{feedback.tags}}\\n\\nAdditional instructions:\\n{{instructions}}\\n\\nThe propanes server is at ${baseUrl}. The browser session may still be live — you can interact with it via the agent API (see below).\\n\\nAvailable hooks the app exposes: {{app.hooks}}"
   }'
 \`\`\`
 
@@ -114,7 +114,7 @@ browser session to your registered application.
 
 \`\`\`html
 <script
-  src="${baseUrl}/widget/prompt-widget.js"
+  src="${baseUrl}/widget/propanes.js"
   data-endpoint="${baseUrl}/api/v1/feedback"
   data-app-key="pw_<KEY>"
 ></script>
@@ -243,7 +243,7 @@ echo "Agent ID: $AGENT_ID"
 
 echo ""
 echo "Add this to your HTML:"
-echo "<script src=\\"$PW_SERVER/widget/prompt-widget.js\\" data-endpoint=\\"$PW_SERVER/api/v1/feedback\\" data-app-key=\\"$API_KEY\\"></script>"
+echo "<script src=\\"$PW_SERVER/widget/propanes.js\\" data-endpoint=\\"$PW_SERVER/api/v1/feedback\\" data-app-key=\\"$API_KEY\\"></script>"
 \`\`\`
 
 ---
@@ -293,9 +293,9 @@ review/dispatch feedback. Default login: \`admin\` / \`admin\`.
 
 ---
 
-## Reporting bugs with prompt-widget
+## Reporting bugs with propanes
 
-If you encounter issues with the prompt-widget API itself (timeouts, unexpected
+If you encounter issues with the propanes API itself (timeouts, unexpected
 responses, missing data), you can report them back through the programmatic
 feedback endpoint:
 
@@ -306,7 +306,7 @@ curl -X POST ${baseUrl}/api/v1/feedback/programmatic \\
     "type": "bug",
     "title": "Brief description of the issue",
     "description": "What happened, what you expected, and any relevant context",
-    "tags": ["prompt-widget-bug"],
+    "tags": ["propanes-bug"],
     "data": {
       "endpoint": "/api/v1/...",
       "statusCode": 500,
@@ -315,8 +315,8 @@ curl -X POST ${baseUrl}/api/v1/feedback/programmatic \\
   }'
 \`\`\`
 
-This helps the prompt-widget maintainers track and fix issues with the platform
-itself. Use the \`prompt-widget-bug\` tag so these reports are easy to filter in
+This helps the propanes maintainers track and fix issues with the platform
+itself. Use the \`propanes-bug\` tag so these reports are easy to filter in
 the admin UI.
 `;
 }

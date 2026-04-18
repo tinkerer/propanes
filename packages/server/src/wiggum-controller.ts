@@ -5,7 +5,7 @@ import { db, schema } from './db/index.js';
 import { dispatchHarnessSession } from './dispatch.js';
 import { sendCommand } from './sessions.js';
 import { sendAndWait, getLauncher } from './launcher-registry.js';
-import type { ExecInHarness, ExecInHarnessResult, WiggumIteration } from '@prompt-widget/shared';
+import type { ExecInHarness, ExecInHarnessResult, WiggumIteration } from '@propanes/shared';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 const SESSION_POLL_INTERVAL = 3_000;

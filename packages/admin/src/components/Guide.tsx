@@ -20,8 +20,8 @@ export const GUIDES: GuideDef[] = [
     steps: [
       {
         selector: '.sidebar-title',
-        title: 'Welcome to Prompt Widget',
-        text: 'This is your admin dashboard for managing feedback, agents, and sessions. Let\'s take a quick tour.',
+        title: 'Welcome to ProPanes',
+        text: 'This is your admin dashboard for managing feedback, agents, and sessions. Now you\'re cooking with gases. Let\'s take a quick tour.',
         position: 'right',
       },
       {

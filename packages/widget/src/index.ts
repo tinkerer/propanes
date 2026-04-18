@@ -1,8 +1,8 @@
-import { PromptWidgetElement } from './widget.js';
+import { ProPanesElement } from './widget.js';
 
 declare global {
   interface Window {
-    promptWidget: PromptWidgetElement;
+    promptWidget: ProPanesElement;
   }
 }
 
@@ -13,8 +13,8 @@ const inEmbedIframe = window !== window.top && params.get('embed') === 'true';
 const isCompanion = params.get('companion') === 'true';
 
 if ((!noEmbed || !inEmbedIframe) && !isCompanion) {
-  const widget = new PromptWidgetElement();
+  const widget = new ProPanesElement();
   window.promptWidget = widget;
 }
 
-export { PromptWidgetElement };
+export { ProPanesElement };

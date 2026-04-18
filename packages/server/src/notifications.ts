@@ -7,7 +7,7 @@ import {
   type NotificationKind,
   type NotificationPayload,
   type NotificationSeverity,
-} from '@prompt-widget/shared';
+} from '@propanes/shared';
 
 /**
  * In-memory notification registry.

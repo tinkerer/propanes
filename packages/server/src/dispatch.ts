@@ -17,7 +17,7 @@ import type {
   SyncCodebaseResult,
   SyncCodebaseToContainer,
   SyncCodebaseToContainerResult,
-} from '@prompt-widget/shared';
+} from '@propanes/shared';
 import { db, schema } from './db/index.js';
 import { spawnAgentSession } from './agent-sessions.js';
 import { getLauncher, addSessionToLauncher, sendAndWait } from './launcher-registry.js';

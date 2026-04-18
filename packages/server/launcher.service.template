@@ -1,5 +1,5 @@
 [Unit]
-Description=Prompt Widget Launcher Daemon ({{LAUNCHER_ID}})
+Description=ProPanes Launcher Daemon ({{LAUNCHER_ID}})
 After=network.target
 
 [Service]

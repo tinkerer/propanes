@@ -80,7 +80,10 @@ export function SidebarNavView() {
             &#9776;
           </button>
         </Tooltip>
-        <span class="sidebar-title">Prompt Widget</span>
+        <div class="sidebar-brand">
+          <span class="sidebar-title">ProPanes</span>
+          <span class="sidebar-tagline">Now you&apos;re cooking with gases</span>
+        </div>
         {!collapsed && (
           <a
             class="bookmarklet-link"

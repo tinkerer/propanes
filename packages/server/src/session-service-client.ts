@@ -1,4 +1,4 @@
-import type { PermissionProfile } from '@prompt-widget/shared';
+import type { PermissionProfile } from '@propanes/shared';
 
 const SESSION_SERVICE_URL = process.env.SESSION_SERVICE_URL || 'http://localhost:3002';
 

@@ -68,7 +68,7 @@ RUN chmod +x /scripts/pw-server-entrypoint.sh
 
 ENV NODE_ENV=production
 ENV PORT=3001
-ENV DB_PATH=/data/prompt-widget.db
+ENV DB_PATH=/data/propanes.db
 
 EXPOSE 3001
 

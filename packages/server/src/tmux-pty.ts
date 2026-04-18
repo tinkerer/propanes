@@ -33,7 +33,7 @@ function tmuxName(sessionId: string): string {
   return `${TMUX_PREFIX}${sessionId}`;
 }
 
-const TMUX_SOCKET = ['-L', 'prompt-widget'];
+const TMUX_SOCKET = ['-L', 'propanes'];
 
 function cleanEnv(extra?: Record<string, string>): Record<string, string> {
   const { CLAUDECODE, ...rest } = process.env as Record<string, string>;
@@ -219,7 +219,7 @@ export function attachDefaultTmuxSession(params: {
   const pwName = tmuxName(sessionId);
 
   // Create a pw-prefixed tmux session in our socket that runs `tmux attach -t <target>` on the default server.
-  // This lets us bridge the default tmux session into our prompt-widget PTY infrastructure.
+  // This lets us bridge the default tmux session into our propanes PTY infrastructure.
   const attachCmd = `tmux attach-session -t ${tmuxTarget.replace(/'/g, "'\\''")}`;
   execFileSync('tmux', [
     ...TMUX_SOCKET,

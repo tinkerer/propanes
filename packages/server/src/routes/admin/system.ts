@@ -454,12 +454,12 @@ function buildSetupPrompt(
     parts.push('2. Example tags: `["cpu:AMD EPYC 7513", "ram:256GB", "gpu:RTX 4090 x2", "os:Ubuntu 22.04"]`');
     parts.push('3. Update: `curl -s -X PATCH ' + baseUrl + '/api/v1/admin/machines/' + m.id + ' -H "Content-Type: application/json" -d \'{"tags":["tag1","tag2",...]}\'`');
     parts.push('');
-    parts.push('### Phase 7: Deploy Prompt-Widget Admin on Remote Machine');
-    parts.push('After the core setup is done, ask the user: "Would you like me to deploy the prompt-widget admin dashboard on this machine too?"');
+    parts.push('### Phase 7: Deploy ProPanes Admin on Remote Machine');
+    parts.push('After the core setup is done, ask the user: "Would you like me to deploy the ProPanes admin dashboard on this machine too?"');
     parts.push('If yes, follow these steps using the companion terminal:');
     const addr = m.address || '<address>';
-    const repoUrl = 'https://github.com/tinkerer/prompt-widget.git';
-    const pwDir = '~/work/github.com/prompt-widget';
+    const repoUrl = 'https://github.com/tinkerer/propanes.git';
+    const pwDir = '~/work/github.com/propanes';
     parts.push('');
     parts.push('1. Check if the repo already exists:');
     parts.push(`   \`ssh ${addr} "test -d ${pwDir} && echo EXISTS || echo MISSING"\``);
@@ -633,11 +633,11 @@ function buildNewEntityPrompt(
     parts.push('1. Parse the hardware JSON and create tags (e.g., `["cpu:AMD EPYC 7513", "ram:256GB", "gpu:RTX 4090 x2"]`)');
     parts.push('2. Update: `curl -s -X PATCH ' + baseUrl + '/api/v1/admin/machines/<machine-id> -H "Content-Type: application/json" -d \'{"tags":[...]}\'`');
     parts.push('');
-    parts.push('### Phase 7: Deploy Prompt-Widget Admin on Remote Machine');
-    parts.push('After the core setup is done, ask the user: "Would you like me to deploy the prompt-widget admin dashboard on this machine too?"');
+    parts.push('### Phase 7: Deploy ProPanes Admin on Remote Machine');
+    parts.push('After the core setup is done, ask the user: "Would you like me to deploy the ProPanes admin dashboard on this machine too?"');
     parts.push('If yes:');
-    const newRepoUrl = 'https://github.com/tinkerer/prompt-widget.git';
-    const newPwDir = '~/work/github.com/prompt-widget';
+    const newRepoUrl = 'https://github.com/tinkerer/propanes.git';
+    const newPwDir = '~/work/github.com/propanes';
     parts.push('1. Check if repo exists: `ssh <address> "test -d ' + newPwDir + ' && echo EXISTS || echo MISSING"`');
     parts.push('2. Clone if missing: `ssh <address> "mkdir -p ~/work/github.com && git clone ' + newRepoUrl + ' ' + newPwDir + '"`');
     parts.push('   Or pull latest: `ssh <address> "cd ' + newPwDir + ' && git pull"`');
@@ -811,4 +811,3 @@ systemRoutes.post('/terminal', async (c) => {
     return c.json({ error: errorMsg }, 500);
   }
 });
-

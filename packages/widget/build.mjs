@@ -6,8 +6,8 @@ const buildOptions = {
   entryPoints: ['src/index.ts'],
   bundle: true,
   format: 'iife',
-  globalName: 'PromptWidget',
-  outfile: 'dist/prompt-widget.js',
+  globalName: 'ProPanes',
+  outfile: 'dist/propanes.js',
   minify: !watch,
   sourcemap: watch ? 'inline' : false,
   target: 'es2022',
@@ -22,5 +22,5 @@ if (watch) {
   console.log('Watching for changes...');
 } else {
   await esbuild.build(buildOptions);
-  console.log('Built prompt-widget.js');
+  console.log('Built propanes.js');
 }

@@ -244,7 +244,7 @@ export class VoiceRecorder {
 
   private installDomListeners() {
     const addInteraction = (type: InteractionEvent['type'], el: Element, details?: Record<string, unknown>) => {
-      if (el.closest('prompt-widget-host')) return;
+      if (el.closest('propanes-host')) return;
       const event: InteractionEvent = {
         id: `int-${this.interactionCounter++}`,
         type,
@@ -300,7 +300,7 @@ export class VoiceRecorder {
       hoverTimer = setTimeout(() => {
         hoverTimer = null;
         const el = document.elementFromPoint(e.clientX, e.clientY);
-        if (el && !el.closest('prompt-widget-host')) {
+        if (el && !el.closest('propanes-host')) {
           const info = getTargetInfo(el);
           if (info.selector !== lastHoverSelector) {
             lastHoverSelector = info.selector;
@@ -379,7 +379,7 @@ export class VoiceRecorder {
 
     const onMousedown = (e: MouseEvent) => {
       if (e.button !== 0) return;
-      if ((e.target as Element)?.closest('prompt-widget-host')) return;
+      if ((e.target as Element)?.closest('propanes-host')) return;
       pending = true;
       tracking = false;
       gestureCompleted = false;
