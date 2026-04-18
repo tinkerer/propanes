@@ -2,6 +2,7 @@ import { useEffect } from 'preact/hooks';
 import { ComponentChildren } from 'preact';
 import { isAuthenticated, currentRoute, loadApplications, isEmbedded, isCompanion, isWorkbench, clearToken } from '../lib/state.js';
 import { connectAdminWs } from '../lib/admin-ws.js';
+import { initNotifications } from '../lib/notifications.js';
 import { isolatedComponent, getIsolateEntry, getIsolateParams } from '../lib/isolate.js';
 import { Layout } from './Layout.js';
 import { GlobalTerminalPanel } from './GlobalTerminalPanel.js';
@@ -48,6 +49,7 @@ export function App() {
 
   useEffect(() => {
     loadApplications();
+    initNotifications();
     connectAdminWs();
   }, []);
 

@@ -38,6 +38,7 @@ export const feedbackItems = sqliteTable('feedback_items', {
   dispatchedAt: text('dispatched_at'),
   dispatchStatus: text('dispatch_status'),
   dispatchResponse: text('dispatch_response'),
+  titleHistory: text('title_history').notNull().default('[]'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });

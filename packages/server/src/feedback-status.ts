@@ -1,13 +1,40 @@
 import { eq, desc, and, ne, sql } from 'drizzle-orm';
 import { db, schema } from './db/index.js';
 import { feedbackEvents } from './events.js';
+import { emitNotification } from './notifications.js';
 
 export function updateFeedbackOnSessionEnd(sessionId: string, sessionStatus: string): void {
   const session = db
-    .select({ feedbackId: schema.agentSessions.feedbackId })
+    .select({
+      feedbackId: schema.agentSessions.feedbackId,
+      parentSessionId: schema.agentSessions.parentSessionId,
+    })
     .from(schema.agentSessions)
     .where(eq(schema.agentSessions.id, sessionId))
     .get();
+
+  // Emit a notification for any non-subagent session lifecycle end.
+  if (session && !session.parentSessionId) {
+    const feedbackRow = session.feedbackId
+      ? db
+          .select({ title: schema.feedbackItems.title, appId: schema.feedbackItems.appId })
+          .from(schema.feedbackItems)
+          .where(eq(schema.feedbackItems.id, session.feedbackId))
+          .get()
+      : null;
+    const title = feedbackRow?.title || `Session ${sessionId.slice(-6)}`;
+    const severity = sessionStatus === 'completed' ? 'success'
+      : sessionStatus === 'killed' ? 'warning'
+      : 'error';
+    emitNotification({
+      kind: 'plain',
+      severity,
+      title: `${titleForStatus(sessionStatus)}: ${title}`,
+      sessionId,
+      feedbackId: session.feedbackId || null,
+      appId: feedbackRow?.appId || null,
+    });
+  }
 
   if (!session?.feedbackId) return;
 
@@ -40,6 +67,12 @@ export function updateFeedbackOnSessionEnd(sessionId: string, sessionStatus: str
     .run();
 
   feedbackEvents.emit('updated', { id: session.feedbackId, appId: feedback?.appId || null });
+}
+
+function titleForStatus(status: string): string {
+  if (status === 'completed') return 'Session finished';
+  if (status === 'killed') return 'Session killed';
+  return 'Session failed';
 }
 
 export function fixStaleDispatchStatuses(): number {

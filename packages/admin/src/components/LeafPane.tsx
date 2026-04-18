@@ -3,6 +3,7 @@ import { signal } from '@preact/signals';
 import { type ViewMode } from './SessionViewToggle.js';
 import type { LeafNode } from '../lib/pane-tree.js';
 import { PopupMenu } from './PopupMenu.js';
+import { SessionIdMenu } from './SessionIdMenu.js';
 import {
   setActiveTab,
   setFocusedLeaf,
@@ -284,122 +285,14 @@ function PaneHeader({
               pw-{sessionId.slice(-6)} <span class="id-dropdown-caret">{'\u25BE'}</span>
             </span>
             {idMenuOpen.value === sessionId && (
-              <PopupMenu anchorRef={idMenuTriggerRef} onClose={() => { idMenuOpen.value = null; }}>
-                <div class="id-submenu-group" onClick={(e: any) => e.stopPropagation()}>
-                  <div class="id-submenu-trigger">Copy</div>
-                  <div class="id-submenu">
-                    <button class="popup-menu-item" onClick={(e) => { idMenuOpen.value = null; copyWithTooltip(sessionId, e as any); }}>
-                      Session ID <kbd>C</kbd>
-                    </button>
-                    {sess?.jsonlPath && (
-                      <button class="popup-menu-item" onClick={(e) => { idMenuOpen.value = null; copyWithTooltip(sess.jsonlPath, e as any); }}>
-                        JSONL path <kbd>J</kbd>
-                      </button>
-                    )}
-                    {sess?.feedbackId && (
-                      <button class="popup-menu-item" onClick={(e) => { idMenuOpen.value = null; copyWithTooltip(sess.feedbackId, e as any); }}>
-                        Feedback ID <kbd>D</kbd>
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div class="id-submenu-group" onClick={(e: any) => e.stopPropagation()}>
-                  <div class="id-submenu-trigger">Companion</div>
-                  <div class="id-submenu">
-                    {sess?.jsonlPath && (() => {
-                      const companions = getCompanions(sessionId);
-                      const jsonlActive = companions.includes('jsonl');
-                      return (
-                        <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; toggleCompanion(sessionId, 'jsonl'); }}>
-                          {jsonlActive ? '\u2713 ' : ''}JSONL <kbd>L</kbd>
-                        </button>
-                      );
-                    })()}
-                    {sess?.feedbackId && (() => {
-                      const companions = getCompanions(sessionId);
-                      const fbActive = companions.includes('feedback');
-                      return (
-                        <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; toggleCompanion(sessionId, 'feedback'); }}>
-                          {fbActive ? '\u2713 ' : ''}Feedback <kbd>F</kbd>
-                        </button>
-                      );
-                    })()}
-                    {sess?.url && (() => {
-                      const companions = getCompanions(sessionId);
-                      const iframeActive = companions.includes('iframe');
-                      return (
-                        <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; toggleCompanion(sessionId, 'iframe'); }}>
-                          {iframeActive ? '\u2713 ' : ''}Page iframe <kbd>I</kbd>
-                        </button>
-                      );
-                    })()}
-                    {(() => {
-                      const companions = getCompanions(sessionId);
-                      const termActive = companions.includes('terminal');
-                      return (
-                        <button class="popup-menu-item" onClick={() => {
-                          if (termActive) {
-                            idMenuOpen.value = null;
-                            toggleCompanion(sessionId, 'terminal');
-                          } else {
-                            idMenuOpen.value = null;
-                            termPickerOpen.value = { kind: 'companion', sessionId };
-                          }
-                        }}>
-                          {termActive ? '\u2713 ' : ''}Terminal <kbd>M</kbd>
-                        </button>
-                      );
-                    })()}
-                    {(() => {
-                      const companions = getCompanions(sessionId);
-                      const wiggumActive = companions.includes('wiggum-runs');
-                      return (
-                        <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; toggleCompanion(sessionId, 'wiggum-runs'); }}>
-                          {wiggumActive ? '\u2713 ' : ''}Wiggum Runs <kbd>W</kbd>
-                        </button>
-                      );
-                    })()}
-                    <button class="popup-menu-item" onClick={() => {
-                      idMenuOpen.value = null;
-                      termPickerOpen.value = { kind: 'url' };
-                    }}>
-                      Iframe... <kbd>U</kbd>
-                    </button>
-                    {sess?.isHarness && sess?.harnessAppPort && (
-                      <button class="popup-menu-item" onClick={() => {
-                        const host = sess.isRemote && sess.launcherHostname ? sess.launcherHostname : 'localhost';
-                        openUrlCompanion(`http://${host}:${sess.harnessAppPort}`);
-                        idMenuOpen.value = null;
-                      }}>
-                        Open App <kbd>O</kbd>
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div class="id-submenu-group" onClick={(e: any) => e.stopPropagation()}>
-                  <div class="id-submenu-trigger">Open In</div>
-                  <div class="id-submenu">
-                    <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'panel'); }}>Panel <kbd>P</kbd></button>
-                    <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'window'); }}>Window <kbd>W</kbd></button>
-                    <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'tab'); }}>Browser Tab <kbd>B</kbd></button>
-                    <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; openLocalTerminal(sessionId); }}>Terminal.app <kbd>T</kbd></button>
-                  </div>
-                </div>
-                <div class="id-submenu-group" onClick={(e: any) => e.stopPropagation()}>
-                  <div class="id-submenu-trigger">{isExited ? 'Resume as...' : 'Restart as...'}</div>
-                  <div class="id-submenu">
-                    <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; resumeSession(sessionId, { permissionProfile: 'interactive' }); }}>
-                      {sess?.permissionProfile === 'interactive' ? '\u2713 ' : ''}{'\uD83D\uDC41'} Supervised
-                    </button>
-                    <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; resumeSession(sessionId, { permissionProfile: 'auto' }); }}>
-                      {sess?.permissionProfile === 'auto' ? '\u2713 ' : ''}{'\uD83E\uDD16'} Autonomous
-                    </button>
-                    <button class="popup-menu-item" onClick={() => { idMenuOpen.value = null; resumeSession(sessionId, { permissionProfile: 'yolo' }); }}>
-                      {sess?.permissionProfile === 'yolo' ? '\u2713 ' : ''}{'\u26A1'} Full Auto (skip permissions)
-                    </button>
-                  </div>
-                </div>
-              </PopupMenu>
+              <SessionIdMenu
+                sessionId={sessionId}
+                sess={sess}
+                isExited={isExited}
+                anchorRef={idMenuTriggerRef}
+                onClose={() => { idMenuOpen.value = null; }}
+                context={{ mode: 'tab' }}
+              />
             )}
           </div>
           {feedbackPath && (

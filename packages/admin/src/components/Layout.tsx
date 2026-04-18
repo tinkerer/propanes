@@ -13,6 +13,7 @@ import { SpotlightSearch } from './SpotlightSearch.js';
 import { AddAppModal } from './AddAppModal.js';
 import { HintToast } from './HintToast.js';
 import { AutoFixToast } from './AutoFixToast.js';
+import { NotificationCenter } from './NotificationCenter.js';
 import { SshSetupDialog } from './SshSetupDialog.js';
 import { TerminalPicker } from './TerminalPicker.js';
 import { ControlBar } from './ControlBar.js';
@@ -636,6 +637,7 @@ export function Layout() {
       <PerfOverlay />
       <HintToast />
       <AutoFixToast />
+      <NotificationCenter />
       <SshSetupDialog />
       {sidebarStatusMenu.value && (() => {
         const menuSid = sidebarStatusMenu.value!.sessionId;

@@ -16,6 +16,7 @@ import {
 } from '../lib/sessions.js';
 import type { PaneMruEntry } from '../lib/sessions.js';
 import { PopupMenu } from './PopupMenu.js';
+import { unreadNotificationCount, openNotificationCenter } from '../lib/notifications.js';
 
 function getSessionMruLabel(sessionId: string, sessionMap: Map<string, any>): string {
   const custom = getSessionLabel(sessionId);
@@ -206,6 +207,17 @@ export function ControlBar() {
       )}
 
       <div style="flex:1" />
+
+      <button
+        class="control-bar-btn control-bar-notif-btn"
+        onClick={openNotificationCenter}
+        title="Notifications"
+      >
+        <span class="control-bar-icon">{'\u{1F514}'}</span>
+        {unreadNotificationCount.value > 0 && (
+          <span class="control-bar-notif-badge">{unreadNotificationCount.value}</span>
+        )}
+      </button>
     </div>
   );
 }

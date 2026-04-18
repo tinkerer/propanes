@@ -14,6 +14,7 @@ import {
   findLeafWithTab,
   addTabToLeaf,
   removeTabFromLeaf,
+  replaceTabInLeaf,
   ensureSessionsLeaf,
   showSessionsLeaf,
   setActiveTab,
@@ -273,9 +274,14 @@ export function closeTab(sessionId: string) {
   }
   persistTabs();
 
-  const leaf = findLeafWithTab(sessionId);
-  if (leaf) {
+  // Remove from every leaf that contains the tab. Defensive: normally a tab
+  // lives in at most one leaf, but if stale state has duplicates, close all.
+  let leaf = findLeafWithTab(sessionId);
+  const visited = new Set<string>();
+  while (leaf && !visited.has(leaf.id)) {
+    visited.add(leaf.id);
     removeTabFromLeaf(leaf.id, sessionId);
+    leaf = findLeafWithTab(sessionId);
   }
 }
 
@@ -382,6 +388,8 @@ export async function resumeSession(sessionId: string, opts?: { permissionProfil
       } else {
         activeTabId.value = newId;
       }
+      const leaf = findLeafWithTab(sessionId);
+      if (leaf) replaceTabInLeaf(leaf.id, sessionId, newId);
     }
     const next = new Set(exitedSessions.value);
     next.delete(sessionId);

@@ -4,6 +4,8 @@ import { listLaunchers, listHarnesses } from './launcher-registry.js';
 import { db, schema } from './db/index.js';
 import { getActiveRunIds } from './wiggum-controller.js';
 import { buildSessionList } from './routes/agent-sessions.js';
+import { listNotifications } from './notifications.js';
+import { NOTIFICATIONS_TOPIC } from '@prompt-widget/shared';
 
 const adminClients = new Set<WebSocket>();
 
@@ -21,6 +23,7 @@ export function registerAdminClient(ws: WebSocket) {
   sendSnapshot(ws, 'live-connections');
   sendSnapshot(ws, 'infrastructure');
   sendSnapshot(ws, 'wiggum');
+  sendSnapshot(ws, NOTIFICATIONS_TOPIC);
 }
 
 export function unregisterAdminClient(ws: WebSocket) {
@@ -28,7 +31,7 @@ export function unregisterAdminClient(ws: WebSocket) {
   if (adminClients.size === 0) stopTimers();
 }
 
-function broadcastAdmin(msg: { topic: string; data: unknown }) {
+export function broadcastAdmin(msg: { topic: string; data: unknown }) {
   if (adminClients.size === 0) return;
   const payload = JSON.stringify(msg);
   for (const ws of adminClients) {
@@ -59,6 +62,8 @@ async function getTopicData(topic: string): Promise<unknown> {
       return buildInfraData();
     case 'wiggum':
       return buildWiggumData();
+    case NOTIFICATIONS_TOPIC:
+      return { type: 'snapshot', notifications: listNotifications() };
     default:
       return null;
   }

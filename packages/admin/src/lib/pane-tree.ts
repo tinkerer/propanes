@@ -303,7 +303,7 @@ export function getAllLeaves(node: PaneNode): LeafNode[] {
 }
 
 export function findLeafWithTab(tabId: string, node?: PaneNode): LeafNode | null {
-  const root = node ?? layoutTree.value.root;
+  const root = node ?? getLatestTree().root;
   if (root.type === 'leaf') return root.tabs.includes(tabId) ? root : null;
   return findLeafWithTab(tabId, root.children[0]) ?? findLeafWithTab(tabId, root.children[1]);
 }
@@ -392,6 +392,18 @@ function commitTree(tree: LayoutTree) {
   }
 }
 
+/**
+ * Returns the most up-to-date tree state: batch tree if batching, pending
+ * RAF-scheduled tree if one is queued, otherwise the committed signal value.
+ * Use this as the clone source in all mutations so consecutive mutations in
+ * the same frame see each other's changes instead of racing.
+ */
+function getLatestTree(): LayoutTree {
+  if (_batchDepth > 0 && _batchTree) return _batchTree;
+  if (_pendingTree) return _pendingTree;
+  return layoutTree.value;
+}
+
 // --- Tree mutation functions (all immutable — clone, mutate, assign) ---
 
 let _idCounter = 0;
@@ -407,7 +419,7 @@ export function splitLeaf(
   ratio = 0.5,
   moveActiveTab = false,
 ): LeafNode | null {
-  const tree = cloneTree(layoutTree.value);
+  const tree = cloneTree(getLatestTree());
   const parent = findParent(tree.root, leafId);
   const leaf = findLeaf(tree.root, leafId);
   if (!leaf) return null;
@@ -453,7 +465,7 @@ export function splitLeaf(
 }
 
 export function mergeLeaf(leafId: string) {
-  const tree = cloneTree(layoutTree.value);
+  const tree = cloneTree(getLatestTree());
   const leaf = findLeaf(tree.root, leafId);
   const parent = findParent(tree.root, leafId);
   if (!parent) return; // Can't merge root
@@ -494,9 +506,25 @@ export function mergeLeaf(leafId: string) {
 }
 
 export function addTabToLeaf(leafId: string, tabId: string, activate = true) {
-  const tree = cloneTree(layoutTree.value);
+  const tree = cloneTree(getLatestTree());
   const leaf = findLeaf(tree.root, leafId);
   if (!leaf) return;
+
+  // Invariant: a tab lives in at most one leaf. Remove from any other leaf so
+  // drag/drop races and stale state can't produce duplicates.
+  const orphanedLeafIds: string[] = [];
+  for (const other of getAllLeaves(tree.root)) {
+    if (other.id === leafId) continue;
+    if (other.tabs.includes(tabId)) {
+      other.tabs = other.tabs.filter(t => t !== tabId);
+      if (other.activeTabId === tabId) {
+        other.activeTabId = other.tabs[0] ?? null;
+      }
+      if (other.tabs.length === 0 && !isWellKnownLeaf(other.id)) {
+        orphanedLeafIds.push(other.id);
+      }
+    }
+  }
 
   if (!leaf.tabs.includes(tabId)) {
     leaf.tabs.push(tabId);
@@ -506,10 +534,12 @@ export function addTabToLeaf(leafId: string, tabId: string, activate = true) {
   }
 
   commitTree(tree);
+
+  for (const id of orphanedLeafIds) mergeLeaf(id);
 }
 
 export function removeTabFromLeaf(leafId: string, tabId: string, autoMerge = true) {
-  const tree = cloneTree(layoutTree.value);
+  const tree = cloneTree(getLatestTree());
   const leaf = findLeaf(tree.root, leafId);
   if (!leaf) return;
 
@@ -527,16 +557,29 @@ export function removeTabFromLeaf(leafId: string, tabId: string, autoMerge = tru
 }
 
 export function setActiveTab(leafId: string, tabId: string) {
-  const tree = cloneTree(layoutTree.value);
+  const tree = cloneTree(getLatestTree());
   const leaf = findLeaf(tree.root, leafId);
   if (!leaf || !leaf.tabs.includes(tabId)) return;
   leaf.activeTabId = tabId;
   commitTree(tree);
 }
 
+export function replaceTabInLeaf(leafId: string, oldTabId: string, newTabId: string) {
+  const tree = cloneTree(getLatestTree());
+  const leaf = findLeaf(tree.root, leafId);
+  if (!leaf) return;
+  const idx = leaf.tabs.indexOf(oldTabId);
+  if (idx === -1) return;
+  leaf.tabs[idx] = newTabId;
+  if (leaf.activeTabId === oldTabId) {
+    leaf.activeTabId = newTabId;
+  }
+  commitTree(tree);
+}
+
 export function moveTab(fromLeafId: string, toLeafId: string, tabId: string) {
   if (fromLeafId === toLeafId) return;
-  const tree = cloneTree(layoutTree.value);
+  const tree = cloneTree(getLatestTree());
   const from = findLeaf(tree.root, fromLeafId);
   const to = findLeaf(tree.root, toLeafId);
   if (!from || !to) return;
@@ -561,7 +604,7 @@ export function moveTab(fromLeafId: string, toLeafId: string, tabId: string) {
 
 export function setSplitRatio(splitId: string, ratio: number) {
   const clamped = Math.max(0.05, Math.min(0.95, ratio));
-  const tree = cloneTree(layoutTree.value);
+  const tree = cloneTree(getLatestTree());
   const node = findNodeById(tree.root, splitId);
   if (!node || node.type !== 'split') return;
 
@@ -636,7 +679,7 @@ export function setFocusedLeaf(leafId: string | null) {
 }
 
 export function toggleLeafCollapsed(leafId: string) {
-  const tree = cloneTree(layoutTree.value);
+  const tree = cloneTree(getLatestTree());
   const leaf = findLeaf(tree.root, leafId);
   if (!leaf) return;
   leaf.collapsed = !leaf.collapsed;
@@ -676,7 +719,7 @@ export const treeSessionsLeafHasTabs = computed(() => {
 // --- Main-split ratio auto-adjust ---
 
 export function showSessionsLeaf() {
-  const tree = cloneTree(_batchDepth > 0 && _batchTree ? _batchTree : layoutTree.value);
+  const tree = cloneTree(getLatestTree());
   // Find the split that directly contains the sessions-leaf
   const parent = findParentSplit(tree.root, SESSIONS_LEAF_ID);
   if (parent && parent.type === 'split' && parent.ratio >= 0.95) {
@@ -691,7 +734,7 @@ export function showSessionsLeaf() {
  * Returns the leaf ID to use for adding sessions.
  */
 export function ensureSessionsLeaf(): string {
-  const current = _batchDepth > 0 && _batchTree ? _batchTree : layoutTree.value;
+  const current = getLatestTree();
   const existing = findLeaf(current.root, SESSIONS_LEAF_ID);
   if (existing) return SESSIONS_LEAF_ID;
 
@@ -733,7 +776,7 @@ export function ensureSessionsLeaf(): string {
 }
 
 export function hideSessionsLeaf() {
-  const tree = cloneTree(_batchDepth > 0 && _batchTree ? _batchTree : layoutTree.value);
+  const tree = cloneTree(getLatestTree());
   const parent = findParentSplit(tree.root, SESSIONS_LEAF_ID);
   if (parent && parent.type === 'split') {
     parent.ratio = 1.0;
@@ -748,7 +791,7 @@ function findParentSplit(node: PaneNode, childId: string): SplitNode | null {
 }
 
 export function reorderTabInLeaf(leafId: string, tabId: string, insertBeforeTabId: string | null) {
-  const tree = cloneTree(layoutTree.value);
+  const tree = cloneTree(getLatestTree());
   const leaf = findLeaf(tree.root, leafId);
   if (!leaf) return;
   const idx = leaf.tabs.indexOf(tabId);
