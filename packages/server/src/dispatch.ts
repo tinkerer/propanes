@@ -27,6 +27,13 @@ import { extractArtifactPaths, exportSessionFiles } from './jsonl-utils.js';
 import { launchSpriteSession } from './sprite-sessions.js';
 
 export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, tags: string[], screenshots: (typeof schema.feedbackScreenshots.$inferSelect)[], audioFiles: (typeof schema.feedbackAudio.$inferSelect)[] = []): FeedbackItem {
+  let titleHistory: FeedbackItem['titleHistory'] = [];
+  if (row.titleHistory) {
+    try {
+      const parsed = JSON.parse(row.titleHistory);
+      if (Array.isArray(parsed)) titleHistory = parsed;
+    } catch { /* ignore malformed */ }
+  }
   return {
     ...row,
     type: row.type as FeedbackItem['type'],
@@ -37,10 +44,11 @@ export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, t
     tags,
     screenshots,
     audioFiles,
+    titleHistory,
   };
 }
 
-export const DEFAULT_PROMPT_TEMPLATE = `do feedback item {{feedback.id}}
+export const DEFAULT_PROMPT_TEMPLATE = `Feedback: {{feedback.url}}
 
 Title: {{feedback.title}}
 {{feedback.description}}
@@ -53,9 +61,7 @@ App description: {{app.description}}
 {{feedback.consoleLogs}}
 {{feedback.networkErrors}}
 {{feedback.data}}
-{{instructions}}
-
-{{feedback.screenshot}}`;
+{{instructions}}`;
 
 export function renderPromptTemplate(
   template: string,
@@ -87,14 +93,16 @@ export function renderPromptTemplate(
     screenshotText = fb.screenshots.map(
       (s) => `Screenshot: /api/v1/images/${s.id}`
     ).join('\n');
-    screenshotText += '\n\nconsider screenshot';
   }
 
   // Look up live widget session for real-time URL/viewport
   const liveSession = fb.sessionId ? getSession(fb.sessionId) : undefined;
 
+  const publicBaseUrl = (process.env.PW_PUBLIC_BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
+
   const vars: Record<string, string> = {
     'feedback.id': fb.id,
+    'feedback.url': `${publicBaseUrl}/api/v1/admin/feedback/${fb.id}`,
     'feedback.title': fb.title || '',
     'feedback.description': fb.description || '',
     'feedback.sourceUrl': fb.sourceUrl || '',
@@ -739,7 +747,7 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
   const now = new Date().toISOString();
 
   // Inherit parent's permission profile by default; allow explicit override (e.g. restart-as)
-  const permissionProfile: PermissionProfile = overridePermissionProfile || parent.permissionProfile;
+  const permissionProfile: PermissionProfile = overridePermissionProfile || parent.permissionProfile as PermissionProfile;
 
   // If parent has a Claude session ID, use --resume for full context restoration
   if (parent.claudeSessionId) {
@@ -797,7 +805,8 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
 
   // Legacy fallback: no stored Claude session ID, use context-dump approach
   const claudeSessionId = crypto.randomUUID();
-  const originalPrompt = `do feedback item ${parent.feedbackId}\n\nTitle: ${feedbackRow.title}${feedbackRow.description ? `\nDescription: ${feedbackRow.description}` : ''}`;
+  const publicBaseUrl = (process.env.PW_PUBLIC_BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
+  const originalPrompt = `Feedback: ${publicBaseUrl}/api/v1/admin/feedback/${parent.feedbackId}\n\nTitle: ${feedbackRow.title}${feedbackRow.description ? `\nDescription: ${feedbackRow.description}` : ''}`;
 
   const parentOutput = parent.outputLog || '';
   const outputTail = parentOutput.length > 4000

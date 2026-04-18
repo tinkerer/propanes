@@ -78,8 +78,14 @@ export interface FeedbackItem {
   dispatchedAt: string | null;
   dispatchStatus: string | null;
   dispatchResponse: string | null;
+  titleHistory: FeedbackTitleHistoryEntry[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface FeedbackTitleHistoryEntry {
+  title: string;
+  changedAt: string;
 }
 
 export interface FeedbackScreenshot {

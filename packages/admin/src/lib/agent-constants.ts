@@ -1,4 +1,4 @@
-export const DEFAULT_PROMPT_TEMPLATE = `do feedback item {{feedback.id}}
+export const DEFAULT_PROMPT_TEMPLATE = `Feedback: {{feedback.url}}
 
 Title: {{feedback.title}}
 {{feedback.description}}
@@ -11,9 +11,7 @@ App description: {{app.description}}
 {{feedback.consoleLogs}}
 {{feedback.networkErrors}}
 {{feedback.data}}
-{{instructions}}
-
-consider screenshot`;
+{{instructions}}`;
 
 export const META_WIGGUM_TEMPLATE = `You are a meta-wiggum orchestrator agent. Your job is to strategically create and manage wiggum runs (automated iteration loops) to improve an application.
 

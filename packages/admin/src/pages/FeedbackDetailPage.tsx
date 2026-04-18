@@ -6,9 +6,8 @@ import { navigate } from '../lib/state.js';
 import { openSession, resumeSession, feedbackTitleCache } from '../lib/sessions.js';
 import { copyText, copyWithTooltip } from '../lib/clipboard.js';
 import { CropEditor } from '../components/CropEditor.js';
-import { DispatchTargetButton } from '../components/DispatchPicker.js';
+import { openDispatchDialog, dispatchDialogResult } from '../components/DispatchDialog.js';
 import { VoicePlayback } from '../components/VoicePlayback.js';
-import { cachedTargets, parseTargetKey } from '../components/DispatchTargetSelect.js';
 import { formatDate } from '../lib/date-utils.js';
 import { ElementCard } from '../components/ElementCard.js';
 import { SpecView, SpecToolbar } from '../components/SpecView.js';
@@ -185,11 +184,6 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
   const feedback = useSignal<any>(null);
   const loading = useSignal(true);
   const error = useSignal('');
-  const agents = useSignal<any[]>([]);
-  const dispatchAgentId = useSignal('');
-  const dispatchInstructions = useSignal('');
-  const dispatchLoading = useSignal(false);
-  const dispatchTarget = useSignal('');
   const newTag = useSignal('');
   const agentSessions = useSignal<any[]>([]);
   const lastLoadedId = useSignal<string | null>(null);
@@ -213,8 +207,6 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
   async function load(loadId: string, loadAppId: string | null) {
     loading.value = true;
     error.value = '';
-    agents.value = [];
-    dispatchAgentId.value = '';
     lastLoadedId.value = loadId;
     currentDetailAppIdRef.current = loadAppId;
     try {
@@ -223,13 +215,6 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
       if (fb?.title) {
         feedbackTitleCache.value = { ...feedbackTitleCache.value, [loadId]: fb.title };
       }
-      const agentsList = await api.getAgents(fb.appId || undefined);
-      agents.value = agentsList;
-      const appDefault = agentsList.find((a: any) => a.isDefault && a.appId === fb.appId);
-      const globalDefault = agentsList.find((a: any) => a.isDefault && !a.appId);
-      const def = appDefault || globalDefault;
-      if (def) dispatchAgentId.value = def.id;
-      else if (agentsList.length > 0) dispatchAgentId.value = agentsList[0].id;
       loadSessions(loadId);
       loadLiveConnections(fb.appId);
     } catch (err: any) {
@@ -312,48 +297,22 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
     feedback.value = { ...fb };
   }
 
-  async function doDispatch() {
+  function openDispatch() {
     const fb = feedback.value;
-    if (!fb || !dispatchAgentId.value) return;
-    dispatchLoading.value = true;
-    try {
-      const selectedAgent = agents.value.find((a) => a.id === dispatchAgentId.value);
-      const { launcherId, harnessConfigId } = parseTargetKey(dispatchTarget.value, cachedTargets.value);
-      const result = await api.dispatch({
-        feedbackId: fb.id,
-        agentEndpointId: dispatchAgentId.value,
-        instructions: dispatchInstructions.value || undefined,
-        launcherId,
-        harnessConfigId,
-      });
-      dispatchInstructions.value = '';
-
-      feedback.value = {
-        ...fb,
-        status: 'dispatched',
-        dispatchedTo: selectedAgent?.name || 'Agent',
-        dispatchedAt: new Date().toISOString(),
-        dispatchStatus: result.sessionId ? 'running' : 'success',
-        dispatchResponse: result.response,
-      };
-
-      if (result.sessionId) {
-        openSession(result.sessionId);
-      }
-
-      loadSessions(fb.id);
-    } catch (err: any) {
-      const msg = err.message || 'Unknown error';
-      const isServiceDown = msg.includes('unreachable') || msg.includes('503');
-      if (isServiceDown) {
-        error.value = `Dispatch failed — session service may be down: ${msg}`;
-      } else {
-        error.value = 'Dispatch failed: ' + msg;
-      }
-    } finally {
-      dispatchLoading.value = false;
-    }
+    if (!fb) return;
+    openDispatchDialog([fb.id], fb.appId);
   }
+
+  // Refresh feedback + sessions after a dispatch from the dialog
+  useSignalEffect(() => {
+    if (dispatchDialogResult.value !== 'dispatched') return;
+    const fb = feedback.value;
+    if (fb) {
+      api.getFeedbackById(fb.id).then((updated) => { feedback.value = updated; }).catch(() => {});
+      loadSessions(fb.id);
+    }
+    dispatchDialogResult.value = 'idle';
+  });
 
   function formatJson(data: any) {
     if (!data) return 'null';
@@ -535,49 +494,39 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
             )}
           </h2>
           <div style="font-size:11px;color:var(--pw-text-faint);font-family:monospace;margin-top:2px">{fb.id}</div>
+          {Array.isArray(fb.titleHistory) && fb.titleHistory.length > 0 && (
+            <details class="title-history" style="margin-top:4px;font-size:12px;color:var(--pw-text-muted)">
+              <summary style="cursor:pointer">Previous titles ({fb.titleHistory.length})</summary>
+              <ul style="margin:4px 0 0 0;padding-left:16px;list-style:disc">
+                {[...fb.titleHistory].reverse().map((h: any, i: number) => (
+                  <li key={i} style="margin-bottom:2px">
+                    <span style="text-decoration:line-through;color:var(--pw-text-faint)">{h.title}</span>
+                    {h.changedAt && (
+                      <span style="margin-left:6px;font-size:11px;color:var(--pw-text-faint)">{formatDate(h.changedAt)}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn-ghost-danger" onClick={deleteFeedback}>Delete</button>
         </div>
       </div>
 
-      {agents.value.length > 0 && (
-        <div class="dispatch-bar dispatch-bar-styled">
-          <div class="dispatch-bar-label">Dispatch</div>
-          <div class="dispatch-bar-controls">
-            <select
-              class="dispatch-bar-select"
-              value={dispatchAgentId.value}
-              onChange={(e) => (dispatchAgentId.value = (e.target as HTMLSelectElement).value)}
-            >
-              {agents.value.map((a) => (
-                <option value={a.id}>
-                  {a.name}{a.isDefault && a.appId ? ' (app default)' : a.isDefault ? ' (default)' : ''}{!a.appId ? '' : ''}
-                </option>
-              ))}
-            </select>
-            <input
-              class="dispatch-bar-input"
-              type="text"
-              placeholder="Instructions (optional)..."
-              value={dispatchInstructions.value}
-              onInput={(e) => (dispatchInstructions.value = (e.target as HTMLInputElement).value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') doDispatch(); }}
-            />
-            <DispatchTargetButton
-              value={dispatchTarget.value}
-              onChange={(id) => { dispatchTarget.value = id || ''; }}
-            />
-            <button
-              class="btn btn-primary dispatch-bar-btn"
-              disabled={!dispatchAgentId.value || dispatchLoading.value}
-              onClick={doDispatch}
-            >
-              {dispatchLoading.value ? 'Dispatching...' : 'Dispatch'}
-            </button>
-          </div>
+      <div class="dispatch-bar dispatch-bar-styled">
+        <div class="dispatch-bar-label">Dispatch</div>
+        <div class="dispatch-bar-controls">
+          <button
+            class="btn btn-primary dispatch-bar-btn"
+            onClick={openDispatch}
+            title="Open dispatch options (Interactive, YOLO, Wiggum, FAFO...)"
+          >
+            Dispatch{'\u2026'}
+          </button>
         </div>
-      )}
+      </div>
 
       <div class="detail-grid">
         <div>

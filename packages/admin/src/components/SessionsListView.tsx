@@ -24,6 +24,7 @@ import {
   deleteSession,
   focusSessionTerminal,
   getSessionLabel,
+  setSessionLabel,
   getSessionColor,
   bringToFront,
   activePanelId,
@@ -47,6 +48,7 @@ import {
   toggleCollapsedAppGroup,
   loadAllSessions,
 } from '../lib/sessions.js';
+import { api } from '../lib/api.js';
 import { setFocusedLeaf } from '../lib/pane-tree.js';
 import { ctrlShiftHeld } from '../lib/shortcuts.js';
 import { autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce } from '../lib/settings.js';
@@ -56,6 +58,36 @@ import { QuickDispatchPopup } from './QuickDispatchPopup.js';
 
 const autoJumpMenuOpen = signal(false);
 const quickDispatchAppKey = signal<string | null>(null);
+const renamingSessionId = signal<string | null>(null);
+const renameValue = signal<string>('');
+const renameSaving = signal(false);
+
+async function commitSessionRename(session: any) {
+  if (!session) { renamingSessionId.value = null; return; }
+  const next = renameValue.value.trim();
+  if (!next) { renamingSessionId.value = null; return; }
+  // Prefer feedback title (persists + tracked on server) when session has a feedback
+  if (session.feedbackId && next !== (session.feedbackTitle || '')) {
+    renameSaving.value = true;
+    try {
+      await api.updateFeedback(session.feedbackId, { title: next });
+      // Optimistically update all sessions sharing this feedback
+      allSessions.value = allSessions.value.map((s: any) =>
+        s.feedbackId === session.feedbackId ? { ...s, feedbackTitle: next } : s
+      );
+      // Clear any stale local override so the server title wins
+      if (getSessionLabel(session.id)) setSessionLabel(session.id, '');
+    } catch {
+      // fall back to local label if server update fails
+      setSessionLabel(session.id, next);
+    } finally {
+      renameSaving.value = false;
+    }
+  } else if (!session.feedbackId) {
+    setSessionLabel(session.id, next);
+  }
+  renamingSessionId.value = null;
+}
 
 function SidebarTabBadge({ tabNum }: { tabNum: number }) {
   const pending = pendingFirstDigit.value;
@@ -226,7 +258,44 @@ export function SessionsListView() {
               <span class="sidebar-tab-badge-overlay"><SidebarTabBadge tabNum={globalNum} /></span>
             ) : null}
           </span>
-          <span class="session-label">{sessionSearchQuery.value ? highlightMatch(raw, sessionSearchQuery.value) : raw}</span>
+          {renamingSessionId.value === s.id ? (
+            <input
+              class="session-label session-label-rename-input"
+              type="text"
+              value={renameValue.value}
+              disabled={renameSaving.value}
+              onInput={(e) => { renameValue.value = (e.target as HTMLInputElement).value; }}
+              onKeyDown={(e) => {
+                // Keep keystrokes contained — the global shortcut layer + xterm focus
+                // stealing can otherwise intercept Home/End/arrow defaults
+                e.stopPropagation();
+                if (e.key === 'Enter') { e.preventDefault(); commitSessionRename(s); }
+                if (e.key === 'Escape') { e.preventDefault(); renamingSessionId.value = null; }
+              }}
+              onBlur={() => commitSessionRename(s)}
+              onClick={(e) => e.stopPropagation()}
+              onDblClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+              ref={(el) => {
+                if (el && document.activeElement !== el) {
+                  el.focus();
+                  el.select();
+                }
+              }}
+            />
+          ) : (
+            <span
+              class="session-label"
+              title="Double-click to rename"
+              onDblClick={(e) => {
+                e.stopPropagation();
+                renameValue.value = getSessionLabel(s.id) || s.feedbackTitle || s.agentName || raw;
+                renamingSessionId.value = s.id;
+              }}
+            >
+              {sessionSearchQuery.value ? highlightMatch(raw, sessionSearchQuery.value) : raw}
+            </span>
+          )}
           <button
             class="sidebar-item-menu-btn"
             onClick={(e) => {

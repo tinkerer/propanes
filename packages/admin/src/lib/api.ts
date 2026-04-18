@@ -103,6 +103,21 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  listNotifications: () =>
+    request<{ notifications: any[] }>('/admin/notifications'),
+
+  resolveNotification: (id: string, action: string, response?: unknown) =>
+    request<{ notification: any }>(`/admin/notifications/${id}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ action, response }),
+    }),
+
+  deleteNotification: (id: string) =>
+    request<{ ok: boolean }>(`/admin/notifications/${id}`, { method: 'DELETE' }),
+
+  clearResolvedNotifications: () =>
+    request<{ removed: number }>('/admin/notifications/clear-resolved', { method: 'POST' }),
+
   spawnTerminal: (data?: { cwd?: string; appId?: string; launcherId?: string; harnessConfigId?: string; permissionProfile?: string }) =>
     request<{ sessionId: string }>('/admin/terminal', {
       method: 'POST',

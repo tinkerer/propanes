@@ -10,27 +10,52 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_BACKOFF_CAP_MS = 30_000;
 
 // Stagger terminal mounts to avoid overwhelming the browser on page load.
-// Only N terminals may initialize concurrently; the rest queue up.
+// At most MOUNT_CONCURRENCY xterm instances initialize simultaneously; the
+// rest wait in a FIFO queue with MOUNT_STAGGER_MS between grants.
 const MOUNT_CONCURRENCY = 2;
 const MOUNT_STAGGER_MS = 150;
 let _mountActive = 0;
 const _mountQueue: Array<() => void> = [];
 
-function requestMount(): Promise<void> {
-  if (_mountActive < MOUNT_CONCURRENCY) {
-    _mountActive++;
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => _mountQueue.push(resolve));
-}
-
-function releaseMount() {
-  _mountActive = Math.max(0, _mountActive - 1);
-  if (_mountQueue.length > 0) {
+function drainMountQueue() {
+  while (_mountActive < MOUNT_CONCURRENCY && _mountQueue.length > 0) {
     const next = _mountQueue.shift()!;
     _mountActive++;
     setTimeout(next, MOUNT_STAGGER_MS);
   }
+}
+
+// Acquire a mount slot. `granted` resolves when it's this caller's turn.
+// `release` returns the slot (idempotent); if called before grant, removes
+// the waiter from the queue without touching _mountActive.
+function acquireMountSlot(): { granted: Promise<void>; release: () => void } {
+  let grantResolve!: () => void;
+  const granted = new Promise<void>((resolve) => { grantResolve = resolve; });
+  let state: 'waiting' | 'granted' | 'released' = 'waiting';
+  const grant = () => {
+    if (state !== 'waiting') return;
+    state = 'granted';
+    grantResolve();
+  };
+  const release = () => {
+    if (state === 'released') return;
+    if (state === 'granted') {
+      state = 'released';
+      _mountActive = Math.max(0, _mountActive - 1);
+      drainMountQueue();
+    } else {
+      state = 'released';
+      const idx = _mountQueue.indexOf(grant);
+      if (idx >= 0) _mountQueue.splice(idx, 1);
+    }
+  };
+  if (_mountActive < MOUNT_CONCURRENCY) {
+    _mountActive++;
+    grant();
+  } else {
+    _mountQueue.push(grant);
+  }
+  return { granted, release };
 }
 
 // Truncate history data to last N bytes before writing to terminal.
@@ -66,15 +91,29 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
   const safeFitAndResizeRef = useRef<(bounce?: boolean) => void>(() => {});
   const [mountReady, setMountReady] = useState(false);
 
-  // Staggered mount: wait for our turn in the queue
+  // Staggered mount: wait for our turn in the queue. The slot is held for
+  // MOUNT_STAGGER_MS after we're allowed to mount, then released so the next
+  // queued mount can start — we do NOT hold the slot for the lifetime of the
+  // terminal (that would permanently cap mounts at MOUNT_CONCURRENCY).
   useEffect(() => {
     let cancelled = false;
-    requestMount().then(() => {
-      if (!cancelled) setMountReady(true);
+    let releaseTimer: ReturnType<typeof setTimeout> | null = null;
+    const { granted, release } = acquireMountSlot();
+    granted.then(() => {
+      if (cancelled) {
+        release();
+        return;
+      }
+      setMountReady(true);
+      releaseTimer = setTimeout(() => {
+        releaseTimer = null;
+        release();
+      }, MOUNT_STAGGER_MS);
     });
     return () => {
       cancelled = true;
-      releaseMount();
+      if (releaseTimer) clearTimeout(releaseTimer);
+      release();
     };
   }, [sessionId]);
 
@@ -736,7 +775,10 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
       cancelled = true;
       cancelAnimationFrame(rafId);
     };
-  }, [isActive]);
+    // mountReady: isActive may already be true when the terminal is still
+    // queued for mount. Re-run once the main mount effect has populated
+    // termRef/fitRef so the initial fit happens even without a tab toggle.
+  }, [isActive, mountReady]);
 
   return <div ref={containerRef} style={{ width: '100%', height: '100%' }} onClick={() => termRef.current?.focus()} />;
 }
