@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { MessageRenderer } from './MessageRenderer.js';
-import { createOutputParser, type ParsedMessage } from '../lib/output-parser.js';
+import { JsonOutputParser, type ParsedMessage } from '../lib/output-parser.js';
+import { api } from '../lib/api.js';
 
 interface Props {
   sessionId: string;
@@ -96,88 +97,41 @@ export function AssistantGroupHeader({ messages }: { messages: ParsedMessage[] }
   );
 }
 
-export function StructuredView({ sessionId, isActive, permissionProfile }: Props) {
+export function StructuredView({ sessionId }: Props) {
   const [messages, setMessages] = useState<ParsedMessage[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const parserRef = useRef(createOutputParser(permissionProfile || ''));
-  const cleanedUp = useRef(false);
   const autoScroll = useRef(true);
+  const lastLength = useRef(0);
 
   useEffect(() => {
-    cleanedUp.current = false;
-    parserRef.current = createOutputParser(permissionProfile || '');
+    lastLength.current = 0;
+    setMessages([]);
+    setLoading(true);
+    setError(null);
 
-    const token = localStorage.getItem('pw-admin-token');
-    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${proto}//${window.location.host}/ws/agent-session?sessionId=${sessionId}&token=${token}`;
-
-    let reconnectDelay = 2000;
-    const MAX_RECONNECT_DELAY = 30000;
-    const MAX_RECONNECT_ATTEMPTS = 5;
-    let reconnectAttempts = 0;
-
-    function connect() {
-      if (cleanedUp.current) return;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        reconnectDelay = 2000;
-        reconnectAttempts = 0;
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          let data: string | undefined;
-
-          if (msg.type === 'sequenced_output' && msg.content?.data) {
-            data = msg.content.data;
-          } else if (msg.type === 'output' && msg.data) {
-            data = msg.data;
-          } else if (msg.type === 'history' && msg.data) {
-            // Truncate large history to prevent expensive synchronous parsing
-            data = msg.data.length > 50_000 ? msg.data.slice(-50_000) : msg.data;
-          }
-
-          if (data) {
-            const newMsgs = parserRef.current.feed(data);
-            if (newMsgs.length > 0) {
-              setMessages(prev => [...prev, ...newMsgs]);
-            }
-          }
-        } catch {}
-      };
-
-      ws.onclose = (event) => {
-        wsRef.current = null;
-        if (cleanedUp.current) return;
-
-        // Stop reconnecting for terminal close codes
-        if (event.code === 4004 || event.code === 4001 || event.code === 4003) return;
-
-        // Session service unavailable — limited retries
-        if (event.code === 4010) {
-          reconnectAttempts++;
-          if (reconnectAttempts > 3) return;
-          setTimeout(connect, 5000);
-          return;
-        }
-
-        reconnectAttempts++;
-        if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) return;
-        setTimeout(connect, reconnectDelay);
-        reconnectDelay = Math.min(reconnectDelay * 1.5, MAX_RECONNECT_DELAY);
-      };
-    }
-
-    connect();
-
-    return () => {
-      cleanedUp.current = true;
-      wsRef.current?.close();
+    let cancelled = false;
+    const fetchJsonl = async () => {
+      try {
+        const text = await api.getJsonl(sessionId);
+        if (cancelled) return;
+        if (text.length === lastLength.current) return;
+        lastLength.current = text.length;
+        const parser = new JsonOutputParser();
+        parser.feed(text + '\n');
+        setMessages(parser.getMessages());
+        setError(null);
+      } catch (err: any) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     };
+
+    fetchJsonl();
+    const interval = setInterval(() => { if (!document.hidden) fetchJsonl(); }, 3000);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [sessionId]);
 
   useEffect(() => {
@@ -192,12 +146,22 @@ export function StructuredView({ sessionId, isActive, permissionProfile }: Props
     autoScroll.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
   };
 
+  if (loading) {
+    return <div class="structured-view"><div class="sm-empty">Loading JSONL...</div></div>;
+  }
+
+  if (error) {
+    return <div class="structured-view"><div class="sm-empty" style="color: #f87171">{error}</div></div>;
+  }
+
   const groups = groupMessages(messages);
+  const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+  const pendingTool = lastMsg?.role === 'tool_use' ? lastMsg : null;
 
   return (
     <div class="structured-view" ref={containerRef} onScroll={handleScroll}>
       {messages.length === 0 && (
-        <div class="sm-empty">Waiting for structured output...</div>
+        <div class="sm-empty">No messages yet</div>
       )}
       {groups.map(group => (
         <div key={group.id} class={`sm-group sm-group-${group.role}`}>
@@ -209,6 +173,14 @@ export function StructuredView({ sessionId, isActive, permissionProfile }: Props
           ))}
         </div>
       ))}
+      {pendingTool && (
+        <div class="sm-pending-approval">
+          <span class="sm-pending-icon">⚙️</span>
+          <span class="sm-pending-text">
+            Running: <strong>{pendingTool.toolName || 'tool call'}</strong>
+          </span>
+        </div>
+      )}
     </div>
   );
 }

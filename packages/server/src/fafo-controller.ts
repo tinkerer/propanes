@@ -2,7 +2,7 @@
  * FAFO Controller — execution engine for multi-path swarm generations.
  *
  * Handles: worktree lifecycle, vite-per-port, per-path Claude dispatch,
- * fitness evaluation (screenshot + crop + diff), survivor selection.
+ * LLM-based visual evaluation, meta-optimizer, survivor selection.
  */
 
 import { eq } from 'drizzle-orm';
@@ -109,6 +109,48 @@ function extractLines(filePath: string, lineSpec: string): string {
   }
 }
 
+/**
+ * LLM-based visual evaluation: have Claude compare two images and return
+ * a structured score + description of differences.
+ * Replaces pixel-diff metrics as primary fitness signal.
+ */
+async function llmEvaluate(
+  targetPath: string,
+  candidatePath: string,
+  context?: string,
+): Promise<{ score: number; differences: string[]; priority_fix: string; raw: string }> {
+  const prompt = [
+    `Read these two images with the Read tool and compare them visually.`,
+    `Target (what we want): ${targetPath}`,
+    `Candidate (what we have): ${candidatePath}`,
+    context ? `Context: ${context}` : '',
+    ``,
+    `Compare every visual aspect: shapes, positions, sizes, colors, stroke widths, elements present/missing, alignment, spacing.`,
+    ``,
+    `Output ONLY valid JSON (no markdown, no backticks, no explanation):`,
+    `{"score": <0-100 where 100=perfect match>, "differences": ["diff1", "diff2", ...], "priority_fix": "single most impactful thing to fix next"}`,
+  ].filter(Boolean).join('\n');
+
+  try {
+    const escaped = prompt.replace(/"/g, '\\"').replace(/\n/g, '\\n');
+    const result = execSync(
+      `claude -p "${escaped}" --max-turns 3 --allowedTools "Read"`,
+      { encoding: 'utf-8', timeout: 180_000 },
+    ).trim();
+
+    // Extract JSON from response (may have surrounding text)
+    const jsonMatch = result.match(/\{[\s\S]*"score"[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return { ...parsed, raw: result };
+    }
+    return { score: 0, differences: ['Could not parse LLM response'], priority_fix: 'unknown', raw: result };
+  } catch (err: any) {
+    console.error('[fafo] llmEvaluate failed:', err.message);
+    return { score: 0, differences: ['LLM evaluation failed'], priority_fix: 'unknown', raw: err.message };
+  }
+}
+
 export function getActiveGenerationIds(): string[] {
   return [...activeGenerations.keys()];
 }
@@ -203,89 +245,9 @@ export async function startFAFOGeneration(
     } catch { /* ignore */ }
   }
 
-  // Write multi-metric fitness tool (SSIM + edge IoU + histogram + pixel diff)
-  writeFileSync(`${runRoot}/fitness.py`, `#!/usr/bin/env python3
-"""Multi-metric fitness scoring: SSIM, edge IoU, color histogram, pixel diff.
-Usage: python3 fitness.py target.png candidate.png [--crop x,y,w,h]
-Output: JSON with composite score (lower=better) and sub-scores.
-"""
-import sys, json, argparse
-import numpy as np
-import cv2
-from skimage.metrics import structural_similarity as ssim
-
-parser = argparse.ArgumentParser()
-parser.add_argument('target')
-parser.add_argument('candidate')
-parser.add_argument('--crop', type=str, default=None, help='x,y,w,h crop region')
-args = parser.parse_args()
-
-a = cv2.imread(args.target)
-b = cv2.imread(args.candidate)
-if a is None: sys.exit(f"Cannot read {args.target}")
-if b is None: sys.exit(f"Cannot read {args.candidate}")
-
-# Resize candidate to match target if different
-if a.shape[:2] != b.shape[:2]:
-    b = cv2.resize(b, (a.shape[1], a.shape[0]))
-
-# Optional crop
-if args.crop:
-    x, y, w, h = [int(v) for v in args.crop.split(',')]
-    a = a[y:y+h, x:x+w]
-    b = b[y:y+h, x:x+w]
-
-# 1. SSIM (structural similarity) — tolerant of small positional shifts
-gray_a = cv2.cvtColor(a, cv2.COLOR_BGR2GRAY)
-gray_b = cv2.cvtColor(b, cv2.COLOR_BGR2GRAY)
-win_size = min(7, min(gray_a.shape[:2]) | 1)  # must be odd, <= image dims
-if win_size < 3: win_size = 3
-ssim_score = ssim(gray_a, gray_b, win_size=win_size)
-
-# 2. Edge IoU — structural element presence via Canny with dilation for fuzzy match
-edges_a = cv2.Canny(gray_a, 30, 100)
-edges_b = cv2.Canny(gray_b, 30, 100)
-# Dilate edges by 3px to tolerate small positional shifts
-kernel = np.ones((3, 3), np.uint8)
-dilated_a = cv2.dilate(edges_a, kernel, iterations=2)
-dilated_b = cv2.dilate(edges_b, kernel, iterations=2)
-# Fuzzy IoU: edge pixel in A matches if within 3px of edge in B
-match_a_in_b = np.logical_and(edges_a > 0, dilated_b > 0).sum()
-match_b_in_a = np.logical_and(edges_b > 0, dilated_a > 0).sum()
-total_a = max((edges_a > 0).sum(), 1)
-total_b = max((edges_b > 0).sum(), 1)
-edge_iou = float((match_a_in_b / total_a + match_b_in_a / total_b) / 2)
-
-# 3. Color histogram correlation
-hist_scores = []
-for ch in range(3):
-    ha = cv2.calcHist([a], [ch], None, [64], [0, 256])
-    hb = cv2.calcHist([b], [ch], None, [64], [0, 256])
-    cv2.normalize(ha, ha)
-    cv2.normalize(hb, hb)
-    hist_scores.append(cv2.compareHist(ha, hb, cv2.HISTCMP_CORREL))
-hist_corr = float(np.mean(hist_scores))
-
-# 4. Pixel diff mean (backward compat)
-diff = cv2.absdiff(a, b)
-pixel_mean = float(diff.mean())
-
-# Composite: lower = better
-composite = 0.5 * (1 - ssim_score) + 0.3 * (1 - edge_iou) + 0.2 * (1 - max(0, hist_corr))
-
-result = {
-    "composite": round(composite, 4),
-    "ssim": round(ssim_score, 4),
-    "edge_iou": round(edge_iou, 4),
-    "hist_corr": round(hist_corr, 4),
-    "pixel_mean": round(pixel_mean, 3),
-}
-print(json.dumps(result))
-`, { mode: 0o755 });
-
-  // Also write legacy diff.py for backward compat
-  if (!existsSync(`${runRoot}/diff.py`)) {
-    writeFileSync(`${runRoot}/diff.py`, `#!/usr/bin/env python3
+  // Write lightweight pixel-diff tool (secondary signal only — LLM visual eval is primary)
+  writeFileSync(`${runRoot}/diff.py`, `#!/usr/bin/env python3
+"""Quick pixel diff — secondary signal only. LLM visual comparison is primary."""
 import sys, json
 from PIL import Image, ImageChops
 a = Image.open(sys.argv[1]).convert("RGB")
@@ -296,20 +258,40 @@ px = list(d.getdata())
 mean = sum(sum(p) for p in px) / (len(px) * 3)
 print(json.dumps({"mean": round(mean, 3), "bbox": list(d.getbbox() or [])}))
 `, { mode: 0o755 });
-  }
 
-  // Find previous generation's run root for wiki copying
+  // Find previous generation's run root for wiki copying + best-worker propagation
   let prevRunRoot: string | null = null;
+  let bestWorkerCommit: string | null = null;
   if (currentGen > 0) {
     try {
       const parentDir = '/tmp/fafo-runs';
       const prefix = `swarm-${swarmId.slice(-8)}-gen${currentGen}-`;
       const entries = execSync(`ls -d ${parentDir}/${prefix}* 2>/dev/null || true`, { encoding: 'utf-8' }).trim().split('\n').filter(Boolean);
       if (entries.length > 0) {
-        prevRunRoot = entries[entries.length - 1]; // most recent
+        prevRunRoot = entries[entries.length - 1];
+
+        // Read meta-verdict to find best worker's commit for code propagation
+        const verdictPath = `${prevRunRoot}/meta-verdict.json`;
+        if (existsSync(verdictPath)) {
+          try {
+            const verdict = JSON.parse(readFileSync(verdictPath, 'utf-8'));
+            if (verdict.best_worker) {
+              const bestWorkDir = `${prevRunRoot}/child-${verdict.best_worker}/work`;
+              if (existsSync(bestWorkDir)) {
+                bestWorkerCommit = execSync(`cd "${bestWorkDir}" && git rev-parse HEAD 2>/dev/null || true`, { encoding: 'utf-8', timeout: 5_000 }).trim();
+                if (bestWorkerCommit) {
+                  console.log(`[fafo] Best worker "${verdict.best_worker}" commit: ${bestWorkerCommit.slice(0, 8)} (score: ${verdict.score})`);
+                }
+              }
+            }
+          } catch { /* ignore */ }
+        }
       }
     } catch { /* ignore */ }
   }
+
+  // Use best worker's commit as base for next generation if available
+  const effectiveBaseBranch = bestWorkerCommit || baseBranch;
 
   // Seed wiki
   seedWiki(runRoot, prevRunRoot);
@@ -341,7 +323,7 @@ print(json.dumps({"mean": round(mean, 3), "bbox": list(d.getbbox() or [])}))
 
       // Create worktree
       try {
-        execSync(`cd "${repoDir}" && git worktree add "${workDir}" -b "${branch}-g${nextGen}" ${baseBranch} 2>&1 || git worktree add "${workDir}" ${baseBranch} --detach 2>&1`, {
+        execSync(`cd "${repoDir}" && git worktree add "${workDir}" -b "${branch}-g${nextGen}" ${effectiveBaseBranch} 2>&1 || git worktree add "${workDir}" ${effectiveBaseBranch} --detach 2>&1`, {
           stdio: 'pipe', timeout: 30_000,
         });
       } catch (err: any) {
@@ -396,38 +378,16 @@ rm -f "$TMP"
 echo "saved $OUT"
 `, { mode: 0o755 });
 
-      // ── Pre-compute baseline screenshot and diff ──
-      let baselineScore = 'N/A';
+      // ── Pre-compute baseline screenshot ──
       try {
         // Wait 5 seconds for vite to be ready
         execSync('sleep 5');
-        // Take baseline screenshot
         execSync(`bash ${childDir}/snap.sh ${childDir}/baseline.png`, {
           stdio: 'pipe', timeout: 30_000,
         });
         console.log(`[fafo] Baseline screenshot taken for ${path.name}`);
-        // Compute fitness if target exists
-        if (existsSync(`${runRoot}/target.png`)) {
-          const cropArg = path.cropRegion ? (() => {
-            try {
-              let cr = JSON.parse(path.cropRegion!);
-              if (typeof cr === 'string') cr = JSON.parse(cr);
-              return `--crop ${cr.join(',')}`;
-            } catch { return ''; }
-          })() : '';
-          const diffOutput = execSync(
-            `python3 ${runRoot}/fitness.py ${runRoot}/target.png ${childDir}/baseline.png ${cropArg}`,
-            { encoding: 'utf-8', timeout: 30_000 },
-          ).trim();
-          try {
-            const diffData = JSON.parse(diffOutput);
-            baselineScore = String(diffData.composite);
-            writeFileSync(`${childDir}/diff-baseline.json`, diffOutput);
-          } catch { baselineScore = diffOutput; }
-        }
-        console.log(`[fafo] Baseline diff score for ${path.name}: ${baselineScore}`);
       } catch (err: any) {
-        console.warn(`[fafo] Baseline screenshot/diff failed for ${path.name}:`, err.message);
+        console.warn(`[fafo] Baseline screenshot failed for ${path.name}:`, err.message);
       }
 
       // ── Determine wiki files relevant to this path ──
@@ -486,18 +446,6 @@ echo "saved $OUT"
         `## IMPORTANT: The code already has harness rendering. Do NOT start from scratch.`,
         `The SchematicRenderer.tsx already renders harness connectors (Layer 11.5), signal harness wires with pill connectors, ports with hexagonal shapes, entry dots, etc. Your job is to REFINE the existing rendering to better match the target image. Do NOT rebuild or remove existing harness code.`,
         '',
-        `## Pre-computed baseline`,
-        `- Baseline screenshot: ${childDir}/baseline.png (Read this with Read tool to see current state)`,
-        `- Target image: ${runRoot}/target.png (Read this to see what we're matching)`,
-        `- Baseline diff score: ${baselineScore} (lower = closer to target)`,
-        '',
-        `## CRITICAL: Visual comparison is more important than scores`,
-        `Read BOTH images with the Read tool and DESCRIBE IN WORDS what is different between them.`,
-        `List every visual difference: shape, position, size, color, stroke width, alignment, elements present/missing.`,
-        `The fitness score is a rough guide — it can be misleading due to viewport/crop differences.`,
-        `Your PRIMARY goal is to make the rendering LOOK like the target. Trust your visual analysis over the score number.`,
-        `Start by comparing the baseline and target images visually. DO NOT take your own screenshot first — use the baseline.`,
-        '',
         `## Your specific task`,
         path.prompt,
         '',
@@ -506,36 +454,43 @@ echo "saved $OUT"
         codeSnippetSection,
         '',
         `## Wiki knowledge`,
-        `Read these wiki files for context relevant to your task:`,
+        `Read these wiki files for context:`,
         ...wikiFilesForPath.map(f => `- ${f}`),
-        `After completing your work, update the wiki files with what you learned:`,
-        `- ${wikiDir}/what-works.md — if your changes improved the score`,
-        `- ${wikiDir}/what-fails.md — if your changes made things worse`,
         '',
-        `## Workflow: Compare baseline to target, then make targeted edits`,
+        `## Workflow: Visual Compare → Targeted Fix → Verify`,
+        ``,
+        `YOUR EYES ARE THE JUDGE. Do NOT compute numeric fitness scores. Use the Read tool to look at images directly.`,
+        ``,
         `1. Read the baseline screenshot: ${childDir}/baseline.png`,
         `2. Read the target image: ${runRoot}/target.png`,
-        `3. Compare visually, identify SPECIFIC differences (shape, color, position, size)`,
-        `4. Make ONE focused edit to ${workDir}/src/components/SchematicRenderer.tsx`,
-        `5. Wait 2 seconds for HMR, then take a screenshot: bash ${childDir}/snap.sh ${childDir}/after.png`,
-        `6. Measure fitness: python3 ${runRoot}/fitness.py ${runRoot}/target.png ${childDir}/after.png`,
-        `   The fitness script returns: composite (overall, lower=better), ssim (structural similarity),`,
-        `   edge_iou (structural element match), hist_corr (color match), pixel_mean (raw pixel diff).`,
-        `   Focus on improving SSIM and edge_iou — they measure rendering quality, not position alignment.`,
-        `7. Repeat steps 4-6 up to 15 times. Each iteration: ONE change → screenshot → measure.`,
-        `   Keep changes that lower the composite score. Revert changes that increase it.`,
-        `   After every 3 iterations, save a checkpoint: write ${childDir}/checkpoint-N.json with`,
-        `   the current fitness scores and a one-line description of what was tried.`,
-        '',
+        `3. DESCRIBE IN WORDS every visual difference you see between them:`,
+        `   - Shape differences (curves, lines, angles)`,
+        `   - Position/alignment differences`,
+        `   - Size/scale differences`,
+        `   - Color/stroke/fill differences`,
+        `   - Missing or extra elements`,
+        `4. Pick the SINGLE highest-impact visual difference`,
+        `5. Make ONE focused edit to fix it in ${workDir}/src/components/SchematicRenderer.tsx`,
+        `6. Wait 2 seconds for HMR, then take a screenshot:`,
+        `   bash ${childDir}/snap.sh ${childDir}/iter-1.png`,
+        `7. Read your new screenshot with the Read tool and compare to target again`,
+        `8. If it looks better, keep. If worse, revert: cd ${workDir} && git checkout src/`,
+        `9. Repeat steps 4-8 up to 20 times, incrementing the screenshot number each time`,
+        `   (iter-1.png, iter-2.png, iter-3.png, etc.)`,
+        ``,
+        `After EACH iteration, append a line to ${childDir}/iteration-log.md:`,
+        `  "Iter N: [what you changed] → [better/worse/same] — [why]"`,
+        ``,
         existsSync(`${runRoot}/KNOWLEDGE.md`) ? `## Knowledge from prior generations\nRead ${runRoot}/KNOWLEDGE.md for important context and lessons learned.` : '',
         existsSync(`${runRoot}/wiki/approach-log.md`) ? `## Approach log (DO NOT repeat these)\nRead ${runRoot}/wiki/approach-log.md to see what has already been tried across generations.` : '',
         existsSync(`${runRoot}/wiki/task-assignments.md`) ? `## Directed task assignments\nRead ${runRoot}/wiki/task-assignments.md for specific sub-problems assigned to your path.` : '',
         '',
-        `## Output`,
-        `Write status.json with these fields: {"diff_score": <composite>, "ssim": <ssim>, "edge_iou": <edge_iou>, "hist_corr": <hist_corr>}`,
-        `Write summary.md in ${childDir}/ describing what you tried and what worked/failed.`,
-        `Save your code changes: cd ${workDir} && git diff > ${childDir}/changes.diff`,
-        `Update wiki files: ${runRoot}/wiki/what-works.md and ${runRoot}/wiki/what-fails.md with your learnings.`,
+        `## Output (required)`,
+        `1. Write ${childDir}/summary.md — what you tried, what worked, what failed`,
+        `2. Write ${childDir}/iteration-log.md — one line per iteration (built up during workflow)`,
+        `3. Save code changes: cd ${workDir} && git add -A && git diff HEAD > ${childDir}/changes.diff`,
+        `4. Take final screenshot: bash ${childDir}/snap.sh ${childDir}/iter-final.png`,
+        `5. Update wiki: ${wikiDir}/what-works.md and ${wikiDir}/what-fails.md with your learnings`,
       ];
       const fullPrompt = promptParts.filter(Boolean).join('\n');
       writeFileSync(`${childDir}/prompt.md`, fullPrompt);
@@ -738,21 +693,23 @@ export function cleanupWorktrees(swarmId: string) {
 }
 
 /**
- * Run the aggregator agent between generations.
- * Reads all worker results, distills knowledge, produces directed task assignments.
- * Returns the sessionId of the aggregator so the poller can wait for it.
+ * Unified meta-optimizer: runs via `claude -p` CLI call (~60-90s) instead of
+ * dispatching a full Claude session (~10min). Replaces both the old aggregator
+ * and meta-manager. Reads all worker screenshots + target visually, identifies
+ * best worker, writes directed task assignments for next gen.
  */
-const pendingAggregators = new Map<string, { sessionId: string; runRoot: string }>();
-
-async function runAggregatorAgent(swarmId: string, runRoot: string): Promise<string | null> {
+async function runMetaOptimizer(swarmId: string, runRoot: string): Promise<{
+  bestWorker: string | null;
+  score: number;
+}> {
   const swarm = db.select().from(schema.wiggumSwarms)
     .where(eq(schema.wiggumSwarms.id, swarmId)).get();
-  if (!swarm) return null;
+  if (!swarm) return { bestWorker: null, score: 0 };
 
   const currentGen = swarm.generationCount;
   const wikiDir = `${runRoot}/wiki`;
 
-  // Collect all worker summaries, fitness scores, and wiki updates
+  // Collect child directories
   const childDirs: string[] = [];
   try {
     const entries = execSync(`ls -d ${runRoot}/child-* 2>/dev/null || true`, { encoding: 'utf-8' })
@@ -760,47 +717,59 @@ async function runAggregatorAgent(swarmId: string, runRoot: string): Promise<str
     childDirs.push(...entries);
   } catch { /* ignore */ }
 
-  const workerResults: string[] = [];
+  if (childDirs.length === 0) return { bestWorker: null, score: 0 };
+
+  // Collect worker summaries and iteration logs
+  const workerSections: string[] = [];
+  const screenshotPaths: string[] = [];
   for (const childDir of childDirs) {
     const name = childDir.split('/').pop()?.replace('child-', '') || 'unknown';
-    let summary = '', statusJson = '', checkpoints = '', codeDiff = '';
+    let summary = '', iterLog = '', codeDiff = '';
 
     try { summary = readFileSync(`${childDir}/summary.md`, 'utf-8'); } catch { summary = '(no summary)'; }
-    try { statusJson = readFileSync(`${childDir}/status.json`, 'utf-8'); } catch { statusJson = '(no status)'; }
+    try { iterLog = readFileSync(`${childDir}/iteration-log.md`, 'utf-8'); } catch { iterLog = '(no log)'; }
 
-    // Collect checkpoints
-    try {
-      const cpFiles = execSync(`ls ${childDir}/checkpoint-*.json 2>/dev/null || true`, { encoding: 'utf-8' })
-        .trim().split('\n').filter(Boolean);
-      const cpData = cpFiles.map(f => { try { return readFileSync(f, 'utf-8'); } catch { return ''; } }).filter(Boolean);
-      if (cpData.length > 0) checkpoints = `\nCheckpoints:\n${cpData.join('\n')}`;
-    } catch { /* ignore */ }
-
-    // Collect git diff (code changes)
+    // Collect git diff
     try {
       const diffPath = `${childDir}/changes.diff`;
       if (existsSync(diffPath)) {
         const raw = readFileSync(diffPath, 'utf-8');
-        codeDiff = raw.length > 4000 ? `\nCode changes (truncated):\n\`\`\`diff\n${raw.slice(0, 4000)}\n...(truncated)\n\`\`\`` : `\nCode changes:\n\`\`\`diff\n${raw}\n\`\`\``;
+        codeDiff = raw.length > 3000 ? raw.slice(0, 3000) + '\n...(truncated)' : raw;
       } else {
-        // Try generating diff from worktree
         const workDir = `${childDir}/work`;
         if (existsSync(workDir)) {
           try {
             const diff = execSync(`cd "${workDir}" && git diff HEAD 2>/dev/null || true`, { encoding: 'utf-8', timeout: 10_000 }).trim();
             if (diff) {
               writeFileSync(diffPath, diff);
-              codeDiff = diff.length > 4000 ? `\nCode changes (truncated):\n\`\`\`diff\n${diff.slice(0, 4000)}\n...(truncated)\n\`\`\`` : `\nCode changes:\n\`\`\`diff\n${diff}\n\`\`\``;
+              codeDiff = diff.length > 3000 ? diff.slice(0, 3000) + '\n...(truncated)' : diff;
             }
           } catch { /* ignore */ }
         }
       }
     } catch { /* ignore */ }
 
-    workerResults.push(`### Worker: ${name}\nStatus: ${statusJson}\nSummary:\n${summary}${checkpoints}${codeDiff}\n`);
+    // Find best screenshot for this worker
+    const finalScreenshot = existsSync(`${childDir}/iter-final.png`) ? `${childDir}/iter-final.png` :
+      (() => {
+        try {
+          const pngs = execSync(`ls ${childDir}/iter-*.png 2>/dev/null || ls ${childDir}/after*.png 2>/dev/null || true`, { encoding: 'utf-8' })
+            .trim().split('\n').filter(Boolean);
+          return pngs.length > 0 ? pngs[pngs.length - 1] : `${childDir}/baseline.png`;
+        } catch { return `${childDir}/baseline.png`; }
+      })();
+    screenshotPaths.push(finalScreenshot);
+
+    workerSections.push([
+      `### Worker: ${name}`,
+      `Final screenshot: ${finalScreenshot}`,
+      `Summary: ${summary}`,
+      `Iteration log: ${iterLog}`,
+      codeDiff ? `Code changes:\n\`\`\`diff\n${codeDiff}\n\`\`\`` : '',
+    ].filter(Boolean).join('\n'));
   }
 
-  // Collect human feedback for this generation
+  // Collect human feedback
   let humanFeedback = '';
   try {
     const feedback = db.select().from(schema.fafoFeedback)
@@ -808,22 +777,20 @@ async function runAggregatorAgent(swarmId: string, runRoot: string): Promise<str
       .all()
       .filter(f => f.generation === currentGen || f.generation === null);
     if (feedback.length > 0) {
-      humanFeedback = '\n## Human Feedback (PRIORITY — these override automated metrics)\n' +
+      humanFeedback = '\n## Human Feedback (PRIORITY)\n' +
         feedback.map(f => {
           const rating = f.rating === 1 ? 'GOOD' : f.rating === -1 ? 'BAD' : 'NEUTRAL';
-          const region = f.regionX != null ? ` [region: ${f.regionX},${f.regionY},${f.regionW},${f.regionH}]` : '';
-          return `- ${rating}${region}: ${f.annotation || '(no annotation)'}`;
+          return `- ${rating}: ${f.annotation || '(no annotation)'}`;
         }).join('\n');
     }
   } catch { /* ignore */ }
 
-  // Read current wiki files
-  const wikiFiles = ['what-works.md', 'what-fails.md', 'coordinates.md', 'style-params.md',
-                     'open-questions.md', 'approach-log.md', 'task-status.md'];
+  // Read current wiki
+  const wikiFiles = ['what-works.md', 'what-fails.md', 'approach-log.md', 'task-assignments.md'];
   const wikiContent = wikiFiles.map(f => {
     try { return `### ${f}\n${readFileSync(`${wikiDir}/${f}`, 'utf-8')}`; }
-    catch { return `### ${f}\n(empty)`; }
-  }).join('\n\n');
+    catch { return ''; }
+  }).filter(Boolean).join('\n\n');
 
   // Get paths for task assignment
   const paths = db.select().from(schema.wiggumSwarmPaths)
@@ -832,202 +799,104 @@ async function runAggregatorAgent(swarmId: string, runRoot: string): Promise<str
     .sort((a, b) => a.order - b.order);
   const pathNames = paths.map(p => p.name).join(', ');
 
-  const aggregatorPrompt = `You are the FAFO Aggregator for Gen ${currentGen} of swarm "${swarm.name}".
-Your job is to read ALL worker results from this generation, distill knowledge, and produce directed task assignments for the next generation.
-
-## Worker Results
-${workerResults.join('\n')}
-${humanFeedback}
-
-## Current Wiki State
-${wikiContent}
-
-## Available Worker Paths for Next Generation
-${pathNames}
-
-## Your Tasks
-
-1. **Update wiki/what-works.md**: Distill and DEDUPLICATE techniques that improved scores. Remove outdated entries. Be specific — include exact parameter values.
-
-2. **Update wiki/what-fails.md**: Distill approaches that made things worse. Include WHY they failed.
-
-3. **Update wiki/coordinates.md**: Update with any new coordinate/position data from workers.
-
-4. **Update wiki/style-params.md**: Update with any new style parameters discovered.
-
-5. **Append to wiki/approach-log.md**: Add ALL approaches tried this generation (both successful and failed) in format:
-   - Gen ${currentGen} / <worker-name>: <approach description> → <result: improved/worsened/neutral> (composite: X → Y)
-
-6. **Write wiki/task-assignments.md**: Create SPECIFIC, MEASURABLE sub-tasks for each worker path in the next generation. Format:
-   ## Task: <descriptive-name>
-   - Assigned to: <path-name>
-   - Acceptance criteria: <metric> > <value> (currently <current-value>)
-   - Crop region: [x, y, w, h] (if applicable)
-   - What to try: <specific approach with parameter values>
-   - What NOT to try: <approaches that have already failed>
-   - Max iterations for this sub-task: <number>
-
-7. **Update wiki/task-status.md**: Mark which tasks from previous generation are DONE vs OPEN.
-
-## Rules
-- Be concise and specific — workers have limited context
-- Human feedback takes PRIORITY over automated metrics
-- Include exact numbers (fitness scores, pixel coordinates, parameter values)
-- Don't repeat approaches that are already in approach-log.md
-
-Write all files to: ${wikiDir}/
-Then write a brief summary to ${runRoot}/aggregator-summary.md
-`;
-
-  // Dispatch the aggregator as a Claude session
+  // Check for convergence history
+  let convergenceHistory = '';
   try {
-    const agents = db.select().from(schema.agentEndpoints).all();
-    const appAgent = swarm.appId ? agents.find(a => a.isDefault && a.appId === swarm.appId) : null;
-    const globalAgent = agents.find(a => a.isDefault && !a.appId);
-    const agent = appAgent || globalAgent || agents[0];
-    if (!agent) {
-      console.error('[fafo] No agent endpoint for aggregator');
-      return null;
+    const parentDir = '/tmp/fafo-runs';
+    for (let g = Math.max(1, currentGen - 3); g < currentGen; g++) {
+      const prefix = `swarm-${swarmId.slice(-8)}-gen${g}-`;
+      const prevDirs = execSync(`ls -d ${parentDir}/${prefix}* 2>/dev/null || true`, { encoding: 'utf-8' }).trim().split('\n').filter(Boolean);
+      if (prevDirs.length > 0) {
+        const verdictPath = `${prevDirs[prevDirs.length - 1]}/meta-verdict.json`;
+        if (existsSync(verdictPath)) {
+          try {
+            const v = JSON.parse(readFileSync(verdictPath, 'utf-8'));
+            convergenceHistory += `Gen ${g}: score=${v.score}, best=${v.best_worker}\n`;
+          } catch { /* ignore */ }
+        }
+      }
     }
+  } catch { /* ignore */ }
 
-    const now = new Date().toISOString();
-    const fbId = ulid();
-    db.insert(schema.feedbackItems).values({
-      id: fbId, type: 'manual', status: 'new',
-      title: `FAFO Aggregator Gen ${currentGen}: ${swarm.name}`,
-      description: `Aggregator agent distilling knowledge from gen ${currentGen}`,
-      appId: swarm.appId || null,
-      createdAt: now, updatedAt: now,
-    }).run();
+  // Build meta-optimizer prompt
+  const metaPrompt = [
+    `You are the FAFO Meta-Optimizer for Gen ${currentGen} of swarm "${swarm.name}".`,
+    `Your job: visually compare all worker results to the target, identify the best, and direct next generation.`,
+    ``,
+    `## STEP 1: Visual Comparison`,
+    `Read the target image and ALL worker final screenshots with the Read tool.`,
+    `- Target: ${runRoot}/target.png`,
+    ...screenshotPaths.map((p, i) => `- Worker ${childDirs[i]?.split('/').pop()?.replace('child-', '') || i}: ${p}`),
+    ``,
+    `## STEP 2: Worker Results`,
+    ...workerSections,
+    humanFeedback,
+    ``,
+    convergenceHistory ? `## Convergence History (last 3 gens)\n${convergenceHistory}` : '',
+    `## Current Wiki\n${wikiContent}`,
+    ``,
+    `## STEP 3: Your Tasks`,
+    `After reading ALL images:`,
+    ``,
+    `1. Which worker's output is VISUALLY closest to the target? Why?`,
+    `2. What specific visual differences remain between the best worker and target?`,
+    `3. Write ${wikiDir}/what-works.md — distilled, deduplicated techniques that helped`,
+    `4. Write ${wikiDir}/what-fails.md — approaches that made things worse and WHY`,
+    `5. Append to ${wikiDir}/approach-log.md — all approaches tried this gen:`,
+    `   "Gen ${currentGen} / <worker>: <approach> → <better/worse/same>"`,
+    `6. Write ${wikiDir}/task-assignments.md — SPECIFIC directed sub-tasks for next gen:`,
+    `   ## Task: <name>`,
+    `   - Assigned to: <path-name from: ${pathNames}>`,
+    `   - What to fix: <specific visual difference>`,
+    `   - What to try: <specific code change with values>`,
+    `   - What NOT to try: <failed approaches>`,
+    `7. Write ${runRoot}/meta-verdict.json with ONLY valid JSON:`,
+    `   {"best_worker": "<name>", "score": <0-100>, "remaining_diffs": ["diff1", ...], "strategy": "<next gen strategy>", "plateau": <true if score hasn't improved in 3 gens>}`,
+    ``,
+    `## Rules`,
+    `- LOOK at the images. Visual comparison is the primary evaluation method.`,
+    `- Be specific: exact parameter values, pixel coordinates, CSS properties.`,
+    `- Human feedback overrides everything else.`,
+    convergenceHistory.includes('plateau') ? `- PLATEAU DETECTED: Pivot strategy significantly. Try a completely different approach.` : '',
+  ].filter(Boolean).join('\n');
 
-    const { sessionId } = await dispatchAgentSession({
-      feedbackId: fbId,
-      agentEndpointId: agent.id,
-      prompt: aggregatorPrompt,
-      cwd: runRoot,
-      permissionProfile: 'yolo',
-    });
+  // Write prompt for debugging
+  writeFileSync(`${runRoot}/meta-optimizer-prompt.md`, metaPrompt);
 
-    console.log(`[fafo] Dispatched aggregator for gen ${currentGen} as session ${sessionId}`);
-    pendingAggregators.set(swarmId, { sessionId, runRoot });
-    return sessionId;
-  } catch (err: any) {
-    console.error(`[fafo] Failed to dispatch aggregator:`, err.message);
-    return null;
-  }
-}
-
-/**
- * Run optional meta-manager after aggregator completes.
- * Reads worker session logs, identifies wasted effort, suggests prompt optimizations.
- */
-async function runMetaManager(swarmId: string, runRoot: string): Promise<string | null> {
-  const swarm = db.select().from(schema.wiggumSwarms)
-    .where(eq(schema.wiggumSwarms.id, swarmId)).get();
-  if (!swarm) return null;
-
-  const currentGen = swarm.generationCount;
-
-  // Collect worker session IDs and their token/time stats
-  const currentRuns = db.select().from(schema.wiggumRuns)
-    .where(eq(schema.wiggumRuns.swarmId, swarmId))
-    .all()
-    .filter(r => r.generation === currentGen);
-
-  const sessionSummaries: string[] = [];
-  for (const run of currentRuns) {
-    if (!run.sessionId) continue;
-    try {
-      const resp = await fetch(`http://localhost:3001/api/v1/admin/agent-sessions/${run.sessionId}`);
-      const sess = await resp.json() as any;
-      const pathName = (() => {
-        if (!run.pathId) return 'unknown';
-        const path = db.select().from(schema.wiggumSwarmPaths).where(eq(schema.wiggumSwarmPaths.id, run.pathId)).get();
-        return path?.name || 'unknown';
-      })();
-      sessionSummaries.push(
-        `### Worker "${pathName}" (session ${run.sessionId.slice(0, 8)})\n` +
-        `- Status: ${sess.status}\n` +
-        `- Output bytes: ${sess.outputBytes || 'unknown'}\n` +
-        `- Duration: ${sess.startedAt && sess.completedAt ? `${Math.round((new Date(sess.completedAt).getTime() - new Date(sess.startedAt).getTime()) / 1000)}s` : 'unknown'}\n` +
-        `- Fitness: ${run.fitnessScore ?? 'N/A'}\n` +
-        `- Iterations completed: ${run.currentIteration}/${run.maxIterations}\n`
-      );
-    } catch { /* ignore */ }
-  }
-
-  if (sessionSummaries.length === 0) return null;
-
-  // Read aggregator summary if it exists
-  let aggSummary = '';
-  try { aggSummary = readFileSync(`${runRoot}/aggregator-summary.md`, 'utf-8'); } catch { /* ignore */ }
-
-  const metaPrompt = `You are the FAFO Meta-Manager for Gen ${currentGen} of swarm "${swarm.name}".
-Your job is to analyze worker efficiency and recommend prompt/strategy improvements.
-
-## Worker Session Stats
-${sessionSummaries.join('\n')}
-
-${aggSummary ? `## Aggregator Summary\n${aggSummary}\n` : ''}
-
-## Your Tasks
-
-1. **Identify wasted effort**: Which workers spent disproportionate time/tokens? What were they doing that wasn't productive?
-
-2. **Identify convergence patterns**: Are scores improving generation-over-generation? Which paths are making progress? Which are stuck?
-
-3. **Write wiki/meta-observations.md** with:
-   - Token efficiency breakdown per worker
-   - Common failure patterns (e.g., "workers spend 40% reading files already in wiki")
-   - Recommended prompt modifications (be specific — add/remove/reword sections)
-   - Strategy adjustments (should paths be renamed? should tasks be redistributed?)
-   - Convergence assessment: are we on track? what's the expected trajectory?
-
-4. **Optionally write wiki/prompt-rewrites.md** if you think worker prompts need significant changes.
-   Format each section with the path name as header:
-   ## horn-pill
-   <rewritten prompt text>
-   ## entry-wires
-   <rewritten prompt text>
-
-Write all files to: ${runRoot}/wiki/
-`;
-
+  // Run via claude CLI — synchronous, ~60-90s
+  console.log(`[fafo] Running meta-optimizer for gen ${currentGen} via claude CLI...`);
   try {
-    const agents = db.select().from(schema.agentEndpoints).all();
-    const agent = agents.find(a => a.isDefault && (!a.appId || a.appId === swarm.appId)) || agents[0];
-    if (!agent) return null;
-
-    const now = new Date().toISOString();
-    const fbId = ulid();
-    db.insert(schema.feedbackItems).values({
-      id: fbId, type: 'manual', status: 'new',
-      title: `FAFO Meta-Manager Gen ${currentGen}: ${swarm.name}`,
-      description: `Meta-manager analyzing worker efficiency for gen ${currentGen}`,
-      appId: swarm.appId || null,
-      createdAt: now, updatedAt: now,
-    }).run();
-
-    const { sessionId } = await dispatchAgentSession({
-      feedbackId: fbId,
-      agentEndpointId: agent.id,
-      prompt: metaPrompt,
-      cwd: runRoot,
-      permissionProfile: 'yolo',
-    });
-
-    console.log(`[fafo] Dispatched meta-manager for gen ${currentGen} as session ${sessionId}`);
-    return sessionId;
+    const escaped = metaPrompt.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\$/g, '\\$');
+    execSync(
+      `claude -p "${escaped}" --max-turns 8 --allowedTools "Read,Write"`,
+      { encoding: 'utf-8', timeout: 300_000, cwd: runRoot },
+    );
+    console.log(`[fafo] Meta-optimizer completed for gen ${currentGen}`);
   } catch (err: any) {
-    console.error(`[fafo] Failed to dispatch meta-manager:`, err.message);
-    return null;
+    console.error(`[fafo] Meta-optimizer CLI failed:`, err.message?.slice(0, 500));
+    // Write fallback verdict
+    writeFileSync(`${runRoot}/meta-verdict.json`, JSON.stringify({
+      best_worker: childDirs[0]?.split('/').pop()?.replace('child-', '') || 'unknown',
+      score: 0,
+      remaining_diffs: ['meta-optimizer failed'],
+      strategy: 'retry with same approach',
+      plateau: false,
+    }));
+  }
+
+  // Read verdict
+  try {
+    const verdict = JSON.parse(readFileSync(`${runRoot}/meta-verdict.json`, 'utf-8'));
+    return { bestWorker: verdict.best_worker, score: verdict.score ?? 0 };
+  } catch {
+    return { bestWorker: null, score: 0 };
   }
 }
 
 /**
  * Poll running swarms and auto-advance to the next generation when all
- * runs in the current generation have completed, up to maxGenerations.
- * Now includes aggregator step between generations.
+ * runs complete. Uses synchronous meta-optimizer (claude CLI) instead of
+ * async aggregator sessions — no waiting between generations.
  */
 let pollerRunning = false;
 export function startFAFOPoller(intervalMs = 15_000) {
@@ -1045,7 +914,6 @@ export function startFAFOPoller(intervalMs = 15_000) {
         const maxGen = (swarm as any).maxGenerations;
         if (maxGen == null) continue; // manual-only swarm
         if (swarm.generationCount >= maxGen) {
-          // Reached limit — mark completed
           db.update(schema.wiggumSwarms)
             .set({ status: 'completed', updatedAt: new Date().toISOString() })
             .where(eq(schema.wiggumSwarms.id, swarm.id)).run();
@@ -1059,9 +927,9 @@ export function startFAFOPoller(intervalMs = 15_000) {
           .all()
           .filter(r => r.generation === swarm.generationCount);
 
-        if (currentRuns.length === 0) continue; // no runs yet
+        if (currentRuns.length === 0) continue;
 
-        // Sync run status from session status for any "running" runs
+        // Sync run status from session status
         for (const run of currentRuns) {
           if (run.status !== 'running' || !run.sessionId) continue;
           try {
@@ -1080,57 +948,33 @@ export function startFAFOPoller(intervalMs = 15_000) {
         const allDone = currentRuns.every(r =>
           r.status === 'completed' || r.status === 'failed' || r.status === 'killed'
         );
+        if (!allDone) continue;
 
-        if (!allDone) continue; // still running
+        // All workers done — run meta-optimizer synchronously, then advance
+        console.log(`[fafo] Swarm "${swarm.name}" gen ${swarm.generationCount} complete (${currentRuns.length} runs), running meta-optimizer...`);
 
-        // Check if aggregator is pending for this swarm
-        const pending = pendingAggregators.get(swarm.id);
-        if (pending) {
-          // Check if aggregator session has completed
-          try {
-            const resp = await fetch(`http://localhost:3001/api/v1/admin/agent-sessions/${pending.sessionId}`);
-            const sess = await resp.json() as any;
-            if (sess.status === 'completed' || sess.status === 'failed' || sess.status === 'killed') {
-              console.log(`[fafo] Aggregator for "${swarm.name}" completed (${sess.status})`);
-              pendingAggregators.delete(swarm.id);
-              // Fire-and-forget meta-manager (don't block advancement)
-              runMetaManager(swarm.id, pending.runRoot).catch(err =>
-                console.warn(`[fafo] Meta-manager failed:`, err.message)
-              );
-              // Advance to next generation
-              try {
-                await startFAFOGeneration(swarm.id, { keepCount: 1 });
-              } catch (err: any) {
-                console.error(`[fafo] Auto-advance failed for swarm "${swarm.name}":`, err.message);
-              }
-            } else {
-              console.log(`[fafo] Waiting for aggregator session ${pending.sessionId.slice(0, 8)}...`);
-            }
-          } catch { /* session-service unavailable */ }
-          continue;
-        }
-
-        // All workers done, no aggregator pending — dispatch aggregator first
-        console.log(`[fafo] Swarm "${swarm.name}" gen ${swarm.generationCount} complete (${currentRuns.length} runs), dispatching aggregator...`);
-
-        // Find the run root for this generation
         try {
           const parentDir = '/tmp/fafo-runs';
           const prefix = `swarm-${swarm.id.slice(-8)}-gen${swarm.generationCount}-`;
           const entries = execSync(`ls -d ${parentDir}/${prefix}* 2>/dev/null || true`, { encoding: 'utf-8' }).trim().split('\n').filter(Boolean);
           if (entries.length > 0) {
             const runRoot = entries[entries.length - 1];
-            const aggSessionId = await runAggregatorAgent(swarm.id, runRoot);
-            if (!aggSessionId) {
-              // Aggregator failed to dispatch — advance without it
-              console.warn(`[fafo] Aggregator failed, advancing directly`);
-              await startFAFOGeneration(swarm.id, { keepCount: 1 });
+            const { bestWorker, score } = await runMetaOptimizer(swarm.id, runRoot);
+
+            console.log(`[fafo] Meta-optimizer verdict: best=${bestWorker}, score=${score}`);
+
+            // Convergence check
+            if (score >= 90) {
+              db.update(schema.wiggumSwarms)
+                .set({ status: 'completed', updatedAt: new Date().toISOString() })
+                .where(eq(schema.wiggumSwarms.id, swarm.id)).run();
+              console.log(`[fafo] Swarm "${swarm.name}" CONVERGED at score ${score}!`);
+              continue;
             }
-          } else {
-            // Can't find run root — advance without aggregator
-            console.warn(`[fafo] Can't find run root for gen ${swarm.generationCount}, advancing directly`);
-            await startFAFOGeneration(swarm.id, { keepCount: 1 });
           }
+
+          // Advance to next generation
+          await startFAFOGeneration(swarm.id, { keepCount: 1 });
         } catch (err: any) {
           console.error(`[fafo] Auto-advance failed for swarm "${swarm.name}":`, err.message);
         }

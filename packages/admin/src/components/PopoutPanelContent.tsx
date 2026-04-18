@@ -1,6 +1,6 @@
 import { type RefObject } from 'preact';
-import { copyWithTooltip } from '../lib/clipboard.js';
 import { PopupMenu } from './PopupMenu.js';
+import { SessionIdMenu } from './SessionIdMenu.js';
 import {
   type PopoutPanelState,
   pendingFirstDigit,
@@ -9,11 +9,7 @@ import {
   popBackIn,
   updatePanel,
   persistPopoutState,
-  togglePanelCompanion,
-  companionTabId,
   toggleAlwaysOnTop,
-  openUrlCompanion,
-  termPickerOpen,
 } from '../lib/sessions.js';
 
 export function PanelTabBadge({ tabNum }: { tabNum: number }) {
@@ -95,75 +91,15 @@ export function IdDropdownMenu({ activeId, panel, session, isExited, anchorRef, 
   anchorRef: RefObject<HTMLSpanElement>;
   onClose: () => void;
 }) {
-  const sessionMap = new Map(); // not needed for the menu items that use session directly
   return (
-    <PopupMenu anchorRef={anchorRef as any} onClose={onClose} className="id-dropdown-menu">
-      <button class="popup-menu-item" onClick={(e) => { e.stopPropagation(); onClose(); copyWithTooltip(activeId, e as any); }}>
-        Copy {activeId} <kbd>C</kbd>
-      </button>
-      {session?.jsonlPath && (
-        <button class="popup-menu-item" onClick={(e) => { e.stopPropagation(); onClose(); copyWithTooltip(session.jsonlPath, e as any); }}>
-          Copy JSONL path <kbd>J</kbd>
-        </button>
-      )}
-      {session?.jsonlPath && (() => {
-        const panelRight = panel.rightPaneTabs || [];
-        const jsonlActive = panelRight.includes(companionTabId(activeId, 'jsonl')) && panel.splitEnabled;
-        return (
-          <button class="popup-menu-item" onClick={() => { onClose(); togglePanelCompanion(panel.id, activeId, 'jsonl'); }}>
-            {jsonlActive ? '\u2713 ' : ''}JSONL companion <kbd>L</kbd>
-          </button>
-        );
-      })()}
-      {session?.feedbackId && (() => {
-        const panelRight = panel.rightPaneTabs || [];
-        const fbActive = panelRight.includes(companionTabId(activeId, 'feedback')) && panel.splitEnabled;
-        return (
-          <button class="popup-menu-item" onClick={() => { onClose(); togglePanelCompanion(panel.id, activeId, 'feedback'); }}>
-            {fbActive ? '\u2713 ' : ''}Feedback companion <kbd>F</kbd>
-          </button>
-        );
-      })()}
-      {session?.url && (() => {
-        const panelRight = panel.rightPaneTabs || [];
-        const iframeActive = panelRight.includes(companionTabId(activeId, 'iframe')) && panel.splitEnabled;
-        return (
-          <button class="popup-menu-item" onClick={() => { onClose(); togglePanelCompanion(panel.id, activeId, 'iframe'); }}>
-            {iframeActive ? '\u2713 ' : ''}Page iframe <kbd>I</kbd>
-          </button>
-        );
-      })()}
-      {(() => {
-        const panelRight = panel.rightPaneTabs || [];
-        const termActive = panelRight.includes(companionTabId(activeId, 'terminal')) && panel.splitEnabled;
-        return (
-          <button class="popup-menu-item" onClick={(e: any) => {
-            e.stopPropagation();
-            onClose();
-            if (termActive) {
-              togglePanelCompanion(panel.id, activeId, 'terminal');
-            } else {
-              termPickerOpen.value = { kind: 'companion', sessionId: activeId, panelId: panel.id };
-            }
-          }}>
-            {termActive ? '\u2713 ' : ''}Terminal companion <kbd>M</kbd>
-          </button>
-        );
-      })()}
-      {session?.isHarness && session?.harnessAppPort && (
-        <button class="popup-menu-item" onClick={() => {
-          const host = session.isRemote && session.launcherHostname ? session.launcherHostname : 'localhost';
-          openUrlCompanion(`http://${host}:${session.harnessAppPort}`);
-          onClose();
-        }}>
-          Open App <kbd>O</kbd>
-        </button>
-      )}
-      <div class="popup-menu-divider" />
-      <button class="popup-menu-item" onClick={() => { onClose(); popBackIn(activeId); }}>Pop back to tab bar <kbd>P</kbd></button>
-      <button class="popup-menu-item" onClick={() => { onClose(); window.open(`#/session/${activeId}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no'); }}>Open in window <kbd>W</kbd></button>
-      <button class="popup-menu-item" onClick={() => { onClose(); window.open(`#/session/${activeId}`, '_blank'); }}>Open in browser tab <kbd>B</kbd></button>
-    </PopupMenu>
+    <SessionIdMenu
+      sessionId={activeId}
+      sess={session}
+      isExited={isExited}
+      anchorRef={anchorRef as RefObject<HTMLElement>}
+      onClose={onClose}
+      context={{ mode: 'popout', panel }}
+    />
   );
 }
 

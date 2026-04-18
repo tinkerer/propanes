@@ -175,6 +175,7 @@ export function runMigrations() {
     `ALTER TABLE wiggum_runs ADD COLUMN prompt_file TEXT`,
     `ALTER TABLE wiggum_runs ADD COLUMN log_file TEXT`,
     `ALTER TABLE wiggum_runs ADD COLUMN agent_label TEXT`,
+    `ALTER TABLE feedback_items ADD COLUMN title_history TEXT NOT NULL DEFAULT '[]'`,
   ];
 
   for (const stmt of alterStatements) {

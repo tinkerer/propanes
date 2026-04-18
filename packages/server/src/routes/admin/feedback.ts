@@ -391,7 +391,18 @@ feedbackRoutes.patch('/feedback/:id', async (c) => {
   const now = new Date().toISOString();
   const updates: Record<string, unknown> = { updatedAt: now };
   if (parsed.data.status) updates.status = parsed.data.status;
-  if (parsed.data.title) updates.title = parsed.data.title;
+  if (parsed.data.title && parsed.data.title !== existing.title) {
+    updates.title = parsed.data.title;
+    let history: { title: string; changedAt: string }[] = [];
+    if (existing.titleHistory) {
+      try {
+        const parsedHist = JSON.parse(existing.titleHistory);
+        if (Array.isArray(parsedHist)) history = parsedHist;
+      } catch { /* ignore */ }
+    }
+    history.push({ title: existing.title, changedAt: existing.updatedAt });
+    updates.titleHistory = JSON.stringify(history);
+  }
   if (parsed.data.description !== undefined) updates.description = parsed.data.description;
 
   if (parsed.data.data) {

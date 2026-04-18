@@ -75,6 +75,7 @@ import { showTabs, showHotkeyHints, popoutMode, type PopoutMode } from '../lib/s
 import { ctrlShiftHeld } from '../lib/shortcuts.js';
 import { copyText, copyWithTooltip } from '../lib/clipboard.js';
 import { TerminalPicker } from './TerminalPicker.js';
+import { SessionIdMenu } from './SessionIdMenu.js';
 
 const statusMenuOpen = signal<{ sessionId: string; x: number; y: number } | null>(null);
 const renamingSessionId = signal<string | null>(null);
@@ -188,6 +189,7 @@ function PaneHeader({
   onToggleMinimized?: () => void;
   onToggleMaximized?: () => void;
 }) {
+  const idMenuTriggerRef = useRef<HTMLSpanElement>(null);
   const isJsonlTab = sessionId?.startsWith('jsonl:') || false;
   const isFeedbackTab = sessionId?.startsWith('feedback:') || false;
   const isIframeTab = sessionId?.startsWith('iframe:') || false;
@@ -274,108 +276,21 @@ function PaneHeader({
         <>
           <div class="id-dropdown-wrapper">
             <span
+              ref={idMenuTriggerRef}
               class="session-id-label"
               onClick={() => { idMenuOpen.value = idMenuOpen.value === sessionId ? null : sessionId; }}
             >
               pw-{sessionId.slice(-6)} <span class="id-dropdown-caret">{'\u25BE'}</span>
             </span>
             {idMenuOpen.value === sessionId && (
-              <div class="id-dropdown-menu" onClick={() => { idMenuOpen.value = null; }}>
-                <div class="id-submenu-group" onClick={(e: any) => e.stopPropagation()}>
-                  <div class="id-submenu-trigger">Copy</div>
-                  <div class="id-submenu">
-                    <button onClick={(e) => { idMenuOpen.value = null; copyWithTooltip(sessionId, e as any); }}>
-                      Session ID <kbd>C</kbd>
-                    </button>
-                    {sess?.jsonlPath && (
-                      <button onClick={(e) => { idMenuOpen.value = null; copyWithTooltip(sess.jsonlPath, e as any); }}>
-                        JSONL path <kbd>J</kbd>
-                      </button>
-                    )}
-                    {sess?.feedbackId && (
-                      <button onClick={(e) => { idMenuOpen.value = null; copyWithTooltip(sess.feedbackId, e as any); }}>
-                        Feedback ID <kbd>D</kbd>
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div class="id-submenu-group" onClick={(e: any) => e.stopPropagation()}>
-                  <div class="id-submenu-trigger">Companion</div>
-                  <div class="id-submenu">
-                    {sess?.jsonlPath && (() => {
-                      const companions = getCompanions(sessionId);
-                      const jsonlActive = companions.includes('jsonl');
-                      return (
-                        <button onClick={() => { idMenuOpen.value = null; toggleCompanion(sessionId, 'jsonl'); }}>
-                          {jsonlActive ? '\u2713 ' : ''}JSONL <kbd>L</kbd>
-                        </button>
-                      );
-                    })()}
-                    {sess?.feedbackId && (() => {
-                      const companions = getCompanions(sessionId);
-                      const fbActive = companions.includes('feedback');
-                      return (
-                        <button onClick={() => { idMenuOpen.value = null; toggleCompanion(sessionId, 'feedback'); }}>
-                          {fbActive ? '\u2713 ' : ''}Feedback <kbd>F</kbd>
-                        </button>
-                      );
-                    })()}
-                    {sess?.url && (() => {
-                      const companions = getCompanions(sessionId);
-                      const iframeActive = companions.includes('iframe');
-                      return (
-                        <button onClick={() => { idMenuOpen.value = null; toggleCompanion(sessionId, 'iframe'); }}>
-                          {iframeActive ? '\u2713 ' : ''}Page iframe <kbd>I</kbd>
-                        </button>
-                      );
-                    })()}
-                    {(() => {
-                      const companions = getCompanions(sessionId);
-                      const termActive = companions.includes('terminal');
-                      return (
-                        <button onClick={() => {
-                          if (termActive) {
-                            idMenuOpen.value = null;
-                            toggleCompanion(sessionId, 'terminal');
-                          } else {
-                            idMenuOpen.value = null;
-                            termPickerOpen.value = { kind: 'companion', sessionId };
-                          }
-                        }}>
-                          {termActive ? '\u2713 ' : ''}Terminal <kbd>M</kbd>
-                        </button>
-                      );
-                    })()}
-                    <button onClick={() => {
-                      idMenuOpen.value = null;
-                      termPickerOpen.value = { kind: 'url' };
-                    }}>
-                      Iframe... <kbd>U</kbd>
-                    </button>
-                    {sess?.isHarness && sess?.harnessAppPort && (
-                      <button onClick={() => {
-                        const host = sess.isRemote && sess.launcherHostname ? sess.launcherHostname : 'localhost';
-                        openUrlCompanion(`http://${host}:${sess.harnessAppPort}`);
-                        idMenuOpen.value = null;
-                      }}>
-                        Open App <kbd>O</kbd>
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div class="id-submenu-group" onClick={(e: any) => e.stopPropagation()}>
-                  <div class="id-submenu-trigger">Open In</div>
-                  <div class="id-submenu">
-                    <button onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'panel'); }}>Panel <kbd>P</kbd></button>
-                    <button onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'window'); }}>Window <kbd>W</kbd></button>
-                    <button onClick={() => { idMenuOpen.value = null; executePopout(sessionId, 'tab'); }}>Browser Tab <kbd>B</kbd></button>
-                    <button onClick={() => { idMenuOpen.value = null; openLocalTerminal(sessionId); }}>Terminal.app <kbd>T</kbd></button>
-                    {canSplit && (
-                      <button onClick={() => { idMenuOpen.value = null; enableSplit(); }}>{'\u2AFF'} Split Panes <kbd>S</kbd></button>
-                    )}
-                  </div>
-                </div>
-              </div>
+              <SessionIdMenu
+                sessionId={sessionId}
+                sess={sess}
+                isExited={isExited}
+                anchorRef={idMenuTriggerRef}
+                onClose={() => { idMenuOpen.value = null; }}
+                context={{ mode: 'tab', canSplit, enableSplit }}
+              />
             )}
           </div>
           {feedbackPath && (
