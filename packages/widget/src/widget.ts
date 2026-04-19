@@ -146,6 +146,11 @@ export class ProPanesElement {
   private micScreenCaptures = false;
   private micHideTranscript = false;
   private micHideWidget = false;
+  private voiceListenSessionId: string | null = null;
+  private voiceListenSilenceTimer: ReturnType<typeof setInterval> | null = null;
+  private voiceListenBlurStart: number | null = null;
+  private voiceListenVisibilityHandler: (() => void) | null = null;
+  private voiceListenWindowSender: ((win: import('./voice-recorder.js').AmbientWindow) => void) | null = null;
   private escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && this.isOpen) {
       // Let sub-overlays (annotator, element picker) handle Escape first
@@ -1433,6 +1438,12 @@ export class ProPanesElement {
     menu.appendChild(makeItem('Hide transcript', this.micHideTranscript, (v) => { this.micHideTranscript = v; }));
     menu.appendChild(makeItem('Hide widget', this.micHideWidget, (v) => { this.micHideWidget = v; }));
 
+    const isListening = !!this.voiceListenSessionId;
+    menu.appendChild(makeItem('Listen mode (ambient)', isListening, (v) => {
+      if (v) this.startListenMode();
+      else this.stopListenMode('user');
+    }));
+
     group.appendChild(menu);
 
     const closeHandler = (e: Event) => {
@@ -1442,6 +1453,134 @@ export class ProPanesElement {
       }
     };
     setTimeout(() => this.shadow.addEventListener('click', closeHandler), 0);
+  }
+
+  /**
+   * Start ambient listen mode: transcripts stream to the server in rolling
+   * windows and the server decides when to spawn an agent. A persistent red
+   * dot on the trigger button indicates listening is on.
+   */
+  private async startListenMode() {
+    if (this.voiceListenSessionId) return;
+
+    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
+    const baseOrigin = endpointUrl.origin;
+
+    let sessionId: string | null = null;
+    try {
+      const res = await fetch(`${baseOrigin}/api/v1/voice/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
+        body: JSON.stringify({
+          widgetSessionId: this.getSessionId(),
+          sourceUrl: location.href,
+        }),
+      });
+      if (!res.ok) throw new Error(`voice session start failed: ${res.status}`);
+      const data = await res.json();
+      sessionId = data.id;
+    } catch (err) {
+      const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement;
+      if (errorEl) {
+        errorEl.textContent = 'Could not start listen mode';
+        errorEl.classList.remove('pw-hidden');
+      }
+      return;
+    }
+
+    try {
+      await this.voiceRecorder.startAmbient({ windowMs: 30_000 });
+    } catch (err) {
+      const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement;
+      if (errorEl) {
+        errorEl.textContent = 'Mic or SpeechRecognition unavailable';
+        errorEl.classList.remove('pw-hidden');
+      }
+      // Best-effort close the server session
+      try {
+        await fetch(`${baseOrigin}/api/v1/voice/sessions/${sessionId}/stop`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
+          body: JSON.stringify({ reason: 'start-failed' }),
+        });
+      } catch {}
+      return;
+    }
+
+    this.voiceListenSessionId = sessionId;
+    this.voiceListenWindowSender = (win) => {
+      fetch(`${baseOrigin}/api/v1/voice/sessions/${sessionId}/windows`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
+        body: JSON.stringify({
+          text: win.text,
+          startedAt: win.startedAt,
+          endedAt: win.endedAt,
+          windowIndex: win.windowIndex,
+        }),
+      }).catch(() => { /* best-effort */ });
+    };
+    this.voiceRecorder.onAmbientWindow = this.voiceListenWindowSender;
+
+    // Red-dot indicator on the trigger button, persistent while listening
+    const trigger = this.shadow.querySelector('.pw-trigger') as HTMLElement;
+    if (trigger) trigger.classList.add('pw-trigger-listening');
+
+    // Safeguards: 30min of silence or 2min of tab-blur auto-stop.
+    const SILENCE_TIMEOUT_MS = 30 * 60 * 1000;
+    const BLUR_TIMEOUT_MS = 2 * 60 * 1000;
+    this.voiceListenSilenceTimer = setInterval(() => {
+      if (!this.voiceListenSessionId) return;
+      const last = this.voiceRecorder.ambientLastSpeech;
+      if (last && Date.now() - last > SILENCE_TIMEOUT_MS) {
+        this.stopListenMode('silence-timeout');
+        return;
+      }
+      if (this.voiceListenBlurStart && Date.now() - this.voiceListenBlurStart > BLUR_TIMEOUT_MS) {
+        this.stopListenMode('blur-timeout');
+      }
+    }, 15_000);
+
+    this.voiceListenVisibilityHandler = () => {
+      if (document.visibilityState === 'hidden') {
+        this.voiceListenBlurStart = Date.now();
+      } else {
+        this.voiceListenBlurStart = null;
+      }
+    };
+    document.addEventListener('visibilitychange', this.voiceListenVisibilityHandler);
+  }
+
+  private async stopListenMode(reason: string) {
+    const sessionId = this.voiceListenSessionId;
+    if (!sessionId) return;
+    this.voiceListenSessionId = null;
+
+    if (this.voiceListenSilenceTimer) {
+      clearInterval(this.voiceListenSilenceTimer);
+      this.voiceListenSilenceTimer = null;
+    }
+    if (this.voiceListenVisibilityHandler) {
+      document.removeEventListener('visibilitychange', this.voiceListenVisibilityHandler);
+      this.voiceListenVisibilityHandler = null;
+    }
+    this.voiceListenBlurStart = null;
+    this.voiceRecorder.onAmbientWindow = null;
+    this.voiceListenWindowSender = null;
+
+    try { await this.voiceRecorder.stopAmbient(); } catch {}
+
+    const trigger = this.shadow.querySelector('.pw-trigger') as HTMLElement;
+    if (trigger) trigger.classList.remove('pw-trigger-listening');
+
+    try {
+      const endpointUrl = new URL(this.config.endpoint, window.location.origin);
+      await fetch(`${endpointUrl.origin}/api/v1/voice/sessions/${sessionId}/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
+        body: JSON.stringify({ reason }),
+      });
+    } catch { /* best-effort */ }
   }
 
   private showTimeline() {
@@ -1792,7 +1931,34 @@ export class ProPanesElement {
       this.dispatchMode = 'off';
     }
 
+    // Screenshot-only submission (no description, no voice, no selected elements, no timeline):
+    // upload directly to /api/v1/screenshots — no feedback item created.
+    const isScreenshotOnly =
+      !description &&
+      this.pendingScreenshots.length > 0 &&
+      !this.voiceResult &&
+      this.selectedElements.length === 0 &&
+      this.timelineItems.length === 0;
+
     try {
+      if (isScreenshotOnly) {
+        const result = await this.submitScreenshotsOnly();
+        this.pendingScreenshots = [];
+        input.value = '';
+        clearWidgetDraftStorage();
+        this.exitTimeline();
+        const screenshotPaths: string[] = Array.isArray(result?.screenshots)
+          ? result.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
+          : [];
+        if (screenshotPaths.length > 0) {
+          try { await copyText(screenshotPaths.join(' ')); } catch {}
+          this.showFlash(undefined, `${screenshotPaths.length} path${screenshotPaths.length === 1 ? '' : 's'} copied`);
+        } else {
+          this.showFlash(undefined, 'Uploaded');
+        }
+        return;
+      }
+
       const result = await this.submitFeedback({ type: 'manual', title: '', description, autoDispatch: shouldDispatch }, this.getCheckedCollectors());
 
       if (description) {
@@ -1845,6 +2011,32 @@ export class ProPanesElement {
     panel.appendChild(flash);
 
     setTimeout(() => this.close(), 1000);
+  }
+
+  private async submitScreenshotsOnly() {
+    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
+    const screenshotsUrl = `${endpointUrl.origin}/api/v1/screenshots`;
+    const formData = new FormData();
+    formData.append('meta', JSON.stringify({
+      sessionId: this.getSessionId(),
+      userId: this.identity?.id,
+      sourceUrl: location.href,
+      width: window.innerWidth,
+      height: window.innerHeight,
+    }));
+    for (const blob of this.pendingScreenshots) {
+      formData.append('screenshots', blob, `screenshot-${Date.now()}.png`);
+    }
+    const res = await fetch(screenshotsUrl, {
+      method: 'POST',
+      headers: this.apiHeaders(),
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    return res.json();
   }
 
   private async submitFeedback(opts: { type: string; title: string; description: string; autoDispatch?: boolean }, collectors?: Collector[]) {

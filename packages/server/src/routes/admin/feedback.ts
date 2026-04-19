@@ -119,7 +119,14 @@ feedbackRoutes.get('/feedback', async (c) => {
   const offset = (page - 1) * limit;
 
   const conditions = [];
-  if (type) conditions.push(eq(schema.feedbackItems.type, type));
+  if (type) {
+    conditions.push(eq(schema.feedbackItems.type, type));
+  } else {
+    // Hide fafo_worker items from the main feedback list by default — they live in
+    // the Wiggum/FAFO view (linked via wiggumRuns.feedbackId). Request ?type=fafo_worker
+    // explicitly to see them.
+    conditions.push(ne(schema.feedbackItems.type, 'fafo_worker'));
+  }
 
   // Build status + dispatchStatus as OR branches
   const statusBranches = [];

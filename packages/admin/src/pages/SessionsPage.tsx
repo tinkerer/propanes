@@ -249,6 +249,17 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
   const isOrchestrator = (s: any): boolean =>
     !!(s && s.agentEndpointId && metaWiggumAgentIds.value.has(s.agentEndpointId));
 
+  // IDs in the filtered (visible) set. We only create groups when the header is
+  // itself visible — a group whose parent is filtered out would be confusing.
+  const filteredIds = new Set<string>(filtered.map((s: any) => s.id));
+
+  // Any session that is referenced as a parent by at least one *visible* session.
+  // Used to decide whether a session should become a parent-group header.
+  const parentOfVisible = new Set<string>();
+  for (const s of filtered) {
+    if (s.parentSessionId) parentOfVisible.add(s.parentSessionId);
+  }
+
   // Walk the parent chain (with cycle guard) and return the topmost orchestrator
   // ancestor, or null if the session is standalone.
   const findSwarmRoot = (s: any): any | null => {
@@ -265,14 +276,33 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
     return root;
   };
 
+  // Walk the parent chain and return the topmost *visible* ancestor. If the session
+  // itself is a parent of another visible session and has no visible ancestor of
+  // its own, it becomes its own group header.
+  const findParentRoot = (s: any): any | null => {
+    let topmost: any | null = parentOfVisible.has(s.id) ? s : null;
+    let cur: any = s;
+    const seen = new Set<string>();
+    while (cur && cur.parentSessionId && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      const parent = sessionById.get(cur.parentSessionId);
+      if (!parent) break;
+      if (filteredIds.has(parent.id)) topmost = parent;
+      cur = parent;
+    }
+    return topmost;
+  };
+
   // Determine grouping key for a session:
   // 1. swarmId → group under swarm (FAFO sessions)
   // 2. wiggumRunId (no swarm) → group under wiggum run
   // 3. parentSessionId orchestrator chain → legacy meta-wiggum grouping
-  // 4. null → standalone
+  // 4. parentSessionId chain (non-orchestrator) → generic parent/child group
+  // 5. null → standalone
   type GroupKey = { type: 'swarm'; id: string; name: string }
     | { type: 'wiggum'; runId: string }
     | { type: 'orchestrator'; session: any }
+    | { type: 'parent'; session: any }
     | null;
 
   const getGroupKey = (s: any): GroupKey => {
@@ -280,11 +310,13 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
     if (s.wiggumRunId) return { type: 'wiggum', runId: s.wiggumRunId };
     const root = findSwarmRoot(s);
     if (root) return { type: 'orchestrator', session: root };
+    const parentRoot = findParentRoot(s);
+    if (parentRoot) return { type: 'parent', session: parentRoot };
     return null;
   };
 
-  // Group entries: key is "swarm:<id>" | "wiggum:<runId>" | "orch:<sessionId>"
-  type SwarmEntry = { label: string; type: 'swarm' | 'wiggum' | 'orchestrator'; refId: string; orchestrator: any | null; children: any[] };
+  // Group entries: key is "swarm:<id>" | "wiggum:<runId>" | "orch:<sessionId>" | "parent:<sessionId>"
+  type SwarmEntry = { label: string; type: 'swarm' | 'wiggum' | 'orchestrator' | 'parent'; refId: string; orchestrator: any | null; children: any[] };
   type AppGroup = {
     appKey: string;
     swarms: Map<string, SwarmEntry>;
@@ -322,12 +354,19 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
           entry = { label: `\uD83D\uDD04 Wiggum ${gk.runId.slice(-8)}`, type: 'wiggum', refId: gk.runId, orchestrator: null, children: [] };
           group.swarms.set(mapKey, entry);
         }
-      } else {
-        // orchestrator
+      } else if (gk.type === 'orchestrator') {
         mapKey = `orch:${gk.session.id}`;
         entry = group.swarms.get(mapKey);
         if (!entry) {
           entry = { label: '', type: 'orchestrator', refId: gk.session.id, orchestrator: gk.session, children: [] };
+          group.swarms.set(mapKey, entry);
+        }
+      } else {
+        // generic parent/child
+        mapKey = `parent:${gk.session.id}`;
+        entry = group.swarms.get(mapKey);
+        if (!entry) {
+          entry = { label: '', type: 'parent', refId: gk.session.id, orchestrator: gk.session, children: [] };
           group.swarms.set(mapKey, entry);
         }
       }
@@ -410,10 +449,11 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
   const showAppSections = orderedAppGroups.length > 1;
 
   // -------- Inline session row renderer --------
-  const renderSessionRow = (s: any, opts: { indent?: boolean; isOrchestrator?: boolean; isExpanded?: boolean; onToggleExpand?: () => void; childCount?: number } = {}) => {
+  const renderSessionRow = (s: any, opts: { indent?: boolean; isOrchestrator?: boolean; headerBadge?: string; isExpanded?: boolean; onToggleExpand?: () => void; childCount?: number } = {}) => {
     const agentLabel = s.permissionProfile === 'plain' ? 'Terminal' : (agentMap.value[s.agentEndpointId] || s.agentEndpointId?.slice(-8) || null);
     const feedbackTitle = feedbackMap.value[s.feedbackId];
     const inputState = sessionInputStates.value.get(s.id);
+    const badge = opts.isOrchestrator ? (opts.headerBadge ?? 'orchestrator') : null;
     return (
       <div
         key={s.id}
@@ -425,14 +465,14 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
             <button
               class="session-swarm-toggle"
               onClick={(e) => { e.stopPropagation(); opts.onToggleExpand?.(); }}
-              title={opts.isExpanded ? 'Collapse swarm' : 'Expand swarm'}
+              title={opts.isExpanded ? 'Collapse' : 'Expand'}
             >
               {opts.isExpanded ? '\u25be' : '\u25b8'}
             </button>
           )}
           <span class={`session-status-dot ${s.status}${s.status === 'running' && inputState ? ` ${inputState}` : ''}`} />
-          {opts.isOrchestrator && (
-            <span class="session-orchestrator-badge">orchestrator</span>
+          {badge && (
+            <span class={`session-orchestrator-badge${badge === 'parent' ? ' session-parent-badge' : ''}`}>{badge}</span>
           )}
           <span class="session-card-label">
             {feedbackTitle || agentLabel || `Session ${s.id.slice(-8)}`}
@@ -498,12 +538,16 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
           const groupKey = `${entry.type}:${entry.refId}`;
           const expanded = expandedSwarms.value.has(groupKey);
 
-          if (entry.type === 'orchestrator' && entry.orchestrator) {
-            // Legacy meta-wiggum: orchestrator session as header
+          if ((entry.type === 'orchestrator' || entry.type === 'parent') && entry.orchestrator) {
+            // Parent session as header. 'orchestrator' keeps the legacy badge for
+            // meta-wiggum; 'parent' uses a lighter "parent" badge.
+            const isParent = entry.type === 'parent';
+            const headerBadge = isParent ? 'parent' : 'orchestrator';
             return (
-              <div key={`swarm-${groupKey}`} class="session-swarm-group">
+              <div key={`swarm-${groupKey}`} class={`session-swarm-group${isParent ? ' session-parent-group' : ''}`}>
                 {renderSessionRow(entry.orchestrator, {
                   isOrchestrator: true,
+                  headerBadge,
                   isExpanded: expanded,
                   onToggleExpand: () => toggleSwarm(groupKey),
                   childCount: entry.children.filter(c => c.id !== entry.orchestrator.id).length,

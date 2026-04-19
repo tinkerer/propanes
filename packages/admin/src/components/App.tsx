@@ -47,17 +47,9 @@ export function App() {
     return <LoginPage />;
   }
 
-  if (!isAuthenticated.value) {
-    return <LoginPage />;
-  }
-
-  useEffect(() => {
-    loadApplications();
-    initNotifications();
-    connectAdminWs();
-  }, []);
-
-  // Isolate mode: render a single component with no admin chrome
+  // Isolate mode: render a single component with no admin chrome and no auth.
+  // This is a standalone surface used for embedded snippets, the widget host
+  // page, and visual-regression fixtures.
   const isolateName = isolatedComponent.value;
   if (isolateName) {
     const entry = getIsolateEntry(isolateName);
@@ -69,6 +61,16 @@ export function App() {
     }
     return <div class="pw-isolate-root">{entry.render(getIsolateParams())}</div>;
   }
+
+  if (!isAuthenticated.value) {
+    return <LoginPage />;
+  }
+
+  useEffect(() => {
+    loadApplications();
+    initNotifications();
+    connectAdminWs();
+  }, []);
 
   // Standalone session page — no layout chrome
   if (route.startsWith('/session/')) {

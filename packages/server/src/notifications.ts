@@ -60,7 +60,7 @@ export function getNotification(id: string): Notification | undefined {
 
 export function resolveNotification(
   id: string,
-  action: 'approved' | 'rejected' | 'answered' | 'dismissed',
+  action: 'approved' | 'rejected' | 'answered' | 'dismissed' | 'launched' | 'edited' | 'cancelled',
   response?: unknown,
 ): Notification | undefined {
   const n = notifications.find((x) => x.id === id);
