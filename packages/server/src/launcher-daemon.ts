@@ -77,7 +77,7 @@ function buildAgentCommand(
     const command = process.env.CODEX_BIN || 'codex';
     const args: string[] = [];
     if (permissionProfile === 'auto') args.push('--full-auto');
-    if (permissionProfile === 'yolo') args.push('--dangerously-auto-approve-everything');
+    if (permissionProfile === 'yolo') args.push('--dangerously-bypass-approvals-and-sandbox');
     if (prompt) args.push(prompt);
     return { command, args };
   }

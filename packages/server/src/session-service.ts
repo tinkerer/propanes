@@ -179,7 +179,7 @@ function buildAgentCommand(
     const command = process.env.CODEX_BIN || 'codex';
     const args: string[] = [];
     if (permissionProfile === 'auto') args.push('--full-auto');
-    if (permissionProfile === 'yolo') args.push('--dangerously-auto-approve-everything');
+    if (permissionProfile === 'yolo') args.push('--dangerously-bypass-approvals-and-sandbox');
     if (prompt) args.push(prompt);
     return { command, args };
   }
@@ -323,7 +323,7 @@ function spawnSession(params: {
     resumeSessionId,
   );
 
-  console.log(`[session-service] Spawning session ${sessionId}: profile=${permissionProfile}, cwd=${cwd}, tmux=${isTmuxAvailable()}`);
+  console.log(`[session-service] Spawning session ${sessionId}: runtime=${runtime}, command=${command}, profile=${permissionProfile}, cwd=${cwd}, tmux=${isTmuxAvailable()}`);
 
   let ptyProcess: pty.IPty;
 

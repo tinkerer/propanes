@@ -1244,10 +1244,10 @@ function buildSpriteCommandArgs(params: {
     if (params.permissionProfile === 'auto') {
       cmdArgs.push('--full-auto');
     } else if (params.permissionProfile === 'yolo') {
-      cmdArgs.push('--dangerously-auto-approve-everything');
+      cmdArgs.push('--dangerously-bypass-approvals-and-sandbox');
     }
     if (params.cwd) {
-      cmdArgs.push('--writable-root', params.cwd);
+      cmdArgs.push('-C', params.cwd);
     }
     if (params.prompt) {
       cmdArgs.push(params.prompt);
