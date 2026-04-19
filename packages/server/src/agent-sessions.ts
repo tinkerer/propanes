@@ -1,7 +1,7 @@
 import { WebSocket as WsWebSocket } from 'ws';
 import { eq } from 'drizzle-orm';
 import { db, schema } from './db/index.js';
-import type { PermissionProfile, InputToSession } from '@propanes/shared';
+import type { AgentRuntime, PermissionProfile, InputToSession } from '@propanes/shared';
 import {
   spawnSessionRemote,
   killSessionRemote,
@@ -41,6 +41,7 @@ export async function spawnAgentSession(params: {
   sessionId: string;
   prompt?: string;
   cwd: string;
+  runtime?: AgentRuntime;
   permissionProfile: PermissionProfile;
   allowedTools?: string | null;
   claudeSessionId?: string;

@@ -5,7 +5,7 @@ import type { Server } from 'node:http';
 import * as pty from 'node-pty';
 import { eq, desc } from 'drizzle-orm';
 import { db, schema } from './db/index.js';
-import type { PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
+import type { AgentRuntime, PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
 import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane } from './tmux-pty.js';
 
@@ -167,13 +167,23 @@ function commitInputState(proc: AgentProcess, newState: InputState): void {
   sendSequenced(proc, { kind: 'input_state', state: newState });
 }
 
-function buildClaudeArgs(
+function buildAgentCommand(
+  runtime: AgentRuntime,
   prompt: string,
   permissionProfile: PermissionProfile,
   allowedTools?: string | null,
   claudeSessionId?: string,
   resumeSessionId?: string,
 ): { command: string; args: string[] } {
+  if (runtime === 'codex') {
+    const command = process.env.CODEX_BIN || 'codex';
+    const args: string[] = [];
+    if (permissionProfile === 'auto') args.push('--full-auto');
+    if (permissionProfile === 'yolo') args.push('--dangerously-bypass-approvals-and-sandbox');
+    if (prompt) args.push(prompt);
+    return { command, args };
+  }
+
   // When resuming, use --resume — no --session-id (it conflicts)
   if (resumeSessionId) {
     const args = ['--resume', resumeSessionId];
@@ -182,7 +192,7 @@ function buildClaudeArgs(
       args.push('--output-format', 'stream-json', '--verbose');
     }
     if (prompt) args.push(prompt);
-    return { command: 'claude', args };
+    return { command: process.env.CLAUDE_BIN || 'claude', args };
   }
 
   switch (permissionProfile) {
@@ -191,7 +201,7 @@ function buildClaudeArgs(
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (allowedTools) args.push(`--allowedTools=${allowedTools}`);
       if (prompt) args.push(prompt);
-      return { command: 'claude', args };
+      return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
     case 'auto': {
       const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose'];
@@ -199,12 +209,12 @@ function buildClaudeArgs(
       if (allowedTools) {
         args.push(`--allowedTools=${allowedTools}`);
       }
-      return { command: 'claude', args };
+      return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
     case 'yolo': {
       const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
-      return { command: 'claude', args };
+      return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
     case 'plain': {
       const shell = process.env.SHELL || '/bin/bash';
@@ -214,7 +224,7 @@ function buildClaudeArgs(
       const args: string[] = [];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (prompt) args.push(prompt);
-      return { command: 'claude', args };
+      return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
   }
 }
@@ -292,18 +302,20 @@ function spawnSession(params: {
   sessionId: string;
   prompt?: string;
   cwd: string;
+  runtime?: AgentRuntime;
   permissionProfile: PermissionProfile;
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
 }): void {
-  const { sessionId, prompt = '', cwd, permissionProfile, allowedTools, claudeSessionId, resumeSessionId } = params;
+  const { sessionId, prompt = '', cwd, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId } = params;
 
   if (activeSessions.has(sessionId)) {
     throw new Error(`Session ${sessionId} is already running`);
   }
 
-  const { command, args } = buildClaudeArgs(
+  const { command, args } = buildAgentCommand(
+    runtime,
     prompt,
     permissionProfile,
     allowedTools,
@@ -311,7 +323,7 @@ function spawnSession(params: {
     resumeSessionId,
   );
 
-  console.log(`[session-service] Spawning session ${sessionId}: profile=${permissionProfile}, cwd=${cwd}, tmux=${isTmuxAvailable()}`);
+  console.log(`[session-service] Spawning session ${sessionId}: runtime=${runtime}, command=${command}, profile=${permissionProfile}, cwd=${cwd}, tmux=${isTmuxAvailable()}`);
 
   let ptyProcess: pty.IPty;
 
@@ -460,7 +472,7 @@ function isSessionHealthy(proc: AgentProcess): boolean {
   // Strip ANSI escape sequences to get visible text
   const visible = proc.outputBuffer.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
   if (visible.length > 200) return true;
-  if (/Claude|>|Type your/i.test(visible)) return true;
+  if (/Claude|Codex|OpenAI|>|Type your/i.test(visible)) return true;
   return false;
 }
 
@@ -708,7 +720,7 @@ app.get('/waiting', (c) => {
 
 app.post('/spawn', async (c) => {
   const body = await c.req.json();
-  const { sessionId, prompt, cwd, permissionProfile, allowedTools, claudeSessionId, resumeSessionId } = body;
+  const { sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId } = body;
 
   if (!sessionId || !cwd || !permissionProfile) {
     return c.json({ error: 'Missing required fields' }, 400);
@@ -718,7 +730,7 @@ app.post('/spawn', async (c) => {
   }
 
   try {
-    spawnSession({ sessionId, prompt, cwd, permissionProfile, allowedTools, claudeSessionId, resumeSessionId });
+    spawnSession({ sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId });
     return c.json({ ok: true, sessionId });
   } catch (err) {
     const pending = pendingConnections.get(sessionId);

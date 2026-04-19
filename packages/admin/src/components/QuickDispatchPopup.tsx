@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import { createPortal } from 'preact/compat';
 import { api } from '../lib/api.js';
-import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE } from '../lib/agent-constants.js';
+import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE } from '../lib/agent-constants.js';
 import { openSession, loadAllSessions, ensureAgentsLoaded } from '../lib/sessions.js';
 
-export type DispatchType = 'agent' | 'wiggum' | 'fafo';
+export type DispatchType = 'agent' | 'wiggum' | 'fafo' | 'structured' | 'powwow';
 
 const DRAFT_KEY = 'pw-qdp-drafts';
 
@@ -153,11 +153,35 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
       const agent = agents.find((a: any) => a.id === selectedAgentId) || agents[0];
       if (!agent) throw new Error('No agent endpoints configured');
 
+      if (dispatchType === 'powwow') {
+        const moderator = agent;
+        const participantAgents = agents.filter((a: any) => a.mode !== 'webhook' && a.id !== moderator.id);
+        if (participantAgents.length === 0) throw new Error('Powwow needs at least one additional agent');
+        const result = await api.powwow({
+          feedbackId: fb.id,
+          moderatorAgentId: moderator.id,
+          participantAgentIds: participantAgents.map((a: any) => a.id),
+          instructions: text.trim(),
+          rounds: 2,
+        });
+        if (result.sessionId) {
+          openSession(result.sessionId);
+        }
+        loadAllSessions();
+        setText('');
+        setDispatchType('agent');
+        clearDraft(appKey);
+        onClose();
+        return;
+      }
+
       let instructions: string | undefined;
       if (dispatchType === 'wiggum') {
         instructions = META_WIGGUM_TEMPLATE;
       } else if (dispatchType === 'fafo') {
         instructions = FAFO_ASSISTANT_TEMPLATE;
+      } else if (dispatchType === 'structured') {
+        instructions = STRUCTURED_MODE_TEMPLATE;
       }
 
       const result = await api.dispatch({
@@ -182,8 +206,8 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
   }
 
   const headerLabel = appName && appName !== 'Unlinked'
-    ? `New Session — ${appName}`
-    : 'New Session';
+    ? `Cook Something — ${appName}`
+    : 'Cook Something';
 
   return createPortal(
     <div
@@ -199,7 +223,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
       <textarea
         ref={textareaRef}
         class="qdp-textarea"
-        placeholder="What should the agent do?"
+        placeholder="What should we cook up?"
         value={text}
         onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
         onKeyDown={(e) => {
@@ -216,13 +240,21 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
       />
       <div class="qdp-footer">
         <div class="qdp-types">
-          {(['agent', 'wiggum', 'fafo'] as const).map((t) => (
+          {(['agent', 'wiggum', 'fafo', 'structured', 'powwow'] as const).map((t) => (
             <button
               key={t}
               class={`qdp-type-btn ${dispatchType === t ? 'active' : ''}`}
               onClick={() => setDispatchType(t)}
             >
-              {t === 'agent' ? '\u{1F916} Agent' : t === 'wiggum' ? '\u{1F575} Wiggum' : '\u{1F9EC} FAFO'}
+              {t === 'agent'
+                ? '\u{1F525} Cook It'
+                : t === 'wiggum'
+                  ? '\u{1F575} Wiggum'
+                  : t === 'fafo'
+                    ? '\u{1F9EC} FAFO'
+                    : t === 'structured'
+                      ? '\u{1F4CB} Structured'
+                      : '\u{1FAD6} Powwow'}
             </button>
           ))}
         </div>
@@ -248,7 +280,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
             disabled={!text.trim() || submitting}
             onClick={submit}
           >
-            {submitting ? '...' : '\u25B6 Run'}
+            {submitting ? 'Cooking…' : '\u{1F525} Cook It'}
           </button>
         </div>
       </div>
