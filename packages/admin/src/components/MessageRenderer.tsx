@@ -48,14 +48,21 @@ function getLangFromPath(path: string): string | undefined {
 
 // --- Syntax highlighting ---
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function highlightCode(content: string, lang?: string): string {
   try {
     if (lang && hljs.getLanguage(lang)) {
       return hljs.highlight(content, { language: lang }).value;
     }
-    return hljs.highlightAuto(content).value;
+    // hljs.highlightAuto is O(N×languages) and freezes mobile Safari with
+    // many large blocks. Fall back to escaped plain text when the language
+    // isn't known — readable, just not colored.
+    return escapeHtml(content);
   } catch {
-    return content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escapeHtml(content);
   }
 }
 

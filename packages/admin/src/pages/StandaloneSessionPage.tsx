@@ -3,6 +3,7 @@ import { signal } from '@preact/signals';
 import { SessionViewToggle, type ViewMode } from '../components/SessionViewToggle.js';
 import { allSessions, startSessionPolling, getViewMode, setViewMode, markSessionExited, setSessionInputState, exitedSessions } from '../lib/sessions.js';
 import { applyTheme } from '../lib/settings.js';
+import { isMobile } from '../lib/viewport.js';
 
 const viewMode = signal<ViewMode>('terminal');
 
@@ -24,7 +25,7 @@ export function StandaloneSessionPage({ sessionId }: { sessionId: string }) {
         <span style={{ fontWeight: 600 }}>pw-{sessionId.slice(-6)}</span>
         {isExited && <span style={{ color: 'var(--pw-text-muted)' }}>(exited)</span>}
         <span style="flex:1" />
-        {sess?.jsonlPath && (
+        {sess?.jsonlPath && !isMobile.value && (
           <select
             class="view-mode-select"
             value={mode}

@@ -1,9 +1,19 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { MessageRenderer } from './MessageRenderer.js';
 import { JsonOutputParser, type ParsedMessage } from '../lib/output-parser.js';
 import { api } from '../lib/api.js';
 import { sessionInputStates } from '../lib/session-state.js';
+import { exitedSessions, allSessions } from '../lib/sessions.js';
+import { isMobile } from '../lib/viewport.js';
 import { ChoicePrompt, type ChoiceOption } from './InteractivePrompt.js';
+
+// Initial window size — on mobile we render only the most recent N groups
+// to keep first paint cheap; user can expand earlier history on demand.
+// Without this, sessions with 150+ tool calls block iPhone Safari for several
+// seconds during initial render and the page appears frozen on the
+// "Loading JSONL..." → blank flash.
+const MOBILE_INITIAL_WINDOW = 30;
+const DESKTOP_INITIAL_WINDOW = 200;
 
 interface Props {
   sessionId: string;
@@ -182,6 +192,13 @@ export function StructuredView({ sessionId }: Props) {
   const inputState = sessionInputStates.value.get(sessionId) || 'active';
   const isWaiting = inputState === 'waiting';
 
+  // Session is "done" if it has exited locally or reached a terminal status
+  // server-side. We still fetch once, but skip the 3s polling — no new JSONL
+  // lines will appear, and the extra load matters on mobile Safari.
+  const sessionRecord = allSessions.value.find((s: any) => s.id === sessionId);
+  const terminalStatus = sessionRecord?.status && ['completed', 'exited', 'failed', 'deleted', 'archived'].includes(sessionRecord.status);
+  const isSessionDone = exitedSessions.value.has(sessionId) || !!terminalStatus;
+
   useEffect(() => {
     lastLength.current = 0;
     setMessages([]);
@@ -207,9 +224,12 @@ export function StructuredView({ sessionId }: Props) {
     };
 
     fetchJsonl();
+    if (isSessionDone) {
+      return () => { cancelled = true; };
+    }
     const interval = setInterval(() => { if (!document.hidden) fetchJsonl(); }, 3000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [sessionId]);
+  }, [sessionId, isSessionDone]);
 
   // When the session is waiting for input, poll the captured terminal output
   // for permission-prompt patterns and surface them as a ChoicePrompt card.
@@ -246,6 +266,26 @@ export function StructuredView({ sessionId }: Props) {
     autoScroll.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
   };
 
+  const initialWindow = isMobile.value ? MOBILE_INITIAL_WINDOW : DESKTOP_INITIAL_WINDOW;
+  const [shownCount, setShownCount] = useState(initialWindow);
+
+  // Window by raw messages, then group. Some sessions pack 100+ tool calls
+  // into one assistant group, so windowing by group leaves all of them on
+  // screen. Slicing messages first keeps initial render bounded regardless
+  // of group shape.
+  useEffect(() => {
+    setShownCount((prev) => {
+      if (prev > initialWindow) return Math.min(prev, messages.length);
+      return Math.min(initialWindow, messages.length);
+    });
+  }, [messages.length, initialWindow]);
+
+  const hiddenMsgCount = Math.max(0, messages.length - shownCount);
+  const groups = useMemo(
+    () => groupMessages(hiddenMsgCount > 0 ? messages.slice(-shownCount) : messages),
+    [messages, shownCount, hiddenMsgCount]
+  );
+
   if (loading) {
     return <div class="structured-view"><div class="sm-empty">Loading JSONL...</div></div>;
   }
@@ -254,7 +294,6 @@ export function StructuredView({ sessionId }: Props) {
     return <div class="structured-view"><div class="sm-empty" style="color: #f87171">{error}</div></div>;
   }
 
-  const groups = groupMessages(messages);
   const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
   const pendingTool = lastMsg?.role === 'tool_use' ? lastMsg : null;
   const askingForInput = isWaiting && pendingTool?.toolName === 'AskUserQuestion';
@@ -263,6 +302,14 @@ export function StructuredView({ sessionId }: Props) {
     <div class="structured-view" ref={containerRef} onScroll={handleScroll}>
       {messages.length === 0 && (
         <div class="sm-empty">No messages yet</div>
+      )}
+      {hiddenMsgCount > 0 && (
+        <button
+          class="sm-show-earlier"
+          onClick={() => setShownCount((n) => n + initialWindow)}
+        >
+          Show {Math.min(hiddenMsgCount, initialWindow)} earlier message{Math.min(hiddenMsgCount, initialWindow) === 1 ? '' : 's'} ({hiddenMsgCount} hidden)
+        </button>
       )}
       {groups.map(group => {
         const lastGroupMsg = group.messages[group.messages.length - 1];

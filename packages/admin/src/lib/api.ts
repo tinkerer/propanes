@@ -296,7 +296,17 @@ export const api = {
     if (token) headers['Authorization'] = `Bearer ${token}`;
     const qs = fileFilter ? `?file=${encodeURIComponent(fileFilter)}` : '';
     const res = await fetch(`${BASE}/admin/agent-sessions/${id}/jsonl${qs}`, { headers });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = await res.clone().json();
+        if (body?.error) detail = body.error;
+      } catch {
+        const text = await res.text().catch(() => '');
+        if (text) detail = text.slice(0, 200);
+      }
+      throw new Error(detail);
+    }
     return res.text();
   },
 
