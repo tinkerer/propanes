@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import * as pty from 'node-pty';
 import { execSync } from 'node:child_process';
 import type {
+  AgentRuntime,
   LauncherRegister,
   LauncherHeartbeat,
   LauncherSessionStarted,
@@ -64,19 +65,29 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = 1000;
 let shuttingDown = false;
 
-function buildClaudeArgs(
+function buildAgentCommand(
+  runtime: AgentRuntime,
   prompt: string,
   permissionProfile: string,
   allowedTools?: string | null,
   claudeSessionId?: string,
   resumeSessionId?: string,
 ): { command: string; args: string[] } {
+  if (runtime === 'codex') {
+    const command = process.env.CODEX_BIN || 'codex';
+    const args: string[] = [];
+    if (permissionProfile === 'auto') args.push('--full-auto');
+    if (permissionProfile === 'yolo') args.push('--dangerously-auto-approve-everything');
+    if (prompt) args.push(prompt);
+    return { command, args };
+  }
+
   // When resuming, use --resume — no --session-id (it conflicts)
   if (resumeSessionId) {
     const args = ['--resume', resumeSessionId];
     if (permissionProfile === 'yolo') args.push('--dangerously-skip-permissions');
     if (prompt) args.push(prompt);
-    return { command: 'claude', args };
+    return { command: process.env.CLAUDE_BIN || 'claude', args };
   }
 
   switch (permissionProfile) {
@@ -85,18 +96,18 @@ function buildClaudeArgs(
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (allowedTools) args.push('--allowedTools', allowedTools);
       if (prompt) args.push(prompt);
-      return { command: 'claude', args };
+      return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
     case 'auto': {
       const args = ['-p', prompt];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (allowedTools) args.push('--allowedTools', allowedTools);
-      return { command: 'claude', args };
+      return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
     case 'yolo': {
       const args = ['-p', prompt, '--dangerously-skip-permissions'];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
-      return { command: 'claude', args };
+      return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
     case 'plain': {
       return { command: process.env.SHELL || '/bin/bash', args: [] };
@@ -105,7 +116,7 @@ function buildClaudeArgs(
       const args: string[] = [];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (prompt) args.push(prompt);
-      return { command: 'claude', args };
+      return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
   }
 }
@@ -138,6 +149,7 @@ function spawnSession(params: {
   sessionId: string;
   prompt: string;
   cwd: string;
+  runtime?: AgentRuntime;
   permissionProfile: string;
   allowedTools?: string | null;
   claudeSessionId?: string;
@@ -145,7 +157,7 @@ function spawnSession(params: {
   cols: number;
   rows: number;
 }): void {
-  const { sessionId, prompt, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, cols, rows } = params;
+  const { sessionId, prompt, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId, cols, rows } = params;
   // Resolve ~ to actual home directory, and fall back to home if cwd doesn't exist
   let cwd = params.cwd;
   if (cwd === '~' || cwd.startsWith('~/')) {
@@ -158,7 +170,7 @@ function spawnSession(params: {
     return;
   }
 
-  const { command, args } = buildClaudeArgs(prompt, permissionProfile, allowedTools, claudeSessionId, resumeSessionId);
+  const { command, args } = buildAgentCommand(runtime, prompt, permissionProfile, allowedTools, claudeSessionId, resumeSessionId);
 
   console.log(`[launcher] Spawning session ${sessionId}: profile=${permissionProfile}, cwd=${cwd}`);
 
@@ -413,12 +425,13 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
       break;
 
     case 'launch_session':
-      spawnSession({
-        sessionId: msg.sessionId,
-        prompt: msg.prompt,
-        cwd: msg.cwd,
-        permissionProfile: msg.permissionProfile,
-        allowedTools: msg.allowedTools,
+        spawnSession({
+          sessionId: msg.sessionId,
+          prompt: msg.prompt,
+          cwd: msg.cwd,
+          runtime: msg.runtime || 'claude',
+          permissionProfile: msg.permissionProfile,
+          allowedTools: msg.allowedTools,
         claudeSessionId: msg.claudeSessionId,
         resumeSessionId: msg.resumeSessionId,
         cols: msg.cols,
@@ -698,7 +711,7 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
     }
 
     case 'launch_harness_session': {
-      const { sessionId, harnessConfigId, prompt, composeDir, serviceName, permissionProfile, containerCwd, claudeSessionId, anthropicApiKey, cols, rows } = msg;
+      const { sessionId, harnessConfigId, prompt, composeDir, serviceName, runtime, permissionProfile, containerCwd, claudeSessionId, anthropicApiKey, cols, rows } = msg;
       const svc = serviceName || 'pw-server';
 
       console.log(`[launcher] Launching harness session ${sessionId} in ${composeDir || harnessConfigId}/${svc}${containerCwd ? ` (cwd=${containerCwd})` : ''}`);
@@ -708,7 +721,7 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
         break;
       }
 
-      const { command: innerCmd, args: innerArgs } = buildClaudeArgs(prompt, permissionProfile, undefined, claudeSessionId);
+      const { command: innerCmd, args: innerArgs } = buildAgentCommand(runtime || 'claude', prompt, permissionProfile, undefined, claudeSessionId);
       const execFlags: string[] = [];
       if (containerCwd) execFlags.push('-w', containerCwd);
       if (anthropicApiKey) execFlags.push('-e', `ANTHROPIC_API_KEY=${anthropicApiKey}`);

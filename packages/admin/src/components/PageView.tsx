@@ -1,8 +1,8 @@
 import { currentRoute, navigate, selectedAppId, applications } from '../lib/state.js';
+import { openSettingsPanel } from '../lib/companion-state.js';
 import { RequestPanel } from './RequestPanel.js';
 import { FeedbackListPage } from '../pages/FeedbackListPage.js';
 import { FeedbackDetailPage } from '../pages/FeedbackDetailPage.js';
-import { AgentsPage } from '../pages/AgentsPage.js';
 import { GettingStartedPage } from '../pages/GettingStartedPage.js';
 import { SessionsPage } from '../pages/SessionsPage.js';
 import { AggregatePage } from '../pages/AggregatePage.js';
@@ -45,7 +45,7 @@ export function PageView() {
     } else if (parsed.sub === 'feedback') {
       page = <FeedbackListPage appId={parsed.appId} />;
     } else if (parsed.sub === 'agents') {
-      navigate('/settings/agents');
+      openSettingsPanel('agents');
       return null;
     } else if (parsed.sub === 'sessions') {
       page = <SessionsPage appId={parsed.appId} />;
@@ -61,7 +61,8 @@ export function PageView() {
       page = <FeedbackListPage appId={parsed.appId} />;
     }
   } else if (route === '/settings/agents') {
-    page = <AgentsPage />;
+    openSettingsPanel('agents');
+    return null;
   } else if (route === '/settings/applications') {
     const apps = applications.value;
     if (apps.length > 0) {

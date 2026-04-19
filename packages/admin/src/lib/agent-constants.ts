@@ -217,10 +217,39 @@ curl -s -X POST $AUTH 'http://localhost:3001/api/v1/admin/wiggum/batch' \\
 - When analyzing fitness scores, lower is better for diff-based metrics
 `;
 
+export const STRUCTURED_MODE_TEMPLATE = `Use structured mode for this task.
+
+## Response format
+1. Problem framing
+2. Proposed solution
+3. Files or systems affected
+4. Risks and open questions
+5. Verification plan
+
+Be concrete, explicit, and implementation-oriented.`;
+
+export const POWWOW_TEMPLATE = `You are orchestrating a powwow across multiple coding agents (Claude, Codex, or others available in ProPanes).
+
+## Goal
+- Dispatch several agents in parallel
+- Compare their competing solutions
+- Run additional rounds if there is disagreement
+- Converge on the strongest shared plan
+
+## Style
+${STRUCTURED_MODE_TEMPLATE}
+
+## Requirements
+- Make the disagreement explicit before declaring consensus
+- Name the strongest idea from each agent
+- End with a single recommended path and verification checklist`;
+
 export const TEMPLATE_PRESETS = [
   { label: 'Default', value: null },
   { label: 'Meta-Wiggum (Orchestrator)', value: META_WIGGUM_TEMPLATE },
   { label: 'FAFO Setup Assistant', value: FAFO_ASSISTANT_TEMPLATE },
+  { label: 'Structured Mode', value: STRUCTURED_MODE_TEMPLATE },
+  { label: 'Powwow Moderator', value: POWWOW_TEMPLATE },
 ] as const;
 
 /**
@@ -280,6 +309,11 @@ export const MODE_INFO: Record<string, { icon: string; label: string; color: str
   interactive: { icon: '\u{1F4BB}', label: 'Interactive', color: 'var(--pw-primary)' },
   headless: { icon: '\u{2699}\uFE0F', label: 'Headless', color: '#22c55e' },
   webhook: { icon: '\u{1F517}', label: 'Webhook', color: '#f59e0b' },
+};
+
+export const RUNTIME_INFO: Record<string, { icon: string; label: string; color: string }> = {
+  claude: { icon: '\u{1F9E0}', label: 'Claude', color: '#8b5cf6' },
+  codex: { icon: '\u{1F4A1}', label: 'Codex', color: '#06b6d4' },
 };
 
 export const PROFILE_DESCRIPTIONS: Record<string, { label: string; desc: string; icon: string }> = {

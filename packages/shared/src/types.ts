@@ -5,6 +5,7 @@ import type {
   WIDGET_POSITIONS,
   COLLECTORS,
   DISPATCH_MODES,
+  AGENT_RUNTIMES,
   PERMISSION_PROFILES,
   AGENT_SESSION_STATUSES,
 } from './constants.js';
@@ -15,6 +16,7 @@ export type WidgetMode = (typeof WIDGET_MODES)[number];
 export type WidgetPosition = (typeof WIDGET_POSITIONS)[number];
 export type Collector = (typeof COLLECTORS)[number];
 export type DispatchMode = (typeof DISPATCH_MODES)[number];
+export type AgentRuntime = (typeof AGENT_RUNTIMES)[number];
 export type PermissionProfile = (typeof PERMISSION_PROFILES)[number];
 export type AgentSessionStatus = (typeof AGENT_SESSION_STATUSES)[number];
 
@@ -156,6 +158,7 @@ export interface AgentEndpoint {
   appId: string | null;
   promptTemplate: string | null;
   mode: DispatchMode;
+  runtime: AgentRuntime;
   permissionProfile: PermissionProfile;
   allowedTools: string | null;
   autoPlan: boolean;
