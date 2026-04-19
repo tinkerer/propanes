@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { api } from '../lib/api.js';
 import { openSession, loadAllSessions } from '../lib/sessions.js';
 import { cachedTargets, ensureTargetsLoaded, targetKey, findTargetByKey, parseTargetKey } from './DispatchTargetSelect.js';
-import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE } from '../lib/agent-constants.js';
+import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE } from '../lib/agent-constants.js';
 
 export interface DispatchDialogRequest {
   feedbackIds: string[];
@@ -24,24 +24,35 @@ export function DispatchDialog() {
   return <DispatchDialogInner req={req} onClose={() => { dispatchDialogOpen.value = null; }} />;
 }
 
-type ActionKind = 'interactive' | 'yolo' | 'wiggum' | 'fafo' | 'assistant';
+type ActionKind = 'interactive' | 'yolo' | 'wiggum' | 'fafo' | 'structured' | 'powwow' | 'assistant';
 
 interface Agent {
   id: string;
   name: string;
   mode: string;
+  runtime?: 'claude' | 'codex';
   permissionProfile: 'interactive' | 'auto' | 'yolo';
   isDefault: boolean;
   appId?: string | null;
   harnessConfigId?: string | null;
 }
 
-function pickAgent(agents: Agent[], profile: Agent['permissionProfile'], appId?: string | null): Agent | undefined {
+function pickAgent(
+  agents: Agent[],
+  profile: Agent['permissionProfile'],
+  appId?: string | null,
+  runtimePreference: Array<'claude' | 'codex'> = ['claude', 'codex'],
+): Agent | undefined {
+  const ordered = [...agents].sort((a, b) => {
+    const ai = runtimePreference.indexOf(a.runtime || 'claude');
+    const bi = runtimePreference.indexOf(b.runtime || 'claude');
+    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+  });
   const match = (a: Agent) => a.permissionProfile === profile;
-  return agents.find(a => match(a) && a.isDefault && a.appId === appId)
-    || agents.find(a => match(a) && a.isDefault && !a.appId)
-    || agents.find(a => match(a) && a.appId === appId)
-    || agents.find(a => match(a));
+  return ordered.find(a => match(a) && a.isDefault && a.appId === appId)
+    || ordered.find(a => match(a) && a.isDefault && !a.appId)
+    || ordered.find(a => match(a) && a.appId === appId)
+    || ordered.find(a => match(a));
 }
 
 function defaultAgent(agents: Agent[], appId?: string | null): Agent | undefined {
@@ -94,8 +105,12 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
   const targetLabel = selectedTarget ? (selectedTarget.machineName || selectedTarget.name) : 'Local';
 
   const interactiveAgent = useMemo(() => pickAgent(agents, 'interactive', req.appId), [agents, req.appId]);
-  const yoloAgent = useMemo(() => pickAgent(agents, 'yolo', req.appId), [agents, req.appId]);
+  const yoloAgent = useMemo(() => pickAgent(agents, 'yolo', req.appId, ['codex', 'claude']), [agents, req.appId]);
   const fallbackAgent = useMemo(() => defaultAgent(agents, req.appId), [agents, req.appId]);
+  const structuredAgent = useMemo(
+    () => pickAgent(agents, 'auto', req.appId, ['codex', 'claude']) || interactiveAgent || fallbackAgent,
+    [agents, req.appId, interactiveAgent, fallbackAgent],
+  );
 
   async function runAction(kind: ActionKind) {
     setError('');
@@ -104,6 +119,33 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
       if (kind === 'assistant') {
         // Phase 2 — not implemented yet
         setError('Setup Assistant coming soon');
+        return;
+      }
+
+      if (kind === 'powwow') {
+        const moderator = overrideAgentId ? agents.find(a => a.id === overrideAgentId) : (structuredAgent || fallbackAgent);
+        const participantAgents = agents.filter((a) => a.mode !== 'webhook' && a.id !== moderator?.id);
+        if (!moderator) throw new Error('No moderator agent available');
+        if (participantAgents.length === 0) throw new Error('Powwow needs at least one participant agent besides the moderator');
+
+        const { launcherId, harnessConfigId } = parseTargetKey(target, targets);
+        let firstSessionId: string | undefined;
+        for (const feedbackId of req.feedbackIds) {
+          const result = await api.powwow({
+            feedbackId,
+            moderatorAgentId: moderator.id,
+            participantAgentIds: participantAgents.map((a) => a.id),
+            instructions: instructions.trim() || undefined,
+            launcherId,
+            harnessConfigId,
+            rounds: 2,
+          });
+          if (result.sessionId && !firstSessionId) firstSessionId = result.sessionId;
+        }
+        if (firstSessionId && !isBatch) openSession(firstSessionId);
+        loadAllSessions();
+        dispatchDialogResult.value = 'dispatched';
+        onClose();
         return;
       }
 
@@ -125,6 +167,11 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
         baseInstructions = baseInstructions
           ? `${FAFO_ASSISTANT_TEMPLATE}\n\n## Additional Instructions\n${baseInstructions}`
           : FAFO_ASSISTANT_TEMPLATE;
+      } else if (kind === 'structured') {
+        agent = override || structuredAgent || fallbackAgent;
+        baseInstructions = baseInstructions
+          ? `${STRUCTURED_MODE_TEMPLATE}\n\n## Additional Instructions\n${baseInstructions}`
+          : STRUCTURED_MODE_TEMPLATE;
       }
 
       if (!agent) throw new Error('No agent endpoint available');
@@ -146,7 +193,7 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
       dispatchDialogResult.value = 'dispatched';
       onClose();
     } catch (err: any) {
-      setError(err.message || 'Dispatch failed');
+      setError(err.message || 'Cook failed');
       dispatchDialogResult.value = 'error';
     } finally {
       setRunning(null);
@@ -165,15 +212,17 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
   return (
     <div class="spotlight-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div class="spotlight-container dispatch-dialog-v2" style="max-width:560px" onKeyDown={handleKeyDown}>
-        <div class="spotlight-input-row" style="border-bottom:1px solid var(--pw-border)">
-          <span class="spotlight-search-icon">{'\u{1F680}'}</span>
-          <div style="flex:1;font-weight:600;font-size:14px;padding:2px 0">
-            Dispatch {isBatch ? `${req.feedbackIds.length} items` : 'Feedback'}
+        <div class="spotlight-input-row dispatch-dialog-topbar">
+          <div class="dispatch-dialog-heading compact">
+            <span class="spotlight-search-icon">{'\u{1F525}'}</span>
+            <div class="dispatch-dialog-title-row compact">
+              <div class="dispatch-dialog-title">Cook It{batchSuffix}</div>
+            </div>
           </div>
           <button
             class={`dispatch-target-chip ${targetOpen ? 'open' : ''}`}
             onClick={() => setTargetOpen(v => !v)}
-            title="Change dispatch target"
+            title="Change cooking target"
           >
             {'\u{1F4CD}'} {targetLabel} {'\u25BE'}
           </button>
@@ -220,11 +269,11 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
           </div>
         )}
 
-        <div style="padding:12px 16px;display:flex;flex-direction:column;gap:12px">
+        <div class="dispatch-dialog-body">
           <textarea
             ref={instructionsRef}
-            class="dispatch-dialog-textarea"
-            placeholder="Instructions (optional) — extra context or direction for the agent..."
+            class="dispatch-dialog-textarea dispatch-dialog-compose"
+            placeholder="Instructions or context..."
             value={instructions}
             onInput={(e) => setInstructions((e.target as HTMLTextAreaElement).value)}
             rows={2}
@@ -234,8 +283,8 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
             <ActionButton
               kind="interactive"
               icon={'\u{25B6}'}
-              label={`Dispatch Interactive${batchSuffix}`}
-              subtitle={interactiveAgent ? interactiveAgent.name : 'No interactive agent — will use default'}
+              label={`Cook It${batchSuffix}`}
+              subtitle={interactiveAgent ? interactiveAgent.name : 'Interactive'}
               accent="primary"
               disabled={!fallbackAgent}
               running={running}
@@ -244,8 +293,8 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
             <ActionButton
               kind="yolo"
               icon={'\u{26A1}'}
-              label={`Dispatch YOLO${batchSuffix}`}
-              subtitle={yoloAgent ? yoloAgent.name : 'No YOLO agent — will use default'}
+              label={`YOLO Modex${batchSuffix}`}
+              subtitle={yoloAgent ? yoloAgent.name : 'Autonomous'}
               accent="warning"
               disabled={!fallbackAgent}
               running={running}
@@ -255,7 +304,7 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
               kind="wiggum"
               icon={'\u{1F575}'}
               label="Wiggum Swarm"
-              subtitle="Iteration loop via meta-wiggum orchestrator"
+              subtitle="Iterative experiments"
               accent="neutral"
               disabled={!fallbackAgent}
               running={running}
@@ -265,17 +314,37 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
               kind="fafo"
               icon={'\u{1F9EC}'}
               label="FAFO Swarm"
-              subtitle="Evolutionary multi-path search"
+              subtitle="Evolutionary search"
               accent="neutral"
               disabled={!fallbackAgent}
               running={running}
               onClick={() => runAction('fafo')}
             />
             <ActionButton
+              kind="structured"
+              icon={'\u{1F4CB}'}
+              label="Structured Mode"
+              subtitle={structuredAgent ? structuredAgent.name : 'Structured output'}
+              accent="neutral"
+              disabled={!fallbackAgent}
+              running={running}
+              onClick={() => runAction('structured')}
+            />
+            <ActionButton
+              kind="powwow"
+              icon={'\u{1FAD6}'}
+              label="Powwow"
+              subtitle="Multi-agent compare"
+              accent="neutral"
+              disabled={agents.filter((a) => a.mode !== 'webhook').length < 2}
+              running={running}
+              onClick={() => runAction('powwow')}
+            />
+            <ActionButton
               kind="assistant"
               icon={'\u{1F3AF}'}
-              label={'Setup Assistant\u2026'}
-              subtitle="Plan first: ask Q/A, choose branch/tests/env"
+              label="Plan First"
+              subtitle="Guided setup"
               accent="neutral"
               disabled={!fallbackAgent}
               running={running}
@@ -288,21 +357,21 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
             class="dispatch-advanced-toggle"
             onClick={() => setAdvancedOpen(v => !v)}
           >
-            {advancedOpen ? '\u25BE' : '\u25B8'} Advanced
+            {advancedOpen ? '\u25BE' : '\u25B8'} Fine Tune
           </button>
 
           {advancedOpen && (
             <div style="display:flex;flex-direction:column;gap:6px">
-              <label style="font-size:12px;color:var(--pw-text-muted)">Force agent endpoint</label>
+              <label style="font-size:12px;color:var(--pw-text-muted)">Force a specific burner</label>
               <select
                 class="dispatch-dialog-select"
                 value={overrideAgentId}
                 onChange={(e) => setOverrideAgentId((e.target as HTMLSelectElement).value)}
               >
-                <option value="">Auto-pick by action</option>
+                <option value="">Auto-pick for this mode</option>
                 {agents.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.name} [{a.permissionProfile}]{a.isDefault && a.appId ? ' (app default)' : a.isDefault ? ' (default)' : ''}
+                    {a.name} [{a.runtime || 'claude'} / {a.permissionProfile}]{a.isDefault && a.appId ? ' (app default)' : a.isDefault ? ' (default)' : ''}
                   </option>
                 ))}
               </select>
@@ -343,7 +412,7 @@ function ActionButton(props: {
     >
       <span class="dispatch-action-icon">{props.icon}</span>
       <span class="dispatch-action-body">
-        <span class="dispatch-action-label">{isRunning ? 'Dispatching\u2026' : props.label}</span>
+        <span class="dispatch-action-label">{isRunning ? 'Cooking\u2026' : props.label}</span>
         <span class="dispatch-action-subtitle">{props.subtitle}</span>
       </span>
     </button>

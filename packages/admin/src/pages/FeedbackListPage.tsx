@@ -307,7 +307,7 @@ export function FeedbackListPage({ appId }: { appId: string }) {
           e.stopPropagation();
           openDispatchDialog([item.id], appId);
         }}
-        title="Dispatch to agent"
+        title="Cook it"
       >
         <span>→</span>
       </button>

@@ -1,4 +1,4 @@
-import { MODE_INFO, PROFILE_DESCRIPTIONS } from '../lib/agent-constants.js';
+import { MODE_INFO, PROFILE_DESCRIPTIONS, RUNTIME_INFO } from '../lib/agent-constants.js';
 
 interface AgentCardProps {
   agent: any;
@@ -11,6 +11,7 @@ interface AgentCardProps {
 export function AgentCard({ agent, applications, onEdit, onDelete, showAppBadge = true }: AgentCardProps) {
   const profile = PROFILE_DESCRIPTIONS[agent.permissionProfile] || PROFILE_DESCRIPTIONS.interactive;
   const mode = MODE_INFO[agent.mode] || MODE_INFO.interactive;
+  const runtime = RUNTIME_INFO[agent.runtime || 'claude'] || RUNTIME_INFO.claude;
   const isWebhook = agent.mode === 'webhook';
   const app = agent.appId ? applications.find((a) => a.id === agent.appId) : null;
 
@@ -31,6 +32,11 @@ export function AgentCard({ agent, applications, onEdit, onDelete, showAppBadge 
           <span class="agent-meta-tag" style={`border-color:${mode.color}40;color:${mode.color}`}>
             {mode.label}
           </span>
+          {!isWebhook && (
+            <span class="agent-meta-tag" style={`border-color:${runtime.color}40;color:${runtime.color}`}>
+              {runtime.icon} {runtime.label}
+            </span>
+          )}
           {!isWebhook && (
             <span class="agent-meta-tag">
               {profile.icon} {profile.label}

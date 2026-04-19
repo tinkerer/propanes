@@ -69,7 +69,7 @@ export function AgentsPage() {
         <div>
           <h2>Agents</h2>
           <p style="font-size:13px;color:var(--pw-text-muted);margin-top:4px">
-            Compute environments where Claude Code runs to handle dispatched feedback.
+            Compute environments where Claude, Codex, or webhooks run to handle dispatched feedback.
           </p>
         </div>
         <div style="display:flex;gap:6px;align-items:center">
@@ -123,7 +123,7 @@ export function AgentsPage() {
         <div class="agent-empty">
           <div class="agent-empty-icon">{'\u{1F916}'}</div>
           <div class="agent-empty-title">No agents configured</div>
-          <div class="agent-empty-desc">Add an agent to start dispatching feedback to Claude Code.</div>
+          <div class="agent-empty-desc">Add an agent to start dispatching feedback to Claude, Codex, or custom runtimes.</div>
           <button class="btn btn-primary" style="margin-top:12px" onClick={() => openCreate()}>+ Add Agent</button>
         </div>
       )}

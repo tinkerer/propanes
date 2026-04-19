@@ -96,6 +96,7 @@ export const agentEndpoints = sqliteTable('agent_endpoints', {
   appId: text('app_id').references(() => applications.id, { onDelete: 'set null' }),
   promptTemplate: text('prompt_template'),
   mode: text('mode').notNull().default('webhook'),
+  runtime: text('runtime').notNull().default('claude'),
   permissionProfile: text('permission_profile').notNull().default('interactive'),
   allowedTools: text('allowed_tools'),
   autoPlan: integer('auto_plan', { mode: 'boolean' }).notNull().default(false),

@@ -1,18 +1,113 @@
 import { Hono } from 'hono';
 import { ulid } from 'ulidx';
-import { eq, and, or, isNull, sql } from 'drizzle-orm';
-import { agentEndpointSchema, dispatchSchema } from '@propanes/shared';
+import { eq, and, or, isNull, sql, inArray } from 'drizzle-orm';
+import { agentEndpointSchema, dispatchSchema, powwowSchema } from '@propanes/shared';
 import { db, schema } from '../../db/index.js';
 import {
   dispatchFeedbackToAgent,
   DEFAULT_PROMPT_TEMPLATE,
+  dispatchAgentSession,
+  hydrateFeedback,
+  renderPromptTemplate,
 } from '../../dispatch.js';
 import { getSessionStatus, SessionServiceError } from '../../session-service-client.js';
 import { killSession } from '../../agent-sessions.js';
 import { listLaunchers, getLauncher } from '../../launcher-registry.js';
 import { countActiveSpriteSessions } from '../../sprite-sessions.js';
+import { feedbackEvents } from '../../events.js';
 
 export const agentRoutes = new Hono();
+
+const POWWOW_PARTICIPANT_TEMPLATE = `You are participating in a multi-agent powwow. Produce an independent, concrete solution proposal before seeing anyone else's answer.
+
+## Deliverable
+- State your proposed approach
+- Identify exact files or systems you would change
+- Call out risks, assumptions, and validation steps
+- Be decisive and implementation-oriented
+
+## Constraints
+- Do not defer to imaginary consensus
+- Do not assume other agents will fill in missing details
+- Optimize for a solution another agent can critique and compare
+`;
+
+const STRUCTURED_MODE_TEMPLATE = `Use structured mode for this task.
+
+## Response format
+1. Problem framing
+2. Proposed solution
+3. Files or systems affected
+4. Risks and open questions
+5. Verification plan
+
+Make the structure explicit and keep each section concrete.`;
+
+function buildPowwowModeratorPrompt(params: {
+  app: { id?: string | null; name: string; projectDir: string; description?: string | null } | null;
+  feedbackTitle: string;
+  feedbackDescription: string;
+  participantSessions: Array<{ agentId: string; agentName: string; runtime: string; sessionId: string }>;
+  instructions?: string;
+  rounds: number;
+}): string {
+  const baseUrl = (process.env.PW_PUBLIC_BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
+  const participantBlock = params.participantSessions
+    .map((session, index) => `${index + 1}. ${session.agentName} [${session.runtime}] -> session ${session.sessionId}`)
+    .join('\n');
+
+  return `You are the powwow moderator for a multi-agent coding discussion. Your job is to drive multiple agents toward a shared best solution over up to ${params.rounds} rounds.
+
+## Context
+- App: ${params.app?.name || 'Unknown'}
+- Project dir: ${params.app?.projectDir || process.cwd()}
+- Feedback title: ${params.feedbackTitle}
+- Feedback description:
+${params.feedbackDescription || '(no description)'}
+
+## Participant sessions
+${participantBlock}
+
+## Tools available
+Authenticate once:
+\`\`\`bash
+TOKEN=$(curl -s -X POST '${baseUrl}/api/v1/auth/login' \\
+  -H 'Content-Type: application/json' \\
+  -d '{"username":"admin","password":"admin"}' | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))")
+AUTH="-H \\"Authorization: Bearer $TOKEN\\""
+\`\`\`
+
+Inspect a participant session:
+\`\`\`bash
+curl -s $AUTH '${baseUrl}/api/v1/admin/agent-sessions/SESSION_ID'
+\`\`\`
+
+Resume a participant for another round:
+\`\`\`bash
+curl -s -X POST $AUTH '${baseUrl}/api/v1/admin/agent-sessions/SESSION_ID/resume' \\
+  -H 'Content-Type: application/json' \\
+  -d '{}'
+\`\`\`
+
+## Your workflow
+1. Read every participant session and summarize each proposal.
+2. Compare them for correctness, scope, risk, and verification quality.
+3. If there is clear agreement, write the consensus plan and say why it wins.
+4. If there is disagreement or missing detail, kick off another round by resuming the relevant sessions and asking each one to respond to the strongest counterarguments.
+5. Stop after consensus or after ${params.rounds} total rounds, whichever comes first.
+
+## Output requirements
+- Produce a clear consensus recommendation
+- Note which agent(s) contributed the winning ideas
+- Call out unresolved disagreements if consensus is partial
+- End with a concrete implementation and verification plan
+
+## Additional user instructions
+${params.instructions || '(none)'}
+
+## Moderator style
+${STRUCTURED_MODE_TEMPLATE}`;
+}
 
 // Agent endpoints CRUD
 agentRoutes.get('/agents', async (c) => {
@@ -56,6 +151,7 @@ agentRoutes.post('/agents', async (c) => {
     appId: parsed.data.appId || null,
     promptTemplate: parsed.data.promptTemplate || null,
     mode: parsed.data.mode || 'webhook',
+    runtime: parsed.data.runtime || 'claude',
     permissionProfile: parsed.data.permissionProfile || 'interactive',
     allowedTools: parsed.data.allowedTools || null,
     autoPlan: parsed.data.autoPlan || false,
@@ -100,6 +196,7 @@ agentRoutes.patch('/agents/:id', async (c) => {
     appId: parsed.data.appId || null,
     promptTemplate: parsed.data.promptTemplate || null,
     mode: parsed.data.mode || 'webhook',
+    runtime: parsed.data.runtime || 'claude',
     permissionProfile: parsed.data.permissionProfile || 'interactive',
     allowedTools: parsed.data.allowedTools || null,
     autoPlan: parsed.data.autoPlan || false,
@@ -327,6 +424,153 @@ agentRoutes.post('/dispatch', async (c) => {
     console.error(`[admin] Dispatch error:`, errorMsg);
     return c.json({ dispatched: false, error: errorMsg }, 500);
   }
+});
+
+agentRoutes.post('/powwow', async (c) => {
+  const body = await c.req.json();
+  const parsed = powwowSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
+  }
+
+  const { feedbackId, moderatorAgentId, participantAgentIds, instructions, launcherId, rounds } = parsed.data;
+
+  const feedback = db.query.feedbackItems.findFirst({
+    where: eq(schema.feedbackItems.id, feedbackId),
+  });
+  const moderator = db.query.agentEndpoints.findFirst({
+    where: eq(schema.agentEndpoints.id, moderatorAgentId),
+  });
+
+  const [feedbackRow, moderatorAgent] = await Promise.all([feedback, moderator]);
+  if (!feedbackRow) return c.json({ error: 'Feedback not found' }, 404);
+  if (!moderatorAgent) return c.json({ error: 'Moderator agent not found' }, 404);
+
+  const uniqueParticipantIds = [...new Set(participantAgentIds)].filter((id) => id !== moderatorAgentId);
+  const participantAgents = uniqueParticipantIds.length
+    ? db.select().from(schema.agentEndpoints).where(inArray(schema.agentEndpoints.id, uniqueParticipantIds)).all()
+    : [];
+  if (participantAgents.length === 0) {
+    return c.json({ error: 'At least one participant agent is required besides the moderator' }, 400);
+  }
+
+  const tags = db
+    .select()
+    .from(schema.feedbackTags)
+    .where(eq(schema.feedbackTags.feedbackId, feedbackId))
+    .all()
+    .map((t) => t.tag);
+  const screenshots = db
+    .select()
+    .from(schema.feedbackScreenshots)
+    .where(eq(schema.feedbackScreenshots.feedbackId, feedbackId))
+    .all();
+  const audioFiles = db
+    .select()
+    .from(schema.feedbackAudio)
+    .where(eq(schema.feedbackAudio.feedbackId, feedbackId))
+    .all();
+
+  const hydratedFeedback = hydrateFeedback(feedbackRow, tags, screenshots, audioFiles);
+
+  let app: { id?: string | null; name: string; projectDir: string; description?: string; hooks?: unknown } | null = null;
+  if (feedbackRow.appId) {
+    const appRow = await db.query.applications.findFirst({
+      where: eq(schema.applications.id, feedbackRow.appId),
+    });
+    if (appRow) {
+      app = {
+        id: appRow.id,
+        name: appRow.name,
+        projectDir: appRow.projectDir,
+        description: appRow.description || undefined,
+        hooks: JSON.parse(appRow.hooks),
+      };
+    }
+  }
+
+  const cwd = app?.projectDir || process.cwd();
+  const participantSessions: Array<{ agentId: string; agentName: string; runtime: string; sessionId: string }> = [];
+  const now = new Date().toISOString();
+
+  for (const agent of participantAgents) {
+    const participantInstructions = [POWWOW_PARTICIPANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, instructions].filter(Boolean).join('\n\n');
+    const prompt = renderPromptTemplate(
+      agent.promptTemplate || DEFAULT_PROMPT_TEMPLATE,
+      hydratedFeedback,
+      app,
+      participantInstructions,
+    );
+    const permissionProfile = (agent.permissionProfile || 'interactive') as any;
+    const runtime = (agent.runtime || 'claude') as any;
+
+    const result = await dispatchAgentSession({
+      feedbackId,
+      agentEndpointId: agent.id,
+      prompt,
+      cwd,
+      runtime,
+      permissionProfile,
+      allowedTools: agent.allowedTools || null,
+      launcherId: launcherId || undefined,
+    });
+    participantSessions.push({
+      agentId: agent.id,
+      agentName: agent.name,
+      runtime,
+      sessionId: result.sessionId,
+    });
+  }
+
+  const moderatorPrompt = buildPowwowModeratorPrompt({
+    app,
+    feedbackTitle: feedbackRow.title,
+    feedbackDescription: feedbackRow.description,
+    participantSessions,
+    instructions,
+    rounds,
+  });
+
+  const moderatorSession = await dispatchAgentSession({
+    feedbackId,
+    agentEndpointId: moderatorAgent.id,
+    prompt: renderPromptTemplate(
+      moderatorAgent.promptTemplate || DEFAULT_PROMPT_TEMPLATE,
+      hydratedFeedback,
+      app,
+      moderatorPrompt,
+    ),
+    cwd,
+    runtime: (moderatorAgent.runtime || 'claude') as any,
+    permissionProfile: (moderatorAgent.permissionProfile || 'interactive') as any,
+    allowedTools: moderatorAgent.allowedTools || null,
+    launcherId: launcherId || undefined,
+  });
+
+  db.update(schema.agentSessions)
+    .set({ parentSessionId: moderatorSession.sessionId })
+    .where(inArray(schema.agentSessions.id, participantSessions.map((s) => s.sessionId)))
+    .run();
+
+  db.update(schema.feedbackItems).set({
+    status: 'dispatched',
+    dispatchedTo: `Powwow (${participantSessions.length + 1} agents)`,
+    dispatchedAt: now,
+    dispatchStatus: 'running',
+    dispatchResponse: `Moderator session: ${moderatorSession.sessionId}`,
+    updatedAt: now,
+  }).where(eq(schema.feedbackItems.id, feedbackId)).run();
+
+  feedbackEvents.emit('updated', { id: feedbackId, appId: feedbackRow.appId });
+
+  return c.json({
+    dispatched: true,
+    sessionId: moderatorSession.sessionId,
+    moderatorSessionId: moderatorSession.sessionId,
+    participantSessions,
+    status: 200,
+    response: `Powwow started with ${participantSessions.length} participants`,
+  });
 });
 
 // Default prompt template

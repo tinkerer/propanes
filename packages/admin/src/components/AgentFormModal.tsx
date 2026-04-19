@@ -18,6 +18,7 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
   const [formDefault, setFormDefault] = useState(editAgent?.isDefault || false);
   const [formAppId, setFormAppId] = useState(fixedAppId || editAgent?.appId || '');
   const [formMode, setFormMode] = useState<'webhook' | 'headless' | 'interactive'>(editAgent?.mode || 'interactive');
+  const [formRuntime, setFormRuntime] = useState<'claude' | 'codex'>(editAgent?.runtime || 'claude');
   const [formPromptTemplate, setFormPromptTemplate] = useState(editAgent?.promptTemplate || DEFAULT_PROMPT_TEMPLATE);
   const [formPermissionProfile, setFormPermissionProfile] = useState<'interactive' | 'auto' | 'yolo'>(editAgent?.permissionProfile || 'interactive');
   const [formAllowedTools, setFormAllowedTools] = useState(editAgent?.allowedTools || '');
@@ -55,6 +56,7 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
       isDefault: formDefault,
       appId: formAppId || undefined,
       mode: formMode,
+      runtime: formRuntime,
       promptTemplate: (formPromptTemplate && formPromptTemplate !== DEFAULT_PROMPT_TEMPLATE) ? formPromptTemplate : undefined,
       permissionProfile: formPermissionProfile,
       allowedTools: formAllowedTools || undefined,
@@ -93,7 +95,7 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
               required
               style="width:100%"
             />
-            <span class="form-hint">Where Claude Code runs</span>
+            <span class="form-hint">Where the selected agent runtime runs</span>
           </div>
           <div class="form-group">
             <label>Application</label>
@@ -207,14 +209,25 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
           <summary>Advanced options</summary>
           <div class="agent-advanced-body">
             <div class="form-group">
+              <label>Runtime</label>
+              <select
+                value={formRuntime}
+                onChange={(e) => setFormRuntime((e.target as HTMLSelectElement).value as 'claude' | 'codex')}
+                style="width:100%"
+              >
+                <option value="claude">Claude CLI</option>
+                <option value="codex">Codex CLI</option>
+              </select>
+            </div>
+            <div class="form-group">
               <label>Mode</label>
               <select
                 value={formMode}
                 onChange={(e) => setFormMode((e.target as HTMLSelectElement).value as any)}
                 style="width:100%"
               >
-                <option value="interactive">Claude Code (interactive)</option>
-                <option value="headless">Claude Code (headless)</option>
+                <option value="interactive">{formRuntime === 'codex' ? 'Codex' : 'Claude'} (interactive)</option>
+                <option value="headless">{formRuntime === 'codex' ? 'Codex' : 'Claude'} (headless)</option>
                 <option value="webhook">Webhook</option>
               </select>
             </div>

@@ -86,8 +86,8 @@ export const HINTS: Hint[] = [
   {
     id: 'feedback-dispatch',
     route: /^\/app\/[^/]+\/feedback$/,
-    title: 'Quick dispatch',
-    body: 'Click the play button on any feedback item to dispatch it to an agent immediately.',
+    title: 'Cook it fast',
+    body: 'Click the arrow button on any feedback item to cook it into an agent session right away.',
     priority: 70,
     highlightSelector: '.btn-dispatch-quick',
     guideLink: '#feedback-workflow',
@@ -113,8 +113,8 @@ export const HINTS: Hint[] = [
   {
     id: 'feedback-detail-dispatch',
     route: /^\/app\/[^/]+\/feedback\/.+/,
-    title: 'Dispatch from detail',
-    body: 'Click "Dispatch to Agent" to create a session that works on this specific feedback item.',
+    title: 'Cook from detail',
+    body: 'Click "Cook It" to create a session that works on this specific feedback item.',
     priority: 70,
     guideLink: '#feedback-workflow',
   },

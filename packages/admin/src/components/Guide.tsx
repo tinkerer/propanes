@@ -56,8 +56,8 @@ export const GUIDES: GuideDef[] = [
       },
       {
         selector: '.btn-dispatch-quick',
-        title: 'Quick Dispatch',
-        text: 'Click the play button to quickly dispatch feedback to the default agent for this app.',
+        title: 'Cook It',
+        text: 'Click the arrow button to quickly cook this feedback into the default agent workflow for the app.',
         position: 'left',
       },
     ],

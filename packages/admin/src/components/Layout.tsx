@@ -22,7 +22,7 @@ import { MobilePageView } from './MobilePageView.js';
 import { isMobile } from '../lib/viewport.js';
 import { registerShortcut, ctrlShiftHeld } from '../lib/shortcuts.js';
 import { toggleTheme, arrowTabSwitching, showHotkeyHints } from '../lib/settings.js';
-import { openPageView } from '../lib/companion-state.js';
+import { openPageView, openSettingsPanel } from '../lib/companion-state.js';
 import {
   openTabs,
   activeTabId,
@@ -223,7 +223,7 @@ export function Layout() {
         key: 'a',
         label: 'Go to Agents',
         category: 'Navigation',
-        action: () => navigate('/settings/agents'),
+        action: () => openSettingsPanel('agents'),
       }),
       registerShortcut({
         sequence: 'g g',
@@ -573,7 +573,9 @@ export function Layout() {
     } else if (r.startsWith('/settings/')) {
       const idx = settingsTabs.indexOf(r);
       if (idx >= 0) {
-        navigate(settingsTabs[(idx + dir + settingsTabs.length) % settingsTabs.length]);
+        const next = settingsTabs[(idx + dir + settingsTabs.length) % settingsTabs.length];
+        const key = next.replace('/settings/', '');
+        openSettingsPanel(key);
       }
     }
   }
