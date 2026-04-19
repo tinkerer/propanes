@@ -11,7 +11,8 @@ export type NotificationKind =
   | 'plain'          // informational: "Session X finished"
   | 'approval'       // user approves/rejects a proposed action
   | 'plan-review'    // user reviews a plan.md before coding starts
-  | 'qna';           // user answers structured questions to configure dispatch
+  | 'qna'            // user answers structured questions to configure dispatch
+  | 'voice-dispatch';// ambient voice classified an actionable idea; countdown before auto-dispatch
 
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
@@ -54,11 +55,25 @@ export interface ApprovalPayload {
   callbackUrl?: string;
 }
 
+export interface VoiceDispatchPayload {
+  /** ID of the pending_dispatches row that controls the timer. */
+  pendingDispatchId: string;
+  feedbackId: string;
+  agentEndpointId: string;
+  /** ISO timestamp when dispatch will fire if not cancelled. */
+  dispatchAt: string;
+  /** Classifier-proposed title, shown in the toast. */
+  title: string;
+  /** Classifier-proposed description. */
+  description: string;
+}
+
 export type NotificationPayload =
   | { kind: 'plain' }
   | { kind: 'approval'; approval: ApprovalPayload }
   | { kind: 'plan-review'; planReview: PlanReviewPayload }
-  | { kind: 'qna'; qna: QnaPayload };
+  | { kind: 'qna'; qna: QnaPayload }
+  | { kind: 'voice-dispatch'; voiceDispatch: VoiceDispatchPayload };
 
 export interface Notification {
   id: string;
@@ -77,7 +92,7 @@ export interface Notification {
   /** Once resolved, notification shows as completed and is removable */
   resolved?: {
     at: string;
-    action: 'approved' | 'rejected' | 'answered' | 'dismissed';
+    action: 'approved' | 'rejected' | 'answered' | 'dismissed' | 'launched' | 'edited' | 'cancelled';
     response?: unknown;
   };
 }

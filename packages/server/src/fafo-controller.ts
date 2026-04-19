@@ -519,11 +519,13 @@ echo "saved $OUT"
 
       // Dispatch Claude session for this path
       try {
-        // Create a feedback item to anchor the agent session
+        // Create a feedback item to anchor the agent session. Uses `fafo_worker`
+        // type so these don't pollute the main feedback list — they still show up
+        // in the Wiggum/FAFO view via `wiggumRuns.feedbackId`.
         const fbId = ulid();
         db.insert(schema.feedbackItems).values({
           id: fbId,
-          type: 'manual',
+          type: 'fafo_worker',
           status: 'new',
           title: `FAFO Gen ${nextGen}: ${path.name}`,
           description: `Worker for swarm "${swarm.name}", path "${path.name}"`,
@@ -612,7 +614,7 @@ echo "saved $OUT"
           const fbId = ulid();
           db.insert(schema.feedbackItems).values({
             id: fbId,
-            type: 'manual',
+            type: 'fafo_worker',
             status: 'new',
             title: `FAFO Gen ${nextGen}, Slot ${i}: ${swarm.name}`,
             description: `Single-mode worker for swarm "${swarm.name}"`,

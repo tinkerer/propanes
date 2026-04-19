@@ -34,7 +34,6 @@ export interface LayoutTree {
 export const SIDEBAR_LEAF_ID = 'sidebar-leaf';
 export const PAGE_LEAF_ID = 'page-leaf';
 export const SESSIONS_LEAF_ID = 'sessions-leaf';
-export const CONTROLBAR_LEAF_ID = 'controlbar-leaf';
 
 // --- Persistence ---
 
@@ -124,40 +123,24 @@ export function buildDefaultLayout(): LayoutTree {
         },
         {
           type: 'split',
-          id: 'main-split',
+          id: 'content-split',
           direction: 'vertical',
-          ratio: 0.04,
+          ratio: 1.0,
           children: [
             {
               type: 'leaf',
-              id: CONTROLBAR_LEAF_ID,
+              id: PAGE_LEAF_ID,
               panelType: 'tabs',
-              tabs: ['view:controlbar'],
-              activeTabId: 'view:controlbar',
+              tabs: ['view:feedback'],
+              activeTabId: 'view:feedback',
               singleton: true,
             },
             {
-              type: 'split',
-              id: 'content-split',
-              direction: 'vertical',
-              ratio: 1.0,
-              children: [
-                {
-                  type: 'leaf',
-                  id: PAGE_LEAF_ID,
-                  panelType: 'tabs',
-                  tabs: ['view:feedback'],
-                  activeTabId: 'view:feedback',
-                  singleton: true,
-                },
-                {
-                  type: 'leaf',
-                  id: SESSIONS_LEAF_ID,
-                  panelType: 'tabs',
-                  tabs: [],
-                  activeTabId: null,
-                },
-              ],
+              type: 'leaf',
+              id: SESSIONS_LEAF_ID,
+              panelType: 'tabs',
+              tabs: [],
+              activeTabId: null,
             },
           ],
         },
@@ -233,42 +216,32 @@ function migrateTree(tree: LayoutTree): LayoutTree {
   }
 
   // Migrate singleton flags on well-known leaves
-  const singletonLeafIds = [SIDEBAR_LEAF_ID, 'sidebar-sessions', 'sidebar-terminals', 'sidebar-files', CONTROLBAR_LEAF_ID, PAGE_LEAF_ID];
+  const singletonLeafIds = [SIDEBAR_LEAF_ID, 'sidebar-sessions', 'sidebar-terminals', 'sidebar-files', PAGE_LEAF_ID];
   for (const id of singletonLeafIds) {
     const leaf = find(tree.root, id);
     if (leaf && !leaf.singleton) leaf.singleton = true;
   }
 
-  // Migrate controlbar-leaf: create if missing
-  const controlbarLeaf = find(tree.root, CONTROLBAR_LEAF_ID);
-  if (!controlbarLeaf) {
-    function findSplit(node: PaneNode, id: string): SplitNode | null {
-      if (node.type === 'split') {
-        if (node.id === id) return node;
-        return findSplit(node.children[0], id) ?? findSplit(node.children[1], id);
+  // Migrate: remove controlbar-leaf — the ControlBar is always rendered in the
+  // fixed top bar by Layout.tsx, so the in-tree pane was a duplicate.
+  const controlbarLeaf = find(tree.root, 'controlbar-leaf');
+  if (controlbarLeaf) {
+    const pageLeaf = find(tree.root, PAGE_LEAF_ID);
+    if (pageLeaf) {
+      for (const t of controlbarLeaf.tabs) {
+        if (t !== 'view:controlbar' && !pageLeaf.tabs.includes(t)) pageLeaf.tabs.push(t);
       }
-      return null;
     }
-    const mainSplit = findSplit(tree.root, 'main-split');
-    if (mainSplit) {
-      const prevRatio = mainSplit.ratio;
-      const newControlbar: LeafNode = {
-        type: 'leaf',
-        id: CONTROLBAR_LEAF_ID,
-        panelType: 'tabs',
-        tabs: ['view:controlbar'],
-        activeTabId: 'view:controlbar',
-        singleton: true,
-      };
-      const contentSplit: SplitNode = {
-        type: 'split',
-        id: 'content-split',
-        direction: 'vertical',
-        ratio: prevRatio,
-        children: [mainSplit.children[0], mainSplit.children[1]],
-      };
-      mainSplit.ratio = 0.04;
-      mainSplit.children = [newControlbar, contentSplit];
+    const parent = findParentOf(tree.root, 'controlbar-leaf');
+    if (parent) {
+      const sibling = parent.children[0].id === 'controlbar-leaf' ? parent.children[1] : parent.children[0];
+      const grandparent = findParentOf(tree.root, parent.id);
+      if (grandparent) {
+        const idx = grandparent.children[0].id === parent.id ? 0 : 1;
+        grandparent.children[idx] = sibling;
+      } else {
+        tree.root = sibling;
+      }
     }
   }
 
@@ -689,7 +662,7 @@ export function toggleLeafCollapsed(leafId: string) {
 // --- Utilities ---
 
 function isWellKnownLeaf(id: string): boolean {
-  return id === SIDEBAR_LEAF_ID || id === PAGE_LEAF_ID || id === SESSIONS_LEAF_ID || id === CONTROLBAR_LEAF_ID;
+  return id === SIDEBAR_LEAF_ID || id === PAGE_LEAF_ID || id === SESSIONS_LEAF_ID;
 }
 
 function findNodeById(node: PaneNode, id: string): PaneNode | null {
@@ -742,7 +715,7 @@ export function ensureSessionsLeaf(): string {
   // Strategy: find the focused leaf, or any non-sidebar/non-controlbar leaf in the main area.
   const tree = cloneTree(current);
   const allLeaves = getAllLeaves(tree.root);
-  const sidebarIds = new Set([SIDEBAR_LEAF_ID, CONTROLBAR_LEAF_ID, 'sidebar-sessions', 'sidebar-terminals', 'sidebar-files']);
+  const sidebarIds = new Set([SIDEBAR_LEAF_ID, 'sidebar-sessions', 'sidebar-terminals', 'sidebar-files']);
   const mainLeaf = allLeaves.find(l => !sidebarIds.has(l.id)) || allLeaves[0];
   if (!mainLeaf) return SESSIONS_LEAF_ID; // shouldn't happen
 

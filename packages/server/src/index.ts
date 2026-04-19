@@ -26,6 +26,7 @@ import {
 } from './launcher-registry.js';
 import type { LauncherToServerMessage, LauncherRegistered } from '@propanes/shared';
 import { registerAutoDispatch } from './auto-dispatch.js';
+import { rearmPendingDispatchesOnStartup } from './voice/deferred-dispatch.js';
 import { updateFeedbackOnSessionEnd, fixStaleDispatchStatuses } from './feedback-status.js';
 import { cleanupSyncBranch } from './dispatch.js';
 import { detectAndStoreJsonlContinuations } from './jsonl-utils.js';
@@ -36,6 +37,7 @@ const LAUNCHER_AUTH_TOKEN = process.env.LAUNCHER_AUTH_TOKEN || '';
 
 runMigrations();
 registerAutoDispatch();
+rearmPendingDispatchesOnStartup();
 startPruneTimer();
 
 const staleFixed = fixStaleDispatchStatuses();

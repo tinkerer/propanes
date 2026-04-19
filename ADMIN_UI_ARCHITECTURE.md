@@ -71,7 +71,6 @@ Manages the **hierarchical layout tree** for the main UI:
 - `SIDEBAR_LEAF_ID` — Navigation sidebar
 - `PAGE_LEAF_ID` — Main page content
 - `SESSIONS_LEAF_ID` — Terminal/session tabs
-- `CONTROLBAR_LEAF_ID` — Control bar
 
 Functions:
 - `findLeaf(root, id)` → locate leaf by ID
@@ -588,6 +587,87 @@ PROFILE_DESCRIPTIONS = {
 - `isolate` — Isolated component preview
 - `url` — Arbitrary URL
 - `file` — File viewer
+
+---
+
+## 15. End-to-End Test Harness (`packages/e2e`)
+
+A Playwright workspace lives at `packages/e2e`. It runs every spec twice
+— once at desktop 1440x900 (`desktop-chromium`) and once at iPhone 14
+(`mobile-iphone-14`) — and treats the admin as a black box.
+
+### Running
+
+```bash
+npm run test:e2e            # boot fresh server, seed, run, tear down
+npm run test:e2e:update     # same, but refresh visual snapshots
+```
+
+The orchestrator at `packages/e2e/scripts/run-e2e.mjs`:
+
+1. Picks a free port (`net.createServer().listen(0)`).
+2. Spawns `tsx src/index.ts` from `packages/server` with a temp
+   `DB_PATH`, temp `UPLOAD_DIR`, deterministic `JWT_SECRET`, and
+   `ADMIN_PASS=e2e-admin-pass`.
+3. Waits for `/api/v1/health`.
+4. Seeds — via the real REST API — one application, one default agent
+   endpoint, and three feedback items.
+5. Exports `E2E_*` env vars and runs `playwright test`.
+6. Tears the server down + removes the temp dir on exit.
+
+There is no mocking of the server, DB, or filesystem. The single
+intentional `page.route` mock is the dispatch POST in
+`04-dispatch-dialog.spec.ts`, so the dialog test doesn't actually spawn a
+Claude Code session.
+
+### What the suite covers
+
+| Spec | What it asserts |
+| ---- | --------------- |
+| `01-auth.spec.ts` | Login form submits, bad creds show inline error, login page visual baseline |
+| `02-feedback-list.spec.ts` | Seeded rows render, search filter narrows, "+ New" form opens, table visual baseline |
+| `03-feedback-detail.spec.ts` | Detail page renders title + description, visual baseline |
+| `04-dispatch-dialog.spec.ts` | Quick-dispatch action opens modal, Escape closes, dispatch click POSTs (intercepted), visual baseline |
+| `05-sessions-page.spec.ts` | Sessions page mounts on empty state, visual baseline |
+| `06-widget-submit.spec.ts` | `POST /api/v1/feedback/programmatic` round-trips into the admin list |
+| `07-message-renderer-visual.spec.ts` | MessageRenderer fixtures (Bash, Edit, AskUserQuestion, long-output collapsed/expanded) |
+| `08-mobile-assertions.spec.ts` | Viewport meta present, no horizontal scroll, tap targets ≥ 44px (annotation-only on mobile until the redesign lands) |
+
+### Adding a new MessageRenderer fixture
+
+Fixtures are defined in
+`packages/admin/src/components/MessageFixturesIsolate.tsx` and surfaced
+via the admin's `isolate` query param:
+
+```
+http://localhost:3001/admin/?isolate=msg-fixture&fixture=<name>
+```
+
+To add a new tool render baseline:
+
+1. Add an entry to `FIXTURES` in `MessageFixturesIsolate.tsx` with a
+   fully-formed `ParsedMessage[]`.
+2. Rebuild admin: `cd packages/admin && npm run build`.
+3. Append the fixture name to the `FIXTURES` array in
+   `packages/e2e/tests/07-message-renderer-visual.spec.ts`.
+4. Run `npm run test:e2e:update` to capture the baseline image.
+
+### Mobile assertions are soft today
+
+The current admin is not yet responsive — that's owned by a sibling
+agent. To avoid blocking the harness on missing UI, mobile-only checks
+(horizontal overflow, tap-target size) are recorded as test annotations
+on the `mobile-iphone-14` project rather than hard failures. They remain
+hard assertions on `desktop-chromium`. When the mobile redesign lands,
+flip the `if (isMobile)` branches in `08-mobile-assertions.spec.ts` to
+hard `expect()` calls.
+
+### Snapshot baseline
+
+Snapshots live under `packages/e2e/tests/__snapshots__/<spec>/<name>-<project>.png`.
+They are committed and represent CURRENT behavior; sibling agents (mobile
+site, voice mode, structured view interaction, code cleanup) should diff
+their PR baselines against the ones recorded here.
 
 ---
 

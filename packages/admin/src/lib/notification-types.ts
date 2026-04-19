@@ -4,8 +4,17 @@
  * shared types are duplicated. Keep in sync when editing either side.
  */
 
-export type NotificationKind = 'plain' | 'approval' | 'plan-review' | 'qna';
+export type NotificationKind = 'plain' | 'approval' | 'plan-review' | 'qna' | 'voice-dispatch';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
+
+export interface VoiceDispatchPayload {
+  pendingDispatchId: string;
+  feedbackId: string;
+  agentEndpointId: string;
+  dispatchAt: string;
+  title: string;
+  description: string;
+}
 
 export interface PlanReviewPayload {
   planMarkdown: string;
@@ -44,7 +53,8 @@ export type NotificationPayload =
   | { kind: 'plain' }
   | { kind: 'approval'; approval: ApprovalPayload }
   | { kind: 'plan-review'; planReview: PlanReviewPayload }
-  | { kind: 'qna'; qna: QnaPayload };
+  | { kind: 'qna'; qna: QnaPayload }
+  | { kind: 'voice-dispatch'; voiceDispatch: VoiceDispatchPayload };
 
 export interface Notification {
   id: string;
@@ -59,7 +69,7 @@ export interface Notification {
   payload?: NotificationPayload;
   resolved?: {
     at: string;
-    action: 'approved' | 'rejected' | 'answered' | 'dismissed';
+    action: 'approved' | 'rejected' | 'answered' | 'dismissed' | 'launched' | 'edited' | 'cancelled';
     response?: unknown;
   };
 }
