@@ -33,7 +33,10 @@ function resolveAppId(apiKey: string | undefined, sessionId: string | undefined,
     const session = getSession(sessionId);
     if (session?.appId) return session.appId;
   }
-  if (apiKey) {
+  // Strip the sentinel used by the admin shell's server-side substitution —
+  // if it arrives literally, the admin index.html wasn't served through the
+  // rewriting route (e.g. vite dev, stale cached HTML).
+  if (apiKey && apiKey !== '__ADMIN_API_KEY__') {
     const app = db
       .select({ id: schema.applications.id })
       .from(schema.applications)
