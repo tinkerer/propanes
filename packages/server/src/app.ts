@@ -2,6 +2,10 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { serveStatic } from '@hono/node-server/serve-static';
+import { readFile } from 'node:fs/promises';
+import { resolve as resolvePath } from 'node:path';
+import { eq } from 'drizzle-orm';
+import { db, schema } from './db/index.js';
 import { feedbackRoutes } from './routes/feedback.js';
 import { adminRoutes } from './routes/admin/index.js';
 import { imageRoutes } from './routes/images.js';
@@ -140,18 +144,56 @@ app.get('/files/*', async (c) => {
 // Serve widget JS from the widget package build output
 app.use('/widget/*', serveStatic({ root: '../widget/dist/', rewriteRequestPath: (path) => path.replace('/widget', '') }));
 
-// Serve admin SPA from the admin package build output
-// Prevent caching of index.html so new builds are picked up immediately
-app.use('/admin/*', async (c, next) => {
-  await next();
-  const path = c.req.path.replace('/admin', '') || '/';
-  if (path === '/' || path === '/index.html' || !path.includes('.')) {
-    c.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+// Serve admin SPA from the admin package build output.
+//
+// The admin's index.html embeds the feedback widget with a hardcoded
+// `data-app-key` that must match the admin app's current apiKey in the DB.
+// Hardcoding drifts whenever the DB is reseeded — so we swap a sentinel
+// (`__ADMIN_API_KEY__`) at serve time with the live key. Serves with
+// no-cache to always pick up fresh builds + current key.
+const ADMIN_DIST = resolvePath(process.cwd(), '../admin/dist');
+const ADMIN_KEY_SENTINEL = '__ADMIN_API_KEY__';
+const SELF_PROJECT_DIR = resolvePath(process.cwd(), '..', '..');
+
+function resolveAdminAppApiKey(): string | null {
+  const byDir = db
+    .select({ apiKey: schema.applications.apiKey })
+    .from(schema.applications)
+    .where(eq(schema.applications.projectDir, SELF_PROJECT_DIR))
+    .get();
+  if (byDir?.apiKey) return byDir.apiKey;
+  const byName = db
+    .select({ apiKey: schema.applications.apiKey })
+    .from(schema.applications)
+    .where(eq(schema.applications.name, 'Propanes Admin'))
+    .get();
+  if (byName?.apiKey) return byName.apiKey;
+  const any = db.select({ apiKey: schema.applications.apiKey }).from(schema.applications).get();
+  return any?.apiKey ?? null;
+}
+
+async function serveAdminIndex(c: any) {
+  const indexPath = resolvePath(ADMIN_DIST, 'index.html');
+  let html: string;
+  try {
+    html = await readFile(indexPath, 'utf8');
+  } catch {
+    return c.text('admin/dist/index.html not found — run `pnpm -F @propanes/admin build`', 500);
   }
-});
+  const key = resolveAdminAppApiKey();
+  if (key) html = html.split(ADMIN_KEY_SENTINEL).join(key);
+  c.header('Content-Type', 'text/html; charset=utf-8');
+  c.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+  return c.body(html);
+}
+
+app.get('/admin', serveAdminIndex);
+app.get('/admin/', serveAdminIndex);
+app.get('/admin/index.html', serveAdminIndex);
+
 app.use('/admin/*', serveStatic({ root: '../admin/dist/', rewriteRequestPath: (path) => path.replace('/admin', '') }));
-// SPA fallback for admin routes
-app.get('/admin/*', serveStatic({ root: '../admin/dist/', path: 'index.html' }));
+// SPA fallback for admin routes — any unmatched /admin/<route> gets the SPA shell.
+app.get('/admin/*', serveAdminIndex);
 
 // Serve test page and other static files
 app.use('/*', serveStatic({ root: './public/' }));
