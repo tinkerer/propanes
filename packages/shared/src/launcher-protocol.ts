@@ -1,5 +1,5 @@
 import type { SequencedOutput, SequencedInput, SessionInputData } from './protocol.js';
-import type { PermissionProfile } from './types.js';
+import type { AgentRuntime, PermissionProfile } from './types.js';
 
 // --- Harness metadata ---
 
@@ -181,6 +181,7 @@ export interface LaunchSession {
   sessionId: string;
   prompt: string;
   cwd: string;
+  runtime?: AgentRuntime;
   permissionProfile: PermissionProfile;
   allowedTools?: string | null;
   claudeSessionId?: string;
@@ -235,6 +236,7 @@ export interface LaunchHarnessSession {
   prompt: string;
   composeDir?: string;
   serviceName?: string;
+  runtime?: AgentRuntime;
   permissionProfile: PermissionProfile;
   containerCwd?: string;
   claudeSessionId?: string;

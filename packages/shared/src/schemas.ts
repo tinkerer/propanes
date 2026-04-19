@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FEEDBACK_TYPES, FEEDBACK_STATUSES, DISPATCH_MODES, PERMISSION_PROFILES } from './constants.js';
+import { FEEDBACK_TYPES, FEEDBACK_STATUSES, DISPATCH_MODES, AGENT_RUNTIMES, PERMISSION_PROFILES } from './constants.js';
 
 export const feedbackSubmitSchema = z.object({
   type: z.enum(FEEDBACK_TYPES).default('manual'),
@@ -197,6 +197,7 @@ export const agentEndpointSchema = z.object({
   appId: z.string().optional(),
   promptTemplate: z.string().max(10000).optional(),
   mode: z.enum(DISPATCH_MODES).default('webhook'),
+  runtime: z.enum(AGENT_RUNTIMES).default('claude'),
   permissionProfile: z.enum(PERMISSION_PROFILES).default('interactive'),
   allowedTools: z.string().max(5000).optional(),
   autoPlan: z.boolean().default(false),
@@ -211,6 +212,16 @@ export const dispatchSchema = z.object({
   instructions: z.string().max(5000).optional(),
   launcherId: z.string().optional(),
   harnessConfigId: z.string().optional(),
+});
+
+export const powwowSchema = z.object({
+  feedbackId: z.string(),
+  moderatorAgentId: z.string(),
+  participantAgentIds: z.array(z.string()).min(1).max(8),
+  instructions: z.string().max(10000).optional(),
+  launcherId: z.string().optional(),
+  harnessConfigId: z.string().optional(),
+  rounds: z.coerce.number().int().min(1).max(5).default(2),
 });
 
 export const PLAN_STATUSES = ['draft', 'active', 'completed'] as const;

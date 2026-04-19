@@ -103,6 +103,27 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  powwow: (data: {
+    feedbackId: string;
+    moderatorAgentId: string;
+    participantAgentIds: string[];
+    instructions?: string;
+    launcherId?: string;
+    harnessConfigId?: string;
+    rounds?: number;
+  }) =>
+    request<{
+      dispatched: boolean;
+      sessionId?: string;
+      moderatorSessionId?: string;
+      participantSessions?: Array<{ agentId: string; agentName: string; runtime: string; sessionId: string }>;
+      status: number;
+      response: string;
+    }>('/admin/powwow', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   listNotifications: () =>
     request<{ notifications: any[] }>('/admin/notifications'),
 

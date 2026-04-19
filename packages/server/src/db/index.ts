@@ -142,6 +142,7 @@ export function runMigrations() {
     `ALTER TABLE agent_endpoints ADD COLUMN app_id TEXT REFERENCES applications(id) ON DELETE SET NULL`,
     `ALTER TABLE agent_endpoints ADD COLUMN prompt_template TEXT`,
     `ALTER TABLE agent_endpoints ADD COLUMN mode TEXT NOT NULL DEFAULT 'webhook'`,
+    `ALTER TABLE agent_endpoints ADD COLUMN runtime TEXT NOT NULL DEFAULT 'claude'`,
     `ALTER TABLE agent_endpoints ADD COLUMN permission_profile TEXT NOT NULL DEFAULT 'interactive'`,
     `ALTER TABLE agent_endpoints ADD COLUMN allowed_tools TEXT`,
     `ALTER TABLE agent_sessions ADD COLUMN parent_session_id TEXT`,

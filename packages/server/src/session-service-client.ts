@@ -1,4 +1,4 @@
-import type { PermissionProfile } from '@propanes/shared';
+import type { AgentRuntime, PermissionProfile } from '@propanes/shared';
 
 const SESSION_SERVICE_URL = process.env.SESSION_SERVICE_URL || 'http://localhost:3002';
 
@@ -6,6 +6,7 @@ export interface SpawnParams {
   sessionId: string;
   prompt?: string;
   cwd: string;
+  runtime?: AgentRuntime;
   permissionProfile: PermissionProfile;
   allowedTools?: string | null;
   claudeSessionId?: string;
