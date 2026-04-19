@@ -181,13 +181,11 @@ export function runMigrations() {
     `ALTER TABLE wiggum_swarms ADD COLUMN max_generations INTEGER`,
   ];
 
-  for (const stmt of alterStatements) {
-    try {
-      sqlite.exec(stmt);
-    } catch {
-      // Column already exists
-    }
-  }
+  // NOTE: alterStatements are applied at the END of runMigrations(), after
+  // ALL CREATE TABLE statements have run. This is intentional — many of the
+  // ALTER targets (machines, harness_configs, sprite_configs, wiggum_*) are
+  // created later in this function, so attempting the ALTER here would be a
+  // no-op silently swallowed by the try/catch on a fresh DB.
 
   // Migration: make feedback_id and agent_endpoint_id nullable for plain terminal sessions
   try {
@@ -454,6 +452,26 @@ export function runMigrations() {
     try { sqlite.exec(sql); } catch { /* column exists */ }
   }
 
+  // Standalone screenshots table (not tied to feedback items)
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS screenshots (
+      id TEXT PRIMARY KEY,
+      app_id TEXT REFERENCES applications(id) ON DELETE SET NULL,
+      session_id TEXT,
+      user_id TEXT,
+      source_url TEXT,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      width INTEGER,
+      height INTEGER,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_screenshots_app ON screenshots(app_id);
+    CREATE INDEX IF NOT EXISTS idx_screenshots_created ON screenshots(created_at);
+  `);
+
   // JSONL continuation tracking
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS jsonl_continuations (
@@ -469,6 +487,56 @@ export function runMigrations() {
       ON jsonl_continuations(project_dir);
   `);
 
+  // Voice ambient-listen sessions
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS voice_sessions (
+      id TEXT PRIMARY KEY,
+      app_id TEXT REFERENCES applications(id) ON DELETE SET NULL,
+      widget_session_id TEXT,
+      user_id TEXT,
+      source_url TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      started_at TEXT NOT NULL,
+      last_activity_at TEXT NOT NULL,
+      stopped_at TEXT,
+      stop_reason TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_voice_sessions_status ON voice_sessions(status);
+    CREATE INDEX IF NOT EXISTS idx_voice_sessions_app ON voice_sessions(app_id);
+
+    CREATE TABLE IF NOT EXISTS voice_transcripts (
+      id TEXT PRIMARY KEY,
+      voice_session_id TEXT NOT NULL REFERENCES voice_sessions(id) ON DELETE CASCADE,
+      window_index INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      ended_at TEXT NOT NULL,
+      classification TEXT,
+      feedback_id TEXT REFERENCES feedback_items(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_voice_transcripts_session ON voice_transcripts(voice_session_id);
+
+    CREATE TABLE IF NOT EXISTS pending_dispatches (
+      id TEXT PRIMARY KEY,
+      feedback_id TEXT NOT NULL REFERENCES feedback_items(id) ON DELETE CASCADE,
+      agent_endpoint_id TEXT REFERENCES agent_endpoints(id) ON DELETE SET NULL,
+      app_id TEXT REFERENCES applications(id) ON DELETE SET NULL,
+      notification_id TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      dispatch_at TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'voice',
+      metadata TEXT,
+      created_at TEXT NOT NULL,
+      resolved_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pending_dispatches_status ON pending_dispatches(status);
+    CREATE INDEX IF NOT EXISTS idx_pending_dispatches_feedback ON pending_dispatches(feedback_id);
+  `);
+
   // Seed default tmux config from tmux-pw.conf if table is empty or default has empty content
   function readTmuxPwConf(): string {
     // Try multiple relative paths since compiled JS runs from dist/db/
@@ -481,6 +549,16 @@ export function runMigrations() {
       try { return readFileSync(p, 'utf-8'); } catch { /* next */ }
     }
     return '';
+  }
+
+  // Apply column-level migrations now that all CREATE TABLE statements
+  // (including machines, harness_configs, sprite_configs, wiggum_*) have run.
+  for (const stmt of alterStatements) {
+    try {
+      sqlite.exec(stmt);
+    } catch {
+      // Column already exists
+    }
   }
 
   const configCount = sqlite.prepare('SELECT count(*) as cnt FROM tmux_configs').get() as { cnt: number };

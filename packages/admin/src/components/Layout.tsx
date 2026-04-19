@@ -17,6 +17,9 @@ import { NotificationCenter } from './NotificationCenter.js';
 import { SshSetupDialog } from './SshSetupDialog.js';
 import { TerminalPicker } from './TerminalPicker.js';
 import { ControlBar } from './ControlBar.js';
+import { MobileNav } from './MobileNav.js';
+import { MobilePageView } from './MobilePageView.js';
+import { isMobile } from '../lib/viewport.js';
 import { registerShortcut, ctrlShiftHeld } from '../lib/shortcuts.js';
 import { toggleTheme, arrowTabSwitching, showHotkeyHints } from '../lib/settings.js';
 import { openPageView } from '../lib/companion-state.js';
@@ -99,7 +102,9 @@ export function Layout() {
   }, []);
 
   // Intercept feedback detail routes and open them as separate pane tabs
+  // (desktop only — mobile renders the detail page via MobilePageView and keeps the URL).
   useEffect(() => {
+    if (isMobile.value) return;
     const detailMatch = route.match(/^\/app\/([^/]+)\/feedback\/(.+)$/);
     if (detailMatch) {
       const [, appId, feedbackId] = detailMatch;
@@ -600,13 +605,20 @@ export function Layout() {
     openSession(next);
   }
 
+  const mobile = isMobile.value;
+
   return (
-    <div class="layout">
+    <div class={`layout${mobile ? ' layout-mobile' : ''}`}>
       <ControlBar />
-      <PaneTree
-        node={layoutTree.value.root}
-      />
-      <PopoutPanel />
+      {mobile ? (
+        <MobilePageView />
+      ) : (
+        <PaneTree
+          node={layoutTree.value.root}
+        />
+      )}
+      {!mobile && <PopoutPanel />}
+      {mobile && <MobileNav />}
       {termPickerOpen.value && (
         <TerminalPicker
           mode={termPickerOpen.value}

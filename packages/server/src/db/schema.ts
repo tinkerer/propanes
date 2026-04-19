@@ -54,6 +54,20 @@ export const feedbackScreenshots = sqliteTable('feedback_screenshots', {
   createdAt: text('created_at').notNull(),
 });
 
+export const screenshots = sqliteTable('screenshots', {
+  id: text('id').primaryKey(),
+  appId: text('app_id').references(() => applications.id, { onDelete: 'set null' }),
+  sessionId: text('session_id'),
+  userId: text('user_id'),
+  sourceUrl: text('source_url'),
+  filename: text('filename').notNull(),
+  mimeType: text('mime_type').notNull(),
+  size: integer('size').notNull(),
+  width: integer('width'),
+  height: integer('height'),
+  createdAt: text('created_at').notNull(),
+});
+
 export const feedbackAudio = sqliteTable('feedback_audio', {
   id: text('id').primaryKey(),
   feedbackId: text('feedback_id')
@@ -326,4 +340,51 @@ export const pendingMessages = sqliteTable('pending_messages', {
   seqNum: integer('seq_num').notNull(),
   content: text('content').notNull(),
   createdAt: text('created_at').notNull(),
+});
+
+// Ambient voice listen-mode sessions. One row per time the user flips on
+// listen mode; rolling transcript windows are stored in voiceTranscripts.
+export const voiceSessions = sqliteTable('voice_sessions', {
+  id: text('id').primaryKey(),
+  appId: text('app_id').references(() => applications.id, { onDelete: 'set null' }),
+  widgetSessionId: text('widget_session_id'),
+  userId: text('user_id'),
+  sourceUrl: text('source_url'),
+  status: text('status').notNull().default('active'), // 'active' | 'stopped'
+  startedAt: text('started_at').notNull(),
+  lastActivityAt: text('last_activity_at').notNull(),
+  stoppedAt: text('stopped_at'),
+  stopReason: text('stop_reason'),
+});
+
+export const voiceTranscripts = sqliteTable('voice_transcripts', {
+  id: text('id').primaryKey(),
+  voiceSessionId: text('voice_session_id')
+    .notNull()
+    .references(() => voiceSessions.id, { onDelete: 'cascade' }),
+  windowIndex: integer('window_index').notNull(),
+  text: text('text').notNull(),
+  startedAt: text('started_at').notNull(),
+  endedAt: text('ended_at').notNull(),
+  classification: text('classification'), // JSON { actionable, title, description, reason }
+  feedbackId: text('feedback_id').references(() => feedbackItems.id, { onDelete: 'set null' }),
+  createdAt: text('created_at').notNull(),
+});
+
+// Scheduled dispatches that fire after a delay unless cancelled. Used by
+// voice-mode to give the user a 10s undo window before an agent spins up.
+export const pendingDispatches = sqliteTable('pending_dispatches', {
+  id: text('id').primaryKey(),
+  feedbackId: text('feedback_id')
+    .notNull()
+    .references(() => feedbackItems.id, { onDelete: 'cascade' }),
+  agentEndpointId: text('agent_endpoint_id').references(() => agentEndpoints.id, { onDelete: 'set null' }),
+  appId: text('app_id').references(() => applications.id, { onDelete: 'set null' }),
+  notificationId: text('notification_id'),
+  status: text('status').notNull().default('pending'), // 'pending' | 'dispatched' | 'cancelled'
+  dispatchAt: text('dispatch_at').notNull(),
+  source: text('source').notNull().default('voice'), // 'voice' | other
+  metadata: text('metadata'), // JSON bag
+  createdAt: text('created_at').notNull(),
+  resolvedAt: text('resolved_at'),
 });

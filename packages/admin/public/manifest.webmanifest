@@ -1,0 +1,19 @@
+{
+  "name": "ProPanes Admin",
+  "short_name": "ProPanes",
+  "description": "Feedback overlay + agent session bridge admin dashboard",
+  "start_url": "/admin/",
+  "scope": "/admin/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f8fafc",
+  "theme_color": "#1d9bf0",
+  "icons": [
+    {
+      "src": "/admin/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -3,6 +3,8 @@ import { marked } from 'marked';
 import hljs from 'highlight.js/lib/common';
 import type { ParsedMessage } from '../lib/output-parser.js';
 import { openFileViewer } from '../lib/file-viewer.js';
+import { CopyCommand } from './CopyCommand.js';
+import { AskUserQuestionPrompt, type Question } from './InteractivePrompt.js';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -88,6 +90,11 @@ interface Props {
   message: ParsedMessage;
   messages?: ParsedMessage[];
   index?: number;
+  // Session context for interactive prompts. When the message is the last
+  // AskUserQuestion in the stream AND the session is waiting for input, we
+  // render buttons/inputs that send responses via send-keys.
+  sessionId?: string;
+  interactive?: boolean;
 }
 
 function findPrecedingToolUse(messages: ParsedMessage[], index: number): ParsedMessage | undefined {
@@ -98,14 +105,14 @@ function findPrecedingToolUse(messages: ParsedMessage[], index: number): ParsedM
   return undefined;
 }
 
-export function MessageRenderer({ message, messages, index }: Props) {
+export function MessageRenderer({ message, messages, index, sessionId, interactive }: Props) {
   const prevToolUse = (message.role === 'tool_result' && messages && index !== undefined)
     ? findPrecedingToolUse(messages, index)
     : undefined;
 
   switch (message.role) {
     case 'tool_use':
-      return <ToolUseMessage message={message} />;
+      return <ToolUseMessage message={message} sessionId={sessionId} interactive={interactive} />;
     case 'tool_result':
       return <ToolResultMessage message={message} prevToolUse={prevToolUse} />;
     case 'assistant':
@@ -178,7 +185,7 @@ function toolIcon(name: string): string {
   }
 }
 
-function ToolUseMessage({ message }: { message: ParsedMessage }) {
+function ToolUseMessage({ message, sessionId, interactive }: { message: ParsedMessage; sessionId?: string; interactive?: boolean }) {
   const { toolName, toolInput } = message;
   if (!toolName) return null;
 
@@ -203,7 +210,7 @@ function ToolUseMessage({ message }: { message: ParsedMessage }) {
     case 'WebFetch':
       return <WebFetchToolUse toolInput={toolInput} cat={cat} />;
     case 'AskUserQuestion':
-      return <AskUserQuestionToolUse toolInput={toolInput} cat={cat} />;
+      return <AskUserQuestionToolUse toolInput={toolInput} cat={cat} sessionId={sessionId} interactive={interactive} />;
     case 'TaskCreate':
     case 'TaskUpdate':
     case 'TaskList':
@@ -228,6 +235,8 @@ function BashToolUse({ toolInput, cat }: { toolInput?: Record<string, unknown>; 
         <span class="sm-tool-name">Bash</span>
         {background && <span class="sm-tool-badge bg">background</span>}
         {timeout && <span class="sm-tool-badge">timeout: {Math.round(timeout / 1000)}s</span>}
+        <span class="sm-tool-spacer" />
+        {command && <CopyCommand text={command} title="Copy command" />}
       </div>
       {description && <div class="sm-tool-desc">{description}</div>}
       <pre class="sm-bash-command">{command}</pre>
@@ -385,14 +394,19 @@ function WebFetchToolUse({ toolInput, cat }: { toolInput?: Record<string, unknow
   );
 }
 
-function AskUserQuestionToolUse({ toolInput, cat }: { toolInput?: Record<string, unknown>; cat: string }) {
-  const questions = toolInput?.questions as Array<{
-    question: string;
-    header?: string;
-    multiSelect?: boolean;
-    options?: Array<{ label: string; description?: string }>;
-  }> | undefined;
+function AskUserQuestionToolUse({ toolInput, cat, sessionId, interactive }: { toolInput?: Record<string, unknown>; cat: string; sessionId?: string; interactive?: boolean }) {
+  const questions = toolInput?.questions as Question[] | undefined;
   const answers = toolInput?.answers as Record<string, string> | undefined;
+  const hasAnswers = answers && Object.keys(answers).length > 0;
+
+  // When session is waiting and no answers yet, render the interactive card.
+  if (interactive && sessionId && questions && questions.length > 0 && !hasAnswers) {
+    return (
+      <div class={`sm-message sm-tool-use ${cat}`}>
+        <AskUserQuestionPrompt sessionId={sessionId} questions={questions} />
+      </div>
+    );
+  }
 
   return (
     <div class={`sm-message sm-tool-use ${cat}`}>

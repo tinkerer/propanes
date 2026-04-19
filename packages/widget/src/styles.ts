@@ -1525,4 +1525,31 @@ export const WIDGET_CSS = `
   animation: pw-pulse 1.5s ease-in-out infinite;
 }
 
+/* Ambient listen-mode indicator: persistent red dot badge on the trigger.
+   Unlike pw-trigger-recording, this does NOT pulse and does NOT change
+   the trigger color — the dot is always visible so the user knows
+   listening is on. */
+.pw-trigger-listening {
+  position: relative;
+}
+.pw-trigger-listening::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 10px;
+  height: 10px;
+  background: #dc2626;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 6px rgba(220, 38, 38, 0.6);
+  animation: pw-listen-blink 2s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+@keyframes pw-listen-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 `;

@@ -6,6 +6,8 @@
     "dev": "turbo dev",
     "build": "turbo build",
     "test": "turbo test",
+    "test:e2e": "pnpm --filter @propanes/e2e test",
+    "test:e2e:update": "pnpm --filter @propanes/e2e test:update",
     "lint": "turbo lint",
     "clean": "turbo clean"
   },

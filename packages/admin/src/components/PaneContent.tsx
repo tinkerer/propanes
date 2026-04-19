@@ -13,7 +13,6 @@ import { SidebarNavView } from './SidebarNavView.js';
 import { SidebarFilesDrawer } from './SidebarFilesDrawer.js';
 import { GitChangesView } from './GitChangesView.js';
 import { PageView } from './PageView.js';
-import { ControlBar } from './ControlBar.js';
 import { FeedbackListPage } from '../pages/FeedbackListPage.js';
 import { FeedbackDetailPage } from '../pages/FeedbackDetailPage.js';
 import { SessionsPage } from '../pages/SessionsPage.js';
@@ -60,8 +59,6 @@ export function renderTabContent(
           <WiggumPage />
         ) : sid === 'view:app-settings' ? (
           (() => { const aid = selectedAppId.value || applications.value[0]?.id; return aid ? <AppSettingsPage appId={aid} /> : <div style={{ padding: 16, color: 'var(--pw-text-muted)' }}>No apps configured</div>; })()
-        ) : sid === 'view:controlbar' ? (
-          <ControlBar />
         ) : sid === 'view:sessions-list' ? (
           <SessionsListView />
         ) : sid === 'view:terminals' ? (

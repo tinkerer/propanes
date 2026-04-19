@@ -37,7 +37,7 @@ export function initNotifications() {
 
 export async function resolveNotification(
   id: string,
-  action: 'approved' | 'rejected' | 'answered' | 'dismissed',
+  action: 'approved' | 'rejected' | 'answered' | 'dismissed' | 'launched' | 'edited' | 'cancelled',
   response?: unknown,
 ) {
   try {

@@ -118,6 +118,21 @@ export const api = {
   clearResolvedNotifications: () =>
     request<{ removed: number }>('/admin/notifications/clear-resolved', { method: 'POST' }),
 
+  cancelPendingDispatch: (pendingId: string) =>
+    request<{ cancelled: boolean; deletedFeedback?: boolean }>(`/voice/pending-dispatches/${pendingId}/cancel`, {
+      method: 'POST',
+    }),
+
+  launchPendingDispatchNow: (pendingId: string) =>
+    request<{ ok: boolean }>(`/voice/pending-dispatches/${pendingId}/launch-now`, {
+      method: 'POST',
+    }),
+
+  editPendingDispatch: (pendingId: string) =>
+    request<{ cancelled: boolean; feedbackId?: string }>(`/voice/pending-dispatches/${pendingId}/edit`, {
+      method: 'POST',
+    }),
+
   spawnTerminal: (data?: { cwd?: string; appId?: string; launcherId?: string; harnessConfigId?: string; permissionProfile?: string }) =>
     request<{ sessionId: string }>('/admin/terminal', {
       method: 'POST',

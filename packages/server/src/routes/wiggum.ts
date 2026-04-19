@@ -859,7 +859,7 @@ Rules:
     const now = new Date().toISOString();
     const fbId = ulid();
     db.insert(schema.feedbackItems).values({
-      id: fbId, type: 'manual', status: 'new',
+      id: fbId, type: 'fafo_worker', status: 'new',
       title: `FAFO Decomposition: ${swarm.name}`,
       description: `Auto-decomposition of target image into worker paths`,
       appId: swarm.appId || null,

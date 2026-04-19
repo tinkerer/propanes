@@ -77,12 +77,32 @@ function getTargetInfo(el: Element): InteractionEvent['target'] {
 const MAX_CONSOLE_ENTRIES = 200;
 const MAX_SCREENSHOTS = 10;
 
+export interface AmbientWindow {
+  /** 0-based index of this window within the listen-mode session. */
+  windowIndex: number;
+  /** ISO timestamp when this window started. */
+  startedAt: string;
+  /** ISO timestamp when this window ended. */
+  endedAt: string;
+  /** Final transcript text for the window, concatenated. */
+  text: string;
+}
+
 export class VoiceRecorder {
   private mediaRecorder: MediaRecorder | null = null;
   private recognition: any = null;
   private audioChunks: Blob[] = [];
   private t0 = 0;
   private _recording = false;
+  private _ambient = false;
+  private ambientStream: MediaStream | null = null;
+  private ambientRecognition: any = null;
+  private ambientWindowMs = 30_000;
+  private ambientWindowIndex = 0;
+  private ambientWindowStart = 0;
+  private ambientWindowBuffer: string[] = [];
+  private ambientFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private ambientLastSpeechAt = 0;
   private _transcript: TranscriptSegment[] = [];
   private _interactions: InteractionEvent[] = [];
   private _consoleLogs: ConsoleEntry[] = [];
@@ -98,9 +118,22 @@ export class VoiceRecorder {
   onConsole: ((entry: ConsoleEntry) => void) | null = null;
   onHover: ((event: InteractionEvent) => void) | null = null;
   onScreenshotCapture: ((capture: ScreenshotCapture) => void) | null = null;
+  /** Fires when a rolling ambient window closes with captured transcript text. */
+  onAmbientWindow: ((win: AmbientWindow) => void) | null = null;
+  /** Fires when an interim ambient transcript segment arrives. */
+  onAmbientSegment: ((seg: TranscriptSegment) => void) | null = null;
 
   get recording(): boolean {
     return this._recording;
+  }
+
+  get ambient(): boolean {
+    return this._ambient;
+  }
+
+  /** Last time the ambient recognizer heard anything (Date.now() ms). */
+  get ambientLastSpeech(): number {
+    return this.ambientLastSpeechAt;
   }
 
   async start(opts?: { screenCaptures?: boolean }): Promise<void> {
@@ -218,6 +251,114 @@ export class VoiceRecorder {
       consoleLogs: this._consoleLogs,
       screenshots: this._screenshots,
     };
+  }
+
+  /**
+   * Start ambient listen mode. A lightweight SpeechRecognition loop runs
+   * continuously; finalized transcript fragments are buffered into rolling
+   * windows (default 30s). When a window closes with any text, onAmbientWindow
+   * fires with the window's text so callers can POST it to the server.
+   *
+   * No audio is uploaded from ambient mode — only transcript text.
+   */
+  async startAmbient(opts?: { windowMs?: number }): Promise<void> {
+    if (this._ambient) return;
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      throw new Error('SpeechRecognition API not available in this browser');
+    }
+
+    // Request mic permission via getUserMedia so the SpeechRecognition
+    // prompt doesn't surprise the user mid-session; keep the stream alive
+    // while ambient mode is on.
+    this.ambientStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this._ambient = true;
+    this.ambientWindowMs = opts?.windowMs ?? 30_000;
+    this.ambientWindowIndex = 0;
+    this.ambientWindowStart = Date.now();
+    this.ambientWindowBuffer = [];
+    this.ambientLastSpeechAt = Date.now();
+
+    const rec = new SpeechRecognition();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = document.documentElement.lang || 'en-US';
+
+    rec.onresult = (event: any) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        const segment: TranscriptSegment = {
+          text: result[0].transcript,
+          timestamp: Date.now() - this.ambientWindowStart,
+          isFinal: result.isFinal,
+        };
+        this.ambientLastSpeechAt = Date.now();
+        if (result.isFinal) {
+          this.ambientWindowBuffer.push(segment.text);
+        }
+        this.onAmbientSegment?.(segment);
+      }
+    };
+
+    rec.onend = () => {
+      if (this._ambient) {
+        try { rec.start(); } catch {}
+      }
+    };
+
+    rec.onerror = (e: any) => {
+      if (e.error !== 'no-speech' && e.error !== 'aborted' && this._ambient) {
+        try { rec.start(); } catch {}
+      }
+    };
+
+    this.ambientRecognition = rec;
+    try { rec.start(); } catch {}
+
+    const tick = () => {
+      if (!this._ambient) return;
+      this.flushAmbientWindow();
+      this.ambientFlushTimer = setTimeout(tick, this.ambientWindowMs);
+    };
+    this.ambientFlushTimer = setTimeout(tick, this.ambientWindowMs);
+  }
+
+  /** Close the current rolling window and start a new one. Safe to call repeatedly. */
+  private flushAmbientWindow() {
+    const now = Date.now();
+    const endedAtMs = now;
+    const text = this.ambientWindowBuffer.join(' ').trim();
+    const windowIndex = this.ambientWindowIndex++;
+    if (text.length > 0) {
+      const win: AmbientWindow = {
+        windowIndex,
+        startedAt: new Date(this.ambientWindowStart).toISOString(),
+        endedAt: new Date(endedAtMs).toISOString(),
+        text,
+      };
+      try { this.onAmbientWindow?.(win); } catch {}
+    }
+    this.ambientWindowBuffer = [];
+    this.ambientWindowStart = now;
+  }
+
+  async stopAmbient(): Promise<void> {
+    if (!this._ambient) return;
+    this._ambient = false;
+    if (this.ambientFlushTimer) {
+      clearTimeout(this.ambientFlushTimer);
+      this.ambientFlushTimer = null;
+    }
+    // Flush any remaining buffered speech.
+    this.flushAmbientWindow();
+    if (this.ambientRecognition) {
+      try { this.ambientRecognition.stop(); } catch {}
+      this.ambientRecognition = null;
+    }
+    if (this.ambientStream) {
+      this.ambientStream.getTracks().forEach((t) => t.stop());
+      this.ambientStream = null;
+    }
   }
 
   removeInteraction(id: string) {

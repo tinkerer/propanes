@@ -9,6 +9,7 @@ import { api } from './api.js';
 import { subscribeAdmin } from './admin-ws.js';
 import { autoNavigateToFeedback, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpLogs, localBridgeUrl, sshConfigs } from './settings.js';
 import { navigate, selectedAppId, isEmbedded } from './state.js';
+import { isMobile } from './viewport.js';
 import { timed } from './perf.js';
 import {
   findLeafWithTab,
@@ -105,6 +106,12 @@ export function focusSessionTerminal(sessionId: string) {
 export function openSession(sessionId: string) {
   autoJumpLogs.value && console.log(`[auto-jump] openSession: ${sessionId.slice(-6)}, currentActive=${activeTabId.value?.slice(-6) ?? 'null'}, alreadyOpen=${openTabs.value.includes(sessionId)}`);
   import('./autofix.js').then(({ trackSessionOpen }) => trackSessionOpen(sessionId));
+
+  // Mobile: skip pane-tree and push a dedicated route that renders StandaloneSessionPage.
+  if (isMobile.value) {
+    navigate(`/session/${sessionId}`);
+    return;
+  }
 
   const panel = findPanelForSession(sessionId);
   if (panel) {

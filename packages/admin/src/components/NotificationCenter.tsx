@@ -1,4 +1,4 @@
-import { useEffect } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import {
   notifications,
   notificationCenterOpen,
@@ -9,7 +9,8 @@ import {
   resolveNotification,
 } from '../lib/notifications.js';
 import { openSession } from '../lib/sessions.js';
-import type { Notification, PlanReviewPayload, QnaPayload, QnaQuestion, ApprovalPayload } from '../lib/notification-types.js';
+import { api } from '../lib/api.js';
+import type { Notification, PlanReviewPayload, QnaPayload, QnaQuestion, ApprovalPayload, VoiceDispatchPayload } from '../lib/notification-types.js';
 
 const SEVERITY_ICONS: Record<string, string> = {
   info: '\u{2139}\uFE0F',
@@ -106,6 +107,7 @@ function InteractivePane({ n }: { n: Notification }) {
   if (n.payload.kind === 'plan-review') return <PlanReviewPane n={n} payload={n.payload.planReview} />;
   if (n.payload.kind === 'qna') return <QnaPane n={n} payload={n.payload.qna} />;
   if (n.payload.kind === 'approval') return <ApprovalPane n={n} payload={n.payload.approval} />;
+  if (n.payload.kind === 'voice-dispatch') return <VoiceDispatchPane n={n} payload={n.payload.voiceDispatch} />;
   return null;
 }
 
@@ -199,6 +201,85 @@ function ApprovalPane({ n, payload }: { n: Notification; payload: ApprovalPayloa
         <button class="btn btn-sm" onClick={() => resolveNotification(n.id, 'rejected')}>
           {payload.rejectLabel || 'Reject'}
         </button>
+      </div>
+    </div>
+  );
+}
+
+function VoiceDispatchPane({ n, payload }: { n: Notification; payload: VoiceDispatchPayload }) {
+  const [secondsLeft, setSecondsLeft] = useState(() =>
+    Math.max(0, Math.round((new Date(payload.dispatchAt).getTime() - Date.now()) / 1000))
+  );
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const s = Math.max(0, Math.round((new Date(payload.dispatchAt).getTime() - Date.now()) / 1000));
+      setSecondsLeft(s);
+    }, 250);
+    return () => clearInterval(id);
+  }, [payload.dispatchAt]);
+
+  async function onCancel() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.cancelPendingDispatch(payload.pendingDispatchId);
+      await resolveNotification(n.id, 'cancelled');
+    } catch (err) {
+      console.error('Cancel failed', err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onEdit() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await api.editPendingDispatch(payload.pendingDispatchId);
+      await resolveNotification(n.id, 'edited');
+      // Open the feedback detail so the user can tweak title/description.
+      const feedbackId = res.feedbackId || payload.feedbackId;
+      if (feedbackId) {
+        const hash = n.appId
+          ? `#/app/${n.appId}/feedback/${feedbackId}`
+          : `#/feedback/${feedbackId}`;
+        window.location.hash = hash;
+        closeNotificationCenter();
+      }
+    } catch (err) {
+      console.error('Edit failed', err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onLaunchNow() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await api.launchPendingDispatchNow(payload.pendingDispatchId);
+      await resolveNotification(n.id, 'launched');
+    } catch (err) {
+      console.error('Launch-now failed', err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div class="notif-pane notif-voice-dispatch">
+      <div class="notif-pane-label">
+        Agent launching in <strong>{secondsLeft}s</strong>
+      </div>
+      {payload.description && (
+        <div class="notif-voice-desc">{payload.description}</div>
+      )}
+      <div class="notif-pane-actions">
+        <button class="btn btn-sm" disabled={busy} onClick={onCancel}>Cancel</button>
+        <button class="btn btn-sm" disabled={busy} onClick={onEdit}>Edit</button>
+        <button class="btn btn-sm btn-primary" disabled={busy} onClick={onLaunchNow}>Launch now</button>
       </div>
     </div>
   );

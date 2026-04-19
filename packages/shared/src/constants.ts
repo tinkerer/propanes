@@ -5,6 +5,7 @@ export const FEEDBACK_TYPES = [
   'error_report',
   'programmatic',
   'request',
+  'fafo_worker',
 ] as const;
 
 export const FEEDBACK_STATUSES = [
