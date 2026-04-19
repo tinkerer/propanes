@@ -4462,6 +4462,26 @@ input:focus, select:focus, textarea:focus {
   font-family: 'SF Mono', Monaco, monospace;
 }
 
+.sm-show-earlier {
+  display: block;
+  width: 100%;
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  background: var(--pw-bg-sunken, #1e293b);
+  color: var(--pw-text-muted, #94a3b8);
+  border: 1px solid var(--pw-border, #334155);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+}
+
+.sm-show-earlier:hover {
+  background: var(--pw-bg-hover, #334155);
+  color: var(--pw-text, #e2e8f0);
+}
+
 /* Message groups */
 .sm-group {
   margin-bottom: 12px;
