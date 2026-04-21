@@ -46,6 +46,7 @@ import {
 // --- Autojump Constants ---
 
 export const AUTOJUMP_PANEL_ID = 'p-autojump';
+export const COS_PANEL_ID = 'p-cos';
 export const autoJumpDismissed = signal(false);
 export const handleBounceCounter = signal(0);
 
