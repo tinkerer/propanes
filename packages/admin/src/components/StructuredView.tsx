@@ -6,6 +6,7 @@ import { sessionInputStates } from '../lib/session-state.js';
 import { exitedSessions, allSessions } from '../lib/sessions.js';
 import { isMobile } from '../lib/viewport.js';
 import { ChoicePrompt, type ChoiceOption } from './InteractivePrompt.js';
+import { SubagentBlock } from './SubagentBlock.js';
 
 // Initial window size — on mobile we render only the most recent N groups
 // to keep first paint cheap; user can expand earlier history on demand.
@@ -98,6 +99,47 @@ export interface MessageGroup {
   role: 'assistant_group' | 'user_input' | 'standalone';
 }
 
+export interface PartitionedMessages {
+  // Messages from the main agent (no `_subagentId` tag).
+  main: ParsedMessage[];
+  // Subagent messages keyed by agentId, in arrival order.
+  subagents: Map<string, ParsedMessage[]>;
+  // Map main-agent tool_use_id → subagent agentId, derived from the
+  // matching Task tool_result's `toolUseResult.agentId`.
+  toolUseIdToAgentId: Map<string, string>;
+  // Subagents whose agentId never appeared in any main tool_result.
+  // The renderer should append these at the end.
+  orphanSubagentIds: string[];
+}
+
+export function partitionMergedMessages(messages: ParsedMessage[]): PartitionedMessages {
+  const main: ParsedMessage[] = [];
+  const subagents = new Map<string, ParsedMessage[]>();
+  const toolUseIdToAgentId = new Map<string, string>();
+  const linkedAgentIds = new Set<string>();
+
+  for (const msg of messages) {
+    if (msg.subagentId) {
+      const arr = subagents.get(msg.subagentId);
+      if (arr) arr.push(msg);
+      else subagents.set(msg.subagentId, [msg]);
+      continue;
+    }
+    main.push(msg);
+    if (msg.role === 'tool_result' && msg.toolUseResultId && msg.subagentLink) {
+      toolUseIdToAgentId.set(msg.toolUseResultId, msg.subagentLink);
+      linkedAgentIds.add(msg.subagentLink);
+    }
+  }
+
+  const orphanSubagentIds: string[] = [];
+  for (const agentId of subagents.keys()) {
+    if (!linkedAgentIds.has(agentId)) orphanSubagentIds.push(agentId);
+  }
+
+  return { main, subagents, toolUseIdToAgentId, orphanSubagentIds };
+}
+
 export function groupMessages(messages: ParsedMessage[]): MessageGroup[] {
   const groups: MessageGroup[] = [];
   let currentGroup: ParsedMessage[] | null = null;
@@ -180,6 +222,79 @@ export function AssistantGroupHeader({ messages }: { messages: ParsedMessage[] }
   );
 }
 
+function AssistantGroup({
+  group,
+  lastGroupMsg,
+  askingForInput,
+  pendingTool,
+  sessionId,
+  subagentLookup,
+}: {
+  group: MessageGroup;
+  lastGroupMsg: ParsedMessage;
+  askingForInput: boolean;
+  pendingTool: ParsedMessage | null;
+  sessionId: string;
+  subagentLookup?: {
+    subagents: Map<string, ParsedMessage[]>;
+    toolUseIdToAgentId: Map<string, string>;
+  };
+}) {
+  const toolCount = group.messages.filter(m => m.role === 'tool_use').length;
+  const defaultCollapsed = toolCount > 4;
+  const [toolsCollapsed, setToolsCollapsed] = useState(defaultCollapsed);
+
+  return (
+    <div class={`sm-group sm-group-assistant_group`}>
+      <AssistantGroupHeader messages={group.messages} />
+      {toolCount > 4 && (
+        <button
+          class="sm-tools-toggle"
+          onClick={() => setToolsCollapsed(c => !c)}
+        >
+          {toolsCollapsed ? `▸ ${toolCount} tool calls` : '▾ hide tools'}
+        </button>
+      )}
+      {group.messages.map((msg, idx) => {
+        const isTool = msg.role === 'tool_use' || msg.role === 'tool_result';
+        if (isTool && toolsCollapsed) return null;
+        const isInteractive = askingForInput && msg === lastGroupMsg && msg === pendingTool;
+        const renderedMsg = (
+          <MessageRenderer
+            key={msg.id}
+            message={msg}
+            messages={group.messages}
+            index={idx}
+            sessionId={sessionId}
+            interactive={isInteractive}
+          />
+        );
+        // Inline subagent transcript right after the call that spawned it.
+        // Match by toolUseId rather than name — Anthropic's SDK calls this
+        // tool either "Task" or "Agent" depending on the version.
+        if (subagentLookup && msg.role === 'tool_use' && msg.toolUseId) {
+          const agentId = subagentLookup.toolUseIdToAgentId.get(msg.toolUseId);
+          const subMsgs = agentId ? subagentLookup.subagents.get(agentId) : null;
+          if (agentId && subMsgs && subMsgs.length > 0) {
+            return (
+              <>
+                {renderedMsg}
+                <SubagentBlock
+                  key={`sub-${agentId}`}
+                  agentId={agentId}
+                  messages={subMsgs}
+                  taskInput={msg.toolInput}
+                />
+              </>
+            );
+          }
+        }
+        return renderedMsg;
+      })}
+    </div>
+  );
+}
+
 export function StructuredView({ sessionId }: Props) {
   const [messages, setMessages] = useState<ParsedMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -198,6 +313,7 @@ export function StructuredView({ sessionId }: Props) {
   const sessionRecord = allSessions.value.find((s: any) => s.id === sessionId);
   const terminalStatus = sessionRecord?.status && ['completed', 'exited', 'failed', 'deleted', 'archived'].includes(sessionRecord.status);
   const isSessionDone = exitedSessions.value.has(sessionId) || !!terminalStatus;
+  const isRunning = sessionRecord?.status === 'running';
 
   useEffect(() => {
     lastLength.current = 0;
@@ -205,21 +321,51 @@ export function StructuredView({ sessionId }: Props) {
     setLoading(true);
     setError(null);
 
+    // On mobile, request only the tail of the JSONL — a running session can
+    // accumulate multi-MB of history and parsing it synchronously freezes
+    // mobile Safari for seconds. We show the last N lines; users can expand
+    // history on demand via the "Show earlier" control.
+    const tailLines = isMobile.value ? 500 : 0;
+
     let cancelled = false;
+    // In-flight guard: the server reads the full JSONL (+continuations +
+    // subagents) on every request, so for a busy running session a single
+    // fetch can take >3s. Without this guard the 3s interval stacks up
+    // pending requests, and mobile Safari stalls as each response triggers
+    // a parse + setState + full re-render in rapid succession.
+    let inFlight = false;
     const fetchJsonl = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
-        const text = await api.getJsonl(sessionId);
+        const text = await api.getJsonl(sessionId, undefined, tailLines);
         if (cancelled) return;
-        if (text.length === lastLength.current) return;
+        if (text.length === lastLength.current) {
+          setLoading(false);
+          return;
+        }
         lastLength.current = text.length;
         const parser = new JsonOutputParser();
         parser.feed(text + '\n');
         setMessages(parser.getMessages());
         setError(null);
+        setLoading(false);
       } catch (err: any) {
-        if (!cancelled) setError(err.message);
+        if (cancelled) return;
+        // JSONL file won't exist for the first few seconds after dispatch
+        // while the agent is spinning up. Keep showing the "waiting" state
+        // and let polling retry — unless the session is already done, in
+        // which case the file really is missing.
+        const isMissing = err?.status === 404;
+        if (isMissing && !isSessionDone) {
+          setLoading(true);
+          setError(null);
+        } else {
+          setError(err.message);
+          setLoading(false);
+        }
       } finally {
-        if (!cancelled) setLoading(false);
+        inFlight = false;
       }
     };
 
@@ -227,14 +373,20 @@ export function StructuredView({ sessionId }: Props) {
     if (isSessionDone) {
       return () => { cancelled = true; };
     }
-    const interval = setInterval(() => { if (!document.hidden) fetchJsonl(); }, 3000);
+    // Poll less aggressively on mobile — Safari has less headroom to absorb
+    // the parse + re-render cycle for a running session that keeps growing.
+    const pollMs = isMobile.value ? 5000 : 3000;
+    const interval = setInterval(() => { if (!document.hidden) fetchJsonl(); }, pollMs);
     return () => { cancelled = true; clearInterval(interval); };
   }, [sessionId, isSessionDone]);
 
   // When the session is waiting for input, poll the captured terminal output
   // for permission-prompt patterns and surface them as a ChoicePrompt card.
+  // Skip while JSONL is still loading: the ChoicePrompt renders alongside the
+  // message stream, and there's no point burning regex cycles against 10KB of
+  // terminal buffer every 1.5s when there are no messages on screen anyway.
   useEffect(() => {
-    if (!isWaiting) { setChoicePrompt(null); return; }
+    if (!isWaiting || loading) { setChoicePrompt(null); return; }
     let cancelled = false;
     const scan = async () => {
       try {
@@ -252,7 +404,7 @@ export function StructuredView({ sessionId }: Props) {
     scan();
     const interval = setInterval(() => { if (!document.hidden) scan(); }, 1500);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [sessionId, isWaiting]);
+  }, [sessionId, isWaiting, loading]);
 
   useEffect(() => {
     if (autoScroll.current && containerRef.current) {
@@ -272,22 +424,46 @@ export function StructuredView({ sessionId }: Props) {
   // Window by raw messages, then group. Some sessions pack 100+ tool calls
   // into one assistant group, so windowing by group leaves all of them on
   // screen. Slicing messages first keeps initial render bounded regardless
-  // of group shape.
+  // of group shape. We window over main-only messages so the count reflects
+  // what's actually visible (subagent transcripts are rendered inline as
+  // collapsibles, not counted toward the main window).
   useEffect(() => {
+    const total = messages.filter((m) => !m.subagentId).length;
     setShownCount((prev) => {
-      if (prev > initialWindow) return Math.min(prev, messages.length);
-      return Math.min(initialWindow, messages.length);
+      if (prev > initialWindow) return Math.min(prev, total);
+      return Math.min(initialWindow, total);
     });
-  }, [messages.length, initialWindow]);
+  }, [messages, initialWindow]);
 
-  const hiddenMsgCount = Math.max(0, messages.length - shownCount);
+  // Partition out subagent messages so they can be rendered inline at the
+  // Task call that spawned them — without this, Claude dumps every subagent
+  // message after the main agent's stream and the main flow is buried.
+  const partitioned = useMemo(() => partitionMergedMessages(messages), [messages]);
+  const mainMessages = partitioned.main;
+
+  const hiddenMsgCount = Math.max(0, mainMessages.length - shownCount);
   const groups = useMemo(
-    () => groupMessages(hiddenMsgCount > 0 ? messages.slice(-shownCount) : messages),
-    [messages, shownCount, hiddenMsgCount]
+    () => groupMessages(hiddenMsgCount > 0 ? mainMessages.slice(-shownCount) : mainMessages),
+    [mainMessages, shownCount, hiddenMsgCount]
   );
 
   if (loading) {
-    return <div class="structured-view"><div class="sm-empty">Loading JSONL...</div></div>;
+    const msg = isSessionDone
+      ? 'Loading JSONL...'
+      : isRunning
+        ? 'Session running, waiting for output...'
+        : 'Waiting for agent to start...';
+    // Visible pulse so mobile users see the page is alive while polling —
+    // without it, "Session running, waiting for output..." looks identical
+    // to a frozen browser.
+    return (
+      <div class="structured-view">
+        <div class="sm-empty sm-empty-loading">
+          <span class="sm-loading-dot" />
+          {msg}
+        </div>
+      </div>
+    );
   }
 
   if (error) {
@@ -313,11 +489,21 @@ export function StructuredView({ sessionId }: Props) {
       )}
       {groups.map(group => {
         const lastGroupMsg = group.messages[group.messages.length - 1];
+        if (group.role === 'assistant_group') {
+          return (
+            <AssistantGroup
+              key={group.id}
+              group={group}
+              lastGroupMsg={lastGroupMsg}
+              askingForInput={askingForInput}
+              pendingTool={pendingTool}
+              sessionId={sessionId}
+              subagentLookup={partitioned}
+            />
+          );
+        }
         return (
           <div key={group.id} class={`sm-group sm-group-${group.role}`}>
-            {group.role === 'assistant_group' && (
-              <AssistantGroupHeader messages={group.messages} />
-            )}
             {group.messages.map((msg, idx) => {
               const isInteractive = askingForInput && msg === lastGroupMsg && msg === pendingTool;
               return (
@@ -334,6 +520,20 @@ export function StructuredView({ sessionId }: Props) {
           </div>
         );
       })}
+      {partitioned.orphanSubagentIds.length > 0 && (
+        <div class="sm-subagent-orphans">
+          {partitioned.orphanSubagentIds.map((agentId) => {
+            const subMsgs = partitioned.subagents.get(agentId) || [];
+            return (
+              <SubagentBlock
+                key={`orphan-${agentId}`}
+                agentId={agentId}
+                messages={subMsgs}
+              />
+            );
+          })}
+        </div>
+      )}
       {isWaiting && choicePrompt && !askingForInput && (
         <ChoicePrompt
           sessionId={sessionId}

@@ -351,7 +351,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
             const gn = globalNum(sid);
             const tabSess = sessionMap.get(sid);
             const tabExited = exitedSessions.value.has(sid);
-            const tabIsCompanion = sid.startsWith('jsonl:') || sid.startsWith('feedback:') || sid.startsWith('iframe:') || sid.startsWith('terminal:');
+            const tabIsCompanion = sid.startsWith('jsonl:') || sid.startsWith('feedback:') || sid.startsWith('iframe:') || sid.startsWith('terminal:') || sid.startsWith('artifact:');
             const tabIsFb = sid.startsWith('fb:');
             const tabInputState = !tabExited && !tabIsCompanion ? (sessionInputStates.value.get(sid) || null) : null;
             const tabIsPlain = tabSess?.permissionProfile === 'plain';
@@ -406,6 +406,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
                   sid.startsWith('jsonl:') ? '\u{1F4DC}' :
                   sid.startsWith('iframe:') ? '\u{1F310}' :
                   sid.startsWith('terminal:') ? '\u{25B8}' :
+                  sid.startsWith('artifact:') ? '\u{1F4CB}' :
                   '\u25C6'
                 }</span>}
                 {renamingSessionId.value === sid ? (

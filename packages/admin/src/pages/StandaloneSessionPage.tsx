@@ -4,8 +4,14 @@ import { SessionViewToggle, type ViewMode } from '../components/SessionViewToggl
 import { allSessions, startSessionPolling, getViewMode, setViewMode, markSessionExited, setSessionInputState, exitedSessions } from '../lib/sessions.js';
 import { applyTheme } from '../lib/settings.js';
 import { isMobile } from '../lib/viewport.js';
+import { navigate, selectedAppId } from '../lib/state.js';
 
 const viewMode = signal<ViewMode>('terminal');
+
+function goBack() {
+  const appId = selectedAppId.value;
+  navigate(appId ? `/app/${appId}/sessions` : '/');
+}
 
 export function StandaloneSessionPage({ sessionId }: { sessionId: string }) {
   useEffect(() => { applyTheme(); }, []);
@@ -18,10 +24,21 @@ export function StandaloneSessionPage({ sessionId }: { sessionId: string }) {
   const sess = sessions.find((s: any) => s.id === sessionId);
   const isExited = exitedSessions.value.has(sessionId);
   const mode = getViewMode(sessionId) || viewMode.value;
+  const mobile = isMobile.value;
 
   return (
-    <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--pw-bg)', color: 'var(--pw-text)' }}>
+    <div class="standalone-session-root" style={{ background: 'var(--pw-bg)', color: 'var(--pw-text)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderBottom: '1px solid var(--pw-border)', fontSize: 12 }}>
+        {mobile && (
+          <button
+            class="mobile-session-back"
+            onClick={goBack}
+            aria-label="Back to sessions"
+            title="Back"
+          >
+            ←
+          </button>
+        )}
         <span style={{ fontWeight: 600 }}>pw-{sessionId.slice(-6)}</span>
         {isExited && <span style={{ color: 'var(--pw-text-muted)' }}>(exited)</span>}
         <span style="flex:1" />

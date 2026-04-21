@@ -28,10 +28,18 @@ import { gettingStartedMarkdown } from './getting-started.js';
 export const app = new Hono();
 
 app.use('*', logger());
+// Reflect the request Origin header instead of returning "*". A wildcard
+// Access-Control-Allow-Origin is rejected by browsers whenever the request
+// uses credentials-mode "include" (cookies, auth headers on cross-origin
+// fetches) — which is what happens when the widget is embedded on a page
+// at a different origin than the propanes server. Reflecting the origin
+// makes the response compatible with both credentialed and plain CORS
+// requests.
 app.use(
   '/api/*',
   cors({
-    origin: '*',
+    origin: (origin) => origin || '*',
+    credentials: true,
     allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
   })

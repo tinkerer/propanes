@@ -1,13 +1,14 @@
 import { useSignal, useSignalEffect } from '@preact/signals';
 import { useEffect, useRef, useCallback } from 'preact/hooks';
 import { api } from '../lib/api.js';
-import { currentRoute } from '../lib/state.js';
+import { currentRoute, navigate } from '../lib/state.js';
 import { openSession, sessionInputStates, openFeedbackItem, feedbackTitleCache } from '../lib/sessions.js';
 import { openDispatchDialog, dispatchDialogResult } from '../components/DispatchDialog.js';
 import { copyWithTooltip } from '../lib/clipboard.js';
 import { DeletedItemsPanel, trackDeletion } from '../components/DeletedItemsPanel.js';
 import { formatDate } from '../lib/date-utils.js';
 import { AggregateWizard, openAggregateWizard } from '../components/AggregateWizard.js';
+import { isMobile } from '../lib/viewport.js';
 
 const TYPES = ['', 'manual', 'ab_test', 'analytics', 'error_report', 'programmatic'];
 const STATUSES = ['', 'new', 'reviewed', 'running', 'completed', 'killed', 'failed', 'resolved', 'archived', 'deleted'];
@@ -97,7 +98,7 @@ export function FeedbackListPage({ appId }: { appId: string }) {
   const totalPages = useSignal(0);
   const loading = useSignal(false);
   const filterType = useSignal('');
-  const filterStatuses = useSignal<Set<string>>(new Set(['new', 'running', 'failed']));
+  const filterStatuses = useSignal<Set<string>>(new Set());
   const searchQuery = useSignal('');
   const selected = useSignal<Set<string>>(new Set());
   const showCreateForm = useSignal(false);
@@ -107,7 +108,7 @@ export function FeedbackListPage({ appId }: { appId: string }) {
   const createTags = useSignal('');
   const createLoading = useSignal(false);
   const isStuck = useSignal(false);
-  const filtersCollapsed = useSignal(false);
+  const filtersCollapsed = useSignal(isMobile.value);
   const sortMode = useSignal<string>('newest');
   const filterTag = useSignal('');
   const availableTags = useSignal<{ tag: string; count: number }[]>([]);
@@ -246,7 +247,11 @@ export function FeedbackListPage({ appId }: { appId: string }) {
       createDescription.value = '';
       createType.value = 'manual';
       createTags.value = '';
-      openFeedbackItem(result.id);
+      if (isMobile.value) {
+        navigate(`/app/${appId}/feedback/${result.id}`);
+      } else {
+        openFeedbackItem(result.id);
+      }
     } catch (err: any) {
       console.error('Failed to create:', err.message);
     } finally {
@@ -329,7 +334,23 @@ export function FeedbackListPage({ appId }: { appId: string }) {
     };
     es.addEventListener('new-feedback', onEvent);
     es.addEventListener('feedback-updated', onEvent);
-    return () => { es.close(); };
+
+    // Same-page widget submits: SSE on mobile Safari (and some proxies) can
+    // buffer events, so piggyback on the widget's own submit event to reload
+    // synchronously when feedback is submitted from this browser.
+    const widget = (window as any).promptWidget;
+    const onWidgetSubmit = (data: any) => {
+      if (!data?.appId || data.appId === appId) {
+        loadFeedback();
+        api.getFeedbackTags(appId).then(tags => { availableTags.value = tags; }).catch(() => {});
+      }
+    };
+    widget?.on?.('submit', onWidgetSubmit);
+
+    return () => {
+      es.close();
+      widget?.off?.('submit', onWidgetSubmit);
+    };
   }, [appId]);
 
   // Re-sort when session states change (for state-based sort modes)
@@ -347,6 +368,12 @@ export function FeedbackListPage({ appId }: { appId: string }) {
 
   const viewingDeleted = filterStatuses.value.has('deleted');
   const hasSelection = selected.value.size > 0;
+  const activeFilterCount =
+    (searchQuery.value ? 1 : 0) +
+    (filterType.value ? 1 : 0) +
+    (sortMode.value !== 'newest' ? 1 : 0) +
+    (filterTag.value ? 1 : 0) +
+    (filterStatuses.value.size > 0 ? 1 : 0);
   const sentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -422,86 +449,91 @@ export function FeedbackListPage({ appId }: { appId: string }) {
       )}
 
       <div ref={sentinelRef} class="filters-sentinel" />
-      <div class={`filters ${hasSelection ? 'has-selection' : ''} ${isStuck.value ? 'stuck' : ''}`}>
-        <input
-          type="text"
-          placeholder="Search..."
-          value={searchQuery.value}
-          onInput={(e) => (searchQuery.value = (e.target as HTMLInputElement).value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              page.value = 1;
-              loadFeedback();
-            }
-          }}
-        />
-        <select
-          value={filterType.value}
-          onChange={(e) => {
-            filterType.value = (e.target as HTMLSelectElement).value;
-            page.value = 1;
-          }}
-        >
-          <option value="">All types</option>
-          {TYPES.filter(Boolean).map((t) => (
-            <option value={t}>{t.replace(/_/g, ' ')}</option>
-          ))}
-        </select>
-        <select
-          value={sortMode.value}
-          onChange={(e) => {
-            sortMode.value = (e.target as HTMLSelectElement).value;
-            page.value = 1;
-          }}
-          class="sort-select"
-        >
-          {SORT_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-        {availableTags.value.length > 0 && (
-          <select
-            value={filterTag.value}
-            onChange={(e) => {
-              filterTag.value = (e.target as HTMLSelectElement).value;
-              page.value = 1;
-            }}
-          >
-            <option value="">All tags</option>
-            {availableTags.value.map((t) => (
-              <option key={t.tag} value={t.tag}>{t.tag} ({t.count})</option>
-            ))}
-          </select>
-        )}
+      <div class={`filters ${hasSelection ? 'has-selection' : ''} ${isStuck.value ? 'stuck' : ''} ${filtersCollapsed.value ? 'collapsed' : ''}`}>
         <button
           class="btn-filter-toggle"
           onClick={() => (filtersCollapsed.value = !filtersCollapsed.value)}
-          title={filtersCollapsed.value ? 'Show status filters' : 'Hide status filters'}
+          title={filtersCollapsed.value ? 'Show filters and search' : 'Hide filters and search'}
         >
-          {filterStatuses.value.size > 0 && <span class="filter-count">{filterStatuses.value.size}</span>}
+          Filters
+          {activeFilterCount > 0 && <span class="filter-count">{activeFilterCount}</span>}
           <span class={`filter-toggle-chevron ${filtersCollapsed.value ? 'collapsed' : ''}`}>&#9662;</span>
         </button>
-        <div class={`filter-pills ${filtersCollapsed.value ? 'collapsed' : ''}`}>
-          {STATUSES.filter(Boolean).map((s) => {
-            const active = filterStatuses.value.has(s);
-            const pillClass = DISPATCH_STATUSES.has(s) ? `badge-dispatch-${s}` : `badge-${s}`;
-            return (
-              <button
-                key={s}
-                class={`status-filter-pill ${pillClass} ${active ? 'active' : ''}`}
-                onClick={() => {
-                  const next = new Set(filterStatuses.value);
-                  if (next.has(s)) next.delete(s);
-                  else next.add(s);
-                  filterStatuses.value = next;
+        {!filtersCollapsed.value && (
+          <>
+            <input
+              type="text"
+              placeholder="Search..."
+              value={searchQuery.value}
+              onInput={(e) => (searchQuery.value = (e.target as HTMLInputElement).value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  page.value = 1;
+                  loadFeedback();
+                }
+              }}
+            />
+            <select
+              value={filterType.value}
+              onChange={(e) => {
+                filterType.value = (e.target as HTMLSelectElement).value;
+                page.value = 1;
+              }}
+            >
+              <option value="">All types</option>
+              {TYPES.filter(Boolean).map((t) => (
+                <option value={t}>{t.replace(/_/g, ' ')}</option>
+              ))}
+            </select>
+            <select
+              value={sortMode.value}
+              onChange={(e) => {
+                sortMode.value = (e.target as HTMLSelectElement).value;
+                page.value = 1;
+              }}
+              class="sort-select"
+            >
+              {SORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            {availableTags.value.length > 0 && (
+              <select
+                value={filterTag.value}
+                onChange={(e) => {
+                  filterTag.value = (e.target as HTMLSelectElement).value;
                   page.value = 1;
                 }}
               >
-                {s}
-              </button>
-            );
-          })}
-        </div>
+                <option value="">All tags</option>
+                {availableTags.value.map((t) => (
+                  <option key={t.tag} value={t.tag}>{t.tag} ({t.count})</option>
+                ))}
+              </select>
+            )}
+            <div class="filter-pills">
+              {STATUSES.filter(Boolean).map((s) => {
+                const active = filterStatuses.value.has(s);
+                const pillClass = DISPATCH_STATUSES.has(s) ? `badge-dispatch-${s}` : `badge-${s}`;
+                return (
+                  <button
+                    key={s}
+                    class={`status-filter-pill ${pillClass} ${active ? 'active' : ''}`}
+                    onClick={() => {
+                      const next = new Set(filterStatuses.value);
+                      if (next.has(s)) next.delete(s);
+                      else next.add(s);
+                      filterStatuses.value = next;
+                      page.value = 1;
+                    }}
+                  >
+                    {s}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
         {hasSelection && (
           <div class="selection-actions">
             <span class="selection-bar-count">{selected.value.size} selected</span>
@@ -595,7 +627,11 @@ export function FeedbackListPage({ appId }: { appId: string }) {
                       if (item.title) {
                         feedbackTitleCache.value = { ...feedbackTitleCache.value, [item.id]: item.title };
                       }
-                      openFeedbackItem(item.id);
+                      if (isMobile.value) {
+                        navigate(`${basePath}/${item.id}`);
+                      } else {
+                        openFeedbackItem(item.id);
+                      }
                     }}
                     style="color:var(--pw-primary-text);text-decoration:none;font-weight:500"
                     title={item.title}

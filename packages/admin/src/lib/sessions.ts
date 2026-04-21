@@ -366,7 +366,7 @@ export function markSessionExited(sessionId: string, exitCode?: number, terminal
   }
 }
 
-export async function resumeSession(sessionId: string, opts?: { permissionProfile?: string }): Promise<string | null> {
+export async function resumeSession(sessionId: string, opts?: { permissionProfile?: string; additionalPrompt?: string }): Promise<string | null> {
   try {
     // Kill running session first before resuming with new profile
     const sess = allSessions.value.find((s) => s.id === sessionId);
@@ -446,9 +446,11 @@ export async function ensureAgentsLoaded(): Promise<any[]> {
 export async function quickDispatch(feedbackId: string, appId?: string | null) {
   quickDispatchState.value = { ...quickDispatchState.value, [feedbackId]: 'loading' };
   try {
-    const agents = appId
+    const allAgents = appId
       ? await api.getAgents(appId)
       : await ensureAgentsLoaded();
+    // Skip webhook endpoints with no URL — they'd fail dispatch immediately.
+    const agents = (allAgents as any[]).filter((a: any) => a.mode !== 'webhook' || !!a.url);
     const appDefault = appId ? agents.find((a: any) => a.isDefault && a.appId === appId) : null;
     const globalDefault = agents.find((a: any) => a.isDefault && !a.appId);
     const defaultAgent = appDefault || globalDefault || agents[0];

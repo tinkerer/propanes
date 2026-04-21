@@ -43,7 +43,7 @@ function formatTime(ms: number): string {
 
 const TYPE_COLORS: Record<string, string> = {
   click: '#60a5fa',
-  scroll: '#a78bfa',
+  scroll: '#60a5fa',
   input: '#34d399',
   focus: '#fbbf24',
   navigation: '#f87171',
@@ -54,7 +54,7 @@ const CONSOLE_COLORS: Record<string, string> = {
   warn: '#fbbf24',
   info: '#60a5fa',
   log: '#94a3b8',
-  debug: '#a78bfa',
+  debug: '#60a5fa',
 };
 
 export function VoicePlayback({ audioUrl, duration, transcript, interactions, consoleLogs }: VoicePlaybackProps) {

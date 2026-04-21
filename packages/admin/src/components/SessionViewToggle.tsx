@@ -1,5 +1,6 @@
 import { AgentTerminal } from './AgentTerminal.js';
 import { StructuredView } from './StructuredView.js';
+import { InterruptBar } from './InterruptBar.js';
 import type { InputState } from '../lib/sessions.js';
 import { isMobile } from '../lib/viewport.js';
 
@@ -43,6 +44,7 @@ export function SessionViewToggle({ sessionId, isActive, onExit, onInputStateCha
           </div>
         )}
       </div>
+      <InterruptBar sessionId={sessionId} permissionProfile={permissionProfile} />
     </div>
   );
 }

@@ -145,6 +145,7 @@ export const agentSessions = sqliteTable('agent_sessions', {
   createdAt: text('created_at').notNull(),
   startedAt: text('started_at'),
   completedAt: text('completed_at'),
+  lastActivityAt: text('last_activity_at'),
 });
 
 export const tmuxConfigs = sqliteTable('tmux_configs', {
@@ -391,6 +392,29 @@ export const cosMetadata = sqliteTable('cos_metadata', {
 
 // Scheduled dispatches that fire after a delay unless cancelled. Used by
 // voice-mode to give the user a 10s undo window before an agent spins up.
+export const cosThreads = sqliteTable('cos_threads', {
+  id: text('id').primaryKey(),
+  agentId: text('agent_id').notNull(),
+  appId: text('app_id'),
+  name: text('name').notNull(),
+  systemPrompt: text('system_prompt'),
+  model: text('model'),
+  claudeSessionId: text('claude_session_id'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+
+export const cosMessages = sqliteTable('cos_messages', {
+  id: text('id').primaryKey(),
+  threadId: text('thread_id').notNull().references(() => cosThreads.id, { onDelete: 'cascade' }),
+  role: text('role').notNull(), // 'user' | 'assistant' | 'system'
+  text: text('text').notNull(),
+  toolCallsJson: text('tool_calls_json'),
+  // JSON: { images?: [{dataUrl, name?, mimeType?}], elements?: [CosElementRef, ...] }
+  attachmentsJson: text('attachments_json'),
+  createdAt: integer('created_at').notNull(),
+});
+
 export const pendingDispatches = sqliteTable('pending_dispatches', {
   id: text('id').primaryKey(),
   feedbackId: text('feedback_id')
