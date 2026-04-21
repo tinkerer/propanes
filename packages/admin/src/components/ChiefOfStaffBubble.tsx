@@ -1118,7 +1118,12 @@ export function ChiefOfStaffBubble({ floatingButton = true }: { floatingButton?:
                 </div>
               ) : (
                 <>
-                  {activeAgent.messages.length > 0 && (
+                  {showLearnings && (
+                    <div class="cos-drawer cos-drawer-left">
+                      <LearningsPanel onClose={() => setShowLearnings(false)} />
+                    </div>
+                  )}
+                  <div class="cos-chat-pane">
                     <div class="cos-scroll-toolbar">
                       <div class="cos-view-segmented" role="tablist" aria-label="View mode">
                         <button
@@ -1140,24 +1145,28 @@ export function ChiefOfStaffBubble({ floatingButton = true }: { floatingButton?:
                           Full
                         </button>
                       </div>
-                      <button
-                        type="button"
-                        class={`cos-scroll-toolbar-btn${showTools ? ' cos-scroll-toolbar-btn-active' : ''}`}
-                        onClick={() => setShowTools(!showTools)}
-                        title={showTools ? 'Hide tool calls' : 'Show tool calls'}
-                        aria-pressed={showTools}
-                      >
-                        Tools
-                      </button>
-                      {hasMultipleThreads && (
-                        <button
-                          type="button"
-                          class="cos-scroll-toolbar-btn"
-                          onClick={toggleAllThreads}
-                          title={anyExpanded ? 'Collapse all threads' : 'Expand all threads'}
-                        >
-                          {anyExpanded ? 'Collapse' : 'Expand'}
-                        </button>
+                      {activeAgent.messages.length > 0 && (
+                        <>
+                          <button
+                            type="button"
+                            class={`cos-scroll-toolbar-btn${showTools ? ' cos-scroll-toolbar-btn-active' : ''}`}
+                            onClick={() => setShowTools(!showTools)}
+                            title={showTools ? 'Hide tool calls' : 'Show tool calls'}
+                            aria-pressed={showTools}
+                          >
+                            Tools
+                          </button>
+                          {hasMultipleThreads && (
+                            <button
+                              type="button"
+                              class="cos-scroll-toolbar-btn"
+                              onClick={toggleAllThreads}
+                              title={anyExpanded ? 'Collapse all threads' : 'Expand all threads'}
+                            >
+                              {anyExpanded ? 'Collapse' : 'Expand'}
+                            </button>
+                          )}
+                        </>
                       )}
                       <button
                         type="button"
@@ -1173,119 +1182,99 @@ export function ChiefOfStaffBubble({ floatingButton = true }: { floatingButton?:
                         Learnings{cosLearnings.value.length > 0 ? ` (${cosLearnings.value.length})` : ''}
                       </button>
                     </div>
-                  )}
-                  {activeAgent.messages.length === 0 && (
-                    <div class="cos-scroll-toolbar cos-scroll-toolbar-thin">
-                      <button
-                        type="button"
-                        class={`cos-scroll-toolbar-btn${showLearnings ? ' cos-scroll-toolbar-btn-active' : ''}`}
-                        onClick={() => {
-                          const next = !showLearnings;
-                          setShowLearnings(next);
-                          if (next) void loadCosLearnings();
-                        }}
-                        title="Wiggum self-reflection learnings"
-                        aria-pressed={showLearnings}
-                      >
-                        Learnings{cosLearnings.value.length > 0 ? ` (${cosLearnings.value.length})` : ''}
-                      </button>
-                    </div>
-                  )}
-                  {showLearnings && (
-                    <LearningsPanel onClose={() => setShowLearnings(false)} />
-                  )}
 
-                  <div class="cos-scroll" ref={scrollRef}>
-                    {activeAgent.messages.length === 0 && (
-                      <div class="cos-empty">
-                        <div class="cos-empty-title">{activeAgent.name}</div>
-                        <div class="cos-empty-hint">
-                          Ready. Ask about feedback, sessions, or infra — or tell me to dispatch something.
+                    <div class="cos-scroll" ref={scrollRef}>
+                      {activeAgent.messages.length === 0 && (
+                        <div class="cos-empty">
+                          <div class="cos-empty-title">{activeAgent.name}</div>
+                          <div class="cos-empty-hint">
+                            Ready. Ask about feedback, sessions, or infra — or tell me to dispatch something.
+                          </div>
+                          <div class="cos-empty-examples">
+                            {[
+                              "What's new in the queue?",
+                              'Any sessions stuck or running long?',
+                              'Are all launchers online?',
+                            ].map((q) => (
+                              <button key={q} class="cos-example" onClick={() => setInput(q)}>{q}</button>
+                            ))}
+                          </div>
                         </div>
-                        <div class="cos-empty-examples">
-                          {[
-                            "What's new in the queue?",
-                            'Any sessions stuck or running long?',
-                            'Are all launchers online?',
-                          ].map((q) => (
-                            <button key={q} class="cos-example" onClick={() => setInput(q)}>{q}</button>
-                          ))}
-                        </div>
+                      )}
+                      {threads.map((t, i) => (
+                        <ThreadBlock
+                          key={t.userIdx ?? `pre-${i}`}
+                          thread={t}
+                          collapsed={t.userIdx !== null && collapsedThreads.has(t.userIdx)}
+                          onToggle={() => t.userIdx !== null && toggleThread(t.userIdx)}
+                          showTools={showTools}
+                          expandArtifacts={expandArtifacts}
+                          onReply={handleReply}
+                        />
+                      ))}
+                      {error && (
+                        <div class="cos-error">{error}</div>
+                      )}
+                    </div>
+
+                    {replyTo && (
+                      <div class="cos-reply-pill" role="status">
+                        <span class="cos-reply-pill-label">Replying to {replyTo.role}</span>
+                        <span class="cos-reply-pill-text">{replyTo.text}</span>
+                        <button
+                          type="button"
+                          class="cos-reply-pill-close"
+                          onClick={() => setReplyTo(null)}
+                          title="Clear reply"
+                          aria-label="Clear reply"
+                        >
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
+                            <path d="M6 6l12 12M18 6L6 18" />
+                          </svg>
+                        </button>
                       </div>
                     )}
-                    {threads.map((t, i) => (
-                      <ThreadBlock
-                        key={t.userIdx ?? `pre-${i}`}
-                        thread={t}
-                        collapsed={t.userIdx !== null && collapsedThreads.has(t.userIdx)}
-                        onToggle={() => t.userIdx !== null && toggleThread(t.userIdx)}
-                        showTools={showTools}
-                        expandArtifacts={expandArtifacts}
-                        onReply={handleReply}
+                    <div class="cos-input-row">
+                      <div
+                        class="cos-resize-handle"
+                        onMouseDown={onInputResizeHandleMouseDown}
+                        role="separator"
+                        aria-orientation="horizontal"
+                        aria-label="Resize input"
+                        title="Drag to resize"
                       />
-                    ))}
-                    {error && (
-                      <div class="cos-error">{error}</div>
-                    )}
-                  </div>
-
-                  {replyTo && (
-                    <div class="cos-reply-pill" role="status">
-                      <span class="cos-reply-pill-label">Replying to {replyTo.role}</span>
-                      <span class="cos-reply-pill-text">{replyTo.text}</span>
-                      <button
-                        type="button"
-                        class="cos-reply-pill-close"
-                        onClick={() => setReplyTo(null)}
-                        title="Clear reply"
-                        aria-label="Clear reply"
-                      >
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
-                          <path d="M6 6l12 12M18 6L6 18" />
-                        </svg>
-                      </button>
-                    </div>
-                  )}
-                  <div class="cos-input-row">
-                    <div
-                      class="cos-resize-handle"
-                      onMouseDown={onInputResizeHandleMouseDown}
-                      role="separator"
-                      aria-orientation="horizontal"
-                      aria-label="Resize input"
-                      title="Drag to resize"
-                    />
-                    <textarea
-                      ref={inputRef}
-                      class="cos-input"
-                      value={input}
-                      placeholder={`Message ${activeAgent.name}…`}
-                      onInput={(e) => setInput((e.target as HTMLTextAreaElement).value)}
-                      onKeyDown={onKeyDown}
-                      rows={1}
-                      style={inputHeight !== null ? { height: inputHeight + 'px', maxHeight: 'none' } : undefined}
-                    />
-                    <div class="cos-input-buttons">
-                      {inFlight > 0 && (
+                      <textarea
+                        ref={inputRef}
+                        class="cos-input"
+                        value={input}
+                        placeholder={`Message ${activeAgent.name}…`}
+                        onInput={(e) => setInput((e.target as HTMLTextAreaElement).value)}
+                        onKeyDown={onKeyDown}
+                        rows={1}
+                        style={inputHeight !== null ? { height: inputHeight + 'px', maxHeight: 'none' } : undefined}
+                      />
+                      <div class="cos-input-buttons">
+                        {inFlight > 0 && (
+                          <button
+                            class="cos-stop"
+                            onClick={() => void interruptActiveAgent()}
+                            title="Stop (interrupt)"
+                            type="button"
+                          >
+                            &#9632;
+                          </button>
+                        )}
                         <button
-                          class="cos-stop"
-                          onClick={() => void interruptActiveAgent()}
-                          title="Stop (interrupt)"
-                          type="button"
+                          class="cos-send"
+                          onClick={submit}
+                          disabled={!input.trim()}
+                          title="Send (Enter)"
                         >
-                          &#9632;
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M5 12l14-7-7 14-2-5z" />
+                          </svg>
                         </button>
-                      )}
-                      <button
-                        class="cos-send"
-                        onClick={submit}
-                        disabled={!input.trim()}
-                        title="Send (Enter)"
-                      >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M5 12l14-7-7 14-2-5z" />
-                        </svg>
-                      </button>
+                      </div>
                     </div>
                   </div>
                 </>
