@@ -180,6 +180,9 @@ export function runMigrations() {
     `ALTER TABLE wiggum_runs ADD COLUMN fitness_detail TEXT`,
     `ALTER TABLE feedback_items ADD COLUMN title_history TEXT NOT NULL DEFAULT '[]'`,
     `ALTER TABLE wiggum_swarms ADD COLUMN max_generations INTEGER`,
+    `ALTER TABLE cos_threads ADD COLUMN claude_session_id TEXT`,
+    `ALTER TABLE agent_sessions ADD COLUMN last_activity_at TEXT`,
+    `ALTER TABLE cos_messages ADD COLUMN attachments_json TEXT`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after
@@ -536,6 +539,54 @@ export function runMigrations() {
 
     CREATE INDEX IF NOT EXISTS idx_pending_dispatches_status ON pending_dispatches(status);
     CREATE INDEX IF NOT EXISTS idx_pending_dispatches_feedback ON pending_dispatches(feedback_id);
+
+    CREATE TABLE IF NOT EXISTS cos_learnings (
+      id TEXT PRIMARY KEY,
+      session_jsonl TEXT,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'medium',
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cos_learnings_type ON cos_learnings(type);
+    CREATE INDEX IF NOT EXISTS idx_cos_learnings_severity ON cos_learnings(severity);
+    CREATE INDEX IF NOT EXISTS idx_cos_learnings_created ON cos_learnings(created_at);
+
+    CREATE TABLE IF NOT EXISTS cos_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+
+  // CoS threads and messages tables
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS cos_threads (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      app_id TEXT,
+      name TEXT NOT NULL,
+      system_prompt TEXT,
+      model TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cos_threads_agent ON cos_threads(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_cos_threads_app ON cos_threads(app_id);
+    CREATE INDEX IF NOT EXISTS idx_cos_threads_updated ON cos_threads(updated_at);
+
+    CREATE TABLE IF NOT EXISTS cos_messages (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL REFERENCES cos_threads(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      text TEXT NOT NULL,
+      tool_calls_json TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cos_messages_thread ON cos_messages(thread_id);
   `);
 
   // Seed default tmux config from tmux-pw.conf if table is empty or default has empty content

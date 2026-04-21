@@ -98,8 +98,8 @@ export function startPicker(
     position: 'fixed',
     pointerEvents: 'none',
     zIndex: '2147483646',
-    border: '2px solid #6366f1',
-    background: 'rgba(99, 102, 241, 0.08)',
+    border: '2px solid #1d9bf0',
+    background: 'rgba(29, 155, 240, 0.08)',
     borderRadius: '3px',
     transition: 'top 0.05s, left 0.05s, width 0.05s, height 0.05s',
     display: 'none',
@@ -110,8 +110,8 @@ export function startPicker(
     position: 'fixed',
     pointerEvents: 'none',
     zIndex: '2147483646',
-    background: '#312e81',
-    color: '#e0e7ff',
+    background: '#1e3a8a',
+    color: '#dbeafe',
     fontSize: '11px',
     fontFamily: 'monospace',
     padding: '2px 6px',
@@ -130,8 +130,8 @@ export function startPicker(
     left: '0',
     right: '0',
     zIndex: '2147483646',
-    background: '#1e1b4b',
-    color: '#c7d2fe',
+    background: '#0c4a6e',
+    color: '#bae6fd',
     fontSize: '13px',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
     textAlign: 'center',
@@ -158,7 +158,7 @@ export function startPicker(
 
   const doneBtn = document.createElement('button');
   Object.assign(doneBtn.style, {
-    background: '#6366f1',
+    background: '#1d9bf0',
     color: '#fff',
     border: 'none',
     borderRadius: '4px',
@@ -177,8 +177,8 @@ export function startPicker(
   const hideBtn = document.createElement('button');
   Object.assign(hideBtn.style, {
     background: 'transparent',
-    color: '#818cf8',
-    border: '1px solid #4338ca',
+    color: '#60a5fa',
+    border: '1px solid #1e40af',
     borderRadius: '4px',
     padding: '4px 10px',
     fontSize: '12px',
@@ -193,10 +193,29 @@ export function startPicker(
     bar.style.display = 'none';
   });
 
+  const cancelBtn = document.createElement('button');
+  Object.assign(cancelBtn.style, {
+    background: 'transparent',
+    color: '#fca5a5',
+    border: '1px solid #7f1d1d',
+    borderRadius: '4px',
+    padding: '4px 10px',
+    fontSize: '12px',
+    fontWeight: '500',
+    cursor: 'pointer',
+  });
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    callback([]);
+    cleanup();
+  });
+
   if (multiSelect) {
-    bar.append(barText, doneBtn, hideBtn);
+    bar.append(barText, doneBtn, cancelBtn, hideBtn);
   } else {
-    bar.append(barText, hideBtn);
+    bar.append(barText, cancelBtn, hideBtn);
   }
 
   document.body.appendChild(highlight);
@@ -244,8 +263,8 @@ export function startPicker(
       position: 'fixed',
       pointerEvents: 'none',
       zIndex: '2147483645',
-      border: '2px solid #22c55e',
-      background: 'rgba(34, 197, 94, 0.12)',
+      border: '2px solid #eab308',
+      background: 'rgba(234, 179, 8, 0.12)',
       borderRadius: '3px',
       top: rect.top + 'px',
       left: rect.left + 'px',
@@ -288,8 +307,8 @@ export function startPicker(
       highlight.style.border = '2px solid #ef4444';
       highlight.style.background = 'rgba(239, 68, 68, 0.08)';
     } else {
-      highlight.style.border = '2px solid #6366f1';
-      highlight.style.background = 'rgba(99, 102, 241, 0.08)';
+      highlight.style.border = '2px solid #1d9bf0';
+      highlight.style.background = 'rgba(29, 155, 240, 0.08)';
     }
 
     let labelText = el.tagName.toLowerCase();

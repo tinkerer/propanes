@@ -34,7 +34,7 @@ export function PaneTree({ node }: PaneTreeProps) {
   );
 
   const isCollapsed = (child: typeof node.children[0]) =>
-    child.type === 'leaf' && child.singleton && !!child.collapsed;
+    child.type === 'leaf' && !!child.collapsed;
 
   return (
     <SplitPane

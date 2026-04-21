@@ -18,19 +18,21 @@ export const WIDGET_CSS = `
   width: 48px;
   height: 48px;
   border-radius: 50%;
-  background: #6366f1;
+  background: #1d9bf0;
   border: none;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 4px 12px rgba(29, 155, 240, 0.4);
   transition: transform 0.2s, box-shadow 0.2s;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .pw-trigger:hover {
   transform: scale(1.1);
-  box-shadow: 0 6px 16px rgba(99, 102, 241, 0.5);
+  box-shadow: 0 6px 16px rgba(29, 155, 240, 0.5);
 }
 
 .pw-trigger svg {
@@ -43,6 +45,15 @@ export const WIDGET_CSS = `
 .pw-trigger.bottom-left { bottom: 20px; left: 20px; }
 .pw-trigger.top-right { top: 20px; right: 20px; }
 .pw-trigger.top-left { top: 20px; left: 20px; }
+
+/* Mobile: the host app (e.g. the admin dashboard) typically has a fixed
+   bottom tab bar. Raise the trigger above it and shrink it slightly. */
+@media (max-width: 480px) {
+  .pw-trigger { width: 40px; height: 40px; }
+  .pw-trigger svg { width: 20px; height: 20px; }
+  .pw-trigger.bottom-right { bottom: calc(env(safe-area-inset-bottom, 0px) + 72px); right: 12px; }
+  .pw-trigger.bottom-left { bottom: calc(env(safe-area-inset-bottom, 0px) + 72px); left: 12px; }
+}
 
 .pw-trigger-dragging {
   transition: none !important;
@@ -68,10 +79,12 @@ export const WIDGET_CSS = `
   position: fixed;
   z-index: 2147483647;
   width: 360px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 96px);
   background: #1e293b;
   border: 1px solid #334155;
   border-radius: 14px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(99, 102, 241, 0.08);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(29, 155, 240, 0.08);
   display: flex;
   flex-direction: column;
   overflow: visible;
@@ -83,11 +96,74 @@ export const WIDGET_CSS = `
 .pw-panel.top-right { top: 80px; right: 20px; }
 .pw-panel.top-left { top: 80px; left: 20px; }
 
+/* Narrow viewports (mobile): clamp the panel to nearly the whole width so
+   the toolbar's many buttons (camera, picker, context, mic, admin, send)
+   stay reachable instead of overflowing off-screen. */
+@media (max-width: 480px) {
+  .pw-panel {
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    /* Drop the panel closer to the edge so the whole thing fits above the
+       host app's bottom tab bar + keyboard on iOS. The trigger is hidden
+       while the panel is open (see .pw-trigger-hidden), so we can reclaim
+       the 80px gap that existed to avoid the trigger. */
+    max-height: calc(100dvh - 24px);
+  }
+  .pw-panel.bottom-right, .pw-panel.bottom-left {
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  }
+  .pw-panel.top-right, .pw-panel.top-left {
+    top: calc(env(safe-area-inset-top, 0px) + 12px);
+  }
+  .pw-panel.bottom-right, .pw-panel.top-right { right: 8px; }
+  .pw-panel.bottom-left, .pw-panel.top-left { left: 8px; }
+}
+
+/* The trigger is hidden behind the panel on mobile, so hide it while the
+   panel is open — the pw-close-btn in the panel's top-right is used to
+   dismiss instead. */
+.pw-trigger-hidden { display: none !important; }
+
+.pw-close-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(15, 23, 42, 0.6);
+  color: #e2e8f0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  z-index: 2;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, color 0.15s;
+}
+
+.pw-close-btn:hover {
+  background: #334155;
+  color: #fff;
+}
+
+.pw-close-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+@media (max-width: 480px) {
+  .pw-close-btn { width: 34px; height: 34px; top: 4px; right: 4px; }
+  .pw-close-btn svg { width: 20px; height: 20px; }
+}
+
 @keyframes pw-slide-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
-
 
 .pw-resize-handle {
   position: absolute;
@@ -106,8 +182,8 @@ export const WIDGET_CSS = `
   border-top-left-radius: 14px;
 }
 .pw-panel.bottom-right .pw-resize-handle:hover {
-  border-top-color: #6366f1;
-  border-left-color: #6366f1;
+  border-top-color: #1d9bf0;
+  border-left-color: #1d9bf0;
 }
 
 .pw-panel.bottom-left .pw-resize-handle {
@@ -118,8 +194,8 @@ export const WIDGET_CSS = `
   border-top-right-radius: 14px;
 }
 .pw-panel.bottom-left .pw-resize-handle:hover {
-  border-top-color: #6366f1;
-  border-right-color: #6366f1;
+  border-top-color: #1d9bf0;
+  border-right-color: #1d9bf0;
 }
 
 .pw-panel.top-right .pw-resize-handle {
@@ -130,8 +206,8 @@ export const WIDGET_CSS = `
   border-bottom-left-radius: 14px;
 }
 .pw-panel.top-right .pw-resize-handle:hover {
-  border-bottom-color: #6366f1;
-  border-left-color: #6366f1;
+  border-bottom-color: #1d9bf0;
+  border-left-color: #1d9bf0;
 }
 
 .pw-panel.top-left .pw-resize-handle {
@@ -142,8 +218,8 @@ export const WIDGET_CSS = `
   border-bottom-right-radius: 14px;
 }
 .pw-panel.top-left .pw-resize-handle:hover {
-  border-bottom-color: #6366f1;
-  border-right-color: #6366f1;
+  border-bottom-color: #1d9bf0;
+  border-right-color: #1d9bf0;
 }
 
 .pw-screenshots {
@@ -169,7 +245,7 @@ export const WIDGET_CSS = `
 }
 
 .pw-screenshot-thumb:hover {
-  border-color: #6366f1;
+  border-color: #1d9bf0;
 }
 
 .pw-screenshot-remove {
@@ -206,18 +282,28 @@ export const WIDGET_CSS = `
 .pw-textarea {
   width: 100%;
   min-height: 40px;
-  flex: 1;
+  /* JS grows the height to fit content on input; cap so the toolbar never
+     scrolls out of the panel on short viewports. */
+  max-height: calc(100dvh - 220px);
+  flex: 0 0 auto;
   padding: 10px 12px;
   border: 1px solid #334155;
   border-radius: 8px;
   background: #0f172a;
   color: #e2e8f0;
-  font-size: 13px;
+  /* 16px prevents iOS Safari from auto-zooming the page on focus, which
+     otherwise disrupts typing on iPhone. */
+  font-size: 16px;
   font-family: inherit;
   line-height: 1.5;
   outline: none;
   resize: none;
+  overflow-y: auto;
   transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+@media (min-width: 481px) {
+  .pw-textarea { font-size: 13px; }
 }
 
 .pw-textarea::placeholder {
@@ -225,8 +311,8 @@ export const WIDGET_CSS = `
 }
 
 .pw-textarea:focus {
-  border-color: #6366f1;
-  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+  border-color: #1d9bf0;
+  box-shadow: 0 0 0 2px rgba(29, 155, 240, 0.15);
 }
 
 .pw-context-group {
@@ -320,7 +406,7 @@ export const WIDGET_CSS = `
 }
 
 .pw-context-menu-item:hover {
-  background: rgba(99, 102, 241, 0.2);
+  background: rgba(29, 155, 240, 0.2);
 }
 
 .pw-context-menu-item input[type="checkbox"] {
@@ -337,8 +423,8 @@ export const WIDGET_CSS = `
 }
 
 .pw-context-menu-item input[type="checkbox"]:checked {
-  background: #6366f1;
-  border-color: #6366f1;
+  background: #1d9bf0;
+  border-color: #1d9bf0;
 }
 
 .pw-context-menu-item input[type="checkbox"]:checked::after {
@@ -358,6 +444,34 @@ export const WIDGET_CSS = `
   align-items: center;
   justify-content: space-between;
   margin-top: 8px;
+  gap: 4px;
+}
+
+/* Narrow viewports: shrink every toolbar button so the whole row fits on one
+   line. The panel clamps to ~calc(100vw - 16px), which is ~303px at a 319px
+   viewport — six 32+20 groups plus gaps overflow to a second row there. */
+@media (max-width: 400px) {
+  .pw-toolbar { gap: 2px; }
+  .pw-toolbar .pw-camera-btn,
+  .pw-toolbar .pw-picker-btn,
+  .pw-toolbar .pw-context-btn,
+  .pw-toolbar .pw-mic-btn,
+  .pw-toolbar .pw-admin-btn { width: 30px; height: 30px; }
+  /* The send/dispatch button is the primary action — make it wider than
+     the other toolbar icons so it's an obvious, easy tap target. */
+  .pw-toolbar .pw-send-btn { width: 44px; height: 30px; padding: 0 8px; }
+  .pw-toolbar .pw-camera-dropdown-toggle,
+  .pw-toolbar .pw-picker-dropdown-toggle,
+  .pw-toolbar .pw-context-dropdown-toggle,
+  .pw-toolbar .pw-mic-dropdown-toggle,
+  .pw-toolbar .pw-admin-dropdown-toggle { width: 14px; height: 30px; }
+  .pw-toolbar .pw-send-dropdown-toggle { width: 20px; height: 30px; }
+  .pw-toolbar .pw-camera-btn svg,
+  .pw-toolbar .pw-picker-btn svg,
+  .pw-toolbar .pw-context-btn svg,
+  .pw-toolbar .pw-mic-btn svg,
+  .pw-toolbar .pw-admin-btn svg,
+  .pw-toolbar .pw-send-btn svg { width: 14px; height: 14px; }
 }
 
 .pw-camera-btn {
@@ -426,15 +540,15 @@ export const WIDGET_CSS = `
   align-items: center;
   gap: 6px;
   padding: 3px 8px;
-  background: rgba(99, 102, 241, 0.1);
-  border: 1px solid #6366f1;
+  background: rgba(29, 155, 240, 0.1);
+  border: 1px solid #1d9bf0;
   border-radius: 6px;
   font-size: 12px;
 }
 
 .pw-selected-element code {
   font-family: monospace;
-  color: #c7d2fe;
+  color: #bae6fd;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -528,7 +642,7 @@ export const WIDGET_CSS = `
 }
 
 .pw-picker-menu-item:hover {
-  background: rgba(99, 102, 241, 0.2);
+  background: rgba(29, 155, 240, 0.2);
 }
 
 .pw-picker-menu-item input[type="checkbox"] {
@@ -545,8 +659,8 @@ export const WIDGET_CSS = `
 }
 
 .pw-picker-menu-item input[type="checkbox"]:checked {
-  background: #6366f1;
-  border-color: #6366f1;
+  background: #1d9bf0;
+  border-color: #1d9bf0;
 }
 
 .pw-picker-menu-item input[type="checkbox"]:checked::after {
@@ -626,7 +740,7 @@ export const WIDGET_CSS = `
 }
 
 .pw-camera-menu-item:hover {
-  background: rgba(99, 102, 241, 0.2);
+  background: rgba(29, 155, 240, 0.2);
 }
 
 .pw-camera-menu-item input[type="checkbox"] {
@@ -643,8 +757,8 @@ export const WIDGET_CSS = `
 }
 
 .pw-camera-menu-item input[type="checkbox"]:checked {
-  background: #6366f1;
-  border-color: #6366f1;
+  background: #1d9bf0;
+  border-color: #1d9bf0;
 }
 
 .pw-camera-menu-item input[type="checkbox"]:checked::after {
@@ -691,7 +805,7 @@ export const WIDGET_CSS = `
   padding: 0 14px;
   border-radius: 6px;
   border: none;
-  background: #6366f1;
+  background: #1d9bf0;
   color: white;
   cursor: pointer;
   display: flex;
@@ -709,15 +823,15 @@ export const WIDGET_CSS = `
 }
 
 .pw-send-btn:hover {
-  background: #4f46e5;
+  background: #0f7ac7;
 }
 
 .pw-send-btn.pw-dispatch-active {
-  background: #22c55e;
+  background: #eab308;
 }
 
 .pw-send-btn.pw-dispatch-active:hover {
-  background: #16a34a;
+  background: #a16207;
 }
 
 .pw-send-btn:active {
@@ -735,7 +849,7 @@ export const WIDGET_CSS = `
   width: 24px;
   border: none;
   border-left: 1px solid rgba(255,255,255,0.25);
-  background: #6366f1;
+  background: #1d9bf0;
   color: white;
   cursor: pointer;
   border-radius: 0 6px 6px 0;
@@ -747,15 +861,15 @@ export const WIDGET_CSS = `
 }
 
 .pw-send-dropdown-toggle:hover {
-  background: #4f46e5;
+  background: #0f7ac7;
 }
 
 .pw-send-dropdown-toggle.pw-dispatch-active {
-  background: #22c55e;
+  background: #eab308;
 }
 
 .pw-send-dropdown-toggle.pw-dispatch-active:hover {
-  background: #16a34a;
+  background: #a16207;
 }
 
 .pw-send-dropdown-toggle svg {
@@ -795,11 +909,11 @@ export const WIDGET_CSS = `
 }
 
 .pw-send-menu-item:hover {
-  background: rgba(99, 102, 241, 0.2);
+  background: rgba(29, 155, 240, 0.2);
 }
 
 .pw-send-menu-item.pw-active {
-  color: #a5b4fc;
+  color: #93c5fd;
 }
 
 .pw-send-menu-checkbox input[type="checkbox"] {
@@ -816,8 +930,8 @@ export const WIDGET_CSS = `
 }
 
 .pw-send-menu-checkbox input[type="checkbox"]:checked {
-  background: #6366f1;
-  border-color: #6366f1;
+  background: #1d9bf0;
+  border-color: #1d9bf0;
 }
 
 .pw-send-menu-checkbox input[type="checkbox"]:checked::after {
@@ -851,7 +965,7 @@ export const WIDGET_CSS = `
   min-width: 0;
 }
 .pw-send-menu-target-select:hover {
-  border-color: #6366f1;
+  border-color: #1d9bf0;
 }
 .pw-send-menu-divider {
   height: 1px;
@@ -864,7 +978,7 @@ export const WIDGET_CSS = `
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  color: #22c55e;
+  color: #eab308;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -876,7 +990,7 @@ export const WIDGET_CSS = `
 .pw-flash svg {
   width: 28px;
   height: 28px;
-  fill: #22c55e;
+  fill: #eab308;
 }
 
 .pw-flash-label {
@@ -998,7 +1112,7 @@ export const WIDGET_CSS = `
 }
 
 .pw-admin-menu-item:hover {
-  background: rgba(99, 102, 241, 0.2);
+  background: rgba(29, 155, 240, 0.2);
 }
 
 .pw-admin-menu-item input[type="checkbox"] {
@@ -1015,8 +1129,8 @@ export const WIDGET_CSS = `
 }
 
 .pw-admin-menu-item input[type="checkbox"]:checked {
-  background: #6366f1;
-  border-color: #6366f1;
+  background: #1d9bf0;
+  border-color: #1d9bf0;
 }
 
 .pw-admin-menu-item input[type="checkbox"]:checked::after {
@@ -1059,7 +1173,7 @@ export const WIDGET_CSS = `
 
 .pw-admin-option:hover {
   background: #334155;
-  border-color: #6366f1;
+  border-color: #1d9bf0;
   color: #f1f5f9;
 }
 
@@ -1073,13 +1187,13 @@ export const WIDGET_CSS = `
   width: 100% !important;
   height: 32px !important;
   gap: 6px;
-  border-color: #4f46e5;
-  background: linear-gradient(135deg, #1e1b4b, #312e81);
+  border-color: #0f7ac7;
+  background: linear-gradient(135deg, #0c4a6e, #1e3a8a);
 }
 
 .pw-workbench-btn:hover {
-  background: linear-gradient(135deg, #312e81, #4338ca);
-  border-color: #818cf8;
+  background: linear-gradient(135deg, #1e3a8a, #1e40af);
+  border-color: #60a5fa;
 }
 
 .pw-workbench-label {
@@ -1296,7 +1410,7 @@ export const WIDGET_CSS = `
 }
 
 .pw-mic-menu-item:hover {
-  background: rgba(99, 102, 241, 0.2);
+  background: rgba(29, 155, 240, 0.2);
 }
 
 .pw-mic-menu-item input[type="checkbox"] {
@@ -1313,8 +1427,8 @@ export const WIDGET_CSS = `
 }
 
 .pw-mic-menu-item input[type="checkbox"]:checked {
-  background: #6366f1;
-  border-color: #6366f1;
+  background: #1d9bf0;
+  border-color: #1d9bf0;
 }
 
 .pw-mic-menu-item input[type="checkbox"]:checked::after {
@@ -1450,15 +1564,16 @@ export const WIDGET_CSS = `
   vertical-align: middle;
 }
 
+/* Timeline badges — flame palette only, per DESIGN_SPEC.md. */
 .pw-tl-badge-click { background: #3b82f6; color: white; }
-.pw-tl-badge-scroll { background: #8b5cf6; color: white; }
+.pw-tl-badge-scroll { background: #475569; color: white; }
 .pw-tl-badge-input { background: #f59e0b; color: #1e293b; }
-.pw-tl-badge-focus { background: #22d3ee; color: #1e293b; }
-.pw-tl-badge-navigation { background: #10b981; color: white; }
+.pw-tl-badge-focus { background: #facc15; color: #1e293b; }
+.pw-tl-badge-navigation { background: #dc2626; color: white; }
 .pw-tl-badge-hover { background: #64748b; color: white; }
 
 .pw-tl-selector {
-  color: #a5b4fc;
+  color: #93c5fd;
   word-break: break-all;
 }
 

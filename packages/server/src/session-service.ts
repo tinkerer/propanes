@@ -180,8 +180,10 @@ function buildAgentCommand(
     const args: string[] = [];
     if (permissionProfile === 'auto' || permissionProfile === 'yolo') {
       args.push('exec');
-      if (permissionProfile === 'auto') args.push('--full-auto');
-      if (permissionProfile === 'yolo') args.push('--dangerously-bypass-approvals-and-sandbox');
+    }
+    if (permissionProfile === 'auto') args.push('--full-auto');
+    if (permissionProfile === 'yolo' || permissionProfile === 'interactive-yolo') {
+      args.push('--dangerously-bypass-approvals-and-sandbox');
     }
     if (prompt) args.push(prompt);
     return { command, args };
@@ -190,7 +192,9 @@ function buildAgentCommand(
   // When resuming, use --resume — no --session-id (it conflicts)
   if (resumeSessionId) {
     const args = ['--resume', resumeSessionId];
-    if (permissionProfile === 'yolo') args.push('--dangerously-skip-permissions');
+    if (permissionProfile === 'yolo' || permissionProfile === 'interactive-yolo') {
+      args.push('--dangerously-skip-permissions');
+    }
     if (permissionProfile === 'auto' || permissionProfile === 'yolo') {
       args.push('--output-format', 'stream-json', '--verbose');
     }
@@ -201,6 +205,13 @@ function buildAgentCommand(
   switch (permissionProfile) {
     case 'interactive': {
       const args: string[] = [];
+      if (claudeSessionId) args.push('--session-id', claudeSessionId);
+      if (allowedTools) args.push(`--allowedTools=${allowedTools}`);
+      if (prompt) args.push(prompt);
+      return { command: process.env.CLAUDE_BIN || 'claude', args };
+    }
+    case 'interactive-yolo': {
+      const args: string[] = ['--dangerously-skip-permissions'];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (allowedTools) args.push(`--allowedTools=${allowedTools}`);
       if (prompt) args.push(prompt);
@@ -273,7 +284,15 @@ function flushOutput(sessionId: string): void {
       outputLog: proc.outputBuffer.slice(-MAX_OUTPUT_LOG),
       outputBytes: proc.totalBytes,
       lastOutputSeq: proc.outputSeq,
+      lastActivityAt: new Date().toISOString(),
     })
+    .where(eq(schema.agentSessions.id, sessionId))
+    .run();
+}
+
+function touchActivity(sessionId: string): void {
+  db.update(schema.agentSessions)
+    .set({ lastActivityAt: new Date().toISOString() })
     .where(eq(schema.agentSessions.id, sessionId))
     .run();
 }
@@ -537,6 +556,7 @@ function writeToSession(sessionId: string, data: string): void {
       proc.inputState = 'active';
       sendSequenced(proc, { kind: 'input_state', state: 'active' });
     }
+    if (!data.startsWith('\x1b')) touchActivity(sessionId);
   }
 }
 
@@ -728,8 +748,8 @@ app.post('/spawn', async (c) => {
   if (!sessionId || !cwd || !permissionProfile) {
     return c.json({ error: 'Missing required fields' }, 400);
   }
-  if (permissionProfile !== 'plain' && permissionProfile !== 'interactive' && !prompt && !resumeSessionId) {
-    return c.json({ error: 'Prompt required for non-plain sessions' }, 400);
+  if ((permissionProfile === 'auto' || permissionProfile === 'yolo') && !prompt && !resumeSessionId) {
+    return c.json({ error: 'Prompt required for headless sessions' }, 400);
   }
 
   try {

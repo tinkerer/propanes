@@ -90,8 +90,16 @@ export function nudgeResize() {
 
 export const viewModes = signal<Record<string, ViewMode>>({});
 
+const TERMINAL_STATUSES = new Set(['completed', 'exited', 'failed', 'killed', 'deleted', 'archived']);
+
 export function getViewMode(sessionId: string): ViewMode {
-  return viewModes.value[sessionId] || 'terminal';
+  const explicit = viewModes.value[sessionId];
+  if (explicit) return explicit;
+  // For finished sessions the terminal shows only "Session exited (code: 0)" —
+  // the JSONL content is what the user actually wants to read. Default to it.
+  const sess = allSessions.value.find((s: any) => s.id === sessionId);
+  const isDone = exitedSessions.value.has(sessionId) || (sess?.status && TERMINAL_STATUSES.has(sess.status));
+  return isDone ? 'structured' : 'terminal';
 }
 
 export function setViewMode(sessionId: string, mode: ViewMode) {
@@ -250,9 +258,8 @@ export function toggleSessionFiltersOpen() {
   localStorage.setItem('pw-session-filters-open', JSON.stringify(sessionFiltersOpen.value));
 }
 
-export function sessionPassesFilters(s: any, tabSet: Set<string>): boolean {
+export function sessionPassesFilters(s: any, _tabSet: Set<string>): boolean {
   if (s.status === 'deleted') return false;
-  if (tabSet.has(s.id)) return true;
   const statusFilters = sessionStatusFilters.value;
   if (!statusFilters.has(s.status)) return false;
   // App filter
@@ -362,8 +369,8 @@ export function getWorktreeLabel(session: any): string | null {
 }
 
 export const SESSION_COLOR_PRESETS = [
-  '#ef4444', '#f97316', '#eab308', '#22c55e',
-  '#3b82f6', '#a855f7', '#ec4899', '#06b6d4',
+  '#ef4444', '#f97316', '#eab308', '#eab308',
+  '#3b82f6', '#a855f7', '#dc2626', '#06b6d4',
 ];
 
 export const sessionColors = signal<Record<string, string>>(loadJson('pw-session-colors', {}));
