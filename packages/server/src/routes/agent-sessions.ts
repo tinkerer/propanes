@@ -288,6 +288,7 @@ const sessionSelectFields = {
   id: schema.agentSessions.id,
   feedbackId: schema.agentSessions.feedbackId,
   agentEndpointId: schema.agentSessions.agentEndpointId,
+  runtime: schema.agentEndpoints.runtime,
   permissionProfile: schema.agentSessions.permissionProfile,
   parentSessionId: schema.agentSessions.parentSessionId,
   status: schema.agentSessions.status,
@@ -397,6 +398,7 @@ async function enrichSessions(rows: SessionRow[]) {
       id: r.id,
       feedbackId: r.feedbackId,
       agentEndpointId: r.agentEndpointId,
+      runtime: r.runtime || 'claude',
       permissionProfile: r.permissionProfile,
       parentSessionId: r.parentSessionId,
       status: r.status,
@@ -681,11 +683,13 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
   const row = db
     .select({
       claudeSessionId: schema.agentSessions.claudeSessionId,
+      runtime: schema.agentEndpoints.runtime,
       cwd: schema.agentSessions.cwd,
       appProjectDir: schema.applications.projectDir,
     })
     .from(schema.agentSessions)
     .leftJoin(schema.feedbackItems, eq(schema.agentSessions.feedbackId, schema.feedbackItems.id))
+    .leftJoin(schema.agentEndpoints, eq(schema.agentSessions.agentEndpointId, schema.agentEndpoints.id))
     .leftJoin(schema.applications, eq(schema.feedbackItems.appId, schema.applications.id))
     .where(eq(schema.agentSessions.id, id))
     .get();
@@ -702,6 +706,7 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
   const files = existsSync(jsonlPath) ? listJsonlFiles(jsonlPath) : [];
   return c.json({
     claudeSessionId: row.claudeSessionId,
+    runtime: row.runtime || 'claude',
     files: files.map(f => ({
       id: f.id,
       claudeSessionId: f.claudeSessionId,

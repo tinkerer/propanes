@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "dev": "concurrently --names server,sessions --prefix-colors blue,green \"NODE_OPTIONS='--conditions=@propanes/source' tsx watch --ignore src/session-service.ts src/index.ts\" \"NODE_OPTIONS='--conditions=@propanes/source' tsx src/session-service.ts\"",
+    "dev": "concurrently --names server,sessions --prefix-colors blue,green \"NODE_OPTIONS='--conditions=@propanes/source' tsx watch --ignore src/session-service.ts src/index.ts\" \"NODE_OPTIONS='--conditions=@propanes/source' tsx watch --ignore src/index.ts src/session-service.ts\"",
     "dev:server": "NODE_OPTIONS='--conditions=@propanes/source' tsx watch src/index.ts",
     "dev:sessions": "NODE_OPTIONS='--conditions=@propanes/source' tsx src/session-service.ts",
     "start": "concurrently \"node --env-file=.env dist/index.js\" \"node --env-file=.env dist/session-service.js\"",

@@ -907,7 +907,7 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
                 <div class="session-list">
                   {agentSessions.value.map((s: any) => (
                     <div class="session-item" key={s.id}>
-                      <div>
+                      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                         <span class="session-id" title="Click to copy full ID" onClick={(e: Event) => {
                           e.stopPropagation();
                           copyText(s.id);
@@ -916,6 +916,16 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
                           el.textContent = 'Copied!';
                           setTimeout(() => { el.textContent = orig; }, 1000);
                         }}>{s.id.slice(-8)}</span>
+                        {s.agentName && (
+                          <span style="font-size:12px;color:var(--pw-text-muted)">{s.agentName}</span>
+                        )}
+                        {s.runtime && (
+                          <span
+                            style={`font-size:11px;padding:2px 6px;border-radius:999px;border:1px solid ${s.runtime === 'codex' ? '#06b6d440' : '#8b5cf640'};color:${s.runtime === 'codex' ? '#06b6d4' : '#8b5cf6'};background:var(--pw-bg-sunken)`}
+                          >
+                            {s.runtime === 'codex' ? 'Codex' : 'Claude'}
+                          </span>
+                        )}
                         <span class={`session-status ${s.status}`} style="margin-left:6px">{s.status}</span>
                       </div>
                       <div style="display:flex;gap:4px">

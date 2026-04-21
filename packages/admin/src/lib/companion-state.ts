@@ -385,17 +385,17 @@ export interface JsonlFileInfo {
   order: number;
 }
 
-export const jsonlFilesCache = signal<Map<string, { files: JsonlFileInfo[]; claudeSessionId: string }>>(new Map());
+export const jsonlFilesCache = signal<Map<string, { files: JsonlFileInfo[]; claudeSessionId: string; runtime: string }>>(new Map());
 export const jsonlSelectedFile = signal<Map<string, string | null>>(new Map());
 export const jsonlDropdownOpen = signal<string | null>(null);
 
-export async function fetchJsonlFiles(sessionId: string, force = false): Promise<{ files: JsonlFileInfo[]; claudeSessionId: string }> {
+export async function fetchJsonlFiles(sessionId: string, force = false): Promise<{ files: JsonlFileInfo[]; claudeSessionId: string; runtime: string }> {
   if (!force) {
     const cached = jsonlFilesCache.value.get(sessionId);
     if (cached) return cached;
   }
   const result = await api.getJsonlFiles(sessionId);
-  const entry = { files: result.files, claudeSessionId: result.claudeSessionId };
+  const entry = { files: result.files, claudeSessionId: result.claudeSessionId, runtime: result.runtime || 'claude' };
   jsonlFilesCache.value = new Map([...jsonlFilesCache.value, [sessionId, entry]]);
   return entry;
 }

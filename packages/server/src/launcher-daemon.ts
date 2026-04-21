@@ -76,8 +76,11 @@ function buildAgentCommand(
   if (runtime === 'codex') {
     const command = process.env.CODEX_BIN || 'codex';
     const args: string[] = [];
-    if (permissionProfile === 'auto') args.push('--full-auto');
-    if (permissionProfile === 'yolo') args.push('--dangerously-bypass-approvals-and-sandbox');
+    if (permissionProfile === 'auto' || permissionProfile === 'yolo') {
+      args.push('exec');
+      if (permissionProfile === 'auto') args.push('--full-auto');
+      if (permissionProfile === 'yolo') args.push('--dangerously-bypass-approvals-and-sandbox');
+    }
     if (prompt) args.push(prompt);
     return { command, args };
   }
@@ -172,7 +175,7 @@ function spawnSession(params: {
 
   const { command, args } = buildAgentCommand(runtime, prompt, permissionProfile, allowedTools, claudeSessionId, resumeSessionId);
 
-  console.log(`[launcher] Spawning session ${sessionId}: profile=${permissionProfile}, cwd=${cwd}`);
+  console.log(`[launcher] Spawning session ${sessionId}: runtime=${runtime}, command=${command}, profile=${permissionProfile}, cwd=${cwd}`);
 
   const ptyProcess = pty.spawn(command, args, {
     name: 'xterm-256color',
