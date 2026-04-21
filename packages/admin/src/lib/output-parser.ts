@@ -17,6 +17,16 @@ export interface ParsedMessage {
   isError?: boolean;
   model?: string;
   usage?: TokenUsage;
+  // Set when this message originated from a subagent JSONL (the server tags
+  // each line with `_subagentId` before merging).
+  subagentId?: string;
+  // For tool_use: the Anthropic tool_use id (toolu_…). Used to link Task
+  // calls in the main flow to their subagent's transcript via tool_result.
+  toolUseId?: string;
+  // For tool_result: the tool_use id this result is for, plus the agentId
+  // extracted from `toolUseResult.agentId` when the parent tool was Task.
+  toolUseResultId?: string;
+  subagentLink?: string;
 }
 
 let nextId = 0;
@@ -50,9 +60,7 @@ export class JsonOutputParser {
   private currentUsage: TokenUsage = {};
 
   // Track in-progress streaming blocks by index
-  private activeBlocks: Map<number, { id: string; type: string; toolName?: string; textAccum: string; jsonAccum: string; thinkingAccum: string }> = new Map();
-  // Track which subagent IDs we've already emitted a marker for
-  private seenSubagents: Set<string> = new Set();
+  private activeBlocks: Map<number, { id: string; type: string; toolName?: string; toolUseId?: string; textAccum: string; jsonAccum: string; thinkingAccum: string }> = new Map();
 
   feed(chunk: string): ParsedMessage[] {
     this.buffer += chunk;
@@ -81,15 +89,15 @@ export class JsonOutputParser {
   }
 
   private parseJsonEvent(obj: any): ParsedMessage[] {
-    // --- Subagent marker: emit a system message on first entry from a new subagent ---
-    const subagentId = obj._subagentId || obj.agentId;
-    if (subagentId && !this.seenSubagents.has(subagentId)) {
-      this.seenSubagents.add(subagentId);
-      const marker: ParsedMessage = { id: genId(), role: 'system', timestamp: Date.now(), content: `Subagent: ${subagentId}` };
-      this.messages.push(marker);
-      return [marker, ...this.parseJsonEventInner(obj)];
+    // Tag every parsed message with its originating subagent (if any). The
+    // server prepends `_subagentId` to lines from agent-<id>.jsonl files in
+    // the merged stream; subagent JSONLs themselves carry `agentId` per line.
+    const subagentId: string | undefined = obj._subagentId || obj.agentId || undefined;
+    const msgs = this.parseJsonEventInner(obj);
+    if (subagentId) {
+      for (const m of msgs) m.subagentId = subagentId;
     }
-    return this.parseJsonEventInner(obj);
+    return msgs;
   }
 
   private parseJsonEventInner(obj: any): ParsedMessage[] {
@@ -112,6 +120,10 @@ export class JsonOutputParser {
     if (type === 'user') {
       const results: ParsedMessage[] = [];
       const content = obj.message?.content;
+      // For Task tool_results the agentId of the spawned subagent lives on
+      // the outer event's toolUseResult — capture it so the renderer can
+      // attach the subagent's transcript inline at this Task call.
+      const subagentLink: string | undefined = obj.toolUseResult?.agentId || undefined;
       if (typeof content === 'string') {
         if (content) results.push({ id: genId(), role: 'user_input', timestamp: Date.now(), content });
       } else if (Array.isArray(content)) {
@@ -122,7 +134,12 @@ export class JsonOutputParser {
             const rc = typeof block.content === 'string' ? block.content
               : Array.isArray(block.content) ? block.content.map((c: any) => c.text || JSON.stringify(c)).join('\n')
               : JSON.stringify(block.content);
-            results.push({ id: genId(), role: 'tool_result', timestamp: Date.now(), content: rc, isError: block.is_error || false });
+            results.push({
+              id: genId(), role: 'tool_result', timestamp: Date.now(),
+              content: rc, isError: block.is_error || false,
+              toolUseResultId: block.tool_use_id || undefined,
+              subagentLink,
+            });
           }
         }
       }
@@ -163,6 +180,7 @@ export class JsonOutputParser {
             id: genId(), role: 'tool_use', timestamp: Date.now(),
             toolName: block.name, toolInput: block.input,
             content: JSON.stringify(block.input, null, 2), model,
+            toolUseId: block.id || undefined,
           });
         } else if (block.type === 'tool_result') {
           const resultContent = typeof block.content === 'string'
@@ -173,6 +191,7 @@ export class JsonOutputParser {
           results.push({
             id: genId(), role: 'tool_result', timestamp: Date.now(),
             content: resultContent, isError: block.is_error || false,
+            toolUseResultId: block.tool_use_id || undefined,
           });
         } else if (block.type === 'thinking') {
           results.push({ id: genId(), role: 'thinking', timestamp: Date.now(), content: block.thinking || '', model });
@@ -188,7 +207,7 @@ export class JsonOutputParser {
       const id = genId();
 
       if (block.type === 'tool_use') {
-        this.activeBlocks.set(idx, { id, type: 'tool_use', toolName: block.name, textAccum: '', jsonAccum: '', thinkingAccum: '' });
+        this.activeBlocks.set(idx, { id, type: 'tool_use', toolName: block.name, toolUseId: block.id, textAccum: '', jsonAccum: '', thinkingAccum: '' });
       } else if (block.type === 'text') {
         this.activeBlocks.set(idx, { id, type: 'text', textAccum: '', jsonAccum: '', thinkingAccum: '' });
       } else if (block.type === 'thinking') {
@@ -242,6 +261,7 @@ export class JsonOutputParser {
           id: active.id, role: 'tool_use', timestamp: Date.now(),
           toolName: active.toolName, toolInput,
           content: active.jsonAccum || '', model,
+          toolUseId: active.toolUseId,
         }];
       }
 

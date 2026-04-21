@@ -3,6 +3,7 @@ import { api } from './api.js';
 import { timed, bindRouteSignal } from './perf.js';
 import { isolatedComponent } from './isolate.js';
 import { openPageView, openSettingsPanel } from './companion-state.js';
+import { initEmbedGestures } from './embed-gestures.js';
 
 // Embed mode detection
 const params = new URLSearchParams(window.location.search);
@@ -13,6 +14,8 @@ const embedAppId = params.get('appId');
 
 if (isWorkbench.value) {
   document.body.classList.add('pw-workbench');
+  // Two-finger pan + pinch-zoom relay so iOS Safari can move/zoom the popout
+  initEmbedGestures();
 } else if (isEmbedded.value) {
   document.body.classList.add('pw-embed');
 }
@@ -40,6 +43,11 @@ export const applications = signal<any[]>([]);
 export const unlinkedCount = signal(0);
 export const appFeedbackCounts = signal<Record<string, { total: number; new: number; running: number }>>({});
 export const addAppModalOpen = signal(false);
+export const spotlightOpen = signal(false);
+
+export function openSpotlight() { spotlightOpen.value = true; }
+export function closeSpotlight() { spotlightOpen.value = false; }
+export function toggleSpotlight() { spotlightOpen.value = !spotlightOpen.value; }
 
 effect(() => {
   const id = selectedAppId.value;

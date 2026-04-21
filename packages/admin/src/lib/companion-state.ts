@@ -19,6 +19,7 @@ import {
   addTabToLeaf,
   removeTabFromLeaf,
   splitLeaf,
+  splitLeafAtPosition,
   focusedLeafId,
   showSessionsLeaf,
   ensureSessionsLeaf,
@@ -27,11 +28,12 @@ import {
   layoutTree,
   batch as batchTreeOps,
   PAGE_LEAF_ID,
+  type PanePosition,
 } from './pane-tree.js';
 
 // --- Companion Types ---
 
-export type CompanionType = 'jsonl' | 'feedback' | 'iframe' | 'terminal' | 'isolate' | 'url' | 'file' | 'wiggum-runs';
+export type CompanionType = 'jsonl' | 'feedback' | 'iframe' | 'terminal' | 'isolate' | 'url' | 'file' | 'wiggum-runs' | 'artifact';
 
 // --- Terminal Companion Map ---
 
@@ -94,7 +96,7 @@ export function extractCompanionType(tabId: string): CompanionType | null {
   const idx = tabId.indexOf(':');
   if (idx < 0) return null;
   const prefix = tabId.slice(0, idx);
-  if (prefix === 'jsonl' || prefix === 'feedback' || prefix === 'iframe' || prefix === 'terminal' || prefix === 'isolate' || prefix === 'url' || prefix === 'file' || prefix === 'wiggum-runs') return prefix as CompanionType;
+  if (prefix === 'jsonl' || prefix === 'feedback' || prefix === 'iframe' || prefix === 'terminal' || prefix === 'isolate' || prefix === 'url' || prefix === 'file' || prefix === 'wiggum-runs' || prefix === 'artifact') return prefix as CompanionType;
   return null;
 }
 
@@ -106,7 +108,7 @@ export function persistCompanions() {
   localStorage.setItem('pw-session-companions', JSON.stringify(sessionCompanions.value));
 }
 
-export function toggleCompanion(sessionId: string, type: CompanionType) {
+export function toggleCompanion(sessionId: string, type: CompanionType, position?: PanePosition) {
   const current = getCompanions(sessionId);
   const tabId = companionTabId(sessionId, type);
 
@@ -155,11 +157,18 @@ export function toggleCompanion(sessionId: string, type: CompanionType) {
 
     const sessionLeaf = findLeafWithTab(sessionId);
     if (sessionLeaf) {
-      const sibling = findCompanionSibling(sessionLeaf.id, sessionId);
-      if (sibling) {
-        addTabToLeaf(sibling.id, tabId, true);
+      // If caller asked for a specific position, always split there — don't
+      // reuse a sibling, since that would put the new pane in the existing
+      // direction rather than the requested one.
+      if (position) {
+        splitLeafAtPosition(sessionLeaf.id, position, [tabId], 0.5);
       } else {
-        splitLeaf(sessionLeaf.id, 'horizontal', 'second', [tabId], 0.5);
+        const sibling = findCompanionSibling(sessionLeaf.id, sessionId);
+        if (sibling) {
+          addTabToLeaf(sibling.id, tabId, true);
+        } else {
+          splitLeaf(sessionLeaf.id, 'horizontal', 'second', [tabId], 0.5);
+        }
       }
     } else {
       const leafId = ensureSessionsLeaf();
@@ -172,7 +181,7 @@ export function toggleCompanion(sessionId: string, type: CompanionType) {
 
 // --- Companion Openers ---
 
-export function openIsolateCompanion(componentName: string) {
+export function openIsolateCompanion(componentName: string, position?: PanePosition) {
   const tabId = `isolate:${componentName}`;
   if (!openTabs.value.includes(tabId)) {
     openTabs.value = [...openTabs.value, tabId];
@@ -182,7 +191,8 @@ export function openIsolateCompanion(componentName: string) {
   const focused = focusedLeafId.value;
   const focusedLeaf = focused ? findLeaf(layoutTree.value.root, focused) : null;
   if (focusedLeaf && focusedLeaf.panelType === 'tabs' && focusedLeaf.tabs.length > 0) {
-    splitLeaf(focusedLeaf.id, 'horizontal', 'second', [tabId], 0.5);
+    if (position) splitLeafAtPosition(focusedLeaf.id, position, [tabId], 0.5);
+    else splitLeaf(focusedLeaf.id, 'horizontal', 'second', [tabId], 0.5);
   } else {
     batchTreeOps(() => {
       const leafId = ensureSessionsLeaf();
@@ -192,7 +202,7 @@ export function openIsolateCompanion(componentName: string) {
   }
 }
 
-export function openUrlCompanion(url: string) {
+export function openUrlCompanion(url: string, position?: PanePosition) {
   let normalized = url.trim();
   if (normalized && !/^https?:\/\//i.test(normalized)) {
     normalized = `http://${normalized}`;
@@ -206,7 +216,8 @@ export function openUrlCompanion(url: string) {
   const focused = focusedLeafId.value;
   const focusedLeaf = focused ? findLeaf(layoutTree.value.root, focused) : null;
   if (focusedLeaf && focusedLeaf.panelType === 'tabs' && focusedLeaf.tabs.length > 0) {
-    splitLeaf(focusedLeaf.id, 'horizontal', 'second', [tabId], 0.5);
+    if (position) splitLeafAtPosition(focusedLeaf.id, position, [tabId], 0.5);
+    else splitLeaf(focusedLeaf.id, 'horizontal', 'second', [tabId], 0.5);
   } else {
     batchTreeOps(() => {
       const leafId = ensureSessionsLeaf();
@@ -216,10 +227,63 @@ export function openUrlCompanion(url: string) {
   }
 }
 
-export function openFileCompanion(filePath: string) {
+export function openArtifactCompanion(artifactId: string, position?: PanePosition) {
+  const tabId = `artifact:${artifactId}`;
+
+  // Toggle off if already open
+  const existingLeaf = findLeafWithTab(tabId);
+  if (existingLeaf) {
+    removeTabFromLeaf(existingLeaf.id, tabId);
+    if (openTabs.value.includes(tabId)) {
+      openTabs.value = openTabs.value.filter((id) => id !== tabId);
+      persistTabs();
+    }
+    if (rightPaneTabs.value.includes(tabId)) {
+      const remaining = rightPaneTabs.value.filter((id) => id !== tabId);
+      rightPaneTabs.value = remaining;
+      if (rightPaneActiveId.value === tabId) {
+        rightPaneActiveId.value = remaining.length > 0 ? remaining[remaining.length - 1] : null;
+      }
+      if (remaining.length === 0 && splitEnabled.value) {
+        disableSplit();
+      } else {
+        persistSplitState();
+      }
+    }
+    return;
+  }
+
+  if (!openTabs.value.includes(tabId)) {
+    openTabs.value = [...openTabs.value, tabId];
+  }
+  openSessionInRightPane(tabId);
+
+  const focused = focusedLeafId.value;
+  const focusedLeaf = focused ? findLeaf(layoutTree.value.root, focused) : null;
+  if (focusedLeaf && focusedLeaf.panelType === 'tabs' && focusedLeaf.tabs.length > 0) {
+    if (position) splitLeafAtPosition(focusedLeaf.id, position, [tabId], 0.5);
+    else splitLeaf(focusedLeaf.id, 'horizontal', 'second', [tabId], 0.5);
+  } else {
+    batchTreeOps(() => {
+      const leafId = ensureSessionsLeaf();
+      addTabToLeaf(leafId, tabId, true);
+      showSessionsLeaf();
+    });
+  }
+}
+
+export function openFileCompanion(filePath: string, position?: PanePosition) {
   const tabId = `file:${filePath}`;
   if (!openTabs.value.includes(tabId)) {
     openTabs.value = [...openTabs.value, tabId];
+  }
+  if (position) {
+    const focused = focusedLeafId.value;
+    const focusedLeaf = focused ? findLeaf(layoutTree.value.root, focused) : null;
+    if (focusedLeaf && focusedLeaf.panelType === 'tabs' && focusedLeaf.tabs.length > 0) {
+      splitLeafAtPosition(focusedLeaf.id, position, [tabId], 0.5);
+      return;
+    }
   }
   batchTreeOps(() => {
     const leafId = ensureSessionsLeaf();

@@ -88,6 +88,25 @@ export interface AmbientWindow {
   text: string;
 }
 
+/**
+ * Throws a descriptive error with a `.code` property when the browser cannot
+ * run getUserMedia — either because we're in an insecure context (HTTP on a
+ * non-localhost origin, which iOS Safari and modern Chrome/Safari refuse) or
+ * because the Media Devices API is missing entirely.
+ */
+function preflightMic(): void {
+  if (typeof window !== 'undefined' && window.isSecureContext === false) {
+    const err = new Error('Microphone requires HTTPS (or localhost)');
+    (err as any).code = 'INSECURE_CONTEXT';
+    throw err;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    const err = new Error('Microphone API not available in this browser');
+    (err as any).code = 'NOT_SUPPORTED';
+    throw err;
+  }
+}
+
 export class VoiceRecorder {
   private mediaRecorder: MediaRecorder | null = null;
   private recognition: any = null;
@@ -139,6 +158,7 @@ export class VoiceRecorder {
   async start(opts?: { screenCaptures?: boolean }): Promise<void> {
     if (this._recording) return;
 
+    preflightMic();
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     this.t0 = Date.now();
     this._recording = true;
@@ -271,6 +291,7 @@ export class VoiceRecorder {
     // Request mic permission via getUserMedia so the SpeechRecognition
     // prompt doesn't surprise the user mid-session; keep the stream alive
     // while ambient mode is on.
+    preflightMic();
     this.ambientStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     this._ambient = true;
     this.ambientWindowMs = opts?.windowMs ?? 30_000;
@@ -537,7 +558,7 @@ export class VoiceRecorder {
       document.body.appendChild(canvas);
       ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.strokeStyle = '#6366f1';
+        ctx.strokeStyle = '#1d9bf0';
         ctx.lineWidth = 2;
         ctx.setLineDash([6, 4]);
         ctx.beginPath();

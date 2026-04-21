@@ -1,5 +1,6 @@
 import { AgentTerminal } from './AgentTerminal.js';
 import { StructuredView } from './StructuredView.js';
+import { InterruptBar } from './InterruptBar.js';
 import type { InputState } from '../lib/sessions.js';
 import { isMobile } from '../lib/viewport.js';
 
@@ -28,20 +29,22 @@ export function SessionViewToggle({ sessionId, isActive, onExit, onInputStateCha
             {showStructured && <StructuredView sessionId={sessionId} isActive={isActive} permissionProfile={permissionProfile} />}
           </div>
         )}
-        <div style={{
-          width: effectiveMode === 'split' ? '45%' : '100%',
-          height: '100%',
-          overflow: 'hidden',
-          display: showTerminal ? 'block' : 'none',
-        }}>
-          <AgentTerminal sessionId={sessionId} isActive={isActive} onExit={onExit} onInputStateChange={onInputStateChange} />
-        </div>
+        {showTerminal && (
+          <div style={{
+            width: effectiveMode === 'split' ? '45%' : '100%',
+            height: '100%',
+            overflow: 'hidden',
+          }}>
+            <AgentTerminal sessionId={sessionId} isActive={isActive} onExit={onExit} onInputStateChange={onInputStateChange} />
+          </div>
+        )}
         {effectiveMode === 'structured' && (
           <div style={{ width: '100%', height: '100%' }}>
             <StructuredView sessionId={sessionId} isActive={isActive} permissionProfile={permissionProfile} />
           </div>
         )}
       </div>
+      <InterruptBar sessionId={sessionId} permissionProfile={permissionProfile} />
     </div>
   );
 }
