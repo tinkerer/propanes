@@ -36,7 +36,6 @@ import {
 } from '../lib/chief-of-staff.js';
 import {
   popoutPanels,
-  updatePanel,
   persistPopoutState,
   bringToFront,
   getDockedPanelTop,
@@ -94,7 +93,6 @@ function deriveListLabel(token: any): { label: string; meta: string } {
   const items: any[] = Array.isArray(token.items) ? token.items : [];
   const n = items.length;
   const meta = `${n} item${n === 1 ? '' : 's'}`;
-  // Use first item's plain text as hint, truncated
   const first = items[0];
   const rawFirst = typeof first?.text === 'string' ? first.text : '';
   const hint = rawFirst.split('\n')[0].replace(/[*_`]/g, '').trim().slice(0, 48);
@@ -121,7 +119,6 @@ function deriveCodeLabel(token: any): { label: string; meta: string; lang: strin
   const kv = info.match(/filename\s*=\s*("([^"]+)"|([^\s]+))/);
   if (kv) filename = kv[2] || kv[3];
   else {
-    // "lang filename" form — marked puts lang separately; any extra tail might be here
     const tail = info.replace(/^\s*\S+\s*/, '').trim();
     if (tail && !tail.includes('=')) filename = tail.split(/\s+/)[0];
   }
@@ -172,7 +169,6 @@ function parseAssistantContent(text: string): ContentSegment[] {
       segments.push({ type: 'artifact', kind: 'table', label: d.label, meta: d.meta, raw });
       continue;
     }
-    // Prose-ish: paragraph, heading, blockquote, hr, space, html, etc.
     proseBuffer += raw;
   }
   flushProse();
@@ -192,7 +188,6 @@ function ArtifactCard({
 
   const body = useMemo(() => {
     if (seg.kind === 'code') {
-      // Recover just the code text from raw fence
       const m = seg.raw.match(/^```[^\n]*\n([\s\S]*?)\n?```\s*$/);
       const code = m ? m[1] : seg.raw;
       try {
@@ -248,7 +243,6 @@ function AssistantContent({ text, expandArtifacts }: { text: string; expandArtif
 }
 
 function bashDisplayName(cmd: string): string {
-  // Extract HTTP method + short path from curl commands
   const postM = cmd.match(/curl[^|]*-X\s+POST[^|]*'[^']*?(\/api\/[^'?\s]+)/);
   if (postM) {
     const path = postM[1].replace('/api/v1/admin/', '').replace('/api/v1/', '');
@@ -400,9 +394,6 @@ function MessageBubble({
   onReply: (role: string, text: string) => void;
 }) {
   const hasTools = !!(msg.toolCalls && msg.toolCalls.length > 0);
-  // For assistant messages, pull the user-facing reply out of <cos-reply> tags.
-  // While streaming and before the tag opens, displayText is empty so only the
-  // thinking dots show — keeps chain-of-thought out of the chat.
   const extracted = msg.role === 'assistant' ? extractCosReply(msg.text) : null;
   const assistantDisplay = extracted ? extracted.displayText : '';
   const showAssistantText = msg.role === 'assistant' && assistantDisplay;
@@ -650,7 +641,6 @@ export function ChiefOfStaffBubble({ floatingButton = true }: { floatingButton?:
   const error = chiefOfStaffError.value;
   const inFlight = chiefOfStaffInFlight.value;
 
-  // Subscribe to popout panel state for CoS
   const allPanels = popoutPanels.value;
   const _zOrders = panelZOrders.value;
   const panel = allPanels.find((p) => p.id === COS_PANEL_ID);
@@ -677,7 +667,6 @@ export function ChiefOfStaffBubble({ floatingButton = true }: { floatingButton?:
   }, [showTools]);
   const expandArtifacts = viewMode === 'full';
 
-  // Inline settings state
   const [nameEdit, setNameEdit] = useState<string | null>(null);
   const [promptEdit, setPromptEdit] = useState<string | null>(null);
   const [newAgentName, setNewAgentName] = useState<string | null>(null);
@@ -760,7 +749,6 @@ export function ChiefOfStaffBubble({ floatingButton = true }: { floatingButton?:
   }
 
   useEffect(() => {
-    // Reset inline state when switching agents or closing settings
     setNameEdit(null);
     setPromptEdit(null);
     setConfirmDelete(false);
