@@ -536,6 +536,25 @@ export function runMigrations() {
 
     CREATE INDEX IF NOT EXISTS idx_pending_dispatches_status ON pending_dispatches(status);
     CREATE INDEX IF NOT EXISTS idx_pending_dispatches_feedback ON pending_dispatches(feedback_id);
+
+    CREATE TABLE IF NOT EXISTS cos_learnings (
+      id TEXT PRIMARY KEY,
+      session_jsonl TEXT,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'medium',
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cos_learnings_type ON cos_learnings(type);
+    CREATE INDEX IF NOT EXISTS idx_cos_learnings_severity ON cos_learnings(severity);
+    CREATE INDEX IF NOT EXISTS idx_cos_learnings_created ON cos_learnings(created_at);
+
+    CREATE TABLE IF NOT EXISTS cos_metadata (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 
   // Seed default tmux config from tmux-pw.conf if table is empty or default has empty content

@@ -372,6 +372,23 @@ export const voiceTranscripts = sqliteTable('voice_transcripts', {
   createdAt: text('created_at').notNull(),
 });
 
+// Wiggum self-reflection: learnings extracted from past CoS sessions.
+export const cosLearnings = sqliteTable('cos_learnings', {
+  id: text('id').primaryKey(),
+  sessionJsonl: text('session_jsonl'), // path to source JSONL file
+  type: text('type').notNull(), // 'pitfall' | 'suggestion' | 'tool_gap'
+  title: text('title').notNull(),
+  body: text('body').notNull(),
+  severity: text('severity').notNull().default('medium'), // 'low' | 'medium' | 'high'
+  createdAt: integer('created_at').notNull(),
+});
+
+// Generic key/value scratchpad used by Wiggum (e.g. lastReflectedAt).
+export const cosMetadata = sqliteTable('cos_metadata', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+});
+
 // Scheduled dispatches that fire after a delay unless cancelled. Used by
 // voice-mode to give the user a 10s undo window before an agent spins up.
 export const pendingDispatches = sqliteTable('pending_dispatches', {
