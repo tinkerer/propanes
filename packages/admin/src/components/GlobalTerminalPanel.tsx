@@ -68,6 +68,7 @@ import {
   openLocalTerminal,
 } from '../lib/sessions.js';
 import { renderTabContent } from './PaneContent.js';
+import { cosArtifacts } from '../lib/cos-artifacts.js';
 import { AdminAssistChat } from './AdminAssistChat.js';
 import { startTabDrag, type TabDragSource } from '../lib/tab-drag.js';
 import { selectedAppId } from '../lib/state.js';
@@ -196,7 +197,8 @@ function PaneHeader({
   const isTerminalTab = sessionId?.startsWith('terminal:') || false;
   const isIsolateTab = sessionId?.startsWith('isolate:') || false;
   const isUrlTab = sessionId?.startsWith('url:') || false;
-  const isCompanionTab = isJsonlTab || isFeedbackTab || isIframeTab || isTerminalTab || isIsolateTab || isUrlTab;
+  const isArtifactTab = sessionId?.startsWith('artifact:') || false;
+  const isCompanionTab = isJsonlTab || isFeedbackTab || isIframeTab || isTerminalTab || isIsolateTab || isUrlTab || isArtifactTab;
   const realSessionId = isCompanionTab && sessionId ? sessionId.slice(sessionId.indexOf(':') + 1) : sessionId;
   const sess = realSessionId ? sessionMap.get(realSessionId) : null;
   const appId = selectedAppId.value;
@@ -245,6 +247,7 @@ function PaneHeader({
                 : isIframeTab ? `Page: pw-${realSessionId!.slice(-6)}`
                 : isIsolateTab ? `Isolate: ${realSessionId}`
                 : isUrlTab ? (() => { try { return `Iframe: ${new URL(realSessionId!).hostname}`; } catch { return `Iframe: ${realSessionId!.slice(0, 30)}`; } })()
+                : isArtifactTab ? (() => { const art = cosArtifacts.value[realSessionId!]; const prefix = art ? (art.kind === 'code' ? 'Code' : art.kind === 'table' ? 'Table' : 'List') : 'Artifact'; return `${prefix}: ${art?.label || realSessionId!.slice(-6)}`; })()
                 : `pw-${realSessionId!.slice(-6)}`;
               return (
                 <div class="id-dropdown-wrapper">
@@ -407,12 +410,13 @@ function PaneTabBar({
         const isTerminal = sid.startsWith('terminal:');
         const isIsolate = sid.startsWith('isolate:');
         const isUrl = sid.startsWith('url:');
-        const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl;
+        const isArtifact = sid.startsWith('artifact:');
+        const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isArtifact;
         const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
         const isExited = exited.has(realSid);
         const inputState = !isExited && !isCompanion ? (sessionInputStates.value.get(sid) || null) : null;
         const isActive = sid === activeId;
-        const sess = (isIsolate || isUrl) ? null : sessionMap.get(realSid);
+        const sess = (isIsolate || isUrl || isArtifact) ? null : sessionMap.get(realSid);
         const isPlain = !isCompanion && sess?.permissionProfile === 'plain';
         const plainLabel = sess?.paneCommand
           ? `${sess.paneCommand}:${sess.panePath || ''} \u2014 ${sess?.paneTitle || realSid.slice(-6)}`
@@ -424,6 +428,7 @@ function PaneTabBar({
           : isTerminal ? (() => { const ts = getTerminalCompanion(realSid); if (ts === '__loading__') return 'Term: loading...'; const tSess = ts ? sessionMap.get(ts) : null; return `Term: ${tSess?.paneTitle || ts?.slice(-6) || realSid.slice(-6)}`; })()
           : isIsolate ? `Isolate: ${realSid}`
           : isUrl ? (() => { try { return `Iframe: ${new URL(realSid).hostname}`; } catch { return `Iframe: ${realSid.slice(0, 30)}`; } })()
+          : isArtifact ? (() => { const art = cosArtifacts.value[realSid]; const prefix = art ? (art.kind === 'code' ? 'Code' : art.kind === 'table' ? 'Table' : 'List') : 'Artifact'; return `${prefix}: ${art?.label || realSid.slice(-6)}`; })()
           : '';
         const locationPrefix = !isCompanion && sess?.isHarness ? '\u{1F4E6}' : !isCompanion && sess?.isRemote ? '\u{1F310}' : '';
         const raw = customLabel || (isCompanion ? companionLabel : isPlain ? `${locationPrefix || '\u{1F5A5}\uFE0F'} ${plainLabel}` : `${locationPrefix ? locationPrefix + ' ' : ''}${sess?.feedbackTitle || sess?.agentName || `Session ${sid.slice(-6)}`}`);
@@ -482,6 +487,7 @@ function PaneTabBar({
               isIframe ? '\u{1F310}' :
               isTerminal ? '\u{25B8}' :
               isUrl ? '\u{1F517}' :
+              isArtifact ? '\u{1F4CB}' :
               isIsolate ? '\u2699' :
               '\u25C6'
             }</span>}

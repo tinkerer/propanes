@@ -4,6 +4,18 @@ import { signal, computed } from '@preact/signals';
 
 export type SplitDirection = 'horizontal' | 'vertical';
 
+/** High-level pane placement direction, mapped to (SplitDirection, 'first'|'second'). */
+export type PanePosition = 'left' | 'right' | 'above' | 'below';
+
+export function positionToSplit(position: PanePosition): { direction: SplitDirection; newPosition: 'first' | 'second' } {
+  switch (position) {
+    case 'left': return { direction: 'horizontal', newPosition: 'first' };
+    case 'right': return { direction: 'horizontal', newPosition: 'second' };
+    case 'above': return { direction: 'vertical', newPosition: 'first' };
+    case 'below': return { direction: 'vertical', newPosition: 'second' };
+  }
+}
+
 export interface SplitNode {
   type: 'split';
   id: string;
@@ -435,6 +447,21 @@ export function splitLeaf(
 
   commitTree(tree);
   return newLeaf;
+}
+
+/**
+ * Split a leaf and place the new pane at a directional position
+ * (left / right / above / below). Thin wrapper around splitLeaf.
+ */
+export function splitLeafAtPosition(
+  leafId: string,
+  position: PanePosition,
+  newTabs: string[] = [],
+  ratio = 0.5,
+  moveActiveTab = false,
+): LeafNode | null {
+  const { direction, newPosition } = positionToSplit(position);
+  return splitLeaf(leafId, direction, newPosition, newTabs, ratio, moveActiveTab);
 }
 
 export function mergeLeaf(leafId: string) {

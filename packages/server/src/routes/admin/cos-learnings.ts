@@ -105,10 +105,10 @@ cosLearningsRoutes.delete('/cos/learnings/:id', async (c) => {
   return c.json({ ok: true });
 });
 
-// Wiggum posts a summary of its findings here. The summary is stashed in
-// cos_metadata so the Learnings UI can show the banner. (When the CoS thread
-// schema lands, this endpoint will also insert a system-role message into the
-// named thread.)
+// Wiggum posts a summary of its findings here. The summary becomes a
+// system-role message in the named CoS thread (visible to history) AND is
+// stashed in cos_metadata so the Learnings UI can show the banner without
+// having to walk every thread.
 cosLearningsRoutes.post('/cos/learnings/announce', async (c) => {
   let body: { threadId?: string; summary?: string };
   try {
@@ -121,6 +121,29 @@ cosLearningsRoutes.post('/cos/learnings/announce', async (c) => {
   if (!summary) return c.json({ error: 'summary required' }, 400);
 
   const now = Date.now();
+  let messageId: string | null = null;
+
+  if (threadId) {
+    const thread = await db.query.cosThreads.findFirst({
+      where: eq(schema.cosThreads.id, threadId),
+    });
+    if (thread) {
+      messageId = ulid();
+      const text = `**Wiggum reflection** — ${summary}\n\nWant me to dispatch fixes? Open the Learnings pill to review.`;
+      await db.insert(schema.cosMessages).values({
+        id: messageId,
+        threadId,
+        role: 'system',
+        text,
+        toolCallsJson: null,
+        createdAt: now,
+      });
+      await db.update(schema.cosThreads)
+        .set({ updatedAt: now })
+        .where(eq(schema.cosThreads.id, threadId));
+    }
+  }
+
   const announcement = JSON.stringify({ summary, threadId: threadId || null, at: now });
   const existing = await db.query.cosMetadata.findFirst({
     where: eq(schema.cosMetadata.key, 'wiggum.lastAnnouncement'),
@@ -133,7 +156,7 @@ cosLearningsRoutes.post('/cos/learnings/announce', async (c) => {
     await db.insert(schema.cosMetadata).values({ key: 'wiggum.lastAnnouncement', value: announcement });
   }
 
-  return c.json({ ok: true });
+  return c.json({ ok: true, messageId });
 });
 
 cosLearningsRoutes.get('/cos/learnings/announcement', async (c) => {

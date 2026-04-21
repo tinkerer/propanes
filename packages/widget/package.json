@@ -6,7 +6,9 @@
   "main": "./dist/propanes.js",
   "exports": {
     ".": "./dist/propanes.js",
-    "./image-editor": "./src/image-editor.ts"
+    "./image-editor": "./src/image-editor.ts",
+    "./element-picker": "./src/element-picker.ts",
+    "./screenshot": "./src/screenshot.ts"
   },
   "scripts": {
     "build": "node build.mjs",

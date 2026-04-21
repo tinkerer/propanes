@@ -157,13 +157,16 @@ export function SessionIdMenu({
         <div class="id-submenu-trigger">{isExited ? 'Resume as...' : 'Restart as...'}</div>
         <div class="id-submenu">
           <button class="popup-menu-item" onClick={() => { onClose(); resumeSession(sessionId, { permissionProfile: 'interactive' }); }}>
-            {sess?.permissionProfile === 'interactive' ? '\u2713 ' : ''}{'\uD83D\uDC41'} Supervised
+            {sess?.permissionProfile === 'interactive' ? '\u2713 ' : ''}{'\uD83D\uDC41'} Interactive (supervised)
+          </button>
+          <button class="popup-menu-item" onClick={() => { onClose(); resumeSession(sessionId, { permissionProfile: 'interactive-yolo' }); }}>
+            {sess?.permissionProfile === 'interactive-yolo' ? '\u2713 ' : ''}{'\u26A1'}{'\uD83D\uDC41'} Interactive YOLO
           </button>
           <button class="popup-menu-item" onClick={() => { onClose(); resumeSession(sessionId, { permissionProfile: 'auto' }); }}>
-            {sess?.permissionProfile === 'auto' ? '\u2713 ' : ''}{'\uD83E\uDD16'} Autonomous
+            {sess?.permissionProfile === 'auto' ? '\u2713 ' : ''}{'\uD83E\uDD16'} Headless (autonomous)
           </button>
           <button class="popup-menu-item" onClick={() => { onClose(); resumeSession(sessionId, { permissionProfile: 'yolo' }); }}>
-            {sess?.permissionProfile === 'yolo' ? '\u2713 ' : ''}{'\u26A1'} Full Auto (skip permissions)
+            {sess?.permissionProfile === 'yolo' ? '\u2713 ' : ''}{'\u26A1'} Headless YOLO (skip permissions)
           </button>
         </div>
       </div>

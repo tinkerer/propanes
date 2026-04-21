@@ -28,8 +28,10 @@ export const OVERLAY_CSS = `
   background: #0f172a;
   cursor: grab;
   user-select: none;
+  -webkit-user-select: none;
   flex-shrink: 0;
   border-bottom: 1px solid #334155;
+  touch-action: none;
 }
 
 .pw-overlay-header:active {
@@ -85,11 +87,19 @@ export const OVERLAY_CSS = `
   position: relative;
 }
 
+.pw-overlay-iframe-scale {
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
 .pw-overlay-iframe {
   width: 100%;
   height: 100%;
   border: none;
   background: #f8fafc;
+  display: block;
 }
 
 .pw-overlay-iframe-mask {
@@ -100,7 +110,8 @@ export const OVERLAY_CSS = `
 }
 
 .pw-overlay-panel.pw-dragging .pw-overlay-iframe-mask,
-.pw-overlay-panel.pw-resizing .pw-overlay-iframe-mask {
+.pw-overlay-panel.pw-resizing .pw-overlay-iframe-mask,
+.pw-overlay-panel.pw-gesturing .pw-overlay-iframe-mask {
   display: block;
 }
 
@@ -108,6 +119,7 @@ export const OVERLAY_CSS = `
 .pw-resize {
   position: absolute;
   z-index: 2;
+  touch-action: none;
 }
 .pw-resize-n  { top: -3px; left: 8px; right: 8px; height: 6px; cursor: n-resize; }
 .pw-resize-s  { bottom: -3px; left: 8px; right: 8px; height: 6px; cursor: s-resize; }
@@ -117,6 +129,33 @@ export const OVERLAY_CSS = `
 .pw-resize-nw { top: -3px; left: -3px; width: 12px; height: 12px; cursor: nw-resize; }
 .pw-resize-se { bottom: -3px; right: -3px; width: 12px; height: 12px; cursor: se-resize; }
 .pw-resize-sw { bottom: -3px; left: -3px; width: 12px; height: 12px; cursor: sw-resize; }
+
+/* Touch devices: bigger hit targets + visible corner grips */
+@media (pointer: coarse) {
+  .pw-overlay-header {
+    height: 44px;
+    padding: 0 6px 0 14px;
+  }
+  .pw-overlay-btn {
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+  }
+  .pw-resize-n  { top: -8px; left: 24px; right: 24px; height: 16px; }
+  .pw-resize-s  { bottom: -8px; left: 24px; right: 24px; height: 16px; }
+  .pw-resize-e  { right: -8px; top: 24px; bottom: 24px; width: 16px; }
+  .pw-resize-w  { left: -8px; top: 24px; bottom: 24px; width: 16px; }
+  .pw-resize-ne, .pw-resize-nw, .pw-resize-se, .pw-resize-sw {
+    width: 28px; height: 28px;
+    background: rgba(99, 102, 241, 0.35);
+    border: 1px solid rgba(99, 102, 241, 0.6);
+    border-radius: 4px;
+  }
+  .pw-resize-ne { top: -10px; right: -10px; }
+  .pw-resize-nw { top: -10px; left: -10px; }
+  .pw-resize-se { bottom: -10px; right: -10px; }
+  .pw-resize-sw { bottom: -10px; left: -10px; }
+}
 
 /* Minimized state */
 .pw-overlay-panel.pw-minimized {

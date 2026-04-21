@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { currentRoute, navigate, selectedAppId, applications, addAppModalOpen } from '../lib/state.js';
+import { currentRoute, navigate, selectedAppId, applications, addAppModalOpen, spotlightOpen, closeSpotlight, toggleSpotlight } from '../lib/state.js';
 import { api } from '../lib/api.js';
 import { idMenuOpen } from './LeafPane.js';
 import { PopoutPanel, popoutIdMenuOpen, popoutWindowMenuOpen } from './PopoutPanel.js';
@@ -84,7 +84,7 @@ export function Layout() {
   const collapsed = sidebarCollapsed.value;
   const width = sidebarWidth.value;
   const [showShortcutHelp, setShowShortcutHelp] = useState(false);
-  const [showSpotlight, setShowSpotlight] = useState(false);
+  const showSpotlight = spotlightOpen.value;
   const showShortcutHelpRef = useRef(false);
   const showSpotlightRef = useRef(false);
   showShortcutHelpRef.current = showShortcutHelp;
@@ -171,7 +171,7 @@ export function Layout() {
         key: 'Escape',
         label: 'Close modal',
         category: 'General',
-        action: () => { setShowShortcutHelp(false); setShowSpotlight(false); popInPickerSessionId.value = null; },
+        action: () => { setShowShortcutHelp(false); closeSpotlight(); popInPickerSessionId.value = null; },
       }),
       registerShortcut({
         key: ' ',
@@ -179,14 +179,14 @@ export function Layout() {
         modifiers: { ctrl: true, shift: true },
         label: 'Spotlight search',
         category: 'General',
-        action: () => setShowSpotlight((v) => !v),
+        action: () => toggleSpotlight(),
       }),
       registerShortcut({
         key: 'k',
         modifiers: { meta: true },
         label: 'Spotlight search',
         category: 'General',
-        action: () => setShowSpotlight((v) => !v),
+        action: () => toggleSpotlight(),
       }),
       registerShortcut({
         key: '\\',
@@ -370,7 +370,7 @@ export function Layout() {
         label: 'Close popup / tab',
         category: 'Panels',
         action: () => {
-          if (showSpotlightRef.current) { setShowSpotlight(false); return; }
+          if (showSpotlightRef.current) { closeSpotlight(); return; }
           if (showShortcutHelpRef.current) { setShowShortcutHelp(false); return; }
           if (hotkeyMenuOpen.value) { hotkeyMenuOpen.value = null; }
           if (isPopoutFocused()) {
@@ -547,10 +547,10 @@ export function Layout() {
     function onMessage(e: MessageEvent) {
       if (e.data?.type !== 'pw-companion-shortcut') return;
       if (e.data.key === 'cmd+k' || e.data.key === 'ctrl+shift+space') {
-        setShowSpotlight((v) => !v);
+        toggleSpotlight();
       } else if (e.data.key === 'escape') {
         setShowShortcutHelp(false);
-        setShowSpotlight(false);
+        closeSpotlight();
       }
     }
     window.addEventListener('message', onMessage);
@@ -629,7 +629,7 @@ export function Layout() {
       )}
       <FileViewerOverlay />
       {showShortcutHelp && <ShortcutHelpModal onClose={() => setShowShortcutHelp(false)} />}
-      {showSpotlight && <SpotlightSearch onClose={() => setShowSpotlight(false)} />}
+      {showSpotlight && <SpotlightSearch onClose={() => closeSpotlight()} />}
       {addAppModalOpen.value && <AddAppModal onClose={() => { addAppModalOpen.value = false; }} />}
       {actionToast.value && (
         <div class="action-toast">

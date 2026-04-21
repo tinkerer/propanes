@@ -66,6 +66,7 @@ import { ctrlShiftHeld } from '../lib/shortcuts.js';
 import { showHotkeyHints, popoutMode, type PopoutMode } from '../lib/settings.js';
 import { selectedAppId, applications, appFeedbackCounts } from '../lib/state.js';
 import { copyWithTooltip } from '../lib/clipboard.js';
+import { cosArtifacts } from '../lib/cos-artifacts.js';
 
 // --- Shared signals (also used by Layout.tsx for keyboard shortcuts) ---
 export const statusMenuOpen = signal<{ sessionId: string; x: number; y: number } | null>(null);
@@ -466,6 +467,13 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
     return `FB: ${fbId.slice(-6)}`;
   }
 
+  // Chief of Staff pane tab — single well-known ID, label by active agent name
+  if (sid.startsWith('cos:')) {
+    const customLabel = getSessionLabel(sid);
+    if (customLabel) return customLabel;
+    return 'Ops';
+  }
+
   const isJsonl = sid.startsWith('jsonl:');
   const isFeedback = sid.startsWith('feedback:');
   const isIframe = sid.startsWith('iframe:');
@@ -474,9 +482,10 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   const isUrl = sid.startsWith('url:');
   const isFile = sid.startsWith('file:');
   const isWiggumRuns = sid.startsWith('wiggum-runs:');
-  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns;
+  const isArtifact = sid.startsWith('artifact:');
+  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact;
   const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
-  const sess = (isIsolate || isUrl || isFile || isWiggumRuns) ? null : sessionMap.get(realSid);
+  const sess = (isIsolate || isUrl || isFile || isWiggumRuns || isArtifact) ? null : sessionMap.get(realSid);
 
   const customLabel = getSessionLabel(sid);
   if (customLabel) return customLabel;
@@ -494,6 +503,11 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (isUrl) { try { return `Iframe: ${new URL(realSid).hostname}`; } catch { return `Iframe: ${realSid.slice(0, 30)}`; } }
   if (isFile) { const parts = realSid.split('/'); return parts[parts.length - 1] || realSid.slice(-20); }
   if (isWiggumRuns) return `Wiggum: ${realSid.slice(-6)}`;
+  if (isArtifact) {
+    const art = cosArtifacts.value[realSid];
+    const prefix = art ? (art.kind === 'code' ? 'Code' : art.kind === 'table' ? 'Table' : 'List') : 'Artifact';
+    return `${prefix}: ${art?.label || realSid.slice(-6)}`;
+  }
 
   const isPlain = sess?.permissionProfile === 'plain';
   if (isPlain) {
@@ -585,11 +599,11 @@ export function LeafPane({ leaf }: LeafPaneProps) {
   const handleActivate = useCallback((sid: string) => {
     setActiveTab(leaf.id, sid);
     setFocusedLeaf(leaf.id);
-    if (!sid.startsWith('view:')) openSession(sid);
+    if (!sid.startsWith('view:') && !sid.startsWith('cos:')) openSession(sid);
   }, [leaf.id]);
 
   const handleClose = useCallback((sid: string) => {
-    if (sid.startsWith('view:')) {
+    if (sid.startsWith('view:') || sid.startsWith('cos:')) {
       removeTabFromLeaf(leaf.id, sid);
       return;
     }
@@ -808,6 +822,23 @@ export function LeafPane({ leaf }: LeafPaneProps) {
     );
   }
 
+  const multiCollapsed = !!leaf.collapsed;
+
+  if (multiCollapsed) {
+    return (
+      <div
+        class={`pane-leaf pane-leaf-collapsed pane-leaf-collapsed-multi${isFocused ? ' pane-leaf-focused' : ''}`}
+        data-leaf-id={leaf.id}
+        onMouseDown={handleMouseDown}
+        onClick={(e) => { e.stopPropagation(); toggleLeafCollapsed(leaf.id); }}
+        title={`Expand (${leaf.tabs.length} tab${leaf.tabs.length === 1 ? '' : 's'})`}
+      >
+        <span class="pane-leaf-collapsed-icon">{'▸'}</span>
+        <span class="pane-leaf-collapsed-count">{leaf.tabs.length}</span>
+      </div>
+    );
+  }
+
   return (
     <div
       class={`pane-leaf${isFocused ? ' pane-leaf-focused' : ''}`}
@@ -833,7 +864,9 @@ export function LeafPane({ leaf }: LeafPaneProps) {
             const isFile = sid.startsWith('file:');
             const isSettings = sid.startsWith('settings:');
             const isWiggumRuns = sid.startsWith('wiggum-runs:');
-            const isCompanion = isView || isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isSettings || isWiggumRuns;
+            const isArtifact = sid.startsWith('artifact:');
+            const isCos = sid.startsWith('cos:');
+            const isCompanion = isView || isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isSettings || isWiggumRuns || isArtifact || isCos;
             const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
             const isActive = sid === leaf.activeTabId;
             const isExited = exited.has(realSid);
@@ -903,7 +936,9 @@ export function LeafPane({ leaf }: LeafPaneProps) {
                   isUrl ? '\u{1F517}' :
                   isFile ? '\u{1F4C4}' :
                   isWiggumRuns ? '\u{1F43B}' :
+                  isArtifact ? '\u{1F4CB}' :
                   isSettings ? '\u2699' :
+                  isCos ? '\u2B50' :
                   '\u25C6'
                 }</span>}
                 {renamingSessionId.value === sid ? (
@@ -939,14 +974,37 @@ export function LeafPane({ leaf }: LeafPaneProps) {
               paneMenuOpen.value = !paneMenuOpen.value;
             }}
           >{'\u2630'}</button>
+          <button
+            class="terminal-collapse-btn pane-tab-collapse-btn"
+            title="Collapse pane"
+            onClick={(e) => { e.stopPropagation(); toggleLeafCollapsed(leaf.id); }}
+          >{'\u2212'}</button>
           {paneMenuOpen.value && (
             <PopupMenu anchorRef={hamburgerRef} align="right" onClose={() => { paneMenuOpen.value = false; }}>
+              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; splitLeaf(leaf.id, 'horizontal', 'first', [], 0.5, true); }}>
+                <span class="pane-action-icon">{'\u2502'}</span> Split Left
+              </button>
               <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; splitLeaf(leaf.id, 'horizontal', 'second', [], 0.5, true); }}>
                 <span class="pane-action-icon">{'\u2502'}</span> Split Right <kbd>{'\u2303\u21E7'}"</kbd>
+              </button>
+              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; splitLeaf(leaf.id, 'vertical', 'first', [], 0.5, true); }}>
+                <span class="pane-action-icon">{'\u2500'}</span> Split Above
               </button>
               <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; splitLeaf(leaf.id, 'vertical', 'second', [], 0.5, true); }}>
                 <span class="pane-action-icon">{'\u2500'}</span> Split Down <kbd>{'\u2303\u21E7'}-</kbd>
               </button>
+              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; toggleLeafCollapsed(leaf.id); }}>
+                <span class="pane-action-icon">{leaf.collapsed ? '\u25B8' : '\u2212'}</span> {leaf.collapsed ? 'Expand Pane' : 'Collapse Pane'}
+              </button>
+              {activeId && (
+                <button
+                  class="popup-menu-item pane-action-item"
+                  onClick={() => { paneMenuOpen.value = false; executePopout(activeId, popoutMode.value); }}
+                  title="Pop out the active tab"
+                >
+                  <span class="pane-action-icon">{'\u2B06'}</span> Pop Out Tab <kbd>{'\u2303\u21E7'}0</kbd>
+                </button>
+              )}
               <div class="popup-menu-divider" />
               <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; mergeLeaf(leaf.id); }}>
                 <span class="pane-action-icon">{'\u00D7'}</span> Close Pane <kbd>{'\u2303\u21E7\u232B'}</kbd>
@@ -1067,7 +1125,7 @@ export function LeafPane({ leaf }: LeafPaneProps) {
         );
       })()}
 
-      {activeId && !activeId.startsWith('view:') && (
+      {activeId && !activeId.startsWith('view:') && !activeId.startsWith('cos:') && (
         <PaneHeader
           sessionId={activeId}
           sessionMap={sessionMap}

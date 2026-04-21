@@ -77,7 +77,9 @@ function buildAgentCommand(
     const command = process.env.CODEX_BIN || 'codex';
     const args: string[] = [];
     if (permissionProfile === 'auto') args.push('--full-auto');
-    if (permissionProfile === 'yolo') args.push('--dangerously-bypass-approvals-and-sandbox');
+    if (permissionProfile === 'yolo' || permissionProfile === 'interactive-yolo') {
+      args.push('--dangerously-bypass-approvals-and-sandbox');
+    }
     if (prompt) args.push(prompt);
     return { command, args };
   }
@@ -85,7 +87,9 @@ function buildAgentCommand(
   // When resuming, use --resume — no --session-id (it conflicts)
   if (resumeSessionId) {
     const args = ['--resume', resumeSessionId];
-    if (permissionProfile === 'yolo') args.push('--dangerously-skip-permissions');
+    if (permissionProfile === 'yolo' || permissionProfile === 'interactive-yolo') {
+      args.push('--dangerously-skip-permissions');
+    }
     if (prompt) args.push(prompt);
     return { command: process.env.CLAUDE_BIN || 'claude', args };
   }
@@ -93,6 +97,13 @@ function buildAgentCommand(
   switch (permissionProfile) {
     case 'interactive': {
       const args: string[] = [];
+      if (claudeSessionId) args.push('--session-id', claudeSessionId);
+      if (allowedTools) args.push('--allowedTools', allowedTools);
+      if (prompt) args.push(prompt);
+      return { command: process.env.CLAUDE_BIN || 'claude', args };
+    }
+    case 'interactive-yolo': {
+      const args: string[] = ['--dangerously-skip-permissions'];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (allowedTools) args.push('--allowedTools', allowedTools);
       if (prompt) args.push(prompt);

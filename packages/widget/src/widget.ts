@@ -25,6 +25,17 @@ type EventHandler = (data: unknown) => void;
 const HISTORY_KEY = 'pw-history';
 const MAX_HISTORY = 50;
 
+function micErrorMessage(err: unknown): string {
+  const code = (err as any)?.code;
+  const name = (err as any)?.name;
+  if (code === 'INSECURE_CONTEXT') return 'Mic requires HTTPS — this page is loaded over HTTP';
+  if (code === 'NOT_SUPPORTED') return 'Mic not supported in this browser';
+  if (name === 'NotAllowedError' || name === 'SecurityError') return 'Mic access denied — allow in browser settings';
+  if (name === 'NotFoundError') return 'No microphone found';
+  if (name === 'NotReadableError') return 'Mic is in use by another app';
+  return 'Could not start microphone';
+}
+
 function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     return navigator.clipboard.writeText(text);
@@ -39,6 +50,25 @@ function copyText(text: string): Promise<void> {
   document.execCommand('copy');
   document.body.removeChild(ta);
   return Promise.resolve();
+}
+
+// iOS Safari drops `navigator.clipboard.writeText()` calls that happen after an
+// `await` because the user-activation transient state expires. The documented
+// workaround is `navigator.clipboard.write([new ClipboardItem({ 'text/plain':
+// Promise<Blob> })])` called synchronously inside the click handler — Safari
+// keeps the activation alive until the promise resolves.
+function copyTextDeferred(textPromise: Promise<string>): Promise<void> {
+  const Ctor = (globalThis as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+  const fallback = () => textPromise.then(text => copyText(text)).catch(() => {});
+  if (Ctor && navigator.clipboard?.write) {
+    try {
+      const blobPromise = textPromise.then(text => new Blob([text], { type: 'text/plain' }));
+      return navigator.clipboard.write([new Ctor({ 'text/plain': blobPromise })]).catch(fallback);
+    } catch {
+      return fallback();
+    }
+  }
+  return fallback();
 }
 
 // --- localStorage persistence for widget drafts ---
@@ -151,6 +181,8 @@ export class ProPanesElement {
   private voiceListenBlurStart: number | null = null;
   private voiceListenVisibilityHandler: (() => void) | null = null;
   private voiceListenWindowSender: ((win: import('./voice-recorder.js').AmbientWindow) => void) | null = null;
+  private brainstormDisabled = false;
+  private brainstormGestureHandler: (() => void) | null = null;
   private escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && this.isOpen) {
       // Let sub-overlays (annotator, element picker) handle Escape first
@@ -197,6 +229,7 @@ export class ProPanesElement {
     this.loadHistory();
     this.loadDispatchMode();
     this.loadAdminAlwaysShow();
+    this.loadBrainstormPref();
     installCollectors(this.config.collectors);
     this.render();
     this.bindShortcut();
@@ -225,6 +258,8 @@ export class ProPanesElement {
         this.updateWorkbenchBadge(waitingCount);
       }
     };
+
+    this.autoStartBrainstorm();
   }
 
   private updateWorkbenchBadge(waitingCount: number) {
@@ -286,6 +321,74 @@ export class ProPanesElement {
         localStorage.removeItem('pw-admin-always-show');
       }
     } catch { /* ignore */ }
+  }
+
+  private loadBrainstormPref() {
+    try {
+      this.brainstormDisabled = localStorage.getItem('pw-brainstorm-disabled') === '1';
+    } catch { /* ignore */ }
+  }
+
+  private setBrainstormDisabled(disabled: boolean) {
+    this.brainstormDisabled = disabled;
+    try {
+      if (disabled) localStorage.setItem('pw-brainstorm-disabled', '1');
+      else localStorage.removeItem('pw-brainstorm-disabled');
+    } catch { /* ignore */ }
+  }
+
+  /**
+   * Brainstorm (always-on listen mode) is enabled by default. iOS Safari and
+   * many desktop browsers gate getUserMedia / SpeechRecognition behind a user
+   * gesture, so we attempt an immediate start and fall back to a one-shot
+   * gesture listener if the browser refuses.
+   */
+  private autoStartBrainstorm() {
+    if (this.brainstormDisabled) return;
+    if (this.voiceListenSessionId) return;
+    // Skip entirely when the page isn't a secure context — iOS Safari and
+    // modern desktop browsers refuse getUserMedia on HTTP origins, so
+    // retrying on every gesture would burn battery with no chance of working.
+    if (typeof window !== 'undefined' && window.isSecureContext === false) return;
+
+    const attempt = async () => {
+      try {
+        await this.startListenMode({ silent: true });
+      } catch { /* swallow — gesture path will retry */ }
+    };
+
+    // Try immediately; if it fails, wait for the first user gesture.
+    attempt().then(() => {
+      if (this.voiceListenSessionId) return;
+      // Skip the gesture fallback if the browser has no SpeechRecognition
+      // at all — e.g. iOS Safari — otherwise every tap/keypress retries.
+      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (!SR) return;
+      this.installBrainstormGestureFallback();
+    });
+  }
+
+  private installBrainstormGestureFallback() {
+    if (this.brainstormGestureHandler) return;
+    const handler = () => {
+      if (this.brainstormDisabled || this.voiceListenSessionId) {
+        this.removeBrainstormGestureFallback();
+        return;
+      }
+      this.startListenMode({ silent: true }).then(() => {
+        if (this.voiceListenSessionId) this.removeBrainstormGestureFallback();
+      }).catch(() => { /* keep listener for next gesture */ });
+    };
+    this.brainstormGestureHandler = handler;
+    document.addEventListener('pointerdown', handler, { once: false, capture: true });
+    document.addEventListener('keydown', handler, { once: false, capture: true });
+  }
+
+  private removeBrainstormGestureFallback() {
+    if (!this.brainstormGestureHandler) return;
+    document.removeEventListener('pointerdown', this.brainstormGestureHandler, true);
+    document.removeEventListener('keydown', this.brainstormGestureHandler, true);
+    this.brainstormGestureHandler = null;
   }
 
   private setDispatchMode(mode: 'off' | 'once' | 'auto') {
@@ -771,8 +874,15 @@ export class ProPanesElement {
     let dragged = false;
     let startX = 0;
     let startY = 0;
+    let activePointerId: number | null = null;
 
     const HOVER_ZONE = 60;
+    // Touch devices have no hover, so the off-screen "stowed" state would be
+    // unreachable. Keep the trigger at the peek offset on touch so users can
+    // still tap it to bring it back.
+    const isTouchDevice = typeof window !== 'undefined' && window.matchMedia
+      ? window.matchMedia('(hover: none)').matches
+      : false;
 
     const defaultPos = () => {
       btn.style.left = 'auto';
@@ -785,11 +895,19 @@ export class ProPanesElement {
       this.triggerStowed = true;
       this.triggerPeeking = false;
       btn.classList.remove('pw-trigger-peek', 'pw-trigger-dragging');
-      btn.classList.add('pw-trigger-stowed');
       btn.style.left = 'auto';
       btn.style.top = 'auto';
-      btn.style.right = '-48px';
-      btn.style.bottom = '-48px';
+      if (isTouchDevice) {
+        // No hover — leave it peeking so it stays tappable.
+        this.triggerPeeking = true;
+        btn.classList.add('pw-trigger-peek');
+        btn.style.right = '-15px';
+        btn.style.bottom = '-15px';
+      } else {
+        btn.classList.add('pw-trigger-stowed');
+        btn.style.right = '-48px';
+        btn.style.bottom = '-48px';
+      }
     };
 
     const peek = () => {
@@ -831,48 +949,60 @@ export class ProPanesElement {
       defaultPos();
     };
 
-    // Corner hover detection — reveal peek after 1s, hide when mouse leaves
-    document.addEventListener('mousemove', (ev: MouseEvent) => {
-      if (!this.triggerStowed) return;
-      const inZone = ev.clientX >= window.innerWidth - HOVER_ZONE
-        && ev.clientY >= window.innerHeight - HOVER_ZONE;
+    // Corner hover detection — reveal peek after 1s, hide when mouse leaves.
+    // Skipped on touch devices (no hover); on those we keep the trigger peeking
+    // permanently when stowed so it remains reachable.
+    if (!isTouchDevice) {
+      document.addEventListener('mousemove', (ev: MouseEvent) => {
+        if (!this.triggerStowed) return;
+        const inZone = ev.clientX >= window.innerWidth - HOVER_ZONE
+          && ev.clientY >= window.innerHeight - HOVER_ZONE;
 
-      if (inZone) {
-        if (!this.triggerPeeking && !this.triggerDwellTimer) {
-          this.triggerDwellTimer = setTimeout(() => {
+        if (inZone) {
+          if (!this.triggerPeeking && !this.triggerDwellTimer) {
+            this.triggerDwellTimer = setTimeout(() => {
+              this.triggerDwellTimer = null;
+              peek();
+            }, 1000);
+          }
+        } else {
+          if (this.triggerDwellTimer) {
+            clearTimeout(this.triggerDwellTimer);
             this.triggerDwellTimer = null;
-            peek();
-          }, 1000);
+          }
+          if (this.triggerPeeking) unpeek();
         }
-      } else {
-        if (this.triggerDwellTimer) {
-          clearTimeout(this.triggerDwellTimer);
-          this.triggerDwellTimer = null;
-        }
-        if (this.triggerPeeking) unpeek();
-      }
-    }, true);
+      }, true);
+    }
 
-    btn.addEventListener('mousedown', (e: MouseEvent) => {
-      if (e.button !== 0) return;
+    btn.addEventListener('pointerdown', (e: PointerEvent) => {
+      // Ignore secondary buttons (right-click) for mouse pointers
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (activePointerId !== null) return;
       e.preventDefault();
+      activePointerId = e.pointerId;
       dragged = false;
       startX = e.clientX;
       startY = e.clientY;
 
-      // If peeking, click to unstow
+      // If peeking, treat as tap-to-unstow
       if (this.triggerPeeking) {
-        const onUp = () => {
-          document.removeEventListener('mouseup', onUp);
+        const onUp = (ev: PointerEvent) => {
+          if (ev.pointerId !== activePointerId) return;
+          document.removeEventListener('pointerup', onUp);
+          document.removeEventListener('pointercancel', onUp);
+          activePointerId = null;
           unstow();
         };
-        document.addEventListener('mouseup', onUp);
+        document.addEventListener('pointerup', onUp);
+        document.addEventListener('pointercancel', onUp);
         return;
       }
 
       if (this.triggerStowed) return;
 
-      const onMove = (ev: MouseEvent) => {
+      const onMove = (ev: PointerEvent) => {
+        if (ev.pointerId !== activePointerId) return;
         const dx = Math.max(0, ev.clientX - startX);
         const dy = Math.max(0, ev.clientY - startY);
         if (!dragged && dx < 4 && dy < 4) return;
@@ -882,9 +1012,12 @@ export class ProPanesElement {
         btn.style.bottom = (20 - dy) + 'px';
       };
 
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
+      const onUp = (ev: PointerEvent) => {
+        if (ev.pointerId !== activePointerId) return;
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
+        activePointerId = null;
         btn.classList.remove('pw-trigger-dragging');
 
         if (!dragged) {
@@ -902,8 +1035,9 @@ export class ProPanesElement {
         }
       };
 
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
     });
   }
 
@@ -1015,6 +1149,9 @@ export class ProPanesElement {
     panel.style.position = 'fixed';
     panel.innerHTML = `
       <div class="pw-resize-handle"></div>
+      <button class="pw-close-btn" id="pw-close-btn" title="Close" aria-label="Close">
+        <svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
       <div class="pw-screenshots pw-hidden" id="pw-screenshots"></div>
       <div id="pw-selected-elements" class="pw-selected-elements pw-hidden"></div>
       <div class="pw-input-area">
@@ -1118,6 +1255,9 @@ export class ProPanesElement {
     const micDropdownBtn = panel.querySelector('#pw-mic-dropdown') as HTMLButtonElement | null;
     micDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleMicMenu(); });
 
+    const closeBtn = panel.querySelector('#pw-close-btn') as HTMLButtonElement | null;
+    closeBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.close(); });
+
     captureBtn.addEventListener('click', () => this.captureScreen());
     pickerBtn.addEventListener('click', () => this.startElementPicker());
     pickerDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.togglePickerMenu(); });
@@ -1139,8 +1279,16 @@ export class ProPanesElement {
 
     this.updateSendButtonTitle(sendBtn);
 
+    const autoResize = () => {
+      input.style.height = 'auto';
+      const next = Math.max(input.scrollHeight, 40);
+      input.style.height = `${next}px`;
+    };
+    requestAnimationFrame(autoResize);
+
     input.addEventListener('input', () => {
       this.updateSendButtonTitle(sendBtn);
+      autoResize();
       try { localStorage.setItem('pw-widget-draft', input.value); } catch {}
     });
 
@@ -1371,7 +1519,7 @@ export class ProPanesElement {
       } catch (err) {
         const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement;
         if (errorEl) {
-          errorEl.textContent = 'Mic access denied';
+          errorEl.textContent = micErrorMessage(err);
           errorEl.classList.remove('pw-hidden');
         }
       }
@@ -1439,9 +1587,14 @@ export class ProPanesElement {
     menu.appendChild(makeItem('Hide widget', this.micHideWidget, (v) => { this.micHideWidget = v; }));
 
     const isListening = !!this.voiceListenSessionId;
-    menu.appendChild(makeItem('Listen mode (ambient)', isListening, (v) => {
-      if (v) this.startListenMode();
-      else this.stopListenMode('user');
+    menu.appendChild(makeItem('Brainstorm (always-on mic)', isListening, (v) => {
+      if (v) {
+        this.setBrainstormDisabled(false);
+        this.startListenMode();
+      } else {
+        this.setBrainstormDisabled(true);
+        this.stopListenMode('user');
+      }
     }));
 
     group.appendChild(menu);
@@ -1460,8 +1613,26 @@ export class ProPanesElement {
    * windows and the server decides when to spawn an agent. A persistent red
    * dot on the trigger button indicates listening is on.
    */
-  private async startListenMode() {
+  private async startListenMode(opts?: { silent?: boolean }) {
     if (this.voiceListenSessionId) return;
+    const silent = opts?.silent === true;
+
+    const showError = (msg: string) => {
+      if (silent) return;
+      const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement;
+      if (errorEl) {
+        errorEl.textContent = msg;
+        errorEl.classList.remove('pw-hidden');
+      }
+    };
+
+    // If silent (auto-start / gesture fallback), skip quietly on browsers
+    // without SpeechRecognition — e.g. iOS Safari — so users don't see a
+    // scary error for a feature they never asked for.
+    if (silent) {
+      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (!SR) return;
+    }
 
     const endpointUrl = new URL(this.config.endpoint, window.location.origin);
     const baseOrigin = endpointUrl.origin;
@@ -1480,22 +1651,14 @@ export class ProPanesElement {
       const data = await res.json();
       sessionId = data.id;
     } catch (err) {
-      const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement;
-      if (errorEl) {
-        errorEl.textContent = 'Could not start listen mode';
-        errorEl.classList.remove('pw-hidden');
-      }
+      showError('Could not start listen mode');
       return;
     }
 
     try {
       await this.voiceRecorder.startAmbient({ windowMs: 30_000 });
     } catch (err) {
-      const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement;
-      if (errorEl) {
-        errorEl.textContent = 'Mic or SpeechRecognition unavailable';
-        errorEl.classList.remove('pw-hidden');
-      }
+      showError(micErrorMessage(err));
       // Best-effort close the server session
       try {
         await fetch(`${baseOrigin}/api/v1/voice/sessions/${sessionId}/stop`, {
@@ -1899,6 +2062,17 @@ export class ProPanesElement {
     errorEl.classList.add('pw-hidden');
     input.disabled = true;
 
+    // Schedule the clipboard write synchronously so iOS Safari preserves the
+    // tap's user-activation state through the network request. The ClipboardItem
+    // resolves once we know what to copy; rejecting it cancels the write.
+    let resolveClipboard: (text: string) => void = () => {};
+    let rejectClipboard: () => void = () => {};
+    const clipboardText = new Promise<string>((res, rej) => {
+      resolveClipboard = res;
+      rejectClipboard = rej;
+    });
+    copyTextDeferred(clipboardText).catch(() => {});
+
     if (this.appendTargetId) {
       try {
         const appendResult = await this.submitAppend(this.appendTargetId, description);
@@ -1912,12 +2086,14 @@ export class ProPanesElement {
           ? appendResult.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
           : [];
         if (!description && appendedPaths.length > 0) {
-          try { await copyText(appendedPaths.join(' ')); } catch {}
+          resolveClipboard(appendedPaths.join(' '));
           this.showFlash(undefined, `${appendedPaths.length} path${appendedPaths.length === 1 ? '' : 's'} copied`);
         } else {
+          rejectClipboard();
           this.showFlash(undefined, 'Appended');
         }
       } catch (err) {
+        rejectClipboard();
         errorEl.textContent = err instanceof Error ? err.message : 'Append failed';
         errorEl.classList.remove('pw-hidden');
         input.disabled = false;
@@ -1951,9 +2127,10 @@ export class ProPanesElement {
           ? result.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
           : [];
         if (screenshotPaths.length > 0) {
-          try { await copyText(screenshotPaths.join(' ')); } catch {}
+          resolveClipboard(screenshotPaths.join(' '));
           this.showFlash(undefined, `${screenshotPaths.length} path${screenshotPaths.length === 1 ? '' : 's'} copied`);
         } else {
+          rejectClipboard();
           this.showFlash(undefined, 'Uploaded');
         }
         return;
@@ -1974,7 +2151,7 @@ export class ProPanesElement {
       clearWidgetDraftStorage();
       this.exitTimeline();
 
-      this.emit('submit', { type: 'manual', title: '', description });
+      this.emit('submit', { type: 'manual', title: '', description, id: result?.id, appId: result?.appId });
 
       const endpointUrl = new URL(this.config.endpoint, window.location.origin);
       const feedbackUrl = `${endpointUrl.origin}/admin/#/app/${result.appId}/feedback/${result.id}`;
@@ -1982,13 +2159,14 @@ export class ProPanesElement {
         ? result.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
         : [];
       if (!description && screenshotPaths.length > 0) {
-        try { await copyText(screenshotPaths.join(' ')); } catch {}
+        resolveClipboard(screenshotPaths.join(' '));
         this.showFlash(undefined, `${screenshotPaths.length} path${screenshotPaths.length === 1 ? '' : 's'} copied`);
       } else {
-        try { await copyText(feedbackUrl); } catch {}
+        resolveClipboard(feedbackUrl);
         this.showFlash(feedbackUrl);
       }
     } catch (err) {
+      rejectClipboard();
       errorEl.textContent = err instanceof Error ? err.message : 'Submission failed';
       errorEl.classList.remove('pw-hidden');
       input.disabled = false;
@@ -2027,7 +2205,7 @@ export class ProPanesElement {
     for (const blob of this.pendingScreenshots) {
       formData.append('screenshots', blob, `screenshot-${Date.now()}.png`);
     }
-    const res = await fetch(screenshotsUrl, {
+    const res = await this.fetchWithContext(screenshotsUrl, {
       method: 'POST',
       headers: this.apiHeaders(),
       body: formData,
@@ -2105,7 +2283,7 @@ export class ProPanesElement {
         if (indicator) indicator.remove();
       }
 
-      const res = await fetch(this.config.endpoint, {
+      const res = await this.fetchWithContext(this.config.endpoint, {
         method: 'POST',
         headers: this.apiHeaders(),
         body: formData,
@@ -2117,7 +2295,7 @@ export class ProPanesElement {
       }
       return res.json();
     } else {
-      const res = await fetch(this.config.endpoint, {
+      const res = await this.fetchWithContext(this.config.endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
         body: JSON.stringify(feedbackPayload),
@@ -2154,7 +2332,7 @@ export class ProPanesElement {
       for (const blob of this.pendingScreenshots) {
         formData.append('screenshots', blob, `screenshot-${Date.now()}.png`);
       }
-      const res = await fetch(url, {
+      const res = await this.fetchWithContext(url, {
         method: 'POST',
         headers: this.apiHeaders(),
         body: formData,
@@ -2165,7 +2343,7 @@ export class ProPanesElement {
       }
       return res.json();
     } else {
-      const res = await fetch(url, {
+      const res = await this.fetchWithContext(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
         body: JSON.stringify(payload),
@@ -2180,6 +2358,19 @@ export class ProPanesElement {
 
   private apiHeaders(): Record<string, string> {
     return this.config.appKey ? { 'X-API-Key': this.config.appKey } : {};
+  }
+
+  // Wraps fetch so that iOS Safari's opaque "Load failed" TypeError gets
+  // a useful message (which URL failed). Mobile users only ever saw the
+  // raw error text, which left them with no way to diagnose a cross-origin
+  // reachability or CORS failure.
+  private async fetchWithContext(url: string, opts: RequestInit): Promise<Response> {
+    try {
+      return await fetch(url, opts);
+    } catch (e: any) {
+      const msg = e?.message || 'Network error';
+      throw new Error(`${msg} — could not reach ${url}`);
+    }
   }
 
   private getSessionId(): string {
@@ -2218,6 +2409,13 @@ export class ProPanesElement {
     this.isOpen = true;
     this.historyIndex = -1;
     this.renderPanel();
+    // Hide the trigger while the panel is open on narrow viewports. On
+    // mobile the panel covers the trigger, so the only way to dismiss was
+    // to tap through the panel — now the panel has a pw-close-btn instead.
+    const trigger = this.shadow.querySelector('.pw-trigger') as HTMLElement | null;
+    if (trigger && window.matchMedia('(max-width: 480px)').matches) {
+      trigger.classList.add('pw-trigger-hidden');
+    }
     document.addEventListener('keydown', this.escHandler, true);
   }
 
@@ -2240,6 +2438,8 @@ export class ProPanesElement {
     if (!this.isOpen) return;
     this.isOpen = false;
     document.removeEventListener('keydown', this.escHandler, true);
+    const trigger = this.shadow.querySelector('.pw-trigger') as HTMLElement | null;
+    if (trigger) trigger.classList.remove('pw-trigger-hidden');
     if (this.pickerCleanup) {
       this.pickerCleanup();
       this.pickerCleanup = null;
@@ -2323,6 +2523,10 @@ export class ProPanesElement {
       this.eventHandlers.set(event, new Set());
     }
     this.eventHandlers.get(event)!.add(handler);
+  }
+
+  off(event: string, handler: EventHandler) {
+    this.eventHandlers.get(event)?.delete(handler);
   }
 
   openAdmin(panel?: PanelType, opts?: { param?: string }) {

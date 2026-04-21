@@ -15,6 +15,7 @@
     "build:launcher": "node esbuild-launcher.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "test": "node --import tsx --test test/*.test.ts",
     "clean": "rm -rf dist"
   },
   "dependencies": {

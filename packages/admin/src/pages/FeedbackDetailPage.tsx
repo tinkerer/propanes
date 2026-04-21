@@ -952,7 +952,7 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
                 {liveConnections.value.map((conn: any) => (
                   <div key={conn.sessionId} style="margin-bottom:8px;padding:8px;background:var(--pw-bg-sunken);border-radius:6px">
                     <div style="font-size:12px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px">
-                      <span style="width:6px;height:6px;border-radius:50%;background:#22c55e;display:inline-block" />
+                      <span style="width:6px;height:6px;border-radius:50%;background:var(--pw-success, #22c55e);display:inline-block" />
                       {conn.name || conn.sessionId.slice(-8)}
                     </div>
                     {conn.url && <div style="font-size:11px;color:var(--pw-text-faint);margin-bottom:6px;word-break:break-all">{conn.url}</div>}

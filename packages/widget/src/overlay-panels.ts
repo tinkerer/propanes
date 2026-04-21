@@ -28,10 +28,12 @@ interface PanelState {
   type: PanelType;
   el: HTMLElement;
   iframe: HTMLIFrameElement;
+  iframeScale: HTMLElement;
   x: number;
   y: number;
   width: number;
   height: number;
+  scale: number;
   minimized: boolean;
   zIndex: number;
   dockedEdge: DockedEdge;
@@ -43,15 +45,33 @@ interface PersistedLayout {
   y: number;
   width: number;
   height: number;
+  scale?: number;
   dockedEdge: DockedEdge;
   drawerCollapsed: boolean;
 }
+
+const MIN_SCALE = 0.4;
+const MAX_SCALE = 2.5;
 
 const PERSIST_KEY = 'pw-workbench-layout';
 const DOCK_SNAP_DISTANCE = 40;
 
 let nextZ = 2147483600;
 let panelCounter = 0;
+
+function clampScale(s: number): number {
+  if (!Number.isFinite(s)) return 1;
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
+}
+
+function applyScale(state: { iframeScale: HTMLElement; iframe: HTMLIFrameElement; scale: number }) {
+  const inv = 1 / state.scale;
+  // Scale the iframe content. We size the iframe at inv * 100% so post-scale it matches the wrapper.
+  state.iframeScale.style.transformOrigin = '0 0';
+  state.iframeScale.style.transform = `scale(${state.scale})`;
+  state.iframeScale.style.width = `${inv * 100}%`;
+  state.iframeScale.style.height = `${inv * 100}%`;
+}
 
 export class OverlayPanelManager {
   private panels = new Map<string, PanelState>();
@@ -101,6 +121,7 @@ export class OverlayPanelManager {
     let height = config.height;
     let x = Math.max(20, (window.innerWidth - width) / 2 + panelCounter * 30);
     let y = Math.max(20, (window.innerHeight - height) / 2 + panelCounter * 20);
+    let scale = 1;
     let dockedEdge: DockedEdge = null;
     let drawerCollapsed = false;
 
@@ -111,6 +132,7 @@ export class OverlayPanelManager {
         y = persisted.y;
         width = persisted.width;
         height = persisted.height;
+        scale = clampScale(persisted.scale ?? 1);
         dockedEdge = persisted.dockedEdge;
         drawerCollapsed = persisted.drawerCollapsed;
       }
@@ -118,8 +140,10 @@ export class OverlayPanelManager {
 
     const panel = this.createPanelDOM(id, config, iframeUrl, x, y, width, height, type === 'workbench');
     const iframe = panel.querySelector('.pw-overlay-iframe') as HTMLIFrameElement;
+    const iframeScale = panel.querySelector('.pw-overlay-iframe-scale') as HTMLElement;
 
-    const state: PanelState = { id, type, el: panel, iframe, x, y, width, height, minimized: false, zIndex: ++nextZ, dockedEdge, drawerCollapsed };
+    const state: PanelState = { id, type, el: panel, iframe, iframeScale, x, y, width, height, scale, minimized: false, zIndex: ++nextZ, dockedEdge, drawerCollapsed };
+    applyScale(state);
     panel.style.zIndex = String(state.zIndex);
     this.panels.set(id, state);
 
@@ -265,6 +289,47 @@ export class OverlayPanelManager {
       if (this.onWaitingChange) {
         this.onWaitingChange(data.sessionId, data.state, data.waitingCount);
       }
+    } else if (data.type === 'pw-embed-gesture') {
+      // Two-finger pan / pinch-zoom from inside the iframe
+      this.handleGesture(e, data);
+    }
+  }
+
+  private handleGesture(e: MessageEvent, data: any) {
+    // Find which panel sent this
+    let target: PanelState | null = null;
+    for (const [, state] of this.panels) {
+      if (state.iframe.contentWindow === e.source) {
+        target = state;
+        break;
+      }
+    }
+    if (!target) return;
+    // Don't gesture-move docked or drawer-collapsed panels
+    if (target.dockedEdge || target.drawerCollapsed || target.minimized) return;
+
+    if (data.phase === 'start') {
+      target.el.classList.add('pw-gesturing');
+      this.bringToFront(target.id);
+    } else if (data.phase === 'move') {
+      // Pan
+      if (typeof data.dx === 'number' && typeof data.dy === 'number' && (data.dx || data.dy)) {
+        target.x += data.dx;
+        target.y += data.dy;
+        target.el.style.left = `${target.x}px`;
+        target.el.style.top = `${target.y}px`;
+      }
+      // Pinch zoom
+      if (typeof data.scaleDelta === 'number' && data.scaleDelta !== 1) {
+        const newScale = clampScale(target.scale * data.scaleDelta);
+        if (newScale !== target.scale) {
+          target.scale = newScale;
+          applyScale(target);
+        }
+      }
+    } else if (data.phase === 'end') {
+      target.el.classList.remove('pw-gesturing');
+      if (target.type === 'workbench') this.persistLayout(target);
     }
   }
 
@@ -355,33 +420,39 @@ export class OverlayPanelManager {
     const iframeWrap = document.createElement('div');
     iframeWrap.className = 'pw-overlay-iframe-wrap';
 
+    // Scale container — pinch-zoom transforms this without resizing the iframe pixels
+    const iframeScale = document.createElement('div');
+    iframeScale.className = 'pw-overlay-iframe-scale';
+
     const iframe = document.createElement('iframe');
     iframe.className = 'pw-overlay-iframe';
     iframe.src = iframeUrl;
     iframe.sandbox.add('allow-same-origin', 'allow-scripts', 'allow-forms', 'allow-popups');
 
+    iframeScale.appendChild(iframe);
+
     // Transparent mask to capture mouse events during drag/resize over iframe
     const mask = document.createElement('div');
     mask.className = 'pw-overlay-iframe-mask';
 
-    iframeWrap.append(iframe, mask);
+    iframeWrap.append(iframeScale, mask);
 
-    // Resize handles
+    // Resize handles — pointer events so they work for mouse + touch + pen
     const resizeHandles = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
     const resizeEls = resizeHandles.map((dir) => {
       const handle = document.createElement('div');
       handle.className = `pw-resize pw-resize-${dir}`;
-      handle.addEventListener('mousedown', (e) => { e.stopPropagation(); this.startResize(id, dir, e); });
+      handle.addEventListener('pointerdown', (e) => { e.stopPropagation(); this.startResize(id, dir, e); });
       return handle;
     });
 
     panel.append(header, iframeWrap, ...resizeEls);
 
-    // Drag
-    header.addEventListener('mousedown', (e) => this.startDrag(id, e));
+    // Drag from header (pointer events: mouse + touch + pen)
+    header.addEventListener('pointerdown', (e) => this.startDrag(id, e));
 
-    // Focus on click
-    panel.addEventListener('mousedown', () => this.bringToFront(id));
+    // Focus on press
+    panel.addEventListener('pointerdown', () => this.bringToFront(id));
 
     return panel;
   }
@@ -456,6 +527,7 @@ export class OverlayPanelManager {
     const data: PersistedLayout = {
       x: state.x, y: state.y,
       width: state.width, height: state.height,
+      scale: state.scale,
       dockedEdge: state.dockedEdge,
       drawerCollapsed: state.drawerCollapsed,
     };
@@ -481,9 +553,11 @@ export class OverlayPanelManager {
     return null;
   }
 
-  private startDrag(id: string, e: MouseEvent) {
+  private startDrag(id: string, e: PointerEvent) {
     const state = this.panels.get(id);
     if (!state) return;
+    // Only react to primary button / first contact
+    if (e.button !== 0) return;
     e.preventDefault();
 
     // If docked, undock first and start drag from float
@@ -510,7 +584,12 @@ export class OverlayPanelManager {
       this.shadow.appendChild(snapPreview);
     }
 
-    const onMove = (ev: MouseEvent) => {
+    const target = e.currentTarget as HTMLElement;
+    const pointerId = e.pointerId;
+    try { target.setPointerCapture(pointerId); } catch { /* ignore */ }
+
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
       state.x = ev.clientX - offsetX;
       state.y = ev.clientY - offsetY;
       state.el.style.left = `${state.x}px`;
@@ -528,7 +607,8 @@ export class OverlayPanelManager {
       }
     };
 
-    const onUp = (ev: MouseEvent) => {
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
       state.el.classList.remove('pw-dragging');
       if (snapPreview) snapPreview.style.display = 'none';
 
@@ -537,22 +617,26 @@ export class OverlayPanelManager {
         const edge = this.detectEdgeSnap(ev.clientX, ev.clientY, 0, 0);
         if (edge) {
           this.dockToEdge(id, edge);
-        } else if (state.type === 'workbench') {
+        } else {
           this.persistLayout(state);
         }
       }
 
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      try { target.releasePointerCapture(pointerId); } catch { /* ignore */ }
+      target.removeEventListener('pointermove', onMove);
+      target.removeEventListener('pointerup', onUp);
+      target.removeEventListener('pointercancel', onUp);
     };
 
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    target.addEventListener('pointermove', onMove);
+    target.addEventListener('pointerup', onUp);
+    target.addEventListener('pointercancel', onUp);
   }
 
-  private startResize(id: string, dir: string, e: MouseEvent) {
+  private startResize(id: string, dir: string, e: PointerEvent) {
     const state = this.panels.get(id);
     if (!state) return;
+    if (e.button !== 0) return;
     e.preventDefault();
 
     this.bringToFront(id);
@@ -566,7 +650,12 @@ export class OverlayPanelManager {
     const origW = rect.width;
     const origH = rect.height;
 
-    const onMove = (ev: MouseEvent) => {
+    const target = e.currentTarget as HTMLElement;
+    const pointerId = e.pointerId;
+    try { target.setPointerCapture(pointerId); } catch { /* ignore */ }
+
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
       let newX = origX, newY = origY, newW = origW, newH = origH;
@@ -586,15 +675,19 @@ export class OverlayPanelManager {
       state.el.style.height = `${newH}px`;
     };
 
-    const onUp = () => {
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
       state.el.classList.remove('pw-resizing');
       if (state.type === 'workbench') this.persistLayout(state);
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      try { target.releasePointerCapture(pointerId); } catch { /* ignore */ }
+      target.removeEventListener('pointermove', onMove);
+      target.removeEventListener('pointerup', onUp);
+      target.removeEventListener('pointercancel', onUp);
     };
 
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    target.addEventListener('pointermove', onMove);
+    target.addEventListener('pointerup', onUp);
+    target.addEventListener('pointercancel', onUp);
   }
 
   destroy() {

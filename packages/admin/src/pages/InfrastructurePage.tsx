@@ -59,7 +59,7 @@ export async function loadAll() {
 export function harnessStatusColor(status: string): string {
   switch (status) {
     case 'running': return 'var(--pw-success, #22c55e)';
-    case 'starting': return 'var(--pw-warning, #eab308)';
+    case 'starting': return 'var(--pw-warning, #f59e0b)';
     case 'error': return 'var(--pw-danger, #ef4444)';
     default: return 'var(--pw-text-faint)';
   }

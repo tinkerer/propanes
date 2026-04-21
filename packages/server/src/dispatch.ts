@@ -49,6 +49,10 @@ export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, t
   };
 }
 
+export const IMPLEMENTATION_AGENT_PREAMBLE = `[AGENT NOTE]
+IMPORTANT: You are an IMPLEMENTATION AGENT, NOT the Chief of Staff (Ops). The dispatch-only policy in your memory does NOT apply to you — you are the agent that was dispatched to do the work. Implement the requested changes directly in the codebase.
+[/AGENT NOTE]`;
+
 export const DEFAULT_PROMPT_TEMPLATE = `Feedback: {{feedback.url}}
 
 Title: {{feedback.title}}
@@ -388,6 +392,10 @@ export async function dispatchAgentSession(params: {
   const now = new Date().toISOString();
   const claudeSessionId = crypto.randomUUID();
 
+  if (params.prompt && params.prompt.trim() && !params.prompt.includes(IMPLEMENTATION_AGENT_PREAMBLE)) {
+    params = { ...params, prompt: `${IMPLEMENTATION_AGENT_PREAMBLE}\n\n${params.prompt}` };
+  }
+
   // Check if explicit launcherId is a sprite target
   if (params.launcherId?.startsWith('sprite:')) {
     const spriteConfigId = params.launcherId.slice('sprite:'.length);
@@ -673,7 +681,7 @@ export async function dispatchCompanionTerminal(params: {
   return { sessionId };
 }
 
-export async function resumeAgentSession(parentSessionId: string, targetLauncherId?: string | null, overridePermissionProfile?: PermissionProfile | null): Promise<{ sessionId: string }> {
+export async function resumeAgentSession(parentSessionId: string, targetLauncherId?: string | null, overridePermissionProfile?: PermissionProfile | null, additionalPrompt?: string | null): Promise<{ sessionId: string }> {
   const parent = db
     .select()
     .from(schema.agentSessions)
@@ -780,11 +788,13 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
       })
       .run();
 
+    const resumePrompt = additionalPrompt ? additionalPrompt.trim() : '';
+
     if (launcher && launcher.ws.readyState === 1) {
       const msg: LaunchSession = {
         type: 'launch_session',
         sessionId,
-        prompt: '',
+        prompt: resumePrompt,
         cwd,
         runtime,
         permissionProfile,
@@ -795,11 +805,11 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
       try {
         launcher.ws.send(JSON.stringify(msg));
         addSessionToLauncher(launcher.id, sessionId);
-        console.log(`[dispatch] Sent resume session ${sessionId} to launcher ${launcher.id}`);
+        console.log(`[dispatch] Sent resume session ${sessionId} to launcher ${launcher.id}${resumePrompt ? ' (with additional prompt)' : ''}`);
       } catch (err) {
         console.error(`[dispatch] Failed to send resume to launcher, falling back to local:`, err);
         spawnLocal(sessionId, {
-          prompt: '',
+          prompt: resumePrompt,
           cwd,
           runtime,
           permissionProfile,
@@ -808,7 +818,7 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
       }
     } else {
       spawnLocal(sessionId, {
-        prompt: '',
+        prompt: resumePrompt,
         cwd,
         runtime,
         permissionProfile,
@@ -829,6 +839,10 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
     ? '...(truncated)\n' + parentOutput.slice(-4000)
     : parentOutput;
 
+  const extraPromptBlock = additionalPrompt && additionalPrompt.trim()
+    ? `\n\nAdditional instruction from the user for this resume:\n${additionalPrompt.trim()}\n`
+    : '';
+
   const resumePrompt = `You are resuming a task that a previous agent session worked on but did not fully complete. The user wants you to continue making progress.
 
 Previous session output:
@@ -837,7 +851,7 @@ ${outputTail}
 ---
 
 Original task:
-${originalPrompt}
+${originalPrompt}${extraPromptBlock}
 
 IMPORTANT: The previous session may have made partial progress. Check the current state (git status, git diff, etc.) then continue working on anything that is still incomplete or broken. Do NOT just summarize what was done — actually do more work. If everything appears complete, verify by running tests or checking the build, and fix any issues you find.`;
 
@@ -1243,7 +1257,7 @@ function buildSpriteCommandArgs(params: {
     const cmdArgs = ['codex'];
     if (params.permissionProfile === 'auto') {
       cmdArgs.push('--full-auto');
-    } else if (params.permissionProfile === 'yolo') {
+    } else if (params.permissionProfile === 'yolo' || params.permissionProfile === 'interactive-yolo') {
       cmdArgs.push('--dangerously-bypass-approvals-and-sandbox');
     }
     if (params.cwd) {
@@ -1256,7 +1270,7 @@ function buildSpriteCommandArgs(params: {
   }
 
   const cmdArgs = ['claude'];
-  if (params.permissionProfile === 'yolo') {
+  if (params.permissionProfile === 'yolo' || params.permissionProfile === 'interactive-yolo') {
     cmdArgs.push('--dangerously-skip-permissions');
   }
   if (params.prompt) {

@@ -10,6 +10,7 @@ import { LoginPage } from '../pages/LoginPage.js';
 import { StandaloneSessionPage } from '../pages/StandaloneSessionPage.js';
 import { DispatchDialog } from './DispatchDialog.js';
 import { PageView } from './PageView.js';
+import { ChiefOfStaffBubble } from './ChiefOfStaffBubble.js';
 
 function CompanionRoot({ children }: { children: ComponentChildren }) {
   useEffect(() => {
@@ -88,6 +89,7 @@ export function App() {
       <>
         <Layout />
         <DispatchDialog />
+        <ChiefOfStaffBubble floatingButton={false} />
       </>
     );
   }
@@ -98,6 +100,7 @@ export function App() {
         <PageView />
         <GlobalTerminalPanel />
         <DispatchDialog />
+        <ChiefOfStaffBubble />
       </div>
     );
   }
@@ -106,6 +109,7 @@ export function App() {
     <>
       <Layout />
       <DispatchDialog />
+      <ChiefOfStaffBubble floatingButton={false} />
     </>
   );
 }

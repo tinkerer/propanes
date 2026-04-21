@@ -13,7 +13,7 @@ localRoutes.get('/bridge', (c) => {
   .card { background: #16213e; border-radius: 12px; padding: 24px 32px; text-align: center;
           box-shadow: 0 4px 24px rgba(0,0,0,0.4); max-width: 400px; }
   .status { margin-top: 12px; font-size: 14px; color: #8b8fa3; }
-  .ok { color: #4ade80; }
+  .ok { color: #facc15; }
   .err { color: #f87171; }
 </style></head><body>
 <div class="card">

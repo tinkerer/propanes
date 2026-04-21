@@ -4,7 +4,21 @@ import { api } from '../lib/api.js';
 import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE } from '../lib/agent-constants.js';
 import { openSession, loadAllSessions, ensureAgentsLoaded } from '../lib/sessions.js';
 
-export type DispatchType = 'agent' | 'wiggum' | 'fafo' | 'structured' | 'powwow';
+export type DispatchType = 'agent' | 'yolo' | 'wiggum' | 'fafo' | 'structured' | 'powwow';
+
+function pickYoloAgent(agents: any[], appId: string): any | undefined {
+  // Usable = not a misconfigured webhook. Prefer codex runtime over claude.
+  const usable = agents.filter((a: any) => a.mode !== 'webhook' || !!a.url);
+  const ordered = [...usable].sort((a, b) => {
+    const order = (r: string) => (r === 'codex' ? 0 : r === 'claude' ? 1 : 2);
+    return order(a.runtime || 'claude') - order(b.runtime || 'claude');
+  });
+  const match = (a: any) => a.permissionProfile === 'yolo';
+  return ordered.find(a => match(a) && a.isDefault && a.appId === appId)
+    || ordered.find(a => match(a) && a.isDefault && !a.appId)
+    || ordered.find(a => match(a) && a.appId === appId)
+    || ordered.find(match);
+}
 
 const DRAFT_KEY = 'pw-qdp-drafts';
 
@@ -48,6 +62,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
   const [text, setText] = useState(draft?.text || '');
   const [dispatchType, setDispatchType] = useState<DispatchType>(draft?.dispatchType || 'agent');
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
   const [agents, setAgents] = useState<any[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>(draft?.agentId || '');
   const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
@@ -73,9 +88,11 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
         setAgents(list);
         // Only pick default if we don't have a saved agent
         if (!selectedAgentId || !list.some((a: any) => a.id === selectedAgentId)) {
-          const appDefault = appId ? list.find((a: any) => a.isDefault && a.appId === appId) : null;
-          const globalDefault = list.find((a: any) => a.isDefault && !a.appId);
-          const def = appDefault || globalDefault || list[0];
+          // Skip webhook endpoints with no URL — they'd fail dispatch immediately.
+          const usable = (list as any[]).filter((a: any) => a.mode !== 'webhook' || !!a.url);
+          const appDefault = appId ? usable.find((a: any) => a.isDefault && a.appId === appId) : null;
+          const globalDefault = usable.find((a: any) => a.isDefault && !a.appId);
+          const def = appDefault || globalDefault || usable[0];
           if (def) setSelectedAgentId(def.id);
         }
       } catch { /* ignore */ }
@@ -141,6 +158,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
   async function submit() {
     if (!text.trim() || submitting) return;
     setSubmitting(true);
+    setError('');
     try {
       const fb = await api.createFeedback({
         title: text.trim().slice(0, 200),
@@ -150,8 +168,14 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
         tags: dispatchType === 'agent' ? [] : [dispatchType],
       });
 
-      const agent = agents.find((a: any) => a.id === selectedAgentId) || agents[0];
+      // YOLO mode auto-picks a yolo-profile agent, ignoring the manual selection.
+      const agent = dispatchType === 'yolo'
+        ? (pickYoloAgent(agents, appId) || agents.find((a: any) => a.id === selectedAgentId) || agents[0])
+        : (agents.find((a: any) => a.id === selectedAgentId) || agents[0]);
       if (!agent) throw new Error('No agent endpoints configured');
+      if (dispatchType === 'yolo' && agent.permissionProfile !== 'yolo') {
+        throw new Error('No YOLO agent configured (need an agent with permissionProfile: yolo)');
+      }
 
       if (dispatchType === 'powwow') {
         const moderator = agent;
@@ -201,6 +225,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
       onClose();
     } catch (err: any) {
       console.error('Quick dispatch failed:', err.message);
+      setError(err.message || 'Cook failed');
     }
     setSubmitting(false);
   }
@@ -240,7 +265,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
       />
       <div class="qdp-footer">
         <div class="qdp-types">
-          {(['agent', 'wiggum', 'fafo', 'structured', 'powwow'] as const).map((t) => (
+          {(['agent', 'yolo', 'wiggum', 'fafo', 'structured', 'powwow'] as const).map((t) => (
             <button
               key={t}
               class={`qdp-type-btn ${dispatchType === t ? 'active' : ''}`}
@@ -248,13 +273,15 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
             >
               {t === 'agent'
                 ? '\u{1F525} Cook It'
-                : t === 'wiggum'
-                  ? '\u{1F575} Wiggum'
-                  : t === 'fafo'
-                    ? '\u{1F9EC} FAFO'
-                    : t === 'structured'
-                      ? '\u{1F4CB} Structured'
-                      : '\u{1FAD6} Powwow'}
+                : t === 'yolo'
+                  ? '\u{26A1} YOLO'
+                  : t === 'wiggum'
+                    ? '\u{1F575} Wiggum'
+                    : t === 'fafo'
+                      ? '\u{1F9EC} FAFO'
+                      : t === 'structured'
+                        ? '\u{1F4CB} Structured'
+                        : '\u{1FAD6} Powwow'}
             </button>
           ))}
         </div>
@@ -280,9 +307,16 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
             disabled={!text.trim() || submitting}
             onClick={submit}
           >
-            {submitting ? 'Cooking…' : '\u{1F525} Cook It'}
+            {submitting
+              ? 'Cooking…'
+              : dispatchType === 'yolo'
+                ? '\u{26A1} YOLO Cook'
+                : '\u{1F525} Cook It'}
           </button>
         </div>
+        {error && (
+          <div class="qdp-error">{error}</div>
+        )}
       </div>
     </div>,
     document.body,

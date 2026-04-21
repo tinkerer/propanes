@@ -26,10 +26,12 @@ async function handleAutoDispatch(event: { id: string; appId: string | null; aut
 
   if (!agentId) {
     const agents = db.select().from(schema.agentEndpoints).all();
+    // Skip webhook endpoints with no URL — they'd fail dispatch immediately.
+    const usable = agents.filter((a) => a.mode !== 'webhook' || !!a.url);
     const defaultAgent =
-      agents.find((a) => a.isDefault && a.appId === event.appId) ||
-      agents.find((a) => a.isDefault && !a.appId) ||
-      agents[0];
+      usable.find((a) => a.isDefault && a.appId === event.appId) ||
+      usable.find((a) => a.isDefault && !a.appId) ||
+      usable[0];
     if (!defaultAgent) return;
     agentId = defaultAgent.id;
   }

@@ -273,9 +273,11 @@ export async function launchFAFOAssistant(opts: {
     tags: ['fafo', 'assistant'],
   });
 
-  const agents = appId
+  const allAgents = appId
     ? await api.getAgents(appId)
     : await ensureAgentsLoaded();
+  // Skip webhook endpoints with no URL — they'd fail dispatch immediately.
+  const agents = (allAgents as any[]).filter((a: any) => a.mode !== 'webhook' || !!a.url);
   const agent = agents.find((a: any) => a.isDefault && a.appId === appId)
     || agents.find((a: any) => a.isDefault && !a.appId)
     || agents[0];
@@ -307,12 +309,12 @@ export const TOOL_PRESETS = [
 
 export const MODE_INFO: Record<string, { icon: string; label: string; color: string }> = {
   interactive: { icon: '\u{1F4BB}', label: 'Interactive', color: 'var(--pw-primary)' },
-  headless: { icon: '\u{2699}\uFE0F', label: 'Headless', color: '#22c55e' },
+  headless: { icon: '\u{2699}\uFE0F', label: 'Headless', color: '#eab308' },
   webhook: { icon: '\u{1F517}', label: 'Webhook', color: '#f59e0b' },
 };
 
 export const RUNTIME_INFO: Record<string, { icon: string; label: string; color: string }> = {
-  claude: { icon: '\u{1F9E0}', label: 'Claude', color: '#8b5cf6' },
+  claude: { icon: '\u{1F9E0}', label: 'Claude', color: '#3b82f6' },
   codex: { icon: '\u{1F4A1}', label: 'Codex', color: '#06b6d4' },
 };
 

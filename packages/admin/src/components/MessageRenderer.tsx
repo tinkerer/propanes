@@ -3,6 +3,7 @@ import { marked } from 'marked';
 import hljs from 'highlight.js/lib/common';
 import type { ParsedMessage } from '../lib/output-parser.js';
 import { openFileViewer } from '../lib/file-viewer.js';
+import { isMobile } from '../lib/viewport.js';
 import { CopyCommand } from './CopyCommand.js';
 import { AskUserQuestionPrompt, type Question } from './InteractivePrompt.js';
 
@@ -235,18 +236,35 @@ function BashToolUse({ toolInput, cat }: { toolInput?: Record<string, unknown>; 
   const timeout = toolInput?.timeout ? Number(toolInput.timeout) : null;
   const background = toolInput?.run_in_background === true || toolInput?.run_in_background === 'true';
 
+  const cmdLines = command ? command.split('\n') : [];
+  const mobile = isMobile.value;
+  const collapsible = mobile && (cmdLines.length > 1 || command.length > 120);
+  const [expanded, setExpanded] = useState(false);
+  const preview = collapsible && !expanded
+    ? cmdLines[0].slice(0, 120) + (cmdLines.length > 1 || cmdLines[0].length > 120 ? ' …' : '')
+    : command;
+
   return (
     <div class={`sm-message sm-tool-use ${cat}`}>
-      <div class="sm-tool-header">
+      <div
+        class="sm-tool-header"
+        onClick={collapsible ? () => setExpanded(!expanded) : undefined}
+        style={collapsible ? { cursor: 'pointer' } : undefined}
+      >
         <span class="sm-tool-icon">$</span>
         <span class="sm-tool-name">Bash</span>
         {background && <span class="sm-tool-badge bg">background</span>}
         {timeout && <span class="sm-tool-badge">timeout: {Math.round(timeout / 1000)}s</span>}
+        {collapsible && <span class="sm-expand-indicator">{expanded ? '▾' : '▸'}</span>}
         <span class="sm-tool-spacer" />
         {command && <CopyCommand text={command} title="Copy command" />}
       </div>
       {description && <div class="sm-tool-desc">{description}</div>}
-      <pre class="sm-bash-command">{command}</pre>
+      {command && (
+        collapsible && !expanded
+          ? <pre class="sm-bash-command sm-bash-command-preview">{preview}</pre>
+          : <pre class="sm-bash-command">{command}</pre>
+      )}
     </div>
   );
 }
@@ -258,16 +276,39 @@ function EditToolUse({ toolInput, cat }: { toolInput?: Record<string, unknown>; 
   const replaceAll = toolInput?.replace_all === true || toolInput?.replace_all === 'true';
 
   const diffLines = computeDiff(oldStr, newStr);
+  const mobile = isMobile.value;
+  const collapsible = mobile && diffLines.length > 6;
+  const [expanded, setExpanded] = useState(!collapsible);
+
+  // Keep expand state in sync when viewport flips between mobile/desktop
+  useEffect(() => { if (!collapsible) setExpanded(true); }, [collapsible]);
+
+  let added = 0, removed = 0;
+  for (const dl of diffLines) {
+    if (dl.type === 'added') added++;
+    else if (dl.type === 'removed') removed++;
+  }
 
   return (
     <div class={`sm-message sm-tool-use ${cat}`}>
-      <div class="sm-tool-header">
+      <div
+        class="sm-tool-header"
+        onClick={collapsible ? () => setExpanded(!expanded) : undefined}
+        style={collapsible ? { cursor: 'pointer' } : undefined}
+      >
         <span class="sm-tool-icon">✎</span>
         <span class="sm-tool-name">Edit</span>
         {replaceAll && <span class="sm-tool-badge">replace all</span>}
         <ClickableFilePath path={filePath} />
+        {collapsible && (
+          <span class="sm-diff-stats">
+            {added > 0 && <span class="sm-diff-stat-add">+{added}</span>}
+            {removed > 0 && <span class="sm-diff-stat-del">-{removed}</span>}
+          </span>
+        )}
+        {collapsible && <span class="sm-expand-indicator">{expanded ? '▾' : '▸'}</span>}
       </div>
-      {diffLines.length > 0 && (
+      {expanded && diffLines.length > 0 && (
         <div class="sm-diff-view">
           {diffLines.map((dl, i) => (
             <div key={i} class={`sm-diff-line sm-diff-${dl.type}`}>
@@ -286,16 +327,26 @@ function WriteToolUse({ toolInput, cat }: { toolInput?: Record<string, unknown>;
   const content = String(toolInput?.content || '');
   const lines = content.split('\n');
   const lang = getLangFromPath(filePath);
+  const mobile = isMobile.value;
+  const collapsible = mobile && lines.length > 4;
+  const [expanded, setExpanded] = useState(!collapsible);
+
+  useEffect(() => { if (!collapsible) setExpanded(true); }, [collapsible]);
 
   return (
     <div class={`sm-message sm-tool-use ${cat}`}>
-      <div class="sm-tool-header">
+      <div
+        class="sm-tool-header"
+        onClick={collapsible ? () => setExpanded(!expanded) : undefined}
+        style={collapsible ? { cursor: 'pointer' } : undefined}
+      >
         <span class="sm-tool-icon">✏</span>
         <span class="sm-tool-name">Write</span>
         <ClickableFilePath path={filePath} />
         <span class="sm-tool-badge">{lines.length} lines</span>
+        {collapsible && <span class="sm-expand-indicator">{expanded ? '▾' : '▸'}</span>}
       </div>
-      <HighlightedCode content={content} lang={lang} maxLines={20} />
+      {expanded && <HighlightedCode content={content} lang={lang} maxLines={mobile ? 8 : 20} />}
     </div>
   );
 }
@@ -340,14 +391,37 @@ function SearchToolUse({ toolName, toolInput, cat }: { toolName: string; toolInp
 
 function TodoToolUse({ toolInput, cat }: { toolInput?: Record<string, unknown>; cat: string }) {
   const todos = toolInput?.todos as Array<{ content: string; status: string }> | undefined;
+  const mobile = isMobile.value;
+  const collapsible = mobile && !!todos && todos.length > 0;
+  const [expanded, setExpanded] = useState(!collapsible);
+
+  useEffect(() => { if (!collapsible) setExpanded(true); }, [collapsible]);
+
+  let done = 0, inProgress = 0, pending = 0;
+  if (todos) {
+    for (const t of todos) {
+      if (t.status === 'completed') done++;
+      else if (t.status === 'in_progress') inProgress++;
+      else pending++;
+    }
+  }
+  const summary = todos && todos.length > 0
+    ? `${todos.length} item${todos.length !== 1 ? 's' : ''} · ${done}✓ ${inProgress}→ ${pending}○`
+    : null;
 
   return (
     <div class={`sm-message sm-tool-use ${cat}`}>
-      <div class="sm-tool-header">
+      <div
+        class="sm-tool-header"
+        onClick={collapsible ? () => setExpanded(!expanded) : undefined}
+        style={collapsible ? { cursor: 'pointer' } : undefined}
+      >
         <span class="sm-tool-icon">☑</span>
         <span class="sm-tool-name">TodoWrite</span>
+        {collapsible && summary && <span class="sm-tool-badge">{summary}</span>}
+        {collapsible && <span class="sm-expand-indicator">{expanded ? '▾' : '▸'}</span>}
       </div>
-      {todos && todos.length > 0 && (
+      {expanded && todos && todos.length > 0 && (
         <div class="sm-todo-list">
           {todos.map((t, i) => (
             <div key={i} class={`sm-todo-item sm-todo-${t.status}`}>
@@ -475,20 +549,82 @@ function TaskToolUse({ toolName, toolInput, cat }: { toolName: string; toolInput
   );
 }
 
+// Parse MCP tool names like mcp__Gmail__send_email → { provider: 'Gmail', action: 'send_email' }
+function parseMcpToolName(name: string): { provider: string; action: string } | null {
+  if (!name.startsWith('mcp__')) return null;
+  const parts = name.split('__');
+  // parts[0] = 'mcp', parts[1] = provider (possibly multi-segment), last = action
+  if (parts.length < 3) return null;
+  const action = parts[parts.length - 1];
+  const provider = parts.slice(1, parts.length - 1).join(' ');
+  return { provider, action };
+}
+
+// Build a short 1–2 key inline summary from toolInput
+function buildInputSummary(toolInput: Record<string, unknown>): string {
+  const MAX_LEN = 40;
+  const entries = Object.entries(toolInput).filter(([, v]) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean');
+  if (entries.length === 0) return '';
+  const parts = entries.slice(0, 2).map(([k, v]) => {
+    const val = String(v);
+    const truncated = val.length > MAX_LEN ? val.slice(0, MAX_LEN) + '…' : val;
+    return `${k}: "${truncated}"`;
+  });
+  return parts.join(', ');
+}
+
+// Render a single value inline or as a collapsible sub-block
+function KvValue({ value }: { value: unknown }) {
+  const [open, setOpen] = useState(false);
+  if (value === null || value === undefined) {
+    return <span class="sm-kv-null">null</span>;
+  }
+  if (typeof value === 'boolean') {
+    return <span class="sm-kv-bool">{String(value)}</span>;
+  }
+  if (typeof value === 'number') {
+    return <span class="sm-kv-number">{String(value)}</span>;
+  }
+  if (typeof value === 'string') {
+    const display = value.length > 200 ? value.slice(0, 200) + '…' : value;
+    return <span class="sm-kv-string">"{display}"</span>;
+  }
+  // Object or array — collapsible sub-block
+  const label = Array.isArray(value) ? `[${(value as unknown[]).length} items]` : `{${Object.keys(value as object).length} keys}`;
+  return (
+    <span class="sm-kv-complex">
+      <span class="sm-kv-toggle" onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>{open ? '▾' : '▸'} {label}</span>
+      {open && <pre class="sm-kv-subblock">{JSON.stringify(value, null, 2)}</pre>}
+    </span>
+  );
+}
+
 function GenericToolUse({ toolName, toolInput, cat }: { toolName: string; toolInput?: Record<string, unknown>; cat: string }) {
-  const icon = toolIcon(toolName);
   const [expanded, setExpanded] = useState(false);
   const hasInput = toolInput && Object.keys(toolInput).length > 0;
+
+  const mcp = parseMcpToolName(toolName);
+  const icon = mcp ? '🔌' : toolIcon(toolName);
+  const displayName = mcp ? `${mcp.provider} → ${mcp.action}` : toolName;
+  const summary = hasInput ? buildInputSummary(toolInput!) : '';
 
   return (
     <div class={`sm-message sm-tool-use ${cat}`}>
       <div class="sm-tool-header" onClick={() => hasInput && setExpanded(!expanded)} style={hasInput ? { cursor: 'pointer' } : undefined}>
         <span class="sm-tool-icon">{icon}</span>
-        <span class="sm-tool-name">{toolName}</span>
+        <span class="sm-tool-name">{displayName}</span>
+        {summary && !expanded && <span class="sm-tool-inline-summary">{summary}</span>}
         {hasInput && <span class="sm-expand-indicator">{expanded ? '▾' : '▸'}</span>}
       </div>
       {expanded && hasInput && (
-        <pre class="sm-tool-summary">{JSON.stringify(toolInput, null, 2)}</pre>
+        <div class="sm-kv-list">
+          {Object.entries(toolInput!).map(([k, v]) => (
+            <div key={k} class="sm-kv-row">
+              <span class="sm-kv-key">{k}:</span>
+              <span class="sm-kv-val"><KvValue value={v} /></span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -518,12 +654,18 @@ function ToolResultMessage({ message, prevToolUse }: { message: ParsedMessage; p
   const isError = message.isError;
   const content = message.content;
   const lines = content.split('\n');
-  const isLong = lines.length > 15 || content.length > 500;
+  const mobile = isMobile.value;
+  const longLineThreshold = mobile ? 5 : 15;
+  const longCharThreshold = mobile ? 200 : 500;
+  const previewLineCount = mobile ? 3 : 10;
+  const isLong = lines.length > longLineThreshold || content.length > longCharThreshold;
   const [expanded, setExpanded] = useState(!isLong);
   const [viewMode, setViewMode] = useState<'raw' | 'highlighted' | 'markdown'>('highlighted');
 
   const imageUrls = extractImageUrls(content);
-  const displayContent = expanded ? content : lines.slice(0, 10).join('\n') + (lines.length > 10 ? '\n...' : '');
+  const displayContent = expanded
+    ? content
+    : lines.slice(0, previewLineCount).join('\n') + (lines.length > previewLineCount ? '\n...' : '');
 
   // Detect language from preceding tool use
   const filePath = prevToolUse?.toolInput?.file_path as string | undefined;

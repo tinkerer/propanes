@@ -306,6 +306,7 @@ const sessionSelectFields = {
   createdAt: schema.agentSessions.createdAt,
   startedAt: schema.agentSessions.startedAt,
   completedAt: schema.agentSessions.completedAt,
+  lastActivityAt: schema.agentSessions.lastActivityAt,
   feedbackTitle: schema.feedbackItems.title,
   feedbackAppId: schema.feedbackItems.appId,
   agentName: schema.agentEndpoints.name,
@@ -415,6 +416,7 @@ async function enrichSessions(rows: SessionRow[]) {
       createdAt: r.createdAt,
       startedAt: r.startedAt,
       completedAt: r.completedAt,
+      lastActivityAt: r.lastActivityAt,
       feedbackTitle: r.feedbackTitle || null,
       agentName: r.agentName || null,
       appId: r.feedbackAppId || r.agentAppId || null,
@@ -539,8 +541,9 @@ agentSessionRoutes.post('/:id/resume', async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const targetLauncherId = body.launcherId || undefined;
   const permissionProfile = body.permissionProfile || undefined;
+  const additionalPrompt = typeof body.additionalPrompt === 'string' ? body.additionalPrompt : undefined;
   try {
-    const { sessionId } = await resumeAgentSession(id, targetLauncherId, permissionProfile);
+    const { sessionId } = await resumeAgentSession(id, targetLauncherId, permissionProfile, additionalPrompt);
     return c.json({ sessionId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Resume failed';
@@ -717,6 +720,11 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
 agentSessionRoutes.get('/:id/jsonl', async (c) => {
   const id = c.req.param('id');
   const fileFilter = c.req.query('file'); // optional: specific file id like "main:uuid", "cont:uuid", "sub:uuid:agentId"
+  // Optional: return only the last N lines of the merged output. Keeps the
+  // initial payload small for mobile clients that freeze parsing multi-MB
+  // JSONL synchronously. Desktop callers can omit it for the full history.
+  const tailParam = c.req.query('tail');
+  const tailN = tailParam ? Math.max(0, parseInt(tailParam, 10) || 0) : 0;
   const row = db
     .select({
       claudeSessionId: schema.agentSessions.claudeSessionId,
@@ -753,7 +761,8 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
     }
     const raw = readFileSync(target.filePath, 'utf-8');
     const lines = filterJsonlLines(raw);
-    return c.text(lines.join('\n'));
+    const out = tailN > 0 ? lines.slice(-tailN) : lines;
+    return c.text(out.join('\n'));
   }
 
   // Default: merged view (all files)
@@ -766,7 +775,8 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
   }
   console.log(`[jsonl] ${id}: total lines=${allLines.length}`);
 
-  return c.text(allLines.join('\n'));
+  const out = tailN > 0 ? allLines.slice(-tailN) : allLines;
+  return c.text(out.join('\n'));
 });
 
 agentSessionRoutes.post('/:id/tail-jsonl', async (c) => {
