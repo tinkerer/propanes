@@ -324,6 +324,7 @@ export const api = {
   getJsonlFiles: (id: string) =>
     request<{
       claudeSessionId: string;
+      runtime: string;
       files: Array<{
         id: string;
         claudeSessionId: string;

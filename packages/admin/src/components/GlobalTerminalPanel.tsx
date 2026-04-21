@@ -87,6 +87,7 @@ const panelResizing = signal(false);
 function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }) {
   const [files, setFiles] = useState<JsonlFileInfo[]>([]);
   const [claudeUuid, setClaudeUuid] = useState<string | null>(null);
+  const [runtime, setRuntime] = useState<string>(sess?.runtime || 'claude');
   const isOpen = jsonlDropdownOpen.value === sessionId;
   const selectedFile = getJsonlSelectedFile(sessionId);
 
@@ -95,18 +96,20 @@ function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }
     if (cached) {
       setFiles(cached.files);
       setClaudeUuid(cached.claudeSessionId);
+      setRuntime(cached.runtime || sess?.runtime || 'claude');
     }
     const refresh = (force = false) => {
       fetchJsonlFiles(sessionId, force).then((result) => {
         setFiles(result.files);
         setClaudeUuid(result.claudeSessionId);
+        setRuntime(result.runtime || sess?.runtime || 'claude');
       }).catch(() => {});
     };
     refresh();
     // Poll for new files every 10s (new continuations/subagents appear mid-session)
     const interval = setInterval(() => { if (!document.hidden) refresh(true); }, 10_000);
     return () => clearInterval(interval);
-  }, [sessionId]);
+  }, [sessionId, sess?.runtime]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -126,6 +129,7 @@ function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }
     : 'All (merged)';
 
   const shortUuid = claudeUuid ? claudeUuid.slice(0, 8) : sessionId.slice(-6);
+  const runtimeLabel = runtime === 'codex' ? 'Codex' : 'Claude';
 
   return (
     <div class="id-dropdown-wrapper jsonl-file-dropdown">
@@ -134,7 +138,7 @@ function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }
         onClick={() => {
           jsonlDropdownOpen.value = isOpen ? null : sessionId;
         }}
-        title={claudeUuid ? `Claude Session: ${claudeUuid}` : undefined}
+        title={claudeUuid ? `${runtimeLabel} session: ${claudeUuid}` : undefined}
       >
         JSONL: {shortUuid} {files.length > 1 && <span class="id-dropdown-caret">{'\u25BE'}</span>}
       </span>
@@ -157,7 +161,7 @@ function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }
               key={f.id}
               class={selectedFile === f.id ? 'active' : ''}
               onClick={() => setJsonlSelectedFile(sessionId, f.id)}
-              title={`${f.type}: ${f.claudeSessionId}`}
+              title={`${runtimeLabel} ${f.type}: ${f.claudeSessionId}`}
             >
               {selectedFile === f.id ? '\u2713 ' : ''}
               {f.type === 'main' && '\u{1F4C4} '}
