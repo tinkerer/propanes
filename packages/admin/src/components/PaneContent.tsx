@@ -1,10 +1,12 @@
 import { SessionViewToggle } from './SessionViewToggle.js';
+import { ChiefOfStaffBubble } from './ChiefOfStaffBubble.js';
 import { JsonlView } from './JsonlView.js';
 import { FeedbackCompanionView } from './FeedbackCompanionView.js';
 import { IframeCompanion } from './IframeCompanion.js';
 import { getIsolateEntry } from '../lib/isolate.js';
 import { TerminalCompanionView } from './TerminalCompanionView.js';
 import { FileCompanionView } from './FileCompanionView.js';
+import { ArtifactCompanionView } from './ArtifactCompanionView.js';
 import { WiggumRunsPanel } from './WiggumRunsPanel.js';
 import { SessionsListView } from './SessionsListView.js';
 import { TerminalsListView } from './TerminalsListView.js';
@@ -93,6 +95,15 @@ export function renderTabContent(
     );
   }
 
+  // Chief of Staff pane tab (cos:<agentId or 'main'>)
+  if (sid.startsWith('cos:')) {
+    return (
+      <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0 }}>
+        <ChiefOfStaffBubble mode="pane" floatingButton={false} />
+      </div>
+    );
+  }
+
   // Settings tabs (settings:<key>)
   if (sid.startsWith('settings:')) {
     const key = sid.slice(9);
@@ -117,9 +128,10 @@ export function renderTabContent(
   const isUrl = sid.startsWith('url:');
   const isFile = sid.startsWith('file:');
   const isWiggumRuns = sid.startsWith('wiggum-runs:');
-  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns;
+  const isArtifact = sid.startsWith('artifact:');
+  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact;
   const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
-  const sess = (isIsolate || isUrl || isFile || isWiggumRuns) ? null : sessionMap.get(realSid);
+  const sess = (isIsolate || isUrl || isFile || isWiggumRuns || isArtifact) ? null : sessionMap.get(realSid);
 
   const handleExit = onExit ?? ((code: number, text: string) => markSessionExited(sid, code, text));
 
@@ -127,6 +139,8 @@ export function renderTabContent(
     <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0 }}>
       {isWiggumRuns ? (
         <WiggumRunsPanel sessionId={realSid} />
+      ) : isArtifact ? (
+        <ArtifactCompanionView artifactId={realSid} />
       ) : isFile ? (
         <FileCompanionView filePath={realSid} />
       ) : isUrl ? (

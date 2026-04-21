@@ -30,11 +30,18 @@ interface Agent {
   id: string;
   name: string;
   mode: string;
+  url?: string | null;
   runtime?: 'claude' | 'codex';
   permissionProfile: 'interactive' | 'auto' | 'yolo';
   isDefault: boolean;
   appId?: string | null;
   harnessConfigId?: string | null;
+}
+
+// A webhook endpoint with no URL can't be dispatched to — exclude from auto-pick
+// so the picker doesn't silently land on a misconfigured endpoint.
+function isAgentUsable(a: Agent): boolean {
+  return a.mode !== 'webhook' || !!a.url;
 }
 
 function pickAgent(
@@ -43,7 +50,7 @@ function pickAgent(
   appId?: string | null,
   runtimePreference: Array<'claude' | 'codex'> = ['claude', 'codex'],
 ): Agent | undefined {
-  const ordered = [...agents].sort((a, b) => {
+  const ordered = [...agents].filter(isAgentUsable).sort((a, b) => {
     const ai = runtimePreference.indexOf(a.runtime || 'claude');
     const bi = runtimePreference.indexOf(b.runtime || 'claude');
     return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
@@ -56,9 +63,10 @@ function pickAgent(
 }
 
 function defaultAgent(agents: Agent[], appId?: string | null): Agent | undefined {
-  return agents.find(a => a.isDefault && a.appId === appId)
-    || agents.find(a => a.isDefault && !a.appId)
-    || agents[0];
+  const usable = agents.filter(isAgentUsable);
+  return usable.find(a => a.isDefault && a.appId === appId)
+    || usable.find(a => a.isDefault && !a.appId)
+    || usable[0];
 }
 
 function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onClose: () => void }) {

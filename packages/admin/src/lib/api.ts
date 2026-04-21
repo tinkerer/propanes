@@ -103,6 +103,20 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  getCosDispatches: () =>
+    request<{
+      dispatches: Array<{
+        sessionId: string | null;
+        feedbackId: string;
+        cosThreadId: string;
+        cosThreadName: string;
+        cosAgentId: string;
+        cosAppId: string | null;
+        cosMessageId: string;
+        createdAt: number;
+      }>;
+    }>('/admin/chief-of-staff/dispatches'),
+
   powwow: (data: {
     feedbackId: string;
     moderatorAgentId: string;
@@ -295,7 +309,7 @@ export const api = {
       method: 'POST',
     }),
 
-  resumeAgentSession: (id: string, opts?: { permissionProfile?: string }) =>
+  resumeAgentSession: (id: string, opts?: { permissionProfile?: string; additionalPrompt?: string }) =>
     request<{ sessionId: string }>(`/admin/agent-sessions/${id}/resume`, {
       method: 'POST',
       body: opts ? JSON.stringify(opts) : undefined,
@@ -311,11 +325,14 @@ export const api = {
       method: 'DELETE',
     }),
 
-  getJsonl: async (id: string, fileFilter?: string): Promise<string> => {
+  getJsonl: async (id: string, fileFilter?: string, tail?: number): Promise<string> => {
     const token = getToken();
     const headers: Record<string, string> = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
-    const qs = fileFilter ? `?file=${encodeURIComponent(fileFilter)}` : '';
+    const params: string[] = [];
+    if (fileFilter) params.push(`file=${encodeURIComponent(fileFilter)}`);
+    if (tail && tail > 0) params.push(`tail=${tail}`);
+    const qs = params.length ? `?${params.join('&')}` : '';
     const res = await fetch(`${BASE}/admin/agent-sessions/${id}/jsonl${qs}`, { headers });
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
@@ -326,7 +343,9 @@ export const api = {
         const text = await res.text().catch(() => '');
         if (text) detail = text.slice(0, 200);
       }
-      throw new Error(detail);
+      const err = new Error(detail) as Error & { status?: number };
+      err.status = res.status;
+      throw err;
     }
     return res.text();
   },

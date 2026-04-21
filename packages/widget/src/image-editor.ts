@@ -58,18 +58,18 @@ const IMAGE_EDITOR_CSS = `
 }
 .pw-ie-toolbar button:hover {
   background: #334155;
-  border-color: #6366f1;
+  border-color: #1d9bf0;
 }
 .pw-ie-toolbar button.active {
-  background: #6366f1;
-  border-color: #6366f1;
+  background: #1d9bf0;
+  border-color: #1d9bf0;
 }
 .pw-ie-toolbar button.pw-ie-save {
-  background: #6366f1;
-  border-color: #6366f1;
+  background: #1d9bf0;
+  border-color: #1d9bf0;
 }
 .pw-ie-toolbar button.pw-ie-save:hover {
-  background: #4f46e5;
+  background: #0f7ac7;
 }
 .pw-ie-toolbar button:disabled {
   opacity: 0.5;
