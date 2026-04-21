@@ -39,6 +39,7 @@ import {
   sidebarWidth,
   sidebarCollapsed,
   AUTOJUMP_PANEL_ID,
+  COS_PANEL_ID,
   resolveSession,
   bringToFront,
   getPanelZIndex,
@@ -990,6 +991,7 @@ export function PopoutPanel() {
   return (
     <>
       {panels.map((p) => {
+        if (p.id === COS_PANEL_ID) return null; // rendered by ChiefOfStaffBubble
         if (p.docked) {
           return (
             <span key={`g-${p.id}`}>
