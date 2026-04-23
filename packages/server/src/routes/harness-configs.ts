@@ -211,7 +211,7 @@ app.post('/:id/session', async (c) => {
 
   const body = await c.req.json().catch(() => ({}));
   const prompt = body.prompt || 'You are running inside a harness container. Await instructions.';
-  const permissionProfile = (body.permissionProfile || 'yolo') as PermissionProfile;
+  const permissionProfile = (body.permissionProfile || 'headless-yolo') as PermissionProfile;
 
   try {
     const { sessionId } = await dispatchHarnessSession({

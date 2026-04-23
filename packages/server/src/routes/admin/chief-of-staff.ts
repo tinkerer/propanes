@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, inArray, sql } from 'drizzle-orm';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { resolve as pathResolve, join as pathJoin } from 'node:path';
@@ -30,7 +30,23 @@ To dispatch an agent to a feedback item, POST to /api/v1/admin/feedback/:id/disp
 
 Bail-out detection (encode, don't re-derive): a session is almost certainly a silent crash when status=completed, exitCode=0, outputBytes<5000, and (completedAt - startedAt) < 2s. When the operator asks to find, rerun, or clean up bailed/crashed sessions, filter by this heuristic, then re-dispatch the same feedbackId with the same agentEndpointId that originally ran.
 
-Style: terse. Short bullet lists. Surface IDs. Flag anything stuck (sessions running hours without output, offline launchers, feedback queued but not dispatched, bailouts matching the heuristic above). Never invent IDs — always curl to look them up. Keep answers under 10 lines unless the operator asks for detail. Don't say "ok" or narrate tool calls — just report results. Don't cop out: if the operator told you to act, act — don't reply asking whether they meant it.`;
+Fast acknowledgement: every turn, your FIRST output must be a short ack — one sentence restating your understanding of the ask, followed by a rough ETA tag like \`eta: looking now\` / \`eta: ~10s\` / \`eta: ~30s\` / \`eta: ~2m\` / \`eta: multi-step\`. Emit that ack in its own \`<cos-reply>\` tag before any tool calls, so the operator sees it immediately. Then do the work. Then emit a second \`<cos-reply>\` with the finished answer. Two tags per turn, ack first, final second.
+
+Style: terse. Short bullet lists. Surface IDs. Flag anything stuck (sessions running hours without output, offline launchers, feedback queued but not dispatched, bailouts matching the heuristic above). Never invent IDs — always curl to look them up. Keep answers under 10 lines unless the operator asks for detail. Don't say "ok" or narrate tool calls — just report results. Don't cop out: if the operator told you to act, act — don't reply asking whether they meant it.
+
+## Posting images / screenshots to the thread
+
+When you take a screenshot (e.g. via pw-vnc screenshot) and want to show it in the chat, DO NOT post it via the CoS chat endpoint — that would create a "You" bubble attributed to the operator. Instead, convert the image to a base64 data URL and POST it as an assistant message directly:
+
+\`\`\`bash
+THREAD_ID="<threadId from your system prompt>"
+IMG_B64=$(base64 -w0 /tmp/pw_vnc_screen.png)
+curl -s -X POST "http://localhost:3001/api/v1/admin/chief-of-staff/threads/$THREAD_ID/messages" \\
+  -H 'Content-Type: application/json' \\
+  -d "{\"role\":\"assistant\",\"text\":\"Screenshot:\",\"attachmentsJson\":\"{\\\"images\\\":[{\\\"dataUrl\\\":\\\"data:image/png;base64,$IMG_B64\\\",\\\"name\\\":\\\"screenshot.png\\\"}]}\"}"
+\`\`\`
+
+This inserts the image as a Chief-of-Staff message so it appears in the "Ops" bubble, not "You".`;
 
 type Verbosity = 'terse' | 'normal' | 'verbose';
 type ReplyStyle = 'dry' | 'neutral' | 'friendly';
@@ -50,19 +66,26 @@ const STYLE_GUIDE: Record<ReplyStyle, string> = {
 function structuredReplyInstructions(verbosity: Verbosity, style: ReplyStyle): string {
   return `## Structured reply protocol
 
-Wrap the text the user should see in a single \`<cos-reply>...</cos-reply>\` XML tag. All reasoning, planning, tool-use narration, and scratch work stays OUTSIDE the tag — only the finished user-facing reply goes inside.
+Wrap any text the operator should see in \`<cos-reply>...</cos-reply>\` XML tags. All reasoning, planning, tool-use narration, and scratch work stays OUTSIDE the tags — only finished user-facing text goes inside.
+
+Emit TWO tags per turn, in this order:
+
+1. **Ack tag** (first, before any tool calls): one short sentence restating the ask, followed by a rough ETA line. Format:
+   \`<cos-reply>On it — <your understanding>. eta: <looking now | ~10s | ~30s | ~2m | multi-step></cos-reply>\`
+2. **Final tag** (after the work is done): the actual answer / report of what you did.
 
 Rules:
-- Exactly one \`<cos-reply>\` per turn. Emit it after you've done your tool calls and know the answer.
-- Never wrap the tag in code fences or quote the literal tag name as an example.
-- If your reply itself needs to contain angle brackets, prefer code fences inside the tag.
-- Do not put the tag inside a tool_use input.
+- Emit the ack tag FIRST thing in the turn, before any Bash/tool call, so the operator sees it instantly.
+- Both tags must be balanced; never leave one open.
+- Never wrap a tag in code fences or quote the literal tag name as an example.
+- If your reply itself needs angle brackets, prefer code fences inside the tag.
+- Do not put a tag inside a tool_use input.
 
-Inside the tag, style the reply as:
+Inside the final tag, style the reply as:
 - Verbosity (${verbosity}): ${VERBOSITY_GUIDE[verbosity]}
 - Tone (${style}): ${STYLE_GUIDE[style]}
 
-Anything you emit outside the tag is treated as hidden scratch work and will not be shown to the user.`;
+Anything outside the tags is hidden scratch work and will not be shown to the user.`;
 }
 
 const COORDINATION_INSTRUCTIONS = `## Coordinating with concurrent Chief-of-Staff sessions
@@ -244,9 +267,23 @@ type ActiveSession = {
 const activeSessions = new Map<string, ActiveSession>();
 const locks = new Map<string, { owner: string; since: number }>();
 
-// Track in-flight processes by threadId so they can be interrupted
-type InFlightEntry = { proc: ReturnType<typeof spawn> };
+// Track in-flight processes by threadId so they can be interrupted.
+// `cancelled` records that we killed the proc on purpose (interrupt, supersede,
+// client abort) so the close handler can distinguish a clean cancel from a
+// real crash — SIGTERM surfaces as exit code 143 and should not surface as
+// "Send failed" in the UI.
+type InFlightEntry = { proc: ReturnType<typeof spawn>; cancelled: boolean };
 const inFlightByThread = new Map<string, InFlightEntry>();
+
+function killProc(entry: InFlightEntry): void {
+  entry.cancelled = true;
+  const pid = entry.proc.pid;
+  if (!pid) return;
+  // Kill the entire process group so subprocesses (tool calls) also die
+  try { process.kill(-pid, 'SIGTERM'); } catch { /* already dead */ }
+  // SIGKILL fallback after 3s in case SIGTERM is ignored
+  setTimeout(() => { try { process.kill(-pid, 'SIGKILL'); } catch { /* already dead */ } }, 3000);
+}
 
 function serializeSession(s: ActiveSession) {
   return {
@@ -322,6 +359,45 @@ chiefOfStaffRoutes.post('/chief-of-staff/threads', async (c) => {
 
   await db.insert(schema.cosThreads).values(thread);
   return c.json(thread);
+});
+
+
+// Post a message directly into a thread as assistant/system role.
+// Used by the CoS itself to surface content (e.g. screenshots) without the
+// message being attributed to the operator ("You").
+chiefOfStaffRoutes.post('/chief-of-staff/threads/:id/messages', async (c) => {
+  const threadId = c.req.param('id');
+  let body: { role?: string; text?: string; attachmentsJson?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+  const role = body.role === 'system' ? 'system' : 'assistant';
+  const text = (body.text || '').trim();
+  if (!text) return c.json({ error: 'text is required' }, 400);
+
+  const thread = await db.query.cosThreads.findFirst({
+    where: eq(schema.cosThreads.id, threadId),
+  });
+  if (!thread) return c.json({ error: 'Thread not found' }, 404);
+
+  const now = Date.now();
+  const messageId = ulid();
+  await db.insert(schema.cosMessages).values({
+    id: messageId,
+    threadId,
+    role,
+    text,
+    toolCallsJson: null,
+    attachmentsJson: body.attachmentsJson || null,
+    createdAt: now,
+  });
+  await db.update(schema.cosThreads)
+    .set({ updatedAt: now })
+    .where(eq(schema.cosThreads.id, threadId));
+
+  return c.json({ ok: true, messageId });
 });
 
 chiefOfStaffRoutes.delete('/chief-of-staff/threads/:id', async (c) => {
@@ -474,7 +550,7 @@ chiefOfStaffRoutes.post('/chief-of-staff/threads/:id/interrupt', (c) => {
   const threadId = c.req.param('id');
   const entry = inFlightByThread.get(threadId);
   if (entry) {
-    try { entry.proc.kill('SIGTERM'); } catch { /* already dead */ }
+    killProc(entry);
     inFlightByThread.delete(threadId);
     return c.json({ ok: true, interrupted: true });
   }
@@ -604,6 +680,8 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
     messages?: Array<{ role: string; text?: string }>;
     attachments?: CosImageAttachment[];
     elementRefs?: CosElementRef[];
+    replyToTs?: number;
+    clientTs?: number;
   };
   try {
     body = await c.req.json();
@@ -634,6 +712,86 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
     thread = await db.query.cosThreads.findFirst({
       where: eq(schema.cosThreads.id, body.threadId),
     });
+  }
+
+  // Stop keyword: if the operator sent just "stop"/"halt"/"cancel"/"kill",
+  // interrupt the in-flight claude proc for this thread and return a short
+  // SSE stream with a "Stopped." reply. No new turn is fired.
+  const STOP_RE = /^\s*(stop|halt|cancel|kill)\s*\.?\s*$/i;
+  if (body.threadId && thread && STOP_RE.test(text)) {
+    const existing = inFlightByThread.get(body.threadId);
+    const wasRunning = !!existing;
+    if (existing) {
+      killProc(existing);
+      inFlightByThread.delete(body.threadId);
+    }
+    const now = Date.now();
+    const userTs = typeof body.clientTs === 'number' ? body.clientTs : now;
+    db.insert(schema.cosMessages).values({
+      id: ulid(),
+      threadId: thread.id,
+      role: 'user',
+      text,
+      toolCallsJson: null,
+      attachmentsJson: null,
+      createdAt: userTs,
+    }).catch(() => { /* non-fatal */ });
+    const ackText = wasRunning ? 'Stopped.' : 'Nothing running.';
+    db.insert(schema.cosMessages).values({
+      id: ulid(),
+      threadId: thread.id,
+      role: 'assistant',
+      text: `<cos-reply>${ackText}</cos-reply>`,
+      toolCallsJson: null,
+      attachmentsJson: null,
+      createdAt: userTs + 1,
+    }).catch(() => { /* non-fatal */ });
+    db.update(schema.cosThreads)
+      .set({ updatedAt: now })
+      .where(eq(schema.cosThreads.id, thread.id))
+      .catch(() => { /* non-fatal */ });
+
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          `event: claude\ndata: ${JSON.stringify({
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: `<cos-reply>${ackText}</cos-reply>` }] },
+          })}\n\n`,
+        ));
+        controller.enqueue(encoder.encode(
+          `event: done\ndata: ${JSON.stringify({ exitCode: 0, stopped: wasRunning })}\n\n`,
+        ));
+        controller.close();
+      },
+    });
+    return c.body(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    });
+  }
+
+  // Concurrent follow-up: if a turn is already in flight for this thread, kill
+  // it and wait for the process to flush before starting a new one. This
+  // implements "new message resumes the session" — the next spawn uses
+  // --resume on the same claudeSessionId, so context carries over.
+  if (body.threadId) {
+    const existing = inFlightByThread.get(body.threadId);
+    if (existing) {
+      const prevProc = existing.proc;
+      killProc(existing);
+      inFlightByThread.delete(body.threadId);
+      await new Promise<void>((resolveWait) => {
+        const done = () => resolveWait();
+        prevProc.once('close', done);
+        setTimeout(done, 3000);
+      });
+    }
   }
 
   let appContext = '';
@@ -670,6 +828,9 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
 
   const concurrencyContext =
     `\n\nYour requestId is ${requestId} (pass it to the lock API).` +
+    (body.threadId
+      ? `\n\nYour threadId is ${body.threadId}. To post content back to this thread as yourself (not labelled "You"), POST to:\n  http://localhost:3001/api/v1/admin/chief-of-staff/threads/${body.threadId}/messages\n\nTo share a screenshot, use this Python one-liner (handles escaping safely):\n  python3 -c "import base64,json,urllib.request; img=open('/tmp/pw_vnc_screen.png','rb').read(); b64='data:image/png;base64,'+base64.b64encode(img).decode(); body=json.dumps({'role':'assistant','text':'Screenshot:','attachmentsJson':json.dumps({'images':[{'dataUrl':b64,'name':'screenshot.png'}]})}); r=urllib.request.Request('http://localhost:3001/api/v1/admin/chief-of-staff/threads/${body.threadId}/messages',body.encode(),{'Content-Type':'application/json'},'POST'); print(urllib.request.urlopen(r).read())"`
+      : '') +
     (otherSessions.length > 0
       ? `\n\nOther active Chief-of-Staff sessions right now:\n${JSON.stringify(otherSessions, null, 2)}`
       : `\n\nNo other Chief-of-Staff sessions are active right now.`) +
@@ -773,17 +934,22 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
 
       // Persist the user message upfront (before the stream) so it survives a
       // stream failure. The assistant row is written on successful close.
-      const userMsgStartedAt = Date.now();
+      // Prefer the client-supplied send timestamp so in-memory replyToTs
+      // references still resolve after rehydration from the server.
+      const userMsgStartedAt = typeof body.clientTs === 'number' ? body.clientTs : Date.now();
       const userMsgId = ulid();
-      const userAttachmentsJson =
-        attachmentsIn.length > 0 || elementRefs.length > 0
-          ? JSON.stringify({
-              images: attachmentsIn
-                .filter((a) => a.kind === 'image' && typeof a.dataUrl === 'string')
-                .map((a) => ({ dataUrl: a.dataUrl, name: a.name })),
-              elements: elementRefs,
-            })
-          : null;
+      const replyToTs = typeof body.replyToTs === 'number' ? body.replyToTs : undefined;
+      const hasExtras =
+        attachmentsIn.length > 0 || elementRefs.length > 0 || replyToTs !== undefined;
+      const userAttachmentsJson = hasExtras
+        ? JSON.stringify({
+            images: attachmentsIn
+              .filter((a) => a.kind === 'image' && typeof a.dataUrl === 'string')
+              .map((a) => ({ dataUrl: a.dataUrl, name: a.name })),
+            elements: elementRefs,
+            ...(replyToTs !== undefined ? { replyToTs } : {}),
+          })
+        : null;
       if (body.threadId && thread) {
         db.insert(schema.cosMessages).values({
           id: userMsgId,
@@ -807,6 +973,7 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
           cwd,
           env: process.env,
           stdio: ['ignore', 'pipe', 'pipe'],
+          detached: true,
         });
       } catch (err: any) {
         send('error', { error: err?.message || 'Failed to spawn claude CLI' });
@@ -816,13 +983,83 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
         return;
       }
 
-      // Register in-flight for interrupt support
+      // Register in-flight for interrupt support. We also hold this entry
+      // locally so the close handler can distinguish intentional kills
+      // (entry.cancelled === true) from real failures even after the map
+      // entry has been deleted by a superseding request.
+      const inFlightEntry: InFlightEntry = { proc, cancelled: false };
       if (body.threadId) {
-        inFlightByThread.set(body.threadId, { proc });
+        inFlightByThread.set(body.threadId, inFlightEntry);
+      }
+
+      // One agent_sessions row PER THREAD (not per turn). The underlying
+      // claude session is --resumed across turns, so each turn is really just
+      // another message on the same process lineage — modelling that as a
+      // single row keeps the Sessions list stable and the claude_session_id
+      // field meaningfully persistent. We upsert: reuse the most recent row
+      // for the thread if it exists, delete any stragglers from the earlier
+      // per-turn behaviour, or insert fresh on first turn.
+      let agentSessionId: string | null = null;
+      let agentSessionOutputBytes = 0;
+      if (body.threadId && thread) {
+        const nowIso = new Date().toISOString();
+        // Drop markdown-quote lines (leading `>`) before titling — the admin
+        // composer prepends the parent message as a `> ` block when replying
+        // in-thread, and that's context for the model, not the label.
+        const rawTitle = text
+          .split('\n')
+          .filter((line) => !line.trimStart().startsWith('>'))
+          .join(' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        const title = rawTitle.length > 160 ? `${rawTitle.slice(0, 160)}…` : rawTitle;
+
+        const existing = db.select({ id: schema.agentSessions.id })
+          .from(schema.agentSessions)
+          .where(eq(schema.agentSessions.cosThreadId, thread.id))
+          .orderBy(desc(schema.agentSessions.createdAt))
+          .all();
+
+        if (existing.length > 0) {
+          agentSessionId = existing[0].id;
+          const stragglers = existing.slice(1).map((e) => e.id);
+          if (stragglers.length > 0) {
+            db.delete(schema.agentSessions)
+              .where(inArray(schema.agentSessions.id, stragglers))
+              .run();
+          }
+          db.update(schema.agentSessions).set({
+            status: 'running',
+            pid: proc.pid ?? null,
+            claudeSessionId: resumeSessionId,
+            title: title || null,
+            completedAt: null,
+            exitCode: null,
+            lastActivityAt: nowIso,
+          }).where(eq(schema.agentSessions.id, agentSessionId)).run();
+        } else {
+          agentSessionId = ulid();
+          db.insert(schema.agentSessions).values({
+            id: agentSessionId,
+            cosThreadId: thread.id,
+            runtime: 'claude',
+            permissionProfile: 'interactive-yolo',
+            status: 'running',
+            pid: proc.pid ?? null,
+            outputBytes: 0,
+            claudeSessionId: resumeSessionId,
+            title: title || null,
+            cwd,
+            createdAt: nowIso,
+            startedAt: nowIso,
+            lastActivityAt: nowIso,
+          }).run();
+        }
       }
 
       let stdoutBuf = '';
       proc.stdout.on('data', (chunk: Buffer) => {
+        if (agentSessionId) agentSessionOutputBytes += chunk.length;
         stdoutBuf += chunk.toString('utf8');
         const lines = stdoutBuf.split('\n');
         stdoutBuf = lines.pop() || '';
@@ -844,6 +1081,12 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
             if (obj) {
               if (!capturedSessionId && typeof obj.session_id === 'string' && obj.session_id) {
                 capturedSessionId = obj.session_id;
+                if (agentSessionId && capturedSessionId !== resumeSessionId) {
+                  db.update(schema.agentSessions)
+                    .set({ claudeSessionId: capturedSessionId })
+                    .where(eq(schema.agentSessions.id, agentSessionId))
+                    .run();
+                }
               }
               if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
                 for (const block of obj.message.content) {
@@ -891,17 +1134,53 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
 
       proc.on('error', (err: any) => {
         send('error', { error: err?.message || 'claude process error' });
+        if (agentSessionId) {
+          const nowIso = new Date().toISOString();
+          db.update(schema.agentSessions)
+            .set({
+              status: 'failed',
+              completedAt: nowIso,
+              lastActivityAt: nowIso,
+              outputBytes: sql`${schema.agentSessions.outputBytes} + ${agentSessionOutputBytes}`,
+            })
+            .where(eq(schema.agentSessions.id, agentSessionId))
+            .run();
+        }
         closed = true;
         cleanup();
         try { controller.close(); } catch { /* already closed */ }
       });
 
-      proc.on('close', (code) => {
-        if (code !== 0) {
+      proc.on('close', (code, signal) => {
+        // Distinguish deliberate cancellation from a real crash. SIGTERM-caught
+        // claude exits with code 143; SIGKILL with 137. If we flagged this
+        // proc as cancelled (interrupt, superseded by a follow-up) or the
+        // process died to a kill signal, surface a `cancelled` event instead
+        // of an `error` so the UI doesn't show "Send failed" for a user-
+        // initiated stop.
+        const killedBySignal = signal === 'SIGTERM' || signal === 'SIGKILL';
+        const cancelled = inFlightEntry.cancelled || killedBySignal || code === 143 || code === 137;
+        if (cancelled) {
+          send('cancelled', { exitCode: code ?? null, signal: signal ?? null });
+        } else if (code !== 0) {
           send('error', {
             error: `claude exited with code ${code}${stderrBuf ? `: ${stderrBuf.slice(0, 500)}` : ''}`,
             exitCode: code,
           });
+        }
+
+        if (agentSessionId) {
+          const nowIso = new Date().toISOString();
+          db.update(schema.agentSessions)
+            .set({
+              status: code === 0 ? 'completed' : cancelled ? 'cancelled' : 'failed',
+              exitCode: code ?? null,
+              completedAt: nowIso,
+              lastActivityAt: nowIso,
+              outputBytes: sql`${schema.agentSessions.outputBytes} + ${agentSessionOutputBytes}`,
+            })
+            .where(eq(schema.agentSessions.id, agentSessionId))
+            .run();
         }
 
         // Persist assistant message + thread bookkeeping. The user message was
@@ -934,7 +1213,7 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
           Promise.all(ops).catch(() => { /* non-fatal */ });
         }
 
-        send('done', { exitCode: code ?? 0 });
+        send('done', { exitCode: code ?? 0, cancelled });
         closed = true;
         cleanup();
         try { controller.close(); } catch { /* already closed */ }
@@ -946,8 +1225,12 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
       });
 
       c.req.raw.signal.addEventListener('abort', () => {
-        try { proc.kill('SIGTERM'); } catch { /* already dead */ }
-        cleanup();
+        // HTTP connection dropped (page refresh, tab close). Don't kill the
+        // claude proc — leave it running and tracked in inFlightByThread so
+        // the next message for this thread finds and replaces it via killProc().
+        // The proc's own close handler will persist results to the DB.
+        releaseAllLocks(requestId);
+        activeSessions.delete(requestId);
       });
     },
   });

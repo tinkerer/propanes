@@ -39,7 +39,18 @@ export const DEFAULT_SHORTCUT = 'ctrl+shift+f';
 export const DISPATCH_MODES = ['webhook', 'headless', 'interactive'] as const;
 export const AGENT_RUNTIMES = ['claude', 'codex'] as const;
 
-export const PERMISSION_PROFILES = ['interactive', 'interactive-yolo', 'auto', 'yolo', 'plain'] as const;
+// Permission profiles encode two orthogonal axes:
+//   - I/O mode:     interactive (TTY) | headless (one-shot `-p`) | headless-stream (bidirectional JSON)
+//   - Permissions:  yolo (skip) | require (ask)
+// Name format: `<mode>-<perms>`. The `plain` profile is a raw shell (no agent).
+export const PERMISSION_PROFILES = [
+  'interactive-require',
+  'interactive-yolo',
+  'headless-yolo',
+  'headless-stream-yolo',
+  'headless-stream-require',
+  'plain',
+] as const;
 
 export const AGENT_SESSION_STATUSES = [
   'pending',

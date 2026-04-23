@@ -14,7 +14,7 @@ const formProjectDir = signal('');
 const formServerUrl = signal('');
 const formHooks = signal('');
 const formDescription = signal('');
-const formPermissionProfile = signal('interactive');
+const formPermissionProfile = signal('interactive-require');
 const formAllowedTools = signal('');
 const formAgentPath = signal('');
 const formError = signal('');
@@ -65,7 +65,7 @@ function openCreate() {
   formServerUrl.value = '';
   formHooks.value = '';
   formDescription.value = '';
-  formPermissionProfile.value = 'interactive';
+  formPermissionProfile.value = 'interactive-require';
   formAllowedTools.value = '';
   formAgentPath.value = '';
   formError.value = '';
@@ -79,7 +79,7 @@ function openEdit(app: any) {
   formServerUrl.value = app.serverUrl || '';
   formHooks.value = (app.hooks || []).join(', ');
   formDescription.value = app.description || '';
-  formPermissionProfile.value = app.defaultPermissionProfile || 'interactive';
+  formPermissionProfile.value = app.defaultPermissionProfile || 'interactive-require';
   formAllowedTools.value = app.defaultAllowedTools || '';
   formAgentPath.value = app.agentPath || '';
   formError.value = '';
@@ -265,9 +265,11 @@ export function ApplicationsPage() {
                     onChange={(e) => (formPermissionProfile.value = (e.target as HTMLSelectElement).value)}
                     style="width:100%"
                   >
-                    <option value="interactive">Interactive</option>
-                    <option value="auto">Auto</option>
-                    <option value="yolo">Yolo (skip permissions)</option>
+                    <option value="interactive-require">Interactive (TUI, ask)</option>
+                    <option value="interactive-yolo">YOLO (TUI, skip permissions)</option>
+                    <option value="headless-yolo">Headless (one-shot pipe, skip)</option>
+                    <option value="headless-stream-yolo">Stream (bidirectional JSON, skip)</option>
+                    <option value="headless-stream-require">Stream (bidirectional JSON, ask via UI)</option>
                   </select>
                 </div>
                 <div class="form-group">

@@ -103,7 +103,7 @@ export function runMigrations() {
       id TEXT PRIMARY KEY,
       feedback_id TEXT NOT NULL REFERENCES feedback_items(id) ON DELETE CASCADE,
       agent_endpoint_id TEXT NOT NULL REFERENCES agent_endpoints(id) ON DELETE CASCADE,
-      permission_profile TEXT NOT NULL DEFAULT 'interactive',
+      permission_profile TEXT NOT NULL DEFAULT 'interactive-require',
       status TEXT NOT NULL DEFAULT 'pending',
       pid INTEGER,
       exit_code INTEGER,
@@ -143,8 +143,9 @@ export function runMigrations() {
     `ALTER TABLE agent_endpoints ADD COLUMN prompt_template TEXT`,
     `ALTER TABLE agent_endpoints ADD COLUMN mode TEXT NOT NULL DEFAULT 'webhook'`,
     `ALTER TABLE agent_endpoints ADD COLUMN runtime TEXT NOT NULL DEFAULT 'claude'`,
-    `ALTER TABLE agent_endpoints ADD COLUMN permission_profile TEXT NOT NULL DEFAULT 'interactive'`,
+    `ALTER TABLE agent_endpoints ADD COLUMN permission_profile TEXT NOT NULL DEFAULT 'interactive-require'`,
     `ALTER TABLE agent_endpoints ADD COLUMN allowed_tools TEXT`,
+    `ALTER TABLE agent_sessions ADD COLUMN runtime TEXT NOT NULL DEFAULT 'claude'`,
     `ALTER TABLE agent_sessions ADD COLUMN parent_session_id TEXT`,
     `ALTER TABLE agent_endpoints ADD COLUMN auto_plan INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE agent_sessions ADD COLUMN last_output_seq INTEGER NOT NULL DEFAULT 0`,
@@ -153,7 +154,7 @@ export function runMigrations() {
     `ALTER TABLE agent_sessions ADD COLUMN launcher_id TEXT`,
     `ALTER TABLE agent_endpoints ADD COLUMN preferred_launcher_id TEXT`,
     `ALTER TABLE applications ADD COLUMN tmux_config_id TEXT`,
-    `ALTER TABLE applications ADD COLUMN default_permission_profile TEXT DEFAULT 'interactive'`,
+    `ALTER TABLE applications ADD COLUMN default_permission_profile TEXT DEFAULT 'interactive-require'`,
     `ALTER TABLE applications ADD COLUMN default_allowed_tools TEXT`,
     `ALTER TABLE applications ADD COLUMN agent_path TEXT`,
     `ALTER TABLE applications ADD COLUMN screenshot_include_widget INTEGER NOT NULL DEFAULT 0`,
@@ -183,6 +184,9 @@ export function runMigrations() {
     `ALTER TABLE cos_threads ADD COLUMN claude_session_id TEXT`,
     `ALTER TABLE agent_sessions ADD COLUMN last_activity_at TEXT`,
     `ALTER TABLE cos_messages ADD COLUMN attachments_json TEXT`,
+    `ALTER TABLE cos_learnings ADD COLUMN tags TEXT`,
+    `ALTER TABLE agent_sessions ADD COLUMN cos_thread_id TEXT`,
+    `ALTER TABLE agent_sessions ADD COLUMN title TEXT`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after
@@ -202,7 +206,8 @@ export function runMigrations() {
           id TEXT PRIMARY KEY,
           feedback_id TEXT REFERENCES feedback_items(id) ON DELETE CASCADE,
           agent_endpoint_id TEXT REFERENCES agent_endpoints(id) ON DELETE CASCADE,
-          permission_profile TEXT NOT NULL DEFAULT 'interactive',
+          runtime TEXT NOT NULL DEFAULT 'claude',
+          permission_profile TEXT NOT NULL DEFAULT 'interactive-require',
           parent_session_id TEXT,
           status TEXT NOT NULL DEFAULT 'pending',
           pid INTEGER,
@@ -219,14 +224,14 @@ export function runMigrations() {
           completed_at TEXT
         );
         INSERT INTO agent_sessions_new (
-          id, feedback_id, agent_endpoint_id, permission_profile,
+          id, feedback_id, agent_endpoint_id, runtime, permission_profile,
           status, pid, exit_code, output_log, output_bytes,
           created_at, started_at, completed_at,
           parent_session_id, last_output_seq, last_input_seq,
           tmux_session_name, launcher_id
         )
         SELECT
-          id, feedback_id, agent_endpoint_id, permission_profile,
+          id, feedback_id, agent_endpoint_id, 'claude', permission_profile,
           status, pid, exit_code, output_log, output_bytes,
           created_at, started_at, completed_at,
           parent_session_id, last_output_seq, last_input_seq,
@@ -254,6 +259,25 @@ export function runMigrations() {
 
     CREATE INDEX IF NOT EXISTS idx_pending_session_dir_seq
       ON pending_messages(session_id, direction, seq_num);
+  `);
+
+  // Follow-up prompts queued for yolo/headless sessions. Popped on parent exit.
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS session_followups (
+      id TEXT PRIMARY KEY,
+      parent_session_id TEXT NOT NULL,
+      feedback_id TEXT,
+      agent_endpoint_id TEXT,
+      prompt TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      dispatched_at TEXT,
+      dispatched_session_id TEXT,
+      error_message TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_session_followups_parent_status
+      ON session_followups(parent_session_id, status, created_at);
   `);
 
   // Perf metrics table
@@ -554,6 +578,19 @@ export function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_cos_learnings_severity ON cos_learnings(severity);
     CREATE INDEX IF NOT EXISTS idx_cos_learnings_created ON cos_learnings(created_at);
 
+    CREATE TABLE IF NOT EXISTS cos_learning_links (
+      id TEXT PRIMARY KEY,
+      from_id TEXT NOT NULL REFERENCES cos_learnings(id) ON DELETE CASCADE,
+      to_id TEXT NOT NULL REFERENCES cos_learnings(id) ON DELETE CASCADE,
+      rel_type TEXT NOT NULL DEFAULT 'related',
+      source TEXT NOT NULL DEFAULT 'user',
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cos_learning_links_from ON cos_learning_links(from_id);
+    CREATE INDEX IF NOT EXISTS idx_cos_learning_links_to ON cos_learning_links(to_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cos_learning_links_unique ON cos_learning_links(from_id, to_id, rel_type);
+
     CREATE TABLE IF NOT EXISTS cos_metadata (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -611,6 +648,79 @@ export function runMigrations() {
     } catch {
       // Column already exists
     }
+  }
+
+  // Migrate permission profile names to the explicit two-axis scheme
+  // (<mode>-<perms>). Every rename is idempotent: re-running after a partial
+  // migration is a no-op because the new names aren't touched by either
+  // pass.
+  //
+  // Rename pipeline (apply in order — each step's WHERE clause excludes the
+  // previous step's output):
+  //   legacy              → interim              → final (2026-04-23)
+  //   auto                → headless             → headless-yolo
+  //   yolo (headless)     → headless             → headless-yolo
+  //   yolo (interactive)  → yolo                 → interactive-yolo
+  //   interactive-yolo    → yolo                 → interactive-yolo
+  //   interactive         → interactive          → interactive-require
+  //   headless            → headless             → headless-yolo
+  //   interactive-json    → interactive-json     → headless-stream-yolo
+  try {
+    sqlite.exec(`
+      -- Step 1: legacy → interim (2026-04-09 rename).
+      UPDATE agent_endpoints SET permission_profile = 'headless'
+        WHERE permission_profile IN ('auto', 'yolo-legacy');
+      UPDATE agent_endpoints SET permission_profile = 'yolo'
+        WHERE permission_profile = 'interactive-yolo';
+      UPDATE agent_sessions SET permission_profile = 'headless'
+        WHERE permission_profile IN ('auto', 'yolo-legacy');
+      UPDATE agent_sessions SET permission_profile = 'yolo'
+        WHERE permission_profile = 'interactive-yolo';
+      UPDATE applications SET default_permission_profile = 'headless'
+        WHERE default_permission_profile IN ('auto', 'yolo-legacy');
+      UPDATE applications SET default_permission_profile = 'yolo'
+        WHERE default_permission_profile = 'interactive-yolo';
+
+      -- Step 2: interim → two-axis final (2026-04-23 rename).
+      UPDATE agent_endpoints SET permission_profile = 'interactive-require'
+        WHERE permission_profile = 'interactive';
+      UPDATE agent_endpoints SET permission_profile = 'interactive-yolo'
+        WHERE permission_profile = 'yolo';
+      UPDATE agent_endpoints SET permission_profile = 'headless-yolo'
+        WHERE permission_profile = 'headless';
+      UPDATE agent_endpoints SET permission_profile = 'headless-stream-yolo'
+        WHERE permission_profile = 'interactive-json';
+
+      UPDATE agent_sessions SET permission_profile = 'interactive-require'
+        WHERE permission_profile = 'interactive';
+      UPDATE agent_sessions SET permission_profile = 'interactive-yolo'
+        WHERE permission_profile = 'yolo';
+      UPDATE agent_sessions SET permission_profile = 'headless-yolo'
+        WHERE permission_profile = 'headless';
+      UPDATE agent_sessions SET permission_profile = 'headless-stream-yolo'
+        WHERE permission_profile = 'interactive-json';
+
+      UPDATE applications SET default_permission_profile = 'interactive-require'
+        WHERE default_permission_profile = 'interactive';
+      UPDATE applications SET default_permission_profile = 'interactive-yolo'
+        WHERE default_permission_profile = 'yolo';
+      UPDATE applications SET default_permission_profile = 'headless-yolo'
+        WHERE default_permission_profile = 'headless';
+      UPDATE applications SET default_permission_profile = 'headless-stream-yolo'
+        WHERE default_permission_profile = 'interactive-json';
+
+      -- Step 3: endpoints literally named "yolo" / "codex-yolo" were seeded
+      -- with permission_profile='headless-yolo' (batch pipe mode) but users
+      -- expect them to behave like the YOLO button (TTY + skip). Realign so
+      -- picker-selection matches button-click.
+      UPDATE agent_endpoints SET permission_profile = 'interactive-yolo'
+        WHERE name IN ('yolo', 'codex-yolo')
+          AND permission_profile = 'headless-yolo';
+    `);
+  } catch {
+    // Tables/columns may not all exist on very fresh DBs; alter statements
+    // above are idempotent and re-running this migration on a clean DB is a
+    // no-op.
   }
 
   const configCount = sqlite.prepare('SELECT count(*) as cnt FROM tmux_configs').get() as { cnt: number };

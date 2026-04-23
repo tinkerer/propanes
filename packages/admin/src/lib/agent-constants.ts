@@ -217,6 +217,71 @@ curl -s -X POST $AUTH 'http://localhost:3001/api/v1/admin/wiggum/batch' \\
 - When analyzing fitness scores, lower is better for diff-based metrics
 `;
 
+export type PlanFirstChoice = 'plan_first' | 'just_code';
+export type TestStrategyChoice = 'user_tests' | 'playwright' | 'isolated_harness';
+export type BranchStrategyChoice = 'current_branch' | 'new_branch_pr' | 'new_worktree_pr';
+export type RunModeChoice = 'interactive' | 'yolo';
+
+export interface SetupAssistantAnswers {
+  planFirst: PlanFirstChoice;
+  tests: TestStrategyChoice;
+  branch: BranchStrategyChoice;
+  runMode: RunModeChoice;
+}
+
+const PLAN_FIRST_PREAMBLE = `## Plan first, code second
+
+Before touching any code:
+1. Read the relevant files to understand current behavior.
+2. Write a concise plan to \`PLAN.md\` at the project root with: problem framing, proposed change list (per file), test strategy, risks, and verification steps.
+3. After writing PLAN.md, STOP and use the ExitPlanMode tool (or explicitly ask the user) to wait for approval before implementing.
+4. Only after approval, implement the plan.`;
+
+const TESTS_INSTRUCTIONS: Record<TestStrategyChoice, string> = {
+  user_tests: 'The user will test the change manually after you finish. Do not add automated tests unless they are trivial; focus on a reproducible manual verification recipe and add it to your final summary.',
+  playwright: 'Add Playwright end-to-end coverage for this change. If Playwright is not installed in the relevant package, install it (`@playwright/test`) and add a minimal config. Place tests under `packages/e2e/tests/` (or the package\'s existing e2e directory). Run the tests before declaring the task complete.',
+  isolated_harness: 'Run and verify this change inside the dispatched harness/isolated environment. Use the harness Docker compose stack rather than mutating the developer\'s local environment.',
+};
+
+const BRANCH_INSTRUCTIONS: Record<BranchStrategyChoice, string> = {
+  current_branch: 'Commit the change to the current branch. Do not create a new branch or PR unless the diff is large enough to obviously warrant one.',
+  new_branch_pr: 'Create a new branch named `feature/<slug-from-feedback-title>`, commit the change there, push, and open a PR with `gh pr create`. Title the PR after the feedback; body should summarize the change and reference the feedback URL.',
+  new_worktree_pr: 'Create a new git worktree under `.worktrees/<slug-from-feedback-title>` on a fresh branch (`feature/<slug>`), do all work in that worktree, then push and open a PR with `gh pr create`. This avoids disturbing the developer\'s current working tree.',
+};
+
+const TESTS_LABELS: Record<TestStrategyChoice, string> = {
+  user_tests: 'User will test',
+  playwright: 'Playwright e2e',
+  isolated_harness: 'Isolated harness',
+};
+
+const BRANCH_LABELS: Record<BranchStrategyChoice, string> = {
+  current_branch: 'Current branch',
+  new_branch_pr: 'New branch + PR',
+  new_worktree_pr: 'New worktree + PR',
+};
+
+export function buildSetupAssistantInstructions(
+  answers: SetupAssistantAnswers,
+  userInstructions?: string,
+): string {
+  const sections: string[] = [];
+  sections.push('## Setup Assistant directives\n\nThe following choices were made up-front for this dispatch. Honor them.');
+  sections.push(`- **Plan strategy:** ${answers.planFirst === 'plan_first' ? 'Write PLAN.md and wait for approval before coding' : 'Skip the plan, implement directly'}`);
+  sections.push(`- **Test strategy:** ${TESTS_LABELS[answers.tests]}`);
+  sections.push(`- **Branch strategy:** ${BRANCH_LABELS[answers.branch]}`);
+  sections.push(`- **Run mode:** ${answers.runMode === 'yolo' ? 'YOLO (skips permission prompts)' : 'Interactive (you may pause for tool approval)'}`);
+
+  if (answers.planFirst === 'plan_first') sections.push(PLAN_FIRST_PREAMBLE);
+  sections.push(`### Testing\n${TESTS_INSTRUCTIONS[answers.tests]}`);
+  sections.push(`### Branching\n${BRANCH_INSTRUCTIONS[answers.branch]}`);
+
+  if (userInstructions && userInstructions.trim()) {
+    sections.push(`## Additional Instructions\n${userInstructions.trim()}`);
+  }
+  return sections.join('\n\n');
+}
+
 export const STRUCTURED_MODE_TEMPLATE = `Use structured mode for this task.
 
 ## Response format
@@ -319,7 +384,9 @@ export const RUNTIME_INFO: Record<string, { icon: string; label: string; color: 
 };
 
 export const PROFILE_DESCRIPTIONS: Record<string, { label: string; desc: string; icon: string }> = {
-  interactive: { label: 'Supervised', desc: 'You approve each tool use in real-time', icon: '\u{1F441}' },
-  auto: { label: 'Autonomous', desc: 'Pre-approved tools run automatically', icon: '\u{1F916}' },
-  yolo: { label: 'Full Auto', desc: 'No permission checks (sandboxed only)', icon: '\u26A1' },
+  'interactive-require': { label: 'Interactive', desc: 'TUI; you approve each tool use', icon: '\u{1F441}' },
+  'interactive-yolo': { label: 'YOLO', desc: 'TUI; skips permission checks', icon: '\u26A1' },
+  'headless-yolo': { label: 'Headless', desc: 'One-shot stream-json; skips permissions', icon: '\u{1F916}' },
+  'headless-stream-yolo': { label: 'Stream', desc: 'Bidirectional stream-json; skips permissions', icon: '\u{1F50C}' },
+  'headless-stream-require': { label: 'Stream (supervised)', desc: 'Bidirectional stream-json; approval prompts delivered via UI', icon: '\u{1F50B}' },
 };

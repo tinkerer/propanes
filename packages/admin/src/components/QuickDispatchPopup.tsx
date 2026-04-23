@@ -1,23 +1,38 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import { createPortal } from 'preact/compat';
 import { api } from '../lib/api.js';
-import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE } from '../lib/agent-constants.js';
+import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../lib/agent-constants.js';
+import { formatAgentOption, agentSortCmp } from '../lib/agent-matrix.js';
 import { openSession, loadAllSessions, ensureAgentsLoaded } from '../lib/sessions.js';
 
 export type DispatchType = 'agent' | 'yolo' | 'wiggum' | 'fafo' | 'structured' | 'powwow';
 
 function pickYoloAgent(agents: any[], appId: string): any | undefined {
-  // Usable = not a misconfigured webhook. Prefer codex runtime over claude.
+  // YOLO button prefers interactive-yolo (TTY + skip permissions), falling
+  // back to any *-yolo profile if no interactive-yolo endpoint is configured.
+  // Either way the user gets an agent that won't pause for permission prompts.
   const usable = agents.filter((a: any) => a.mode !== 'webhook' || !!a.url);
-  const ordered = [...usable].sort((a, b) => {
-    const order = (r: string) => (r === 'codex' ? 0 : r === 'claude' ? 1 : 2);
-    return order(a.runtime || 'claude') - order(b.runtime || 'claude');
-  });
-  const match = (a: any) => a.permissionProfile === 'yolo';
-  return ordered.find(a => match(a) && a.isDefault && a.appId === appId)
-    || ordered.find(a => match(a) && a.isDefault && !a.appId)
-    || ordered.find(a => match(a) && a.appId === appId)
-    || ordered.find(match);
+  const ordered = [...usable].sort((a, b) => agentSortCmp(a, b, ['codex', 'claude']));
+  for (const profile of ['interactive-yolo', 'headless-yolo', 'headless-stream-yolo'] as const) {
+    const match = (a: any) => a.permissionProfile === profile;
+    const hit = ordered.find(a => match(a) && a.isDefault && a.appId === appId)
+      || ordered.find(a => match(a) && a.isDefault && !a.appId)
+      || ordered.find(a => match(a) && a.appId === appId)
+      || ordered.find(match);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+function groupAgentsByRuntime(agents: any[]): Array<[string, any[]]> {
+  const sorted = [...agents].sort(agentSortCmp);
+  const groups = new Map<string, any[]>();
+  for (const a of sorted) {
+    const key = a.runtime || 'claude';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(a);
+  }
+  return Array.from(groups.entries());
 }
 
 const DRAFT_KEY = 'pw-qdp-drafts';
@@ -55,16 +70,27 @@ interface Props {
   appKey: string;
   appName?: string;
   onClose: () => void;
+  initialDispatchType?: DispatchType;
 }
 
-export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
+interface PastedImage {
+  id: string;
+  blob: Blob;
+  previewUrl: string;
+  mimeType: string;
+}
+
+export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchType }: Props) {
   const draft = loadDrafts()[appKey];
   const [text, setText] = useState(draft?.text || '');
-  const [dispatchType, setDispatchType] = useState<DispatchType>(draft?.dispatchType || 'agent');
+  const [dispatchType, setDispatchType] = useState<DispatchType>(
+    draft?.dispatchType || initialDispatchType || 'agent',
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [agents, setAgents] = useState<any[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>(draft?.agentId || '');
+  const [images, setImages] = useState<PastedImage[]>([]);
   const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
     x: Math.round(window.innerWidth / 2 - 200),
     y: Math.round(window.innerHeight * 0.3),
@@ -72,6 +98,51 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
   const dragging = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const allObjectUrls = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    return () => {
+      allObjectUrls.current.forEach((url) => URL.revokeObjectURL(url));
+      allObjectUrls.current.clear();
+    };
+  }, []);
+
+  function addImage(blob: Blob) {
+    const previewUrl = URL.createObjectURL(blob);
+    allObjectUrls.current.add(previewUrl);
+    setImages((prev) => [
+      ...prev,
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        blob,
+        previewUrl,
+        mimeType: blob.type || 'image/png',
+      },
+    ]);
+  }
+
+  function removeImage(id: string) {
+    setImages((prev) => {
+      const removed = prev.find((img) => img.id === id);
+      if (removed) URL.revokeObjectURL(removed.previewUrl);
+      return prev.filter((img) => img.id !== id);
+    });
+  }
+
+  function onPaste(e: ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items || items.length === 0) return;
+    let handled = false;
+    for (const item of items) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (!file) continue;
+        handled = true;
+        addImage(file);
+      }
+    }
+    if (handled) e.preventDefault();
+  }
 
   const appId = appKey === '__unlinked__' ? '' : appKey;
 
@@ -137,20 +208,34 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  // Close on click outside (blur)
+  // Close when focus leaves the panel (keyboard tab-out or click-away).
+  // Draft is persisted on every change, so dismissing is safe.
   useEffect(() => {
     function onMouseDown(e: MouseEvent) {
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
         onClose();
       }
     }
+    function onFocusIn(e: FocusEvent) {
+      const target = e.target as Node | null;
+      if (!target || !panelRef.current) return;
+      if (!panelRef.current.contains(target)) onClose();
+    }
     document.addEventListener('mousedown', onMouseDown);
-    return () => document.removeEventListener('mousedown', onMouseDown);
+    document.addEventListener('focusin', onFocusIn);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('focusin', onFocusIn);
+    };
   }, [onClose]);
 
   function handleClear() {
     setText('');
     setDispatchType('agent');
+    setImages((prev) => {
+      prev.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+      return [];
+    });
     clearDraft(appKey);
     textareaRef.current?.focus();
   }
@@ -168,13 +253,19 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
         tags: dispatchType === 'agent' ? [] : [dispatchType],
       });
 
-      // YOLO mode auto-picks a yolo-profile agent, ignoring the manual selection.
+      if (images.length > 0) {
+        await Promise.all(
+          images.map((img) => api.saveImageAsNew(fb.id, img.blob)),
+        );
+      }
+
+      // YOLO mode auto-picks a skip-permissions agent, ignoring the manual selection.
       const agent = dispatchType === 'yolo'
         ? (pickYoloAgent(agents, appId) || agents.find((a: any) => a.id === selectedAgentId) || agents[0])
         : (agents.find((a: any) => a.id === selectedAgentId) || agents[0]);
       if (!agent) throw new Error('No agent endpoints configured');
-      if (dispatchType === 'yolo' && agent.permissionProfile !== 'yolo') {
-        throw new Error('No YOLO agent configured (need an agent with permissionProfile: yolo)');
+      if (dispatchType === 'yolo' && typeof agent.permissionProfile === 'string' && !agent.permissionProfile.endsWith('-yolo')) {
+        throw new Error('No skip-permissions (*-yolo) agent configured');
       }
 
       if (dispatchType === 'powwow') {
@@ -230,9 +321,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
     setSubmitting(false);
   }
 
-  const headerLabel = appName && appName !== 'Unlinked'
-    ? `Cook Something — ${appName}`
-    : 'Cook Something';
+  const headerAppLabel = appName && appName !== 'Unlinked' ? appName : 'Unlinked';
 
   return createPortal(
     <div
@@ -242,15 +331,20 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
       onClick={(e) => e.stopPropagation()}
     >
       <div class="qdp-header" onMouseDown={onMouseDown}>
-        <span class="qdp-title">{headerLabel}</span>
+        <span class="qdp-title">
+          <span class="qdp-title-kicker">New Session</span>
+          <span class="qdp-title-sep">{'·'}</span>
+          <span class="qdp-title-app">{headerAppLabel}</span>
+        </span>
         <button class="qdp-close" onClick={onClose}>{'\u2715'}</button>
       </div>
       <textarea
         ref={textareaRef}
         class="qdp-textarea"
-        placeholder="What should we cook up?"
+        placeholder="What should we cook up? (paste screenshots too)"
         value={text}
         onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
+        onPaste={onPaste}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
@@ -263,6 +357,22 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
         }}
         rows={3}
       />
+      {images.length > 0 && (
+        <div class="qdp-attachments">
+          {images.map((img) => (
+            <div key={img.id} class="qdp-attachment">
+              <img src={img.previewUrl} alt="pasted screenshot" />
+              <button
+                class="qdp-attachment-remove"
+                onClick={() => removeImage(img.id)}
+                title="Remove screenshot"
+              >
+                {'✕'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <div class="qdp-footer">
         <div class="qdp-types">
           {(['agent', 'yolo', 'wiggum', 'fafo', 'structured', 'powwow'] as const).map((t) => (
@@ -291,11 +401,17 @@ export function QuickDispatchPopup({ appKey, appName, onClose }: Props) {
               class="qdp-agent-select"
               value={selectedAgentId}
               onChange={(e) => setSelectedAgentId((e.target as HTMLSelectElement).value)}
+              disabled={dispatchType === 'yolo'}
+              title={dispatchType === 'yolo' ? 'YOLO auto-picks a yolo-profile agent' : 'Pick agent (runtime + permission profile)'}
             >
-              {agents.map((a: any) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}{a.isDefault ? ' *' : ''}
-                </option>
+              {groupAgentsByRuntime(agents).map(([runtime, group]) => (
+                <optgroup key={runtime} label={`${(RUNTIME_INFO[runtime] || RUNTIME_INFO.claude).label}`}>
+                  {group.map((a: any) => (
+                    <option key={a.id} value={a.id}>
+                      {formatAgentOption(a)}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           )}

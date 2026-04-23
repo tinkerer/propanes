@@ -31,6 +31,8 @@ import { updateFeedbackOnSessionEnd, fixStaleDispatchStatuses } from './feedback
 import { cleanupSyncBranch } from './dispatch.js';
 import { detectAndStoreJsonlContinuations } from './jsonl-utils.js';
 import { registerAdminClient, unregisterAdminClient } from './admin-push.js';
+import { startAdminWatcher } from './admin-watcher.js';
+import { dispatchPendingFollowups } from './routes/admin/session-followups.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const LAUNCHER_AUTH_TOKEN = process.env.LAUNCHER_AUTH_TOKEN || '';
@@ -49,6 +51,15 @@ setTimeout(() => {
     console.error('Failed to cleanup orphaned sessions:', err);
   });
 }, 10_000);
+
+// Sweep for pending follow-up prompts on exited sessions every 5s. Latency
+// between a session exit and the follow-up dispatch is bounded by this
+// interval plus the admin-watcher poll that picks up the new session.
+setInterval(() => {
+  dispatchPendingFollowups().catch((err) => {
+    console.error('[session-followups] sweep failed:', err);
+  });
+}, 5_000);
 
 // Backfill JSONL continuation cache for completed sessions
 setTimeout(() => {
@@ -106,6 +117,14 @@ const localMachineId = ensureLocalMachine();
 
 // Start FAFO auto-advance poller (checks every 15s for completed generations)
 startFAFOPoller(15_000);
+
+// Auto-rebuild admin bundle when src changes (opt-in via env).
+// The server serves packages/admin/dist statically; without this watcher a
+// stale bundle gets served after agents edit packages/admin/src until someone
+// runs `vite build` by hand.
+if (process.env.ADMIN_WATCH === '1') {
+  startAdminWatcher();
+}
 
 const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
   const url = `http://localhost:${info.port}`;

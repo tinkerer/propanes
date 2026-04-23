@@ -16,6 +16,18 @@ delete process.env.CLAUDECODE;
 const MAX_OUTPUT_LOG = 500 * 1024; // 500KB
 const FLUSH_INTERVAL = 10_000; // 10s
 
+// Safety net: node-pty's onData fires synchronously during a ReadStream read;
+// any throw from a handler bubbles up as an uncaughtException and kills the
+// whole session-service, dropping every live AgentTerminal's WebSocket. Log
+// and keep running instead — individual callers still catch their own
+// expected errors, this is the last-resort guard against bugs.
+process.on('uncaughtException', (err) => {
+  console.error('[session-service] uncaughtException (continuing):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[session-service] unhandledRejection (continuing):', reason);
+});
+
 // ---------- Message buffer ----------
 
 const messageBuffer = new MessageBuffer();
@@ -167,6 +179,23 @@ function commitInputState(proc: AgentProcess, newState: InputState): void {
   sendSequenced(proc, { kind: 'input_state', state: newState });
 }
 
+// Profile names follow `<mode>-<perms>` (see packages/shared/src/constants.ts).
+// `plain` is the only exception (raw shell, no agent).
+const PIPE_PROFILES = new Set<PermissionProfile>([
+  'headless-yolo',
+  'headless-stream-yolo',
+  'headless-stream-require',
+]);
+const SKIP_PROFILES = new Set<PermissionProfile>([
+  'interactive-yolo',
+  'headless-yolo',
+  'headless-stream-yolo',
+]);
+const STREAM_PROFILES = new Set<PermissionProfile>([
+  'headless-stream-yolo',
+  'headless-stream-require',
+]);
+
 function buildAgentCommand(
   runtime: AgentRuntime,
   prompt: string,
@@ -178,11 +207,12 @@ function buildAgentCommand(
   if (runtime === 'codex') {
     const command = process.env.CODEX_BIN || 'codex';
     const args: string[] = [];
-    if (permissionProfile === 'auto' || permissionProfile === 'yolo') {
-      args.push('exec');
-    }
-    if (permissionProfile === 'auto') args.push('--full-auto');
-    if (permissionProfile === 'yolo' || permissionProfile === 'interactive-yolo') {
+    // Codex has no interactive/headless/stream separation the way claude does —
+    // `exec` is the only headless subcommand and it's one-shot. The stream
+    // profiles fall back to `exec` too (codex doesn't yet expose a
+    // bidirectional JSON protocol we can drive from here).
+    if (PIPE_PROFILES.has(permissionProfile)) args.push('exec');
+    if (SKIP_PROFILES.has(permissionProfile)) {
       args.push('--dangerously-bypass-approvals-and-sandbox');
     }
     if (prompt) args.push(prompt);
@@ -192,18 +222,21 @@ function buildAgentCommand(
   // When resuming, use --resume — no --session-id (it conflicts)
   if (resumeSessionId) {
     const args = ['--resume', resumeSessionId];
-    if (permissionProfile === 'yolo' || permissionProfile === 'interactive-yolo') {
+    if (SKIP_PROFILES.has(permissionProfile)) {
       args.push('--dangerously-skip-permissions');
     }
-    if (permissionProfile === 'auto' || permissionProfile === 'yolo') {
+    if (permissionProfile === 'headless-yolo') {
       args.push('--output-format', 'stream-json', '--verbose');
+    }
+    if (STREAM_PROFILES.has(permissionProfile)) {
+      args.push('--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages', '--verbose');
     }
     if (prompt) args.push(prompt);
     return { command: process.env.CLAUDE_BIN || 'claude', args };
   }
 
   switch (permissionProfile) {
-    case 'interactive': {
+    case 'interactive-require': {
       const args: string[] = [];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (allowedTools) args.push(`--allowedTools=${allowedTools}`);
@@ -217,17 +250,33 @@ function buildAgentCommand(
       if (prompt) args.push(prompt);
       return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
-    case 'auto': {
-      const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose'];
-      if (claudeSessionId) args.push('--session-id', claudeSessionId);
-      if (allowedTools) {
-        args.push(`--allowedTools=${allowedTools}`);
-      }
-      return { command: process.env.CLAUDE_BIN || 'claude', args };
-    }
-    case 'yolo': {
+    case 'headless-yolo': {
       const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
+      if (allowedTools) args.push(`--allowedTools=${allowedTools}`);
+      return { command: process.env.CLAUDE_BIN || 'claude', args };
+    }
+    case 'headless-stream-yolo':
+    case 'headless-stream-require': {
+      // Bidirectional streaming JSON. Persistent stdin/stdout session; caller
+      // feeds user turns as stream-json and reads assistant/tool deltas back.
+      // --print is required for stream-json I/O but --input-format stream-json
+      // keeps the session open across turns. The `-require` variant omits the
+      // skip-permissions flag, so permission prompts arrive as JSON events for
+      // the admin UI to approve.
+      const args = [
+        '--print',
+        '--input-format', 'stream-json',
+        '--output-format', 'stream-json',
+        '--include-partial-messages',
+        '--verbose',
+      ];
+      if (SKIP_PROFILES.has(permissionProfile)) {
+        args.push('--dangerously-skip-permissions');
+      }
+      if (prompt) args.push(prompt);
+      if (claudeSessionId) args.push('--session-id', claudeSessionId);
+      if (allowedTools) args.push(`--allowedTools=${allowedTools}`);
       return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
     case 'plain': {
@@ -235,10 +284,7 @@ function buildAgentCommand(
       return { command: shell, args: [] };
     }
     default: {
-      const args: string[] = [];
-      if (claudeSessionId) args.push('--session-id', claudeSessionId);
-      if (prompt) args.push(prompt);
-      return { command: process.env.CLAUDE_BIN || 'claude', args };
+      throw new Error(`Unknown permission profile: ${permissionProfile}. This usually means the session-service is running stale code — restart it. Known: interactive-require | interactive-yolo | headless-yolo | headless-stream-yolo | headless-stream-require | plain.`);
     }
   }
 }
@@ -748,7 +794,7 @@ app.post('/spawn', async (c) => {
   if (!sessionId || !cwd || !permissionProfile) {
     return c.json({ error: 'Missing required fields' }, 400);
   }
-  if ((permissionProfile === 'auto' || permissionProfile === 'yolo') && !prompt && !resumeSessionId) {
+  if (permissionProfile === 'headless-yolo' && !prompt && !resumeSessionId) {
     return c.json({ error: 'Prompt required for headless sessions' }, 400);
   }
 

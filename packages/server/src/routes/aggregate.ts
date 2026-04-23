@@ -295,7 +295,7 @@ Analyze these items and produce your clustering and action plans.`;
   }
 
   const cwd = app?.projectDir || process.cwd();
-  const permissionProfile = (agent.permissionProfile || 'interactive') as PermissionProfile;
+  const permissionProfile = (agent.permissionProfile || 'interactive-require') as PermissionProfile;
 
   // Create a synthetic feedback item to anchor the agent session
   const analysisFeedbackId = ulid();
@@ -415,7 +415,7 @@ ${itemsList}`;
   }
 
   const cwd = app?.projectDir || process.cwd();
-  const permissionProfile = (agent.permissionProfile || 'interactive') as PermissionProfile;
+  const permissionProfile = (agent.permissionProfile || 'interactive-require') as PermissionProfile;
 
   const analysisFeedbackId = ulid();
   const now = new Date().toISOString();

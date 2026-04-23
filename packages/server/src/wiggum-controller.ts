@@ -151,7 +151,7 @@ export async function startWiggumRun(runId: string): Promise<void> {
         launcherId,
         prompt,
         composeDir: harnessConfig.composeDir || undefined,
-        permissionProfile: 'auto',
+        permissionProfile: 'headless-yolo',
         feedbackId: run.feedbackId,
         agentEndpointId: run.agentEndpointId,
       });
