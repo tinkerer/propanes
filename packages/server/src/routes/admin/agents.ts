@@ -152,7 +152,7 @@ agentRoutes.post('/agents', async (c) => {
     promptTemplate: parsed.data.promptTemplate || null,
     mode: parsed.data.mode || 'webhook',
     runtime: parsed.data.runtime || 'claude',
-    permissionProfile: parsed.data.permissionProfile || 'interactive',
+    permissionProfile: parsed.data.permissionProfile || 'interactive-require',
     allowedTools: parsed.data.allowedTools || null,
     autoPlan: parsed.data.autoPlan || false,
     createdAt: now,
@@ -197,7 +197,7 @@ agentRoutes.patch('/agents/:id', async (c) => {
     promptTemplate: parsed.data.promptTemplate || null,
     mode: parsed.data.mode || 'webhook',
     runtime: parsed.data.runtime || 'claude',
-    permissionProfile: parsed.data.permissionProfile || 'interactive',
+    permissionProfile: parsed.data.permissionProfile || 'interactive-require',
     allowedTools: parsed.data.allowedTools || null,
     autoPlan: parsed.data.autoPlan || false,
     preferredLauncherId: parsed.data.preferredLauncherId ?? existing.preferredLauncherId,
@@ -350,9 +350,8 @@ agentRoutes.get('/dispatch-targets', (c) => {
 });
 
 // Dispatch
-agentRoutes.post('/dispatch', async (c) => {
-  const body = await c.req.json();
-  const parsed = dispatchSchema.safeParse(body);
+async function handleDispatch(c: any, payload: unknown) {
+  const parsed = dispatchSchema.safeParse(payload);
   if (!parsed.success) {
     return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
   }
@@ -424,6 +423,24 @@ agentRoutes.post('/dispatch', async (c) => {
     console.error(`[admin] Dispatch error:`, errorMsg);
     return c.json({ dispatched: false, error: errorMsg }, 500);
   }
+}
+
+agentRoutes.post('/dispatch', async (c) => {
+  const body = await c.req.json();
+  return handleDispatch(c, body);
+});
+
+// Path-style alias — lets callers (CoS agents, slack-bot) dispatch with
+// `POST /api/v1/admin/feedback/<id>/dispatch` and the feedbackId in the URL.
+agentRoutes.post('/feedback/:id/dispatch', async (c) => {
+  const feedbackId = c.req.param('id');
+  let body: Record<string, unknown> = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    // Empty body is fine for the path-style form.
+  }
+  return handleDispatch(c, { ...body, feedbackId });
 });
 
 agentRoutes.post('/powwow', async (c) => {
@@ -501,7 +518,7 @@ agentRoutes.post('/powwow', async (c) => {
       app,
       participantInstructions,
     );
-    const permissionProfile = (agent.permissionProfile || 'interactive') as any;
+    const permissionProfile = (agent.permissionProfile || 'interactive-require') as any;
     const runtime = (agent.runtime || 'claude') as any;
 
     const result = await dispatchAgentSession({
@@ -542,7 +559,7 @@ agentRoutes.post('/powwow', async (c) => {
     ),
     cwd,
     runtime: (moderatorAgent.runtime || 'claude') as any,
-    permissionProfile: (moderatorAgent.permissionProfile || 'interactive') as any,
+    permissionProfile: (moderatorAgent.permissionProfile || 'interactive-require') as any,
     allowedTools: moderatorAgent.allowedTools || null,
     launcherId: launcherId || undefined,
   });

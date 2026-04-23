@@ -352,7 +352,7 @@ export function Layout() {
         key: 'c',
         label: 'New Claude session',
         category: 'Panels',
-        action: () => spawnTerminal(selectedAppId.value, undefined, undefined, 'interactive'),
+        action: () => spawnTerminal(selectedAppId.value, undefined, undefined, 'interactive-require'),
       }),
       // Ctrl+Shift+0-9: tab switching (0 = toggle pop-out, 1-9 = tab by index)
       ...Array.from({ length: 10 }, (_, i) => registerShortcut({

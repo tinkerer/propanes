@@ -142,7 +142,7 @@ async function handleHarnessStop(id: string) {
 
 async function handleLaunchHarnessSession(id: string) {
   try {
-    const result = await api.launchHarnessSession(id, { permissionProfile: 'yolo' });
+    const result = await api.launchHarnessSession(id, { permissionProfile: 'headless-yolo' });
     if (result.sessionId) window.location.hash = '#/sessions';
   } catch (err: any) { error.value = err.message; }
 }

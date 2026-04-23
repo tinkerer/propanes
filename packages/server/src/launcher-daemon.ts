@@ -65,6 +65,22 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = 1000;
 let shuttingDown = false;
 
+// Profile names follow `<mode>-<perms>` (see packages/shared/src/constants.ts).
+const PIPE_PROFILES = new Set<string>([
+  'headless-yolo',
+  'headless-stream-yolo',
+  'headless-stream-require',
+]);
+const SKIP_PROFILES = new Set<string>([
+  'interactive-yolo',
+  'headless-yolo',
+  'headless-stream-yolo',
+]);
+const STREAM_PROFILES = new Set<string>([
+  'headless-stream-yolo',
+  'headless-stream-require',
+]);
+
 function buildAgentCommand(
   runtime: AgentRuntime,
   prompt: string,
@@ -76,11 +92,8 @@ function buildAgentCommand(
   if (runtime === 'codex') {
     const command = process.env.CODEX_BIN || 'codex';
     const args: string[] = [];
-    if (permissionProfile === 'auto' || permissionProfile === 'yolo') {
-      args.push('exec');
-    }
-    if (permissionProfile === 'auto') args.push('--full-auto');
-    if (permissionProfile === 'yolo' || permissionProfile === 'interactive-yolo') {
+    if (PIPE_PROFILES.has(permissionProfile)) args.push('exec');
+    if (SKIP_PROFILES.has(permissionProfile)) {
       args.push('--dangerously-bypass-approvals-and-sandbox');
     }
     if (prompt) args.push(prompt);
@@ -90,15 +103,21 @@ function buildAgentCommand(
   // When resuming, use --resume — no --session-id (it conflicts)
   if (resumeSessionId) {
     const args = ['--resume', resumeSessionId];
-    if (permissionProfile === 'yolo' || permissionProfile === 'interactive-yolo') {
+    if (SKIP_PROFILES.has(permissionProfile)) {
       args.push('--dangerously-skip-permissions');
+    }
+    if (permissionProfile === 'headless-yolo') {
+      args.push('--output-format', 'stream-json', '--verbose');
+    }
+    if (STREAM_PROFILES.has(permissionProfile)) {
+      args.push('--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages', '--verbose');
     }
     if (prompt) args.push(prompt);
     return { command: process.env.CLAUDE_BIN || 'claude', args };
   }
 
   switch (permissionProfile) {
-    case 'interactive': {
+    case 'interactive-require': {
       const args: string[] = [];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (allowedTools) args.push('--allowedTools', allowedTools);
@@ -112,25 +131,34 @@ function buildAgentCommand(
       if (prompt) args.push(prompt);
       return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
-    case 'auto': {
-      const args = ['-p', prompt];
+    case 'headless-yolo': {
+      const args = ['-p', prompt, '--dangerously-skip-permissions'];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (allowedTools) args.push('--allowedTools', allowedTools);
       return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
-    case 'yolo': {
-      const args = ['-p', prompt, '--dangerously-skip-permissions'];
+    case 'headless-stream-yolo':
+    case 'headless-stream-require': {
+      const args = [
+        '--print',
+        '--input-format', 'stream-json',
+        '--output-format', 'stream-json',
+        '--include-partial-messages',
+        '--verbose',
+      ];
+      if (SKIP_PROFILES.has(permissionProfile)) {
+        args.push('--dangerously-skip-permissions');
+      }
+      if (prompt) args.push(prompt);
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
+      if (allowedTools) args.push('--allowedTools', allowedTools);
       return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
     case 'plain': {
       return { command: process.env.SHELL || '/bin/bash', args: [] };
     }
     default: {
-      const args: string[] = [];
-      if (claudeSessionId) args.push('--session-id', claudeSessionId);
-      if (prompt) args.push(prompt);
-      return { command: process.env.CLAUDE_BIN || 'claude', args };
+      throw new Error(`Unknown permission profile: ${permissionProfile}. Known: interactive-require | interactive-yolo | headless-yolo | headless-stream-yolo | headless-stream-require | plain.`);
     }
   }
 }
