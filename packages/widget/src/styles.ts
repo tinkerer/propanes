@@ -1949,6 +1949,26 @@ export const WIDGET_CSS = `
   color: #1e293b;
 }
 
+.pw-cc-ticket-pickers {
+  display: flex;
+  gap: 6px;
+}
+
+.pw-cc-select {
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.8);
+  color: #e2e8f0;
+  cursor: pointer;
+  outline: none;
+}
+
+.pw-cc-select:focus {
+  border-color: #3b82f6;
+}
+
 .pw-cc-ticket-actions .pw-cc-dismiss-btn {
   background: transparent;
   border: 1px solid rgba(148, 163, 184, 0.3);

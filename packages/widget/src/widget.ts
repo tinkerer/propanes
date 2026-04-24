@@ -29,7 +29,10 @@ function micErrorMessage(err: unknown): string {
   const code = (err as any)?.code;
   const name = (err as any)?.name;
   if (code === 'INSECURE_CONTEXT') return 'Mic requires HTTPS — this page is loaded over HTTP';
-  if (code === 'NOT_SUPPORTED') return 'Mic not supported in this browser';
+  if (code === 'NOT_SUPPORTED') return 'Mic/SpeechRecognition not supported in this browser';
+  if (code === 'NOT_ALLOWED') return 'Mic access denied — allow in browser settings';
+  if (code === 'NOT_FOUND') return 'No microphone found';
+  if (code === 'NOT_READABLE') return 'Mic is in use by another app';
   if (name === 'NotAllowedError' || name === 'SecurityError') return 'Mic access denied — allow in browser settings';
   if (name === 'NotFoundError') return 'No microphone found';
   if (name === 'NotReadableError') return 'Mic is in use by another app';
@@ -193,7 +196,7 @@ export class ProPanesElement {
   private ccInterimSpan: HTMLElement | null = null;
   private ccTicketsEl: HTMLElement | null = null;
   private ccChunks: { text: string; windowIndex: number }[] = [];
-  private ccPendingTickets: Map<string, { title: string; description: string; appName?: string; pendingId: string; feedbackId: string }> = new Map();
+  private ccPendingTickets: Map<string, { title: string; description: string; appName?: string; feedbackId: string }> = new Map();
   private escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && this.isOpen) {
       // Let sub-overlays (annotator, element picker) handle Escape first
@@ -357,10 +360,6 @@ export class ProPanesElement {
   private autoStartBrainstorm() {
     if (this.brainstormDisabled) return;
     if (this.voiceListenSessionId) return;
-    // Skip entirely when the page isn't a secure context — iOS Safari and
-    // modern desktop browsers refuse getUserMedia on HTTP origins, so
-    // retrying on every gesture would burn battery with no chance of working.
-    if (typeof window !== 'undefined' && window.isSecureContext === false) return;
 
     const attempt = async () => {
       try {
@@ -372,9 +371,13 @@ export class ProPanesElement {
     attempt().then(() => {
       if (this.voiceListenSessionId) return;
       // Skip the gesture fallback if the browser has no SpeechRecognition
-      // at all — e.g. iOS Safari — otherwise every tap/keypress retries.
-      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (!SR) return;
+      // at all — e.g. iOS Safari — unless we're on an insecure context where
+      // the iframe bridge provides SpeechRecognition from localhost.
+      const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
+      if (!insecure) {
+        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (!SR) return;
+      }
       this.installBrainstormGestureFallback();
     });
   }
@@ -1730,10 +1733,12 @@ export class ProPanesElement {
       }
     };
 
+    const insecureContext = typeof window !== 'undefined' && window.isSecureContext === false;
+
     // If silent (auto-start / gesture fallback), skip quietly on browsers
-    // without SpeechRecognition — e.g. iOS Safari — so users don't see a
-    // scary error for a feature they never asked for.
-    if (silent) {
+    // without SpeechRecognition — e.g. iOS Safari — unless we can use the
+    // iframe bridge on insecure contexts.
+    if (silent && !insecureContext) {
       const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SR) return;
     }
@@ -1760,11 +1765,21 @@ export class ProPanesElement {
     }
 
     try {
-      await this.voiceRecorder.startAmbient({
-        windowMs: 30_000,
-        silenceMs: 10_000,
-        maxLength: 500,
-      });
+      if (insecureContext) {
+        // Use iframe bridge: load mic-bridge from localhost server
+        const bridgeUrl = `${baseOrigin}/api/v1/local/mic-bridge`;
+        await this.voiceRecorder.startAmbientViaIframe(bridgeUrl, {
+          windowMs: 30_000,
+          silenceMs: 10_000,
+          maxLength: 500,
+        });
+      } else {
+        await this.voiceRecorder.startAmbient({
+          windowMs: 30_000,
+          silenceMs: 10_000,
+          maxLength: 500,
+        });
+      }
     } catch (err) {
       showError(micErrorMessage(err));
       try {
@@ -1799,12 +1814,11 @@ export class ProPanesElement {
       })
         .then((r) => r.ok ? r.json() : null)
         .then((data) => {
-          if (data?.feedbackId && data?.pendingDispatchId && data?.classification?.actionable) {
+          if (data?.feedbackId && data?.classification?.actionable) {
             this.addCCTicket({
               title: data.classification.title || 'Voice idea',
               description: data.classification.description || win.text,
               appName: data.classification.appName,
-              pendingId: data.pendingDispatchId,
               feedbackId: data.feedbackId,
             });
           }
@@ -1860,7 +1874,13 @@ export class ProPanesElement {
     this.voiceRecorder.onAmbientSegment = null;
     this.voiceListenWindowSender = null;
 
-    try { await this.voiceRecorder.stopAmbient(); } catch {}
+    try {
+      if (this.voiceRecorder.usingMicBridge) {
+        await this.voiceRecorder.stopAmbientViaIframe();
+      } else {
+        await this.voiceRecorder.stopAmbient();
+      }
+    } catch {}
 
     this.cleanupCCOverlay();
 
@@ -1935,7 +1955,13 @@ export class ProPanesElement {
     flushBtn.className = 'pw-cc-flush-btn';
     flushBtn.textContent = 'Chunk now';
     flushBtn.title = 'Send current text as a chunk';
-    flushBtn.addEventListener('click', () => this.voiceRecorder.manualFlush());
+    flushBtn.addEventListener('click', () => {
+      if (this.voiceRecorder.usingMicBridge) {
+        this.voiceRecorder.manualFlushViaIframe();
+      } else {
+        this.voiceRecorder.manualFlush();
+      }
+    });
 
     const closeFooterBtn = document.createElement('button');
     closeFooterBtn.textContent = 'Close';
@@ -2040,14 +2066,14 @@ export class ProPanesElement {
     this.ccTextEl.appendChild(divider);
   }
 
-  private addCCTicket(ticket: { title: string; description: string; appName?: string; pendingId: string; feedbackId: string }) {
-    this.ccPendingTickets.set(ticket.pendingId, ticket);
+  private addCCTicket(ticket: { title: string; description: string; appName?: string; feedbackId: string }) {
+    this.ccPendingTickets.set(ticket.feedbackId, ticket);
     if (!this.ccTicketsEl) return;
     this.ccTicketsEl.style.display = '';
 
     const card = document.createElement('div');
     card.className = 'pw-cc-ticket';
-    card.dataset.pendingId = ticket.pendingId;
+    card.dataset.feedbackId = ticket.feedbackId;
 
     const titleEl = document.createElement('div');
     titleEl.className = 'pw-cc-ticket-title';
@@ -2057,9 +2083,6 @@ export class ProPanesElement {
     descEl.className = 'pw-cc-ticket-desc';
     descEl.textContent = ticket.description;
 
-    const actions = document.createElement('div');
-    actions.className = 'pw-cc-ticket-actions';
-
     if (ticket.appName) {
       const appEl = document.createElement('div');
       appEl.className = 'pw-cc-ticket-app';
@@ -2067,59 +2090,77 @@ export class ProPanesElement {
       card.appendChild(appEl);
     }
 
+    // Runtime + mode pickers
+    const pickers = document.createElement('div');
+    pickers.className = 'pw-cc-ticket-pickers';
+
+    const runtimeSel = document.createElement('select');
+    runtimeSel.className = 'pw-cc-select';
+    runtimeSel.innerHTML = '<option value="claude">Claude</option><option value="codex">Codex</option>';
+
+    const modeSel = document.createElement('select');
+    modeSel.className = 'pw-cc-select';
+    modeSel.innerHTML = '<option value="interactive">Interactive</option><option value="headless">Headless</option>';
+
+    pickers.append(runtimeSel, modeSel);
+
+    const actions = document.createElement('div');
+    actions.className = 'pw-cc-ticket-actions';
+
+    const goBtn = document.createElement('button');
+    goBtn.className = 'pw-cc-doit-btn';
+    goBtn.textContent = 'Just do it';
+    goBtn.addEventListener('click', () => this.dispatchCCTicket(ticket.feedbackId, runtimeSel.value, modeSel.value));
+
     const planBtn = document.createElement('button');
     planBtn.className = 'pw-cc-plan-btn';
     planBtn.textContent = 'Create plan';
-    planBtn.addEventListener('click', () => this.handleCCTicketAction(ticket.pendingId, ticket.feedbackId, 'plan'));
-
-    const doitBtn = document.createElement('button');
-    doitBtn.className = 'pw-cc-doit-btn';
-    doitBtn.textContent = 'Just do it';
-    doitBtn.addEventListener('click', () => this.handleCCTicketAction(ticket.pendingId, ticket.feedbackId, 'doit'));
+    planBtn.addEventListener('click', () => this.dispatchCCTicket(ticket.feedbackId, runtimeSel.value, modeSel.value, 'Create a detailed plan before implementing. Present the plan for review.'));
 
     const dismissBtn = document.createElement('button');
     dismissBtn.className = 'pw-cc-dismiss-btn';
     dismissBtn.textContent = 'Dismiss';
-    dismissBtn.addEventListener('click', () => this.handleCCTicketAction(ticket.pendingId, ticket.feedbackId, 'dismiss'));
+    dismissBtn.addEventListener('click', () => this.dismissCCTicket(ticket.feedbackId));
 
-    actions.append(planBtn, doitBtn, dismissBtn);
-    card.append(titleEl, descEl, actions);
+    actions.append(goBtn, planBtn, dismissBtn);
+    card.append(titleEl, descEl, pickers, actions);
     this.ccTicketsEl.appendChild(card);
   }
 
-  private async handleCCTicketAction(pendingId: string, feedbackId: string, action: 'plan' | 'doit' | 'dismiss') {
+  private async dispatchCCTicket(feedbackId: string, runtime: string, mode: string, instructions?: string) {
     const endpointUrl = new URL(this.config.endpoint, window.location.origin);
     const base = endpointUrl.origin;
 
-    if (action === 'dismiss') {
-      try {
-        await fetch(`${base}/api/v1/voice/pending-dispatches/${pendingId}/cancel`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
-        });
-      } catch {}
-    } else if (action === 'doit') {
-      try {
-        await fetch(`${base}/api/v1/voice/pending-dispatches/${pendingId}/launch-now`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
-        });
-      } catch {}
-    } else if (action === 'plan') {
-      // Launch with "plan" instruction — edit the feedback to add planning context, then launch
-      try {
-        await fetch(`${base}/api/v1/voice/pending-dispatches/${pendingId}/launch-now`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
-          body: JSON.stringify({ instructions: 'Create a detailed plan before implementing. Present the plan for review.' }),
-        });
-      } catch {}
-    }
+    try {
+      await fetch(`${base}/api/v1/voice/dispatch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
+        body: JSON.stringify({ feedbackId, runtime, mode, instructions }),
+      });
+    } catch {}
 
-    // Remove the ticket card
-    this.ccPendingTickets.delete(pendingId);
+    this.removeCCTicketCard(feedbackId);
+  }
+
+  private async dismissCCTicket(feedbackId: string) {
+    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
+    const base = endpointUrl.origin;
+
+    try {
+      await fetch(`${base}/api/v1/voice/dismiss`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
+        body: JSON.stringify({ feedbackId }),
+      });
+    } catch {}
+
+    this.removeCCTicketCard(feedbackId);
+  }
+
+  private removeCCTicketCard(feedbackId: string) {
+    this.ccPendingTickets.delete(feedbackId);
     if (this.ccTicketsEl) {
-      const card = this.ccTicketsEl.querySelector(`[data-pending-id="${pendingId}"]`);
+      const card = this.ccTicketsEl.querySelector(`[data-feedback-id="${feedbackId}"]`);
       if (card) card.remove();
       if (this.ccTicketsEl.children.length === 0) this.ccTicketsEl.style.display = 'none';
     }
