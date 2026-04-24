@@ -848,10 +848,58 @@ export function cycleWaitingSession() {
 
 export const sshSetupDialog = signal<{ hostname: string; sessionId: string } | null>(null);
 
-function openBridgeWindow(config: import('./settings.js').SshConfig, sessionId: string): Window | null {
+let bridgeWindow: Window | null = null;
+let bridgeReady = false;
+let pendingBridgeCommands: Array<{ params: Record<string, unknown>; reqId: string }> = [];
+let bridgeListenerAttached = false;
+
+function ensureBridgeListener() {
+  if (bridgeListenerAttached) return;
+  bridgeListenerAttached = true;
+  window.addEventListener('message', (e) => {
+    const d = e.data;
+    if (!d || d.source !== 'pw-local-bridge') return;
+    if (d.type === 'ready') {
+      bridgeReady = true;
+      for (const cmd of pendingBridgeCommands) {
+        bridgeWindow?.postMessage({ source: 'pw-local-bridge-cmd', type: 'open-terminal', params: cmd.params, reqId: cmd.reqId }, '*');
+      }
+      pendingBridgeCommands = [];
+    } else if (d.type === 'result') {
+      bridgeWindow = null;
+      bridgeReady = false;
+      if (d.ok) {
+        showActionToast('\u2713', 'Terminal opened', 'var(--pw-accent, #facc15)');
+      } else {
+        console.error('[local-bridge]', d.error);
+        showActionToast('\u2715', d.error || 'Failed to open terminal', 'var(--pw-error)');
+      }
+    }
+  });
+}
+
+function sendBridgeCommand(params: Record<string, unknown>) {
+  ensureBridgeListener();
+  const reqId = Math.random().toString(36).slice(2);
+
+  if (bridgeWindow && !bridgeWindow.closed) {
+    if (bridgeReady) {
+      bridgeWindow.postMessage({ source: 'pw-local-bridge-cmd', type: 'open-terminal', params, reqId }, '*');
+    } else {
+      pendingBridgeCommands.push({ params, reqId });
+    }
+    return true;
+  }
+
+  bridgeReady = false;
+  pendingBridgeCommands = [{ params, reqId }];
   const bridgeUrl = localBridgeUrl.value;
-  const params = encodeURIComponent(JSON.stringify({ ...config, sessionId }));
-  return window.open(`${bridgeUrl}/api/v1/local/bridge#${params}`, '_blank', 'width=400,height=200,menubar=no,toolbar=no');
+  bridgeWindow = window.open(`${bridgeUrl}/api/v1/local/bridge`, 'pw-local-bridge', 'width=400,height=200,menubar=no,toolbar=no');
+  if (!bridgeWindow) {
+    showActionToast('\u2715', 'Popup blocked \u2014 allow popups and try again', 'var(--pw-error)');
+    return false;
+  }
+  return true;
 }
 
 export function openLocalTerminal(sessionId: string) {
@@ -864,14 +912,11 @@ export function openLocalTerminal(sessionId: string) {
       body: JSON.stringify({ sessionId }),
     }).then(async (res) => {
       if (res.ok) return;
-      // fetch() only rejects on network errors \u2014 surface non-2xx ourselves
-      // so the user isn't left staring at a menu that silently did nothing
-      // (e.g. server returning "Open in Terminal.app is only supported on macOS").
       let message = `Failed to open terminal (${res.status})`;
       try {
         const body = await res.json();
         if (body?.error) message = body.error;
-      } catch { /* non-JSON response \u2014 keep default */ }
+      } catch {}
       console.error('[local-bridge]', message);
       showActionToast('\u2715', message, 'var(--pw-error)');
     }).catch((err) => {
@@ -884,18 +929,14 @@ export function openLocalTerminal(sessionId: string) {
       sshSetupDialog.value = { hostname: location.hostname, sessionId };
       return;
     }
-    const win = openBridgeWindow(config, sessionId);
-    if (!win) {
-      // Popup blocked \u2014 prompt user to allow popups for this site.
-      showActionToast('\u2715', 'Popup blocked \u2014 allow popups and try again', 'var(--pw-error)');
-    }
+    sendBridgeCommand({ ...config, sessionId });
   }
 }
 
 export function completeSshSetup(hostname: string, config: import('./settings.js').SshConfig, sessionId: string) {
   sshConfigs.value = { ...sshConfigs.value, [hostname]: config };
   sshSetupDialog.value = null;
-  openBridgeWindow(config, sessionId);
+  sendBridgeCommand({ ...config, sessionId });
 }
 
 // --- Re-exports ---
