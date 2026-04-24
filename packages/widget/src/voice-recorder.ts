@@ -88,6 +88,15 @@ export interface AmbientWindow {
   text: string;
 }
 
+export interface AmbientChunkOpts {
+  /** Window duration in ms (default 30000). */
+  windowMs?: number;
+  /** Silence gap in ms before auto-chunking (default 10000). */
+  silenceMs?: number;
+  /** Max text length before auto-chunking (default 500 chars). */
+  maxLength?: number;
+}
+
 /**
  * Throws a descriptive error with a `.code` property when the browser cannot
  * run getUserMedia — either because we're in an insecure context (HTTP on a
@@ -117,10 +126,13 @@ export class VoiceRecorder {
   private ambientStream: MediaStream | null = null;
   private ambientRecognition: any = null;
   private ambientWindowMs = 30_000;
+  private ambientSilenceMs = 10_000;
+  private ambientMaxLength = 500;
   private ambientWindowIndex = 0;
   private ambientWindowStart = 0;
   private ambientWindowBuffer: string[] = [];
   private ambientFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private ambientSilenceTimer: ReturnType<typeof setTimeout> | null = null;
   private ambientLastSpeechAt = 0;
   private _transcript: TranscriptSegment[] = [];
   private _interactions: InteractionEvent[] = [];
@@ -281,20 +293,19 @@ export class VoiceRecorder {
    *
    * No audio is uploaded from ambient mode — only transcript text.
    */
-  async startAmbient(opts?: { windowMs?: number }): Promise<void> {
+  async startAmbient(opts?: AmbientChunkOpts): Promise<void> {
     if (this._ambient) return;
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRecognition) {
       throw new Error('SpeechRecognition API not available in this browser');
     }
 
-    // Request mic permission via getUserMedia so the SpeechRecognition
-    // prompt doesn't surprise the user mid-session; keep the stream alive
-    // while ambient mode is on.
     preflightMic();
     this.ambientStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     this._ambient = true;
     this.ambientWindowMs = opts?.windowMs ?? 30_000;
+    this.ambientSilenceMs = opts?.silenceMs ?? 10_000;
+    this.ambientMaxLength = opts?.maxLength ?? 500;
     this.ambientWindowIndex = 0;
     this.ambientWindowStart = Date.now();
     this.ambientWindowBuffer = [];
@@ -316,6 +327,12 @@ export class VoiceRecorder {
         this.ambientLastSpeechAt = Date.now();
         if (result.isFinal) {
           this.ambientWindowBuffer.push(segment.text);
+          this.resetSilenceTimer();
+          // Auto-chunk if text exceeds max length
+          const currentLength = this.ambientWindowBuffer.join(' ').length;
+          if (currentLength >= this.ambientMaxLength) {
+            this.flushAmbientWindow();
+          }
         }
         this.onAmbientSegment?.(segment);
       }
@@ -336,6 +353,7 @@ export class VoiceRecorder {
     this.ambientRecognition = rec;
     try { rec.start(); } catch {}
 
+    // Max window timer as a hard ceiling
     const tick = () => {
       if (!this._ambient) return;
       this.flushAmbientWindow();
@@ -344,8 +362,28 @@ export class VoiceRecorder {
     this.ambientFlushTimer = setTimeout(tick, this.ambientWindowMs);
   }
 
+  /** Reset the silence-gap timer — called after each finalized segment. */
+  private resetSilenceTimer() {
+    if (this.ambientSilenceTimer) clearTimeout(this.ambientSilenceTimer);
+    if (!this._ambient || this.ambientWindowBuffer.length === 0) return;
+    this.ambientSilenceTimer = setTimeout(() => {
+      if (this._ambient && this.ambientWindowBuffer.length > 0) {
+        this.flushAmbientWindow();
+      }
+    }, this.ambientSilenceMs);
+  }
+
+  /** Manually flush the current ambient buffer — callable from widget UI. */
+  manualFlush(): void {
+    if (this._ambient) this.flushAmbientWindow();
+  }
+
   /** Close the current rolling window and start a new one. Safe to call repeatedly. */
   private flushAmbientWindow() {
+    if (this.ambientSilenceTimer) {
+      clearTimeout(this.ambientSilenceTimer);
+      this.ambientSilenceTimer = null;
+    }
     const now = Date.now();
     const endedAtMs = now;
     const text = this.ambientWindowBuffer.join(' ').trim();
@@ -361,6 +399,15 @@ export class VoiceRecorder {
     }
     this.ambientWindowBuffer = [];
     this.ambientWindowStart = now;
+    // Reset the hard-ceiling timer on flush so it doesn't double-fire
+    if (this.ambientFlushTimer) {
+      clearTimeout(this.ambientFlushTimer);
+      if (this._ambient) {
+        this.ambientFlushTimer = setTimeout(() => {
+          if (this._ambient) this.flushAmbientWindow();
+        }, this.ambientWindowMs);
+      }
+    }
   }
 
   async stopAmbient(): Promise<void> {
@@ -369,6 +416,10 @@ export class VoiceRecorder {
     if (this.ambientFlushTimer) {
       clearTimeout(this.ambientFlushTimer);
       this.ambientFlushTimer = null;
+    }
+    if (this.ambientSilenceTimer) {
+      clearTimeout(this.ambientSilenceTimer);
+      this.ambientSilenceTimer = null;
     }
     // Flush any remaining buffered speech.
     this.flushAmbientWindow();

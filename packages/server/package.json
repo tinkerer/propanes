@@ -35,8 +35,8 @@
     "@types/node": "^25.2.2",
     "@types/ws": "^8.18.1",
     "concurrently": "^9.1.0",
-    "esbuild": "^0.24.0",
     "drizzle-kit": "^0.30.0",
+    "esbuild": "^0.24.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }

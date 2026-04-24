@@ -602,8 +602,11 @@ export function moveTab(fromLeafId: string, toLeafId: string, tabId: string) {
   }
 }
 
+const MIN_RATIO = 0.05;
+const MAX_RATIO = 0.95;
+
 export function setSplitRatio(splitId: string, ratio: number) {
-  const clamped = Math.max(0.05, Math.min(0.95, ratio));
+  const clamped = Math.max(MIN_RATIO, Math.min(MAX_RATIO, ratio));
   const tree = cloneTree(getLatestTree());
   const node = findNodeById(tree.root, splitId);
   if (!node || node.type !== 'split') return;
@@ -618,18 +621,81 @@ export function setSplitRatio(splitId: string, ratio: number) {
   const [first, second] = node.children;
 
   if (first.type === 'split' && first.direction === node.direction) {
-    // First child shrank/grew from oldRatio to clamped.
-    // Its second sub-child (index 1) is adjacent to our divider.
     preserveNonAdjacentSizes(first, oldRatio, clamped, 1);
   }
 
   if (second.type === 'split' && second.direction === node.direction) {
-    // Second child shrank/grew from (1-oldRatio) to (1-clamped).
-    // Its first sub-child (index 0) is adjacent to our divider.
     preserveNonAdjacentSizes(second, 1 - oldRatio, 1 - clamped, 0);
   }
 
+  // When ratio was clamped, cascade overflow to ancestor splits so the user
+  // can continue resizing past a pane's minimum by shrinking the next pane over.
+  if (ratio !== clamped) {
+    cascadeOverflow(tree.root, splitId, ratio - clamped, node.direction);
+  }
+
   commitTree(tree);
+}
+
+/**
+ * Cascade resize overflow to ancestor splits when a child split's ratio is clamped.
+ * Walks up the tree looking for an ancestor in the same direction that has a sibling
+ * on the correct side to absorb the overflow.
+ */
+function cascadeOverflow(
+  root: PaneNode,
+  fromId: string,
+  overflow: number,
+  direction: SplitDirection,
+) {
+  let walkId = fromId;
+  let remaining = overflow;
+
+  while (Math.abs(remaining) > 0.001) {
+    const parent = findParent(root, walkId);
+    if (!parent) break;
+
+    if (parent.direction !== direction) {
+      walkId = parent.id;
+      continue;
+    }
+
+    const isFirst = parent.children[0].id === walkId;
+    const childProp = isFirst ? parent.ratio : (1 - parent.ratio);
+    const inParent = remaining * childProp;
+
+    // overflow < 0: first child at min, need sibling to the left (walkId must be second child)
+    // overflow > 0: second child at min, need sibling to the right (walkId must be first child)
+    const canAbsorb = (remaining < 0 && !isFirst) || (remaining > 0 && isFirst);
+
+    if (!canAbsorb) {
+      walkId = parent.id;
+      remaining = inParent;
+      continue;
+    }
+
+    const oldRatio = parent.ratio;
+    const desired = oldRatio + inParent;
+    parent.ratio = Math.max(MIN_RATIO, Math.min(MAX_RATIO, desired));
+
+    // Preserve non-adjacent sizes in the sibling branch (not the branch containing the clamped split)
+    const sibIdx = isFirst ? 1 : 0;
+    const sib = parent.children[sibIdx];
+    if (sib.type === 'split' && sib.direction === direction) {
+      if (sibIdx === 0) {
+        preserveNonAdjacentSizes(sib, oldRatio, parent.ratio, 1);
+      } else {
+        preserveNonAdjacentSizes(sib, 1 - oldRatio, 1 - parent.ratio, 0);
+      }
+    }
+
+    if (desired !== parent.ratio) {
+      remaining = desired - parent.ratio;
+      walkId = parent.id;
+      continue;
+    }
+    break;
+  }
 }
 
 /**
@@ -658,7 +724,7 @@ function preserveNonAdjacentSizes(
     newRatio = 1 - (1 - oldRatio) * oldProportion / newProportion;
   }
 
-  node.ratio = Math.max(0.05, Math.min(0.95, newRatio));
+  node.ratio = Math.max(MIN_RATIO, Math.min(MAX_RATIO, newRatio));
 
   // Recurse into the adjacent child if it's also a same-direction split
   const adjChild = node.children[adjacentChildIndex];
