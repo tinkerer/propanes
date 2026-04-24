@@ -89,4 +89,139 @@ localRoutes.post('/open-terminal', async (c) => {
   return c.json({ ok: true, command: finalCommand });
 });
 
+// Mic bridge — loaded in a hidden iframe from insecure (HTTP) pages so that
+// SpeechRecognition + getUserMedia can run in a secure localhost context.
+// Parent communicates via postMessage; transcript segments and ambient windows
+// are sent back the same way.
+localRoutes.get('/mic-bridge', (c) => {
+  return c.html(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Mic Bridge</title></head>
+<body>
+<script>
+// Ambient listen state
+let recognition = null;
+let stream = null;
+let running = false;
+let windowMs = 30000;
+let silenceMs = 10000;
+let maxLength = 500;
+let windowIndex = 0;
+let windowStart = 0;
+let windowBuffer = [];
+let flushTimer = null;
+let silenceTimer = null;
+
+const parentOrigin = '*'; // widget may be on any origin
+
+function post(type, data) {
+  window.parent.postMessage({ source: 'pw-mic-bridge', type, ...data }, parentOrigin);
+}
+
+function resetSilenceTimer() {
+  if (silenceTimer) clearTimeout(silenceTimer);
+  if (!running || windowBuffer.length === 0) return;
+  silenceTimer = setTimeout(() => {
+    if (running && windowBuffer.length > 0) flushWindow();
+  }, silenceMs);
+}
+
+function flushWindow() {
+  if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
+  const now = Date.now();
+  const text = windowBuffer.join(' ').trim();
+  const idx = windowIndex++;
+  if (text.length > 0) {
+    post('ambientWindow', {
+      windowIndex: idx,
+      startedAt: new Date(windowStart).toISOString(),
+      endedAt: new Date(now).toISOString(),
+      text,
+    });
+  }
+  windowBuffer = [];
+  windowStart = now;
+  if (flushTimer) clearTimeout(flushTimer);
+  if (running) {
+    flushTimer = setTimeout(() => { if (running) flushWindow(); }, windowMs);
+  }
+}
+
+function startAmbient(opts) {
+  if (running) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { post('error', { code: 'NOT_SUPPORTED', message: 'SpeechRecognition not available' }); return; }
+
+  windowMs = opts.windowMs || 30000;
+  silenceMs = opts.silenceMs || 10000;
+  maxLength = opts.maxLength || 500;
+  windowIndex = 0;
+  windowStart = Date.now();
+  windowBuffer = [];
+
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(s => {
+    stream = s;
+    running = true;
+
+    recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = opts.lang || 'en-US';
+
+    recognition.onresult = (event) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        const seg = { text: result[0].transcript, timestamp: Date.now() - windowStart, isFinal: result.isFinal };
+        if (result.isFinal) {
+          windowBuffer.push(seg.text);
+          resetSilenceTimer();
+          if (windowBuffer.join(' ').length >= maxLength) flushWindow();
+        }
+        post('segment', { segment: seg });
+      }
+    };
+
+    recognition.onend = () => { if (running) try { recognition.start(); } catch {} };
+    recognition.onerror = (e) => {
+      if (e.error !== 'no-speech' && e.error !== 'aborted' && running) {
+        try { recognition.start(); } catch {}
+      }
+    };
+
+    try { recognition.start(); } catch {}
+    flushTimer = setTimeout(() => { if (running) flushWindow(); }, windowMs);
+    post('started', {});
+  }).catch(err => {
+    const code = err.name === 'NotAllowedError' || err.name === 'SecurityError' ? 'NOT_ALLOWED'
+      : err.name === 'NotFoundError' ? 'NOT_FOUND'
+      : err.name === 'NotReadableError' ? 'NOT_READABLE'
+      : 'UNKNOWN';
+    post('error', { code, message: err.message });
+  });
+}
+
+function stopAmbient() {
+  if (!running) return;
+  running = false;
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
+  flushWindow();
+  if (recognition) { try { recognition.stop(); } catch {} recognition = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  post('stopped', {});
+}
+
+window.addEventListener('message', (e) => {
+  const d = e.data;
+  if (!d || d.source !== 'pw-mic-bridge-cmd') return;
+  if (d.type === 'start') startAmbient(d.opts || {});
+  else if (d.type === 'stop') stopAmbient();
+  else if (d.type === 'flush') { if (running) flushWindow(); }
+  else if (d.type === 'ping') post('pong', {});
+});
+
+post('ready', {});
+</script>
+</body></html>`);
+});
+
 export default localRoutes;

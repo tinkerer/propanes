@@ -134,6 +134,8 @@ export class VoiceRecorder {
   private ambientFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private ambientSilenceTimer: ReturnType<typeof setTimeout> | null = null;
   private ambientLastSpeechAt = 0;
+  private micBridgeIframe: HTMLIFrameElement | null = null;
+  private micBridgeListener: ((e: MessageEvent) => void) | null = null;
   private _transcript: TranscriptSegment[] = [];
   private _interactions: InteractionEvent[] = [];
   private _consoleLogs: ConsoleEntry[] = [];
@@ -431,6 +433,126 @@ export class VoiceRecorder {
       this.ambientStream.getTracks().forEach((t) => t.stop());
       this.ambientStream = null;
     }
+  }
+
+  /**
+   * Start ambient listen mode via a hidden iframe on localhost. Used when the
+   * host page is on an insecure (HTTP) origin where getUserMedia / SpeechRecognition
+   * are blocked. The iframe loads from the PropPanes server on localhost which is
+   * a secure context, runs the mic + recognition there, and relays results back
+   * via postMessage.
+   */
+  async startAmbientViaIframe(bridgeUrl: string, opts?: AmbientChunkOpts): Promise<void> {
+    if (this._ambient) return;
+
+    this._ambient = true;
+    this.ambientWindowIndex = 0;
+    this.ambientLastSpeechAt = Date.now();
+
+    return new Promise<void>((resolve, reject) => {
+      const iframe = document.createElement('iframe');
+      iframe.src = bridgeUrl;
+      iframe.style.cssText = 'position:fixed;width:0;height:0;border:none;opacity:0;pointer-events:none;';
+      iframe.setAttribute('allow', 'microphone');
+      document.body.appendChild(iframe);
+      this.micBridgeIframe = iframe;
+
+      let resolved = false;
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          this.cleanupMicBridge();
+          reject(new Error('Mic bridge iframe timed out'));
+        }
+      }, 10_000);
+
+      const listener = (e: MessageEvent) => {
+        const d = e.data;
+        if (!d || d.source !== 'pw-mic-bridge') return;
+
+        if (d.type === 'ready' && !resolved) {
+          iframe.contentWindow?.postMessage({
+            source: 'pw-mic-bridge-cmd',
+            type: 'start',
+            opts: {
+              windowMs: opts?.windowMs ?? 30_000,
+              silenceMs: opts?.silenceMs ?? 10_000,
+              maxLength: opts?.maxLength ?? 500,
+              lang: document.documentElement.lang || 'en-US',
+            },
+          }, '*');
+        } else if (d.type === 'started' && !resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          resolve();
+        } else if (d.type === 'error' && !resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          this.cleanupMicBridge();
+          const err = new Error(d.message || 'Mic bridge error');
+          (err as any).code = d.code;
+          reject(err);
+        } else if (d.type === 'segment') {
+          this.ambientLastSpeechAt = Date.now();
+          this.onAmbientSegment?.(d.segment);
+        } else if (d.type === 'ambientWindow') {
+          const win: AmbientWindow = {
+            windowIndex: d.windowIndex,
+            startedAt: d.startedAt,
+            endedAt: d.endedAt,
+            text: d.text,
+          };
+          try { this.onAmbientWindow?.(win); } catch {}
+        } else if (d.type === 'stopped') {
+          // Bridge stopped itself (shouldn't happen normally)
+        }
+      };
+
+      window.addEventListener('message', listener);
+      this.micBridgeListener = listener;
+    });
+  }
+
+  async stopAmbientViaIframe(): Promise<void> {
+    if (!this._ambient) return;
+    this._ambient = false;
+
+    if (this.micBridgeIframe?.contentWindow) {
+      this.micBridgeIframe.contentWindow.postMessage({
+        source: 'pw-mic-bridge-cmd',
+        type: 'stop',
+      }, '*');
+      // Give it a moment to flush
+      await new Promise(r => setTimeout(r, 100));
+    }
+    this.cleanupMicBridge();
+  }
+
+  /** Manually flush the iframe bridge's current buffer. */
+  manualFlushViaIframe(): void {
+    if (this._ambient && this.micBridgeIframe?.contentWindow) {
+      this.micBridgeIframe.contentWindow.postMessage({
+        source: 'pw-mic-bridge-cmd',
+        type: 'flush',
+      }, '*');
+    }
+  }
+
+  /** Whether we're running in iframe-bridge mode. */
+  get usingMicBridge(): boolean {
+    return this.micBridgeIframe !== null;
+  }
+
+  private cleanupMicBridge() {
+    if (this.micBridgeListener) {
+      window.removeEventListener('message', this.micBridgeListener);
+      this.micBridgeListener = null;
+    }
+    if (this.micBridgeIframe) {
+      this.micBridgeIframe.remove();
+      this.micBridgeIframe = null;
+    }
+    this._ambient = false;
   }
 
   removeInteraction(id: string) {
