@@ -82,6 +82,8 @@ import {
   openFeedbackItem,
   updatePanel,
   toggleCompanion,
+  activePanelId,
+  focusedPanelId,
 } from '../lib/sessions.js';
 import { handleDragMove, handleResizeMove } from '../lib/popout-physics.js';
 import { detectExternalZone, openCosExternally, applyExternalGhostHint } from '../lib/tab-drag.js';
@@ -2832,6 +2834,9 @@ export function ChiefOfStaffBubble({
     document.addEventListener('mouseup', onUp);
   }, []);
 
+  const isCosActive = !inPane && activePanelId.value === COS_PANEL_ID;
+  const isCosFocused = !inPane && focusedPanelId.value === COS_PANEL_ID;
+
   let panelStyle: Record<string, string | number> | undefined;
   let isDocked = false;
   let isLeftDocked = false;
@@ -2967,10 +2972,14 @@ export function ChiefOfStaffBubble({
           ref={wrapperRef}
           class={inPane
             ? 'cos-popout cos-pane'
-            : `${isDocked ? `popout-docked${isLeftDocked ? ' docked-left' : ''}` : 'popout-floating'}${isMinimized ? ' minimized' : ''}${panel!.alwaysOnTop ? ' always-on-top' : ''} cos-popout`}
+            : `${isDocked ? `popout-docked${isLeftDocked ? ' docked-left' : ''}` : 'popout-floating'}${isMinimized ? ' minimized' : ''}${isCosFocused ? ' panel-focused' : ''}${isCosActive ? ' panel-active' : ''}${panel!.alwaysOnTop ? ' always-on-top' : ''} cos-popout`}
           style={inPane ? undefined : (panelStyle as any)}
           data-panel-id={COS_PANEL_ID}
-          onMouseDown={inPane ? undefined : (() => { bringToFront(COS_PANEL_ID); })}
+          onMouseDown={inPane ? undefined : (() => {
+            activePanelId.value = COS_PANEL_ID;
+            bringToFront(COS_PANEL_ID);
+            setFocusedLeaf(null);
+          })}
         >
           <div class="popout-tab-bar" onMouseDown={inPane ? undefined : onHeaderDragStart}>
             <div class="popout-tab-scroll">
