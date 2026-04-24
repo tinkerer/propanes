@@ -3048,7 +3048,6 @@ export function ChiefOfStaffBubble({
                         document.removeEventListener('mousemove', onMove);
                         document.removeEventListener('mouseup', onUp);
                         setMenuOpen(false);
-                        const cosUrl = `${location.origin}${location.pathname}?embed=cos`;
                         // Decide window vs tab based on drop position: near screen
                         // edge → detached window, anywhere else → new tab.
                         const nearEdge =
@@ -3056,11 +3055,7 @@ export function ChiefOfStaffBubble({
                           ev.clientX > window.innerWidth - 20 ||
                           ev.clientY < 20 ||
                           ev.clientY > window.innerHeight - 20;
-                        if (nearEdge) {
-                          window.open(cosUrl, '_blank', 'width=900,height=700,menubar=no,toolbar=no');
-                        } else {
-                          window.open(cosUrl, '_blank');
-                        }
+                        openCosExternally(nearEdge ? 'new-window' : 'new-tab');
                       }
                     };
                     const onUp = () => {
