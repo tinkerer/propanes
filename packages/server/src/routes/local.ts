@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 const localRoutes = new Hono();
 
 // Bridge page — opened via window.open from remote admins to bypass Private Network Access.
-// Params come in the URL hash (never sent to server), parsed client-side, then POSTed same-origin.
+// Communicates results back via postMessage, then auto-closes.
 localRoutes.get('/bridge', (c) => {
   return c.html(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Local Bridge</title>
@@ -18,14 +18,20 @@ localRoutes.get('/bridge', (c) => {
 </style></head><body>
 <div class="card">
   <div style="font-size:20px;font-weight:600">Local Terminal Bridge</div>
-  <div class="status" id="status">Connecting...</div>
+  <div class="status" id="status">Ready</div>
 </div>
 <script>
-(async () => {
-  const el = document.getElementById('status');
+const el = document.getElementById('status');
+const openerOrigin = '*';
+
+function post(type, data) {
+  if (window.opener) window.opener.postMessage({ source: 'pw-local-bridge', type, ...data }, openerOrigin);
+}
+
+async function handleOpenTerminal(params, reqId) {
   try {
-    const params = JSON.parse(decodeURIComponent(location.hash.slice(1)));
     el.textContent = 'Opening terminal...';
+    el.className = 'status';
     const res = await fetch('/api/v1/local/open-terminal', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -35,16 +41,38 @@ localRoutes.get('/bridge', (c) => {
     if (data.ok) {
       el.textContent = 'Terminal opened';
       el.className = 'status ok';
-      setTimeout(() => window.close(), 1500);
+      post('result', { reqId, ok: true, command: data.command });
+      setTimeout(() => window.close(), 1000);
     } else {
       el.textContent = data.error || 'Unknown error';
       el.className = 'status err';
+      post('result', { reqId, ok: false, error: data.error });
+      setTimeout(() => window.close(), 3000);
     }
   } catch (e) {
     el.textContent = e.message;
     el.className = 'status err';
+    post('result', { reqId, ok: false, error: e.message });
+    setTimeout(() => window.close(), 3000);
   }
-})();
+}
+
+window.addEventListener('message', (e) => {
+  const d = e.data;
+  if (!d || d.source !== 'pw-local-bridge-cmd') return;
+  if (d.type === 'open-terminal') handleOpenTerminal(d.params || {}, d.reqId);
+  else if (d.type === 'ping') post('pong', {});
+});
+
+// Handle legacy hash params (one-shot open, then stay alive)
+if (location.hash.length > 1) {
+  try {
+    const params = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+    handleOpenTerminal(params, 'legacy');
+  } catch {}
+}
+
+post('ready', {});
 </script></body></html>`);
 });
 
