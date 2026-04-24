@@ -4,34 +4,35 @@
  * Flow:
  *   1) Widget calls POST /api/v1/voice/sessions to start a listen-mode
  *      session. Server returns a voiceSessionId.
- *   2) For each rolling ~30s window, widget calls
+ *   2) For each chunk, widget calls
  *      POST /api/v1/voice/sessions/:id/windows with the transcript.
- *      Server classifies the window. If actionable, server creates a
- *      feedback item tagged `voice-captured` and schedules a deferred
- *      dispatch (notification with Cancel/Edit/Launch-now).
- *   3) Widget calls POST /api/v1/voice/sessions/:id/stop when listen
+ *      Server classifies. If actionable, creates a feedback item and
+ *      returns the classification + feedbackId so the widget can show
+ *      a ticket card with dispatch options.
+ *   3) Widget calls POST /api/v1/voice/dispatch with the user's chosen
+ *      runtime + mode to launch the session. No pre-configured agent
+ *      endpoint needed.
+ *   4) Widget calls POST /api/v1/voice/sessions/:id/stop when listen
  *      mode turns off or safeguards fire.
- *
- * The classifier and dispatcher are pluggable — see
- * ./voice/classifier.ts and ./voice/deferred-dispatch.ts.
  */
 
 import { Hono } from 'hono';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { ulid } from 'ulidx';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { classifyVoiceWindow, summarizeConversation } from '../voice/classifier.js';
-import {
-  scheduleDeferredDispatch,
-  cancelDeferredDispatch,
-  fireDeferredDispatchNow,
-} from '../voice/deferred-dispatch.js';
 import { feedbackEvents } from '../events.js';
+import {
+  dispatchAgentSession,
+  renderPromptTemplate,
+  DEFAULT_PROMPT_TEMPLATE,
+  hydrateFeedback,
+} from '../dispatch.js';
+import type { AgentRuntime, PermissionProfile } from '@propanes/shared';
 
 export const voiceRoutes = new Hono();
 
-const VOICE_DISPATCH_DELAY_MS = Number(process.env.VOICE_DISPATCH_DELAY_MS || 10_000);
 const VOICE_MIN_WINDOW_CHARS = 30;
 
 function resolveAppIdFromApiKey(apiKey: string | undefined): string | null {
@@ -42,41 +43,6 @@ function resolveAppIdFromApiKey(apiKey: string | undefined): string | null {
     .where(eq(schema.applications.apiKey, apiKey))
     .get();
   return app?.id ?? null;
-}
-
-function resolveYoloAgent(appId: string | null): string | null {
-  // Voice auto-dispatch runs unattended, so prefer a headless agent. We still
-  // call the helper "yolo" internally for continuity with older call sites.
-  if (!appId) {
-    const any = db
-      .select()
-      .from(schema.agentEndpoints)
-      .where(eq(schema.agentEndpoints.permissionProfile, 'headless-yolo'))
-      .all();
-    return any[0]?.id ?? null;
-  }
-  const appHeadless = db
-    .select()
-    .from(schema.agentEndpoints)
-    .where(and(
-      eq(schema.agentEndpoints.appId, appId),
-      eq(schema.agentEndpoints.permissionProfile, 'headless-yolo'),
-    ))
-    .all();
-  if (appHeadless.length) return appHeadless[0].id;
-  const globalHeadless = db
-    .select()
-    .from(schema.agentEndpoints)
-    .where(eq(schema.agentEndpoints.permissionProfile, 'headless-yolo'))
-    .all();
-  if (globalHeadless.length) return globalHeadless[0].id;
-  // Fall back: app's default agent
-  const agents = db.select().from(schema.agentEndpoints).all();
-  const def =
-    agents.find((a) => a.isDefault && a.appId === appId) ||
-    agents.find((a) => a.isDefault && !a.appId) ||
-    agents[0];
-  return def?.id ?? null;
 }
 
 const startSchema = z.object({
@@ -197,16 +163,8 @@ voiceRoutes.post('/sessions/:id/windows', async (c) => {
   // Use routed app ID if the classifier determined a better target app
   const effectiveAppId = classification.routedAppId || session.appId;
 
-  const agentId = resolveYoloAgent(effectiveAppId);
-  if (!agentId) {
-    return c.json({
-      transcriptId,
-      classification,
-      warning: 'no-yolo-agent-configured',
-    });
-  }
-
-  // Create a feedback item tagged voice-captured
+  // Create a feedback item — but do NOT auto-dispatch.
+  // Widget shows a ticket card and user picks runtime + mode.
   const feedbackId = ulid();
   const title = classification.title || 'Voice idea';
   const description = classification.description || win.text;
@@ -236,11 +194,10 @@ voiceRoutes.post('/sessions/:id/windows', async (c) => {
   await db.insert(schema.feedbackTags).values(
     tags.map((tag) => ({ feedbackId, tag }))
   );
-  // Notify feedback stream (matches POST /feedback emission shape but with autoDispatch=false,
-  // since we're handling the deferred-dispatch ourselves).
+
   feedbackEvents.emit('new', {
     id: feedbackId,
-    appId: session.appId,
+    appId: effectiveAppId,
     autoDispatch: false,
   });
 
@@ -249,23 +206,10 @@ voiceRoutes.post('/sessions/:id/windows', async (c) => {
     .set({ feedbackId })
     .where(eq(schema.voiceTranscripts.id, transcriptId));
 
-  const scheduled = await scheduleDeferredDispatch({
-    feedbackId,
-    agentEndpointId: agentId,
-    appId: effectiveAppId,
-    delayMs: VOICE_DISPATCH_DELAY_MS,
-    title,
-    description,
-    source: 'voice',
-  });
-
   return c.json({
     transcriptId,
     classification,
     feedbackId,
-    pendingDispatchId: scheduled.pendingId,
-    dispatchAt: scheduled.dispatchAt,
-    notificationId: scheduled.notificationId,
   });
 });
 
@@ -311,44 +255,115 @@ voiceRoutes.get('/sessions/:id', (c) => {
   return c.json({ session, transcripts });
 });
 
-// --- Pending-dispatch control surface (used by the notification toast) ---
+// --- Inline voice dispatch (no agent endpoint required) ---
 
-voiceRoutes.post('/pending-dispatches/:id/cancel', async (c) => {
-  const id = c.req.param('id');
-  const result = await cancelDeferredDispatch(id, { deleteFeedback: true });
-  if (!result.cancelled) return c.json({ error: 'not found or already resolved' }, 404);
-  return c.json({ cancelled: true, deletedFeedback: !!result.deletedFeedback });
+const dispatchSchema = z.object({
+  feedbackId: z.string(),
+  runtime: z.enum(['claude', 'codex']).default('claude'),
+  mode: z.enum(['interactive', 'headless']).default('interactive'),
+  instructions: z.string().optional(),
 });
 
-voiceRoutes.post('/pending-dispatches/:id/launch-now', async (c) => {
-  const id = c.req.param('id');
+/** Map user-facing mode to a permission profile. */
+function resolveProfile(mode: 'interactive' | 'headless'): PermissionProfile {
+  // interactive = TUI with skip-permissions (no approval prompts from brainstorm)
+  // headless = one-shot pipe with skip-permissions
+  return mode === 'headless' ? 'headless-yolo' : 'interactive-yolo';
+}
+
+voiceRoutes.post('/dispatch', async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const instructions = typeof body?.instructions === 'string' ? body.instructions : undefined;
-  if (instructions) {
-    // Update the pending dispatch metadata with instructions before firing
-    const row = db.select().from(schema.pendingDispatches).where(eq(schema.pendingDispatches.id, id)).get();
-    if (row) {
-      const metadata = row.metadata ? JSON.parse(row.metadata) : {};
-      metadata.instructions = instructions;
-      await db.update(schema.pendingDispatches)
-        .set({ metadata: JSON.stringify(metadata) })
-        .where(eq(schema.pendingDispatches.id, id));
+  const parsed = dispatchSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
+  }
+  const { feedbackId, runtime, mode, instructions } = parsed.data;
+
+  const feedback = db
+    .select()
+    .from(schema.feedbackItems)
+    .where(eq(schema.feedbackItems.id, feedbackId))
+    .get();
+  if (!feedback) return c.json({ error: 'Feedback not found' }, 404);
+
+  // Check for existing active session
+  const existing = db
+    .select()
+    .from(schema.agentSessions)
+    .where(
+      and(
+        eq(schema.agentSessions.feedbackId, feedbackId),
+        sql`${schema.agentSessions.status} IN ('pending', 'running')`
+      )
+    )
+    .get();
+  if (existing) {
+    return c.json({ sessionId: existing.id, existing: true });
+  }
+
+  const tags = db
+    .select()
+    .from(schema.feedbackTags)
+    .where(eq(schema.feedbackTags.feedbackId, feedbackId))
+    .all()
+    .map((t) => t.tag);
+  const screenshots = db
+    .select()
+    .from(schema.feedbackScreenshots)
+    .where(eq(schema.feedbackScreenshots.feedbackId, feedbackId))
+    .all();
+  const hydratedFeedback = hydrateFeedback(feedback, tags, screenshots);
+
+  let app = null;
+  if (feedback.appId) {
+    const appRow = db
+      .select()
+      .from(schema.applications)
+      .where(eq(schema.applications.id, feedback.appId))
+      .get();
+    if (appRow) {
+      app = { ...appRow, hooks: JSON.parse(appRow.hooks) };
     }
   }
-  await fireDeferredDispatchNow(id);
-  return c.json({ ok: true });
+
+  const cwd = app?.projectDir || process.cwd();
+  const permissionProfile = resolveProfile(mode);
+  const prompt = renderPromptTemplate(DEFAULT_PROMPT_TEMPLATE, hydratedFeedback, app, instructions);
+
+  // Find any agent endpoint to satisfy the FK, or use a placeholder
+  const anyAgent = db.select().from(schema.agentEndpoints).limit(1).get();
+  const agentEndpointId = anyAgent?.id || 'voice-inline';
+
+  const { sessionId } = await dispatchAgentSession({
+    feedbackId,
+    agentEndpointId,
+    prompt,
+    cwd,
+    runtime: runtime as AgentRuntime,
+    permissionProfile,
+  });
+
+  const now = new Date().toISOString();
+  db.update(schema.feedbackItems).set({
+    status: 'dispatched',
+    dispatchedTo: `Voice ${runtime} (${mode})`,
+    dispatchedAt: now,
+    dispatchStatus: 'running',
+    dispatchResponse: `Agent session started: ${sessionId}`,
+    updatedAt: now,
+  }).where(eq(schema.feedbackItems.id, feedbackId)).run();
+
+  feedbackEvents.emit('updated', { id: feedbackId, appId: feedback.appId });
+
+  return c.json({ sessionId, runtime, mode, permissionProfile });
 });
 
-voiceRoutes.post('/pending-dispatches/:id/edit', async (c) => {
-  // "Edit" cancels the timer but keeps the feedback item so the user
-  // can tweak it in the feedback detail drawer.
-  const id = c.req.param('id');
-  const result = await cancelDeferredDispatch(id, { deleteFeedback: false });
-  if (!result.cancelled) return c.json({ error: 'not found or already resolved' }, 404);
-  const row = db
-    .select()
-    .from(schema.pendingDispatches)
-    .where(eq(schema.pendingDispatches.id, id))
-    .get();
-  return c.json({ cancelled: true, feedbackId: row?.feedbackId });
+// --- Dismiss a voice ticket (delete the feedback item) ---
+
+voiceRoutes.post('/dismiss', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const feedbackId = body?.feedbackId;
+  if (!feedbackId) return c.json({ error: 'feedbackId required' }, 400);
+  await db.delete(schema.feedbackItems).where(eq(schema.feedbackItems.id, feedbackId));
+  return c.json({ dismissed: true });
 });
