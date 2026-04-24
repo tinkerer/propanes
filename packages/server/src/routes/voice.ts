@@ -21,7 +21,7 @@ import { eq, and } from 'drizzle-orm';
 import { ulid } from 'ulidx';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
-import { classifyVoiceWindow } from '../voice/classifier.js';
+import { classifyVoiceWindow, summarizeConversation } from '../voice/classifier.js';
 import {
   scheduleDeferredDispatch,
   cancelDeferredDispatch,
@@ -135,13 +135,14 @@ voiceRoutes.post('/sessions/:id/windows', async (c) => {
   const win = parsed.data;
   const now = new Date().toISOString();
 
-  // Fetch previous window text for short context
+  // Fetch all previous window texts for context/summary
   const prevRows = db
     .select()
     .from(schema.voiceTranscripts)
     .where(eq(schema.voiceTranscripts.voiceSessionId, voiceSessionId))
-    .all();
-  const prev = prevRows.sort((a, b) => b.windowIndex - a.windowIndex)[0];
+    .all()
+    .sort((a, b) => a.windowIndex - b.windowIndex);
+  const prev = prevRows[prevRows.length - 1];
 
   const transcriptId = ulid();
   await db.insert(schema.voiceTranscripts).values({
@@ -168,9 +169,16 @@ voiceRoutes.post('/sessions/:id/windows', async (c) => {
     });
   }
 
+  // Build conversation summary from previous chunks for context
+  const previousTexts = prevRows.map((r) => r.text).filter(Boolean);
+  const conversationSummary = previousTexts.length >= 2
+    ? await summarizeConversation(previousTexts)
+    : undefined;
+
   const classification = await classifyVoiceWindow({
     text: win.text,
     previousText: prev?.text,
+    conversationSummary,
     appId: session.appId,
     sourceUrl: session.sourceUrl,
   });
@@ -184,7 +192,10 @@ voiceRoutes.post('/sessions/:id/windows', async (c) => {
     return c.json({ transcriptId, classification });
   }
 
-  const agentId = resolveYoloAgent(session.appId);
+  // Use routed app ID if the classifier determined a better target app
+  const effectiveAppId = classification.routedAppId || session.appId;
+
+  const agentId = resolveYoloAgent(effectiveAppId);
   if (!agentId) {
     return c.json({
       transcriptId,
@@ -207,6 +218,7 @@ voiceRoutes.post('/sessions/:id/windows', async (c) => {
       voiceSessionId,
       voiceTranscriptId: transcriptId,
       classification,
+      conversationSummary,
     }),
     context: null,
     sourceUrl: session.sourceUrl,
@@ -214,7 +226,7 @@ voiceRoutes.post('/sessions/:id/windows', async (c) => {
     viewport: null,
     sessionId: session.widgetSessionId,
     userId: session.userId,
-    appId: session.appId,
+    appId: effectiveAppId,
     createdAt: now,
     updatedAt: now,
   });
@@ -238,7 +250,7 @@ voiceRoutes.post('/sessions/:id/windows', async (c) => {
   const scheduled = await scheduleDeferredDispatch({
     feedbackId,
     agentEndpointId: agentId,
-    appId: session.appId,
+    appId: effectiveAppId,
     delayMs: VOICE_DISPATCH_DELAY_MS,
     title,
     description,
@@ -308,6 +320,19 @@ voiceRoutes.post('/pending-dispatches/:id/cancel', async (c) => {
 
 voiceRoutes.post('/pending-dispatches/:id/launch-now', async (c) => {
   const id = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  const instructions = typeof body?.instructions === 'string' ? body.instructions : undefined;
+  if (instructions) {
+    // Update the pending dispatch metadata with instructions before firing
+    const row = db.select().from(schema.pendingDispatches).where(eq(schema.pendingDispatches.id, id)).get();
+    if (row) {
+      const metadata = row.metadata ? JSON.parse(row.metadata) : {};
+      metadata.instructions = instructions;
+      await db.update(schema.pendingDispatches)
+        .set({ metadata: JSON.stringify(metadata) })
+        .where(eq(schema.pendingDispatches.id, id));
+    }
+  }
   await fireDeferredDispatchNow(id);
   return c.json({ ok: true });
 });

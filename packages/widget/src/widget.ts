@@ -183,6 +183,14 @@ export class ProPanesElement {
   private voiceListenWindowSender: ((win: import('./voice-recorder.js').AmbientWindow) => void) | null = null;
   private brainstormDisabled = false;
   private brainstormGestureHandler: (() => void) | null = null;
+  private ccOverlay: HTMLElement | null = null;
+  private ccOpen = true;
+  private ccSizeLarge = false;
+  private ccTextEl: HTMLElement | null = null;
+  private ccInterimSpan: HTMLElement | null = null;
+  private ccTicketsEl: HTMLElement | null = null;
+  private ccChunks: { text: string; windowIndex: number }[] = [];
+  private ccPendingTickets: Map<string, { title: string; description: string; appName?: string; pendingId: string; feedbackId: string }> = new Map();
   private escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && this.isOpen) {
       // Let sub-overlays (annotator, element picker) handle Escape first
@@ -1003,9 +1011,9 @@ export class ProPanesElement {
 
       const onMove = (ev: PointerEvent) => {
         if (ev.pointerId !== activePointerId) return;
-        const dx = Math.max(0, ev.clientX - startX);
-        const dy = Math.max(0, ev.clientY - startY);
-        if (!dragged && dx < 4 && dy < 4) return;
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        if (!dragged && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
         dragged = true;
         btn.classList.add('pw-trigger-dragging');
         btn.style.right = (20 - dx) + 'px';
@@ -1656,10 +1664,13 @@ export class ProPanesElement {
     }
 
     try {
-      await this.voiceRecorder.startAmbient({ windowMs: 30_000 });
+      await this.voiceRecorder.startAmbient({
+        windowMs: 30_000,
+        silenceMs: 10_000,
+        maxLength: 500,
+      });
     } catch (err) {
       showError(micErrorMessage(err));
-      // Best-effort close the server session
       try {
         await fetch(`${baseOrigin}/api/v1/voice/sessions/${sessionId}/stop`, {
           method: 'POST',
@@ -1671,7 +1682,15 @@ export class ProPanesElement {
     }
 
     this.voiceListenSessionId = sessionId;
+
+    // Show CC overlay and wire segment display
+    this.removeCCToggleBar();
+    this.showCCOverlay();
+    this.voiceRecorder.onAmbientSegment = (seg) => this.appendCCSegment(seg);
+
+    // Window sender with response handling for ticket display
     this.voiceListenWindowSender = (win) => {
+      this.markCCChunk(win.text, win.windowIndex);
       fetch(`${baseOrigin}/api/v1/voice/sessions/${sessionId}/windows`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
@@ -1681,7 +1700,20 @@ export class ProPanesElement {
           endedAt: win.endedAt,
           windowIndex: win.windowIndex,
         }),
-      }).catch(() => { /* best-effort */ });
+      })
+        .then((r) => r.ok ? r.json() : null)
+        .then((data) => {
+          if (data?.feedbackId && data?.pendingDispatchId && data?.classification?.actionable) {
+            this.addCCTicket({
+              title: data.classification.title || 'Voice idea',
+              description: data.classification.description || win.text,
+              appName: data.classification.appName,
+              pendingId: data.pendingDispatchId,
+              feedbackId: data.feedbackId,
+            });
+          }
+        })
+        .catch(() => {});
     };
     this.voiceRecorder.onAmbientWindow = this.voiceListenWindowSender;
 
@@ -1729,9 +1761,12 @@ export class ProPanesElement {
     }
     this.voiceListenBlurStart = null;
     this.voiceRecorder.onAmbientWindow = null;
+    this.voiceRecorder.onAmbientSegment = null;
     this.voiceListenWindowSender = null;
 
     try { await this.voiceRecorder.stopAmbient(); } catch {}
+
+    this.cleanupCCOverlay();
 
     const trigger = this.shadow.querySelector('.pw-trigger') as HTMLElement;
     if (trigger) trigger.classList.remove('pw-trigger-listening');
@@ -1744,6 +1779,267 @@ export class ProPanesElement {
         body: JSON.stringify({ reason }),
       });
     } catch { /* best-effort */ }
+  }
+
+  // ===== Brainstorm Closed-Caption Overlay =====
+
+  private showCCOverlay() {
+    if (this.ccOverlay) return;
+    this.ccOpen = true;
+    this.ccChunks = [];
+    this.ccPendingTickets.clear();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'pw-cc-overlay';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'pw-cc-header';
+
+    const title = document.createElement('span');
+    title.className = 'pw-cc-header-title';
+    title.textContent = 'Brainstorm';
+
+    const appLabel = document.createElement('span');
+    appLabel.className = 'pw-cc-header-app';
+    appLabel.textContent = '';
+
+    const sizeBtn = document.createElement('button');
+    sizeBtn.textContent = 'Aa';
+    sizeBtn.title = 'Toggle text size';
+    sizeBtn.addEventListener('click', () => this.toggleCCSize());
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Minimize';
+    closeBtn.addEventListener('click', () => this.toggleCCOpen());
+
+    header.append(title, appLabel, sizeBtn, closeBtn);
+    overlay.appendChild(header);
+
+    // Body (transcript text)
+    const body = document.createElement('div');
+    body.className = 'pw-cc-body';
+
+    const text = document.createElement('div');
+    text.className = 'pw-cc-text pw-cc-size-normal';
+    body.appendChild(text);
+    overlay.appendChild(body);
+
+    // Tickets area
+    const tickets = document.createElement('div');
+    tickets.className = 'pw-cc-tickets';
+    tickets.style.display = 'none';
+    overlay.appendChild(tickets);
+
+    // Footer
+    const footer = document.createElement('div');
+    footer.className = 'pw-cc-footer';
+
+    const flushBtn = document.createElement('button');
+    flushBtn.className = 'pw-cc-flush-btn';
+    flushBtn.textContent = 'Chunk now';
+    flushBtn.title = 'Send current text as a chunk';
+    flushBtn.addEventListener('click', () => this.voiceRecorder.manualFlush());
+
+    const closeFooterBtn = document.createElement('button');
+    closeFooterBtn.textContent = 'Close';
+    closeFooterBtn.addEventListener('click', () => this.hideCCOverlay());
+
+    footer.append(flushBtn, closeFooterBtn);
+    overlay.appendChild(footer);
+
+    this.ccOverlay = overlay;
+    this.ccTextEl = text;
+    this.ccInterimSpan = null;
+    this.ccTicketsEl = tickets;
+    this.shadow.appendChild(overlay);
+  }
+
+  private hideCCOverlay() {
+    if (this.ccOverlay) {
+      this.ccOverlay.remove();
+      this.ccOverlay = null;
+      this.ccTextEl = null;
+      this.ccInterimSpan = null;
+      this.ccTicketsEl = null;
+    }
+    // Show a minimized toggle bar
+    this.showCCToggleBar();
+  }
+
+  private showCCToggleBar() {
+    const existing = this.shadow.querySelector('.pw-cc-toggle-bar');
+    if (existing) return;
+    const bar = document.createElement('div');
+    bar.className = 'pw-cc-toggle-bar';
+    bar.innerHTML = '<div class="pw-cc-toggle-dot"></div><span>Brainstorm</span>';
+    bar.addEventListener('click', () => {
+      bar.remove();
+      this.showCCOverlay();
+    });
+    this.shadow.appendChild(bar);
+  }
+
+  private removeCCToggleBar() {
+    const bar = this.shadow.querySelector('.pw-cc-toggle-bar');
+    if (bar) bar.remove();
+  }
+
+  private toggleCCOpen() {
+    if (!this.ccOverlay) return;
+    this.ccOpen = !this.ccOpen;
+    if (this.ccOpen) {
+      this.ccOverlay.classList.remove('pw-cc-collapsed');
+    } else {
+      this.ccOverlay.classList.add('pw-cc-collapsed');
+    }
+  }
+
+  private toggleCCSize() {
+    this.ccSizeLarge = !this.ccSizeLarge;
+    if (this.ccTextEl) {
+      this.ccTextEl.classList.toggle('pw-cc-size-normal', !this.ccSizeLarge);
+      this.ccTextEl.classList.toggle('pw-cc-size-large', this.ccSizeLarge);
+    }
+  }
+
+  private appendCCSegment(seg: import('./voice-recorder.js').TranscriptSegment) {
+    if (!this.ccTextEl) return;
+    if (seg.isFinal) {
+      // Remove interim span
+      if (this.ccInterimSpan) {
+        this.ccInterimSpan.remove();
+        this.ccInterimSpan = null;
+      }
+      const span = document.createElement('span');
+      span.className = 'pw-cc-final';
+      span.textContent = seg.text + ' ';
+      this.ccTextEl.appendChild(span);
+    } else {
+      // Update or create interim span
+      if (!this.ccInterimSpan) {
+        this.ccInterimSpan = document.createElement('span');
+        this.ccInterimSpan.className = 'pw-cc-interim';
+        this.ccTextEl.appendChild(this.ccInterimSpan);
+      }
+      this.ccInterimSpan.textContent = seg.text;
+    }
+    // Auto-scroll
+    const body = this.ccTextEl.parentElement;
+    if (body) body.scrollTop = body.scrollHeight;
+  }
+
+  private markCCChunk(chunkText: string, windowIndex: number) {
+    if (!this.ccTextEl) return;
+    this.ccChunks.push({ text: chunkText, windowIndex });
+
+    // Highlight the final spans that make up this chunk
+    const finals = this.ccTextEl.querySelectorAll('.pw-cc-final:not(.pw-cc-chunk-highlight)');
+    finals.forEach((el) => el.classList.add('pw-cc-chunk-highlight'));
+
+    // Add a divider
+    const divider = document.createElement('div');
+    divider.className = 'pw-cc-chunk-divider';
+    divider.textContent = `chunk ${windowIndex + 1}`;
+    this.ccTextEl.appendChild(divider);
+  }
+
+  private addCCTicket(ticket: { title: string; description: string; appName?: string; pendingId: string; feedbackId: string }) {
+    this.ccPendingTickets.set(ticket.pendingId, ticket);
+    if (!this.ccTicketsEl) return;
+    this.ccTicketsEl.style.display = '';
+
+    const card = document.createElement('div');
+    card.className = 'pw-cc-ticket';
+    card.dataset.pendingId = ticket.pendingId;
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'pw-cc-ticket-title';
+    titleEl.textContent = ticket.title;
+
+    const descEl = document.createElement('div');
+    descEl.className = 'pw-cc-ticket-desc';
+    descEl.textContent = ticket.description;
+
+    const actions = document.createElement('div');
+    actions.className = 'pw-cc-ticket-actions';
+
+    if (ticket.appName) {
+      const appEl = document.createElement('div');
+      appEl.className = 'pw-cc-ticket-app';
+      appEl.textContent = ticket.appName;
+      card.appendChild(appEl);
+    }
+
+    const planBtn = document.createElement('button');
+    planBtn.className = 'pw-cc-plan-btn';
+    planBtn.textContent = 'Create plan';
+    planBtn.addEventListener('click', () => this.handleCCTicketAction(ticket.pendingId, ticket.feedbackId, 'plan'));
+
+    const doitBtn = document.createElement('button');
+    doitBtn.className = 'pw-cc-doit-btn';
+    doitBtn.textContent = 'Just do it';
+    doitBtn.addEventListener('click', () => this.handleCCTicketAction(ticket.pendingId, ticket.feedbackId, 'doit'));
+
+    const dismissBtn = document.createElement('button');
+    dismissBtn.className = 'pw-cc-dismiss-btn';
+    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.addEventListener('click', () => this.handleCCTicketAction(ticket.pendingId, ticket.feedbackId, 'dismiss'));
+
+    actions.append(planBtn, doitBtn, dismissBtn);
+    card.append(titleEl, descEl, actions);
+    this.ccTicketsEl.appendChild(card);
+  }
+
+  private async handleCCTicketAction(pendingId: string, feedbackId: string, action: 'plan' | 'doit' | 'dismiss') {
+    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
+    const base = endpointUrl.origin;
+
+    if (action === 'dismiss') {
+      try {
+        await fetch(`${base}/api/v1/voice/pending-dispatches/${pendingId}/cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
+        });
+      } catch {}
+    } else if (action === 'doit') {
+      try {
+        await fetch(`${base}/api/v1/voice/pending-dispatches/${pendingId}/launch-now`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
+        });
+      } catch {}
+    } else if (action === 'plan') {
+      // Launch with "plan" instruction — edit the feedback to add planning context, then launch
+      try {
+        await fetch(`${base}/api/v1/voice/pending-dispatches/${pendingId}/launch-now`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
+          body: JSON.stringify({ instructions: 'Create a detailed plan before implementing. Present the plan for review.' }),
+        });
+      } catch {}
+    }
+
+    // Remove the ticket card
+    this.ccPendingTickets.delete(pendingId);
+    if (this.ccTicketsEl) {
+      const card = this.ccTicketsEl.querySelector(`[data-pending-id="${pendingId}"]`);
+      if (card) card.remove();
+      if (this.ccTicketsEl.children.length === 0) this.ccTicketsEl.style.display = 'none';
+    }
+  }
+
+  private cleanupCCOverlay() {
+    if (this.ccOverlay) {
+      this.ccOverlay.remove();
+      this.ccOverlay = null;
+    }
+    this.removeCCToggleBar();
+    this.ccTextEl = null;
+    this.ccInterimSpan = null;
+    this.ccTicketsEl = null;
+    this.ccChunks = [];
+    this.ccPendingTickets.clear();
   }
 
   private showTimeline() {

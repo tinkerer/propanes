@@ -1667,4 +1667,289 @@ export const WIDGET_CSS = `
   50% { opacity: 0.55; }
 }
 
+/* ===== Brainstorm CC Overlay ===== */
+
+.pw-cc-overlay {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483646;
+  width: 90vw;
+  max-width: 900px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: #e2e8f0;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.pw-cc-overlay.pw-cc-collapsed {
+  max-height: 0;
+  padding: 0;
+  border: none;
+  overflow: hidden;
+}
+
+.pw-cc-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+  flex-shrink: 0;
+}
+
+.pw-cc-header-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #94a3b8;
+  flex: 1;
+}
+
+.pw-cc-header-app {
+  font-size: 11px;
+  color: #60a5fa;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pw-cc-header button {
+  background: none;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.pw-cc-header button:hover {
+  background: rgba(148, 163, 184, 0.15);
+  color: #e2e8f0;
+}
+
+.pw-cc-header button.pw-cc-active {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: #3b82f6;
+  color: #93c5fd;
+}
+
+.pw-cc-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  min-height: 60px;
+}
+
+.pw-cc-text {
+  line-height: 1.5;
+  transition: font-size 0.2s;
+}
+
+.pw-cc-text.pw-cc-size-normal {
+  font-size: 18px;
+}
+
+.pw-cc-text.pw-cc-size-large {
+  font-size: 32px;
+  font-weight: 500;
+}
+
+.pw-cc-text .pw-cc-final {
+  color: #e2e8f0;
+}
+
+.pw-cc-text .pw-cc-interim {
+  color: #64748b;
+  font-style: italic;
+}
+
+.pw-cc-text .pw-cc-chunk-highlight {
+  background: rgba(234, 179, 8, 0.25);
+  border-radius: 3px;
+  padding: 0 2px;
+  animation: pw-cc-flash 1.5s ease-out forwards;
+}
+
+@keyframes pw-cc-flash {
+  0% { background: rgba(234, 179, 8, 0.4); }
+  100% { background: transparent; }
+}
+
+.pw-cc-chunk-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 10px;
+  color: #475569;
+}
+
+.pw-cc-chunk-divider::before,
+.pw-cc-chunk-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(71, 85, 105, 0.4);
+}
+
+.pw-cc-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  flex-shrink: 0;
+}
+
+.pw-cc-footer button {
+  background: none;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.pw-cc-footer button:hover {
+  background: rgba(148, 163, 184, 0.15);
+  color: #e2e8f0;
+}
+
+.pw-cc-flush-btn {
+  background: rgba(234, 179, 8, 0.15) !important;
+  border-color: rgba(234, 179, 8, 0.4) !important;
+  color: #eab308 !important;
+}
+
+.pw-cc-flush-btn:hover {
+  background: rgba(234, 179, 8, 0.25) !important;
+}
+
+/* ===== Brainstorm Ticket Cards ===== */
+
+.pw-cc-tickets {
+  padding: 8px 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.pw-cc-ticket {
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pw-cc-ticket-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+.pw-cc-ticket-desc {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.4;
+  max-height: 40px;
+  overflow: hidden;
+}
+
+.pw-cc-ticket-app {
+  font-size: 10px;
+  color: #60a5fa;
+}
+
+.pw-cc-ticket-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.pw-cc-ticket-actions button {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  transition: opacity 0.15s;
+}
+
+.pw-cc-ticket-actions button:hover {
+  opacity: 0.85;
+}
+
+.pw-cc-ticket-actions .pw-cc-plan-btn {
+  background: #3b82f6;
+  color: #fff;
+}
+
+.pw-cc-ticket-actions .pw-cc-doit-btn {
+  background: #eab308;
+  color: #1e293b;
+}
+
+.pw-cc-ticket-actions .pw-cc-dismiss-btn {
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #94a3b8;
+}
+
+/* ===== Brainstorm toggle (minimized bar) ===== */
+
+.pw-cc-toggle-bar {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483646;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 20px;
+  padding: 4px 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #94a3b8;
+  transition: background 0.15s;
+}
+
+.pw-cc-toggle-bar:hover {
+  background: rgba(30, 41, 59, 0.95);
+  color: #e2e8f0;
+}
+
+.pw-cc-toggle-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #dc2626;
+  animation: pw-listen-blink 2s ease-in-out infinite;
+}
+
 `;
