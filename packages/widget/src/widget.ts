@@ -1761,8 +1761,12 @@ export class ProPanesElement {
 
     try {
       if (insecureContext) {
-        // Use iframe bridge: load mic-bridge from localhost server
-        const bridgeUrl = `${baseOrigin}/api/v1/local/mic-bridge`;
+        // Use iframe bridge: load mic-bridge from localhost (secure context).
+        // Swap the hostname to localhost but keep the port so the iframe runs
+        // in a secure context where getUserMedia + SpeechRecognition work.
+        const originUrl = new URL(baseOrigin);
+        originUrl.hostname = 'localhost';
+        const bridgeUrl = `${originUrl.origin}/api/v1/local/mic-bridge`;
         await this.voiceRecorder.startAmbientViaIframe(bridgeUrl, {
           windowMs: 30_000,
           silenceMs: 10_000,
