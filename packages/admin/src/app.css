@@ -9511,7 +9511,10 @@ body.pw-isolate {
 }
 
 .pane-leaf-focused {
-  z-index: 2;
+  /* Above .pane-split-divider (z-index 10) so the focus ::after border isn't
+     clipped by the divider where they overlap. Stays well below floating
+     popouts (.popout-floating starts at 950). */
+  z-index: 11;
   position: relative;
 }
 
