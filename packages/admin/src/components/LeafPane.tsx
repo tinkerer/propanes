@@ -13,6 +13,11 @@ import {
   splitLeaf,
   mergeLeaf,
   toggleLeafCollapsed,
+  setLeafCollapsedOffset,
+  collapseLeafToEdge,
+  findParent,
+  layoutTree,
+  setSplitRatio,
   SIDEBAR_LEAF_ID,
   PAGE_LEAF_ID,
   SESSIONS_LEAF_ID,
@@ -38,6 +43,7 @@ import {
   allNumberedSessions,
   pendingFirstDigit,
   popOutTab,
+  popOutLeafAsPanel,
   getViewMode,
   setViewMode,
   toggleCompanion,
@@ -54,14 +60,17 @@ import {
   getWorktreeLabel,
   activePanelId,
   popInPickerSessionId,
+  popInPickerPanelId,
   popBackInToLeaf,
   popBackInToLeafWithSplit,
+  popBackInPanelToLeaf,
+  popBackInPanelToLeafWithSplit,
   feedbackTitleCache,
   getSettingsLabel,
   openFeedbackItem,
   openLocalTerminal,
 } from '../lib/sessions.js';
-import { startTabDrag, dragOverLeafZone } from '../lib/tab-drag.js';
+import { startTabDrag, startLeafDrag, dragOverLeafZone } from '../lib/tab-drag.js';
 import { ctrlShiftHeld } from '../lib/shortcuts.js';
 import { showHotkeyHints, popoutMode, type PopoutMode } from '../lib/settings.js';
 import { selectedAppId, applications, appFeedbackCounts } from '../lib/state.js';
@@ -83,11 +92,30 @@ function executePopout(sessionId: string, mode: PopoutMode) {
       popOutTab(sessionId);
       break;
     case 'window':
+      // Also move into a popout panel so the tab is still accessible in the
+      // main admin while the separate window holds the same session view.
+      popOutTab(sessionId);
       window.open(`#/session/${sessionId}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no');
       break;
     case 'tab':
+      popOutTab(sessionId);
       window.open(`#/session/${sessionId}`, '_blank');
       break;
+  }
+}
+
+function executePanePopout(leaf: LeafNode, mode: PopoutMode) {
+  // Always consolidate the whole leaf into a popout panel first so the tabs
+  // remain visible in the admin, even when also opening external targets.
+  const target = leaf.activeTabId || leaf.tabs[0];
+  popOutLeafAsPanel(leaf.id);
+  if (mode === 'panel' || !target) return;
+  // Browser window / tab can only show one session at a time; open the active
+  // one as a convenience anchor alongside the popout panel.
+  if (mode === 'window') {
+    window.open(`#/session/${target}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no');
+  } else {
+    window.open(`#/session/${target}`, '_blank');
   }
 }
 
@@ -208,7 +236,7 @@ function PaneHeader({
   const sess = realSessionId ? sessionMap.get(realSessionId) : null;
   const appId = selectedAppId.value;
   const feedbackPath = sess?.feedbackId
-    ? appId ? `/app/${appId}/feedback/${sess.feedbackId}` : `/feedback/${sess.feedbackId}`
+    ? appId ? `/app/${appId}/tickets/${sess.feedbackId}` : `/tickets/${sess.feedbackId}`
     : null;
   const viewMode = realSessionId ? getViewMode(realSessionId) : 'terminal';
   const isExited = realSessionId ? exited.has(realSessionId) : false;
@@ -248,7 +276,7 @@ function PaneHeader({
           ) : (
             (() => {
               const showMenu = companionIdMenuOpen.value === sessionId;
-              const label = isFeedbackTab ? `Feedback: pw-${realSessionId!.slice(-6)}`
+              const label = isFeedbackTab ? `Ticket: pw-${realSessionId!.slice(-6)}`
                 : isIframeTab ? `Page: pw-${realSessionId!.slice(-6)}`
                 : isIsolateTab ? `Isolate: ${realSessionId}`
                 : isUrlTab ? (() => { try { return `Iframe: ${new URL(realSessionId!).hostname}`; } catch { return `Iframe: ${realSessionId!.slice(0, 30)}`; } })()
@@ -275,7 +303,7 @@ function PaneHeader({
             })()
           )}
           {feedbackPath && (
-            <a href={`#${feedbackPath}`} onClick={(e) => { e.preventDefault(); if (sess?.feedbackId) openFeedbackItem(sess.feedbackId); }} class="feedback-title-link" title={sess?.feedbackTitle || 'View feedback'}>{sess?.feedbackTitle || 'View feedback'}</a>
+            <a href={`#${feedbackPath}`} onClick={(e) => { e.preventDefault(); if (sess?.feedbackId) openFeedbackItem(sess.feedbackId); }} class="feedback-title-link" title={sess?.feedbackTitle || 'View ticket'}>{sess?.feedbackTitle || 'View ticket'}</a>
           )}
         </>
       )}
@@ -388,7 +416,7 @@ function getSingletonMeta(sid: string): SingletonMeta {
       };
     case 'view:feedback':
       return {
-        label: 'Feedback',
+        label: 'Tickets',
         plusKind: 'new',
         appPrefix: () => app ? `${app.name} \u2014 ` : '',
         countSuffix: () => {
@@ -445,7 +473,7 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (sid === 'view:terminals') return 'Terminals';
   if (sid === 'view:files') return 'Files';
   if (sid === 'view:nav') return 'Nav';
-  if (sid === 'view:feedback') return 'Feedback';
+  if (sid === 'view:feedback') return 'Tickets';
   if (sid === 'view:sessions-page') return 'Sessions';
   if (sid === 'view:live') return 'Live';
   if (sid === 'view:app-settings') return 'Settings';
@@ -526,11 +554,159 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
 
 // --- Diagonal drop zone (shown during tab drag) ---
 
+function SplitSubmenuItem({ leafId, closeMenu }: { leafId: string; closeMenu: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        class="popup-menu-item pane-action-item pane-submenu-trigger"
+        onClick={() => setOpen(!open)}
+        title="Split this pane"
+      >
+        <span class="pane-action-icon">{'▣'}</span> Split Pane
+        <span class="pane-submenu-caret">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <>
+          <button
+            class="popup-menu-item pane-action-item pane-submenu-child"
+            onClick={() => { setOpen(false); closeMenu(); splitLeaf(leafId, 'horizontal', 'first', [], 0.5, true); }}
+          >
+            <span class="pane-action-icon">{'│'}</span> Split Left
+          </button>
+          <button
+            class="popup-menu-item pane-action-item pane-submenu-child"
+            onClick={() => { setOpen(false); closeMenu(); splitLeaf(leafId, 'horizontal', 'second', [], 0.5, true); }}
+          >
+            <span class="pane-action-icon">{'│'}</span> Split Right <kbd>{'⌃⇧'}"</kbd>
+          </button>
+          <button
+            class="popup-menu-item pane-action-item pane-submenu-child"
+            onClick={() => { setOpen(false); closeMenu(); splitLeaf(leafId, 'vertical', 'first', [], 0.5, true); }}
+          >
+            <span class="pane-action-icon">{'─'}</span> Split Above
+          </button>
+          <button
+            class="popup-menu-item pane-action-item pane-submenu-child"
+            onClick={() => { setOpen(false); closeMenu(); splitLeaf(leafId, 'vertical', 'second', [], 0.5, true); }}
+          >
+            <span class="pane-action-icon">{'─'}</span> Split Down <kbd>{'⌃⇧'}-</kbd>
+          </button>
+        </>
+      )}
+    </>
+  );
+}
+
+function CollapseSubmenuItem({ leafId, collapsed, closeMenu }: { leafId: string; collapsed: boolean; closeMenu: () => void }) {
+  const [open, setOpen] = useState(false);
+  if (collapsed) {
+    return (
+      <button
+        class="popup-menu-item pane-action-item"
+        onClick={() => { closeMenu(); toggleLeafCollapsed(leafId); }}
+      >
+        <span class="pane-action-icon">{'▸'}</span> Expand Pane
+      </button>
+    );
+  }
+  return (
+    <>
+      <button
+        class="popup-menu-item pane-action-item pane-submenu-trigger"
+        onClick={() => setOpen(!open)}
+        title="Collapse to an edge handle"
+      >
+        <span class="pane-action-icon">{'−'}</span> Collapse Pane
+        <span class="pane-submenu-caret">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <>
+          <button
+            class="popup-menu-item pane-action-item pane-submenu-child"
+            onClick={() => { setOpen(false); closeMenu(); collapseLeafToEdge(leafId, 'W'); }}
+          >
+            <span class="pane-action-icon">{'◂'}</span> Collapse to Left
+          </button>
+          <button
+            class="popup-menu-item pane-action-item pane-submenu-child"
+            onClick={() => { setOpen(false); closeMenu(); collapseLeafToEdge(leafId, 'E'); }}
+          >
+            <span class="pane-action-icon">{'▸'}</span> Collapse to Right
+          </button>
+          <button
+            class="popup-menu-item pane-action-item pane-submenu-child"
+            onClick={() => { setOpen(false); closeMenu(); collapseLeafToEdge(leafId, 'N'); }}
+          >
+            <span class="pane-action-icon">{'▴'}</span> Collapse to Top
+          </button>
+          <button
+            class="popup-menu-item pane-action-item pane-submenu-child"
+            onClick={() => { setOpen(false); closeMenu(); collapseLeafToEdge(leafId, 'S'); }}
+          >
+            <span class="pane-action-icon">{'▾'}</span> Collapse to Bottom
+          </button>
+        </>
+      )}
+    </>
+  );
+}
+
+function PopOutSubmenuItem({ label, title, onPopout, closeMenu }: { label: string; title: string; onPopout: (mode: PopoutMode) => void; closeMenu: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        class="popup-menu-item pane-action-item pane-submenu-trigger"
+        onClick={() => setOpen(!open)}
+        title={title}
+      >
+        <span class="pane-action-icon">{'⬆'}</span> {label}
+        <span class="pane-submenu-caret">{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <>
+          <button
+            class="popup-menu-item pane-action-item pane-submenu-child"
+            onClick={() => { setOpen(false); closeMenu(); onPopout('panel'); }}
+            title="Pop out into a new docked panel"
+          >
+            <span class="pane-action-icon">{'◻'}</span> New Panel
+          </button>
+          <button
+            class="popup-menu-item pane-action-item pane-submenu-child"
+            onClick={() => { setOpen(false); closeMenu(); onPopout('window'); }}
+            title="Pop out into a new browser window"
+          >
+            <span class="pane-action-icon">{'⤢'}</span> New Window
+          </button>
+          <button
+            class="popup-menu-item pane-action-item pane-submenu-child"
+            onClick={() => { setOpen(false); closeMenu(); onPopout('tab'); }}
+            title="Pop out into a new browser tab"
+          >
+            <span class="pane-action-icon">{'⇗'}</span> New Tab
+          </button>
+        </>
+      )}
+    </>
+  );
+}
+
 function DiagonalDropZone({ leafId }: { leafId: string }) {
   const zone = dragOverLeafZone.value;
   if (!zone || zone.leafId !== leafId) return null;
   const activeZone = zone.zone;
   if (activeZone === 'tab') return null;
+  if (activeZone === 'self-popout') {
+    return (
+      <div class="self-popout-zone" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 90 }}>
+        <div class="self-popout-zone-inner active">
+          <span class="self-popout-zone-label">{'⬆'} Drop to pop out</span>
+        </div>
+      </div>
+    );
+  }
   return (
     <div class="diagonal-drop-zone" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 90 }}>
       <div class={`diagonal-zone diagonal-zone-vsplit${activeZone === 'v-split' ? ' active' : ''}`}>
@@ -548,33 +724,53 @@ function DiagonalDropZone({ leafId }: { leafId: string }) {
 
 function PopInPickerOverlay({ leafId }: { leafId: string }) {
   const pickSid = popInPickerSessionId.value;
-  if (!pickSid) return null;
+  const pickPanel = popInPickerPanelId.value;
+  if (!pickSid && !pickPanel) return null;
+  const tabLabel = pickPanel ? 'Add panel as Tabs' : 'Add as Tab';
+  const handleTab = () => {
+    if (pickPanel) {
+      popInPickerPanelId.value = null;
+      popBackInPanelToLeaf(pickPanel, leafId);
+    } else if (pickSid) {
+      popInPickerSessionId.value = null;
+      popBackInToLeaf(pickSid, leafId);
+    }
+  };
+  const handleVsplit = () => {
+    if (pickPanel) {
+      popInPickerPanelId.value = null;
+      popBackInPanelToLeafWithSplit(pickPanel, leafId, 'vertical');
+    } else if (pickSid) {
+      popInPickerSessionId.value = null;
+      popBackInToLeafWithSplit(pickSid, leafId, 'vertical');
+    }
+  };
+  const handleHsplit = () => {
+    if (pickPanel) {
+      popInPickerPanelId.value = null;
+      popBackInPanelToLeafWithSplit(pickPanel, leafId, 'horizontal');
+    } else if (pickSid) {
+      popInPickerSessionId.value = null;
+      popBackInToLeafWithSplit(pickSid, leafId, 'horizontal');
+    }
+  };
   return (
     <div class="pop-in-picker-overlay pop-in-picker-zones" onClick={(e) => e.stopPropagation()}>
       <div
         class="pop-in-zone pop-in-zone-tab"
-        onClick={() => {
-          popInPickerSessionId.value = null;
-          popBackInToLeaf(pickSid, leafId);
-        }}
+        onClick={handleTab}
       >
-        <span class="pop-in-zone-label">Add as Tab</span>
+        <span class="pop-in-zone-label">{tabLabel}</span>
       </div>
       <div
         class="pop-in-zone pop-in-zone-vsplit"
-        onClick={() => {
-          popInPickerSessionId.value = null;
-          popBackInToLeafWithSplit(pickSid, leafId, 'vertical');
-        }}
+        onClick={handleVsplit}
       >
         <span class="pop-in-zone-label">{'\u2550'} Split Down</span>
       </div>
       <div
         class="pop-in-zone pop-in-zone-hsplit"
-        onClick={() => {
-          popInPickerSessionId.value = null;
-          popBackInToLeafWithSplit(pickSid, leafId, 'horizontal');
-        }}
+        onClick={handleHsplit}
       >
         <span class="pop-in-zone-label">{'\u2551'} Split Right</span>
       </div>
@@ -754,7 +950,7 @@ export function LeafPane({ leaf }: LeafPaneProps) {
           onClick={(e) => { e.stopPropagation(); mergeLeaf(leaf.id); }}
           title="Close pane"
         >&times;</span>
-        {popInPickerSessionId.value && (
+        {(popInPickerSessionId.value || popInPickerPanelId.value) && (
           <PopInPickerOverlay leafId={leaf.id} />
         )}
       </div>
@@ -819,7 +1015,7 @@ export function LeafPane({ leaf }: LeafPaneProps) {
             <DiagonalDropZone leafId={leaf.id} />
           </div>
         )}
-        {popInPickerSessionId.value && (
+        {(popInPickerSessionId.value || popInPickerPanelId.value) && (
           <PopInPickerOverlay leafId={leaf.id} />
         )}
       </div>
@@ -829,16 +1025,91 @@ export function LeafPane({ leaf }: LeafPaneProps) {
   const multiCollapsed = !!leaf.collapsed;
 
   if (multiCollapsed) {
+    const parent = findParent(layoutTree.value.root, leaf.id);
+    const parentDir = parent?.direction ?? 'horizontal';
+    const isFirst = parent ? parent.children[0].id === leaf.id : true;
+    // Horizontal parent split = vertical handle (attached to E or W edge).
+    // Vertical parent split = horizontal handle (attached to N or S edge).
+    const edge: 'N' | 'S' | 'E' | 'W' = parentDir === 'horizontal'
+      ? (isFirst ? 'W' : 'E')
+      : (isFirst ? 'N' : 'S');
+    const activeTab = leaf.activeTabId || leaf.tabs[0];
+    const label = activeTab ? getTabLabel(activeTab, sessionMap) : '';
+    const offset = leaf.collapsedOffset || 0;
+    const chevron = edge === 'W' ? '▸'
+      : edge === 'E' ? '◂'
+      : edge === 'N' ? '▾'
+      : '▴';
+
+    const onHandleMouseDown = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handleMouseDown();
+
+      const handleEl = e.currentTarget as HTMLElement;
+      // Walk up to the SplitPane that owns this leaf — we need its bounding
+      // rect to compute the expanded ratio.
+      const splitContainer = handleEl.closest('.pane-split') as HTMLElement | null;
+      const rect = splitContainer?.getBoundingClientRect();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startOffset = offset;
+      const DRAG_THRESHOLD = 4;
+      let moved = false;
+      let axis: 'along' | 'cross' | null = null;
+
+      const parallelIsY = parentDir === 'horizontal'; // handle is vertical → parallel axis is Y
+      const onMove = (ev: MouseEvent) => {
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        if (!moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+          moved = true;
+          const parallelMag = Math.abs(parallelIsY ? dy : dx);
+          const crossMag = Math.abs(parallelIsY ? dx : dy);
+          axis = parallelMag > crossMag ? 'along' : 'cross';
+        }
+        if (!moved || !axis) return;
+        if (axis === 'along') {
+          // Slide handle along the edge (reposition).
+          const delta = parallelIsY ? dy : dx;
+          setLeafCollapsedOffset(leaf.id, startOffset + delta);
+        } else if (rect && parent) {
+          // Cross-axis drag = expand + set split ratio at drag position.
+          const newRatio = parentDir === 'horizontal'
+            ? (ev.clientX - rect.left) / rect.width
+            : (ev.clientY - rect.top) / rect.height;
+          setSplitRatio(parent.id, Math.max(0.05, Math.min(0.95, newRatio)),
+            parentDir === 'horizontal' ? rect.width : rect.height);
+        }
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        // Click (no movement) OR cross-axis drag (expand) → uncollapse.
+        // Along-axis drag keeps it collapsed with a new offset.
+        if (!moved || axis === 'cross') {
+          toggleLeafCollapsed(leaf.id);
+        }
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    };
+
+    const offsetStyle = parentDir === 'horizontal'
+      ? { transform: `translateY(${offset}px)` }
+      : { transform: `translateX(${offset}px)` };
+
     return (
       <div
-        class={`pane-leaf pane-leaf-collapsed pane-leaf-collapsed-multi${isFocused ? ' pane-leaf-focused' : ''}`}
+        class={`pane-leaf pane-leaf-collapsed pane-leaf-collapsed-multi pane-leaf-collapsed-${parentDir} pane-leaf-collapsed-edge-${edge}${isFocused ? ' pane-leaf-focused' : ''}`}
         data-leaf-id={leaf.id}
-        onMouseDown={handleMouseDown}
-        onClick={(e) => { e.stopPropagation(); toggleLeafCollapsed(leaf.id); }}
-        title={`Expand (${leaf.tabs.length} tab${leaf.tabs.length === 1 ? '' : 's'})`}
+        onMouseDown={onHandleMouseDown}
+        title={`Drag to resize, click to expand (${leaf.tabs.length} tab${leaf.tabs.length === 1 ? '' : 's'})${label ? ': ' + label : ''}`}
+        style={offsetStyle}
       >
-        <span class="pane-leaf-collapsed-icon">{'▸'}</span>
+        <span class="pane-leaf-collapsed-icon">{chevron}</span>
         <span class="pane-leaf-collapsed-count">{leaf.tabs.length}</span>
+        {label && <span class="pane-leaf-collapsed-label">{label}</span>}
       </div>
     );
   }
@@ -970,52 +1241,59 @@ export function LeafPane({ leaf }: LeafPaneProps) {
         </div>
         <div class="terminal-tab-actions">
           <button
+            class="terminal-collapse-btn pane-tab-new-btn"
+            title="New terminal / tab"
+            onClick={(e) => { e.stopPropagation(); termPickerOpen.value = { kind: 'new' }; }}
+          >{'+'}</button>
+          <button
             ref={hamburgerRef}
             class="terminal-collapse-btn pane-hamburger-btn"
-            title="Pane actions"
-            onClick={(e) => {
+            title="Pane actions (drag to pop out the whole pane)"
+            onMouseDown={(e) => {
               e.stopPropagation();
-              paneMenuOpen.value = !paneMenuOpen.value;
+              startLeafDrag(e, {
+                leafId: leaf.id,
+                label: `Pane: ${leaf.tabs.length} tab${leaf.tabs.length === 1 ? '' : 's'}`,
+                onClickFallback: () => { paneMenuOpen.value = !paneMenuOpen.value; },
+              });
             }}
           >{'\u2630'}</button>
           <button
-            class="terminal-collapse-btn pane-tab-collapse-btn"
-            title="Collapse pane"
-            onClick={(e) => { e.stopPropagation(); toggleLeafCollapsed(leaf.id); }}
-          >{'\u2212'}</button>
+            class="terminal-collapse-btn pane-tab-close-btn"
+            title="Close pane"
+            onClick={(e) => { e.stopPropagation(); mergeLeaf(leaf.id); }}
+          >{'\u00D7'}</button>
           {paneMenuOpen.value && (
             <PopupMenu anchorRef={hamburgerRef} align="right" onClose={() => { paneMenuOpen.value = false; }}>
-              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; splitLeaf(leaf.id, 'horizontal', 'first', [], 0.5, true); }}>
-                <span class="pane-action-icon">{'\u2502'}</span> Split Left
-              </button>
-              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; splitLeaf(leaf.id, 'horizontal', 'second', [], 0.5, true); }}>
-                <span class="pane-action-icon">{'\u2502'}</span> Split Right <kbd>{'\u2303\u21E7'}"</kbd>
-              </button>
-              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; splitLeaf(leaf.id, 'vertical', 'first', [], 0.5, true); }}>
-                <span class="pane-action-icon">{'\u2500'}</span> Split Above
-              </button>
-              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; splitLeaf(leaf.id, 'vertical', 'second', [], 0.5, true); }}>
-                <span class="pane-action-icon">{'\u2500'}</span> Split Down <kbd>{'\u2303\u21E7'}-</kbd>
-              </button>
-              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; toggleLeafCollapsed(leaf.id); }}>
-                <span class="pane-action-icon">{leaf.collapsed ? '\u25B8' : '\u2212'}</span> {leaf.collapsed ? 'Expand Pane' : 'Collapse Pane'}
-              </button>
-              {activeId && (
-                <button
-                  class="popup-menu-item pane-action-item"
-                  onClick={() => { paneMenuOpen.value = false; executePopout(activeId, popoutMode.value); }}
-                  title="Pop out the active tab"
-                >
-                  <span class="pane-action-icon">{'\u2B06'}</span> Pop Out Tab <kbd>{'\u2303\u21E7'}0</kbd>
-                </button>
+              {leaf.tabs.length === 1 && activeId ? (
+                <PopOutSubmenuItem
+                  label="Pop Out"
+                  title="Pop out this tab"
+                  onPopout={(mode) => { paneMenuOpen.value = false; executePanePopout(leaf, mode); }}
+                  closeMenu={() => { paneMenuOpen.value = false; }}
+                />
+              ) : (
+                <>
+                  {leaf.tabs.length > 0 && (
+                    <PopOutSubmenuItem
+                      label="Pop Out Panel"
+                      title="Pop out the whole pane with all its tabs"
+                      onPopout={(mode) => { paneMenuOpen.value = false; executePanePopout(leaf, mode); }}
+                      closeMenu={() => { paneMenuOpen.value = false; }}
+                    />
+                  )}
+                  {activeId && (
+                    <PopOutSubmenuItem
+                      label="Pop Out Tab"
+                      title="Pop out just the active tab"
+                      onPopout={(mode) => { paneMenuOpen.value = false; executePopout(activeId, mode); }}
+                      closeMenu={() => { paneMenuOpen.value = false; }}
+                    />
+                  )}
+                </>
               )}
-              <div class="popup-menu-divider" />
-              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; mergeLeaf(leaf.id); }}>
-                <span class="pane-action-icon">{'\u00D7'}</span> Close Pane <kbd>{'\u2303\u21E7\u232B'}</kbd>
-              </button>
-              <button class="popup-menu-item pane-action-item" onClick={() => { paneMenuOpen.value = false; termPickerOpen.value = { kind: 'new' }; }}>
-                <span class="pane-action-icon">+</span> New Terminal <kbd>{'\u2303\u21E7'}=</kbd>
-              </button>
+              <SplitSubmenuItem leafId={leaf.id} closeMenu={() => { paneMenuOpen.value = false; }} />
+              <CollapseSubmenuItem leafId={leaf.id} collapsed={!!leaf.collapsed} closeMenu={() => { paneMenuOpen.value = false; }} />
             </PopupMenu>
           )}
         </div>
@@ -1143,7 +1421,7 @@ export function LeafPane({ leaf }: LeafPaneProps) {
         )}
         <DiagonalDropZone leafId={leaf.id} />
       </div>
-      {popInPickerSessionId.value && (
+      {(popInPickerSessionId.value || popInPickerPanelId.value) && (
         <PopInPickerOverlay leafId={leaf.id} />
       )}
     </div>

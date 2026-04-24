@@ -435,6 +435,15 @@ export const cosThreads = sqliteTable('cos_threads', {
   systemPrompt: text('system_prompt'),
   model: text('model'),
   claudeSessionId: text('claude_session_id'),
+  agentSessionId: text('agent_session_id'),
+  // In-flight turn bookkeeping. Set when a turn starts, cleared when it ends.
+  // Survives main-server restarts so the frontend can poll status / re-attach
+  // to an ongoing turn instead of surfacing a spurious "network error" when
+  // the SSE stream drops.
+  turnStartedAt: integer('turn_started_at'),
+  turnStartSeq: integer('turn_start_seq'),
+  turnUserText: text('turn_user_text'),
+  turnRequestId: text('turn_request_id'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });

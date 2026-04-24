@@ -356,7 +356,7 @@ async function handleDispatch(c: any, payload: unknown) {
     return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
   }
 
-  const { feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId } = parsed.data;
+  const { feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId, permissionProfile } = parsed.data;
 
   try {
     // Admin-specific: detect and kill stuck sessions before dispatching
@@ -409,7 +409,7 @@ async function handleDispatch(c: any, payload: unknown) {
       }
     }
 
-    const result = await dispatchFeedbackToAgent({ feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId });
+    const result = await dispatchFeedbackToAgent({ feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId, permissionProfile });
     return c.json(result);
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';

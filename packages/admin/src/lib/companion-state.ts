@@ -74,6 +74,25 @@ export function removeTerminalCompanion(sessionId: string) {
   persistTerminalCompanionMap();
 }
 
+// Transfer per-session UI state from oldId to newId. Called when a session is
+// resumed/restarted under a new id so the new session inherits the user's
+// open companions (JSONL, terminal, etc.) instead of opening empty.
+export function transferSessionCompanions(oldId: string, newId: string) {
+  if (oldId === newId) return;
+  const sc = sessionCompanions.value;
+  if (sc[oldId]) {
+    const { [oldId]: companions, [newId]: _existing, ...rest } = sc;
+    sessionCompanions.value = { ...rest, [newId]: companions };
+    persistCompanions();
+  }
+  const tc = terminalCompanionMap.value;
+  if (tc[oldId]) {
+    const { [oldId]: termSid, [newId]: _existingTerm, ...rest } = tc;
+    terminalCompanionMap.value = { ...rest, [newId]: termSid };
+    persistTerminalCompanionMap();
+  }
+}
+
 // --- Session Companions ---
 
 export const sessionCompanions = signal<Record<string, CompanionType[]>>(

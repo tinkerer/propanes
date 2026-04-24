@@ -8,7 +8,8 @@
     ".": "./dist/propanes.js",
     "./image-editor": "./src/image-editor.ts",
     "./element-picker": "./src/element-picker.ts",
-    "./screenshot": "./src/screenshot.ts"
+    "./screenshot": "./src/screenshot.ts",
+    "./voice-recorder": "./src/voice-recorder.ts"
   },
   "scripts": {
     "build": "node build.mjs",

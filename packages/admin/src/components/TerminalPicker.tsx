@@ -302,7 +302,7 @@ export function TerminalPicker({ mode, onClose }: Props) {
 
   // 8. View tabs (sidebar views)
   const viewItems: { id: string; label: string; icon: string }[] = [
-    { id: 'view:feedback', label: 'Feedback', icon: '\u{1F4AC}' },
+    { id: 'view:feedback', label: 'Tickets', icon: '\u{1F4AC}' },
     { id: 'view:sessions-page', label: 'Sessions Page', icon: '\u{1F4CB}' },
     { id: 'view:live', label: 'Live Connections', icon: '\u{1F4E1}' },
     { id: 'view:page', label: 'Page (Router)', icon: '\u{1F4C4}' },

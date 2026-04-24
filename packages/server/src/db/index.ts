@@ -187,6 +187,11 @@ export function runMigrations() {
     `ALTER TABLE cos_learnings ADD COLUMN tags TEXT`,
     `ALTER TABLE agent_sessions ADD COLUMN cos_thread_id TEXT`,
     `ALTER TABLE agent_sessions ADD COLUMN title TEXT`,
+    `ALTER TABLE cos_threads ADD COLUMN agent_session_id TEXT`,
+    `ALTER TABLE cos_threads ADD COLUMN turn_started_at INTEGER`,
+    `ALTER TABLE cos_threads ADD COLUMN turn_start_seq INTEGER`,
+    `ALTER TABLE cos_threads ADD COLUMN turn_user_text TEXT`,
+    `ALTER TABLE cos_threads ADD COLUMN turn_request_id TEXT`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after
@@ -722,6 +727,60 @@ export function runMigrations() {
     // above are idempotent and re-running this migration on a clean DB is a
     // no-op.
   }
+
+  // Backfill agent_session_id on existing cos_threads that already have a
+  // linked agent_sessions row (from the old upsert-per-turn logic).
+  try {
+    const orphanThreads = sqlite.prepare(
+      `SELECT t.id AS threadId, s.id AS sessionId
+       FROM cos_threads t
+       JOIN agent_sessions s ON s.cos_thread_id = t.id
+       WHERE t.agent_session_id IS NULL
+       ORDER BY s.created_at ASC`
+    ).all() as { threadId: string; sessionId: string }[];
+    for (const row of orphanThreads) {
+      sqlite.prepare(`UPDATE cos_threads SET agent_session_id = ? WHERE id = ? AND agent_session_id IS NULL`)
+        .run(row.sessionId, row.threadId);
+    }
+  } catch { /* table may not exist yet on very fresh DBs */ }
+
+  // Provision a persistent headless-stream agent session for any cos_threads
+  // that still have none. Post-this-migration every CoS thread shows up as
+  // exactly one session row in the sessions list under the CoS hierarchy,
+  // even threads created before the auto-provision logic landed.
+  try {
+    const threadsMissingSession = sqlite.prepare(
+      `SELECT id, name FROM cos_threads WHERE agent_session_id IS NULL`
+    ).all() as { id: string; name: string }[];
+    // Repo root: server runs from packages/server, so process.cwd() + ../..
+    // lands at the project root. Mirrors resolveRepoRoot() in chief-of-staff.ts.
+    const cwd = resolve(process.cwd(), '..', '..');
+    for (const t of threadsMissingSession) {
+      const sessionId = ulid();
+      const nowIso = new Date().toISOString();
+      sqlite.prepare(
+        `INSERT INTO agent_sessions
+           (id, cos_thread_id, runtime, permission_profile, status, output_bytes, last_output_seq, last_input_seq,
+            title, cwd, created_at, started_at, last_activity_at)
+         VALUES (?, ?, 'claude', 'headless-stream-yolo', 'idle', 0, 0, 0, ?, ?, ?, ?, ?)`
+      ).run(sessionId, t.id, t.name, cwd, nowIso, nowIso, nowIso);
+      sqlite.prepare(`UPDATE cos_threads SET agent_session_id = ? WHERE id = ?`)
+        .run(sessionId, t.id);
+    }
+  } catch { /* non-fatal — tables may not exist yet on fresh DBs */ }
+
+  // Normalize profile on CoS-linked sessions: the persistent chat path is
+  // always headless-stream-yolo. Older rows may have the legacy headless-yolo
+  // (one-shot pipe) or interactive-yolo (TTY) profile from the removed
+  // direct-spawn fallback; fix them so the sessions list reflects reality.
+  try {
+    sqlite.exec(`
+      UPDATE agent_sessions
+         SET permission_profile = 'headless-stream-yolo'
+       WHERE cos_thread_id IS NOT NULL
+         AND permission_profile IN ('headless-yolo', 'interactive-yolo');
+    `);
+  } catch { /* non-fatal */ }
 
   const configCount = sqlite.prepare('SELECT count(*) as cnt FROM tmux_configs').get() as { cnt: number };
   if (configCount.cnt === 0) {

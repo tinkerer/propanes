@@ -525,6 +525,21 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
                 if (waitingDots) { clearInterval(waitingDots); waitingDots = null; }
                 gotFirstOutput = true;
                 term.write(truncateHistory(msg.data));
+                // Popped-out / newly-mounted terminals can open with a 0-size
+                // container (split pane not yet laid out), in which case the
+                // initial fit.fit() in the mount effect was skipped. Once
+                // history arrives the container is almost always sized — fit
+                // + refresh so the buffered content actually paints instead
+                // of sitting invisibly in an unrendered viewport.
+                queueMicrotask(() => {
+                  const el = containerRef.current;
+                  if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return;
+                  try {
+                    fit.fit();
+                    term.refresh(0, term.rows - 1);
+                    term.scrollToBottom();
+                  } catch { /* xterm may still be initializing */ }
+                });
               }
               break;
             case 'output':
@@ -679,6 +694,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
 
     let resizeLastFired = 0;
     let resizeRaf = 0;
+    let hasPainted = false;
     const RESIZE_THROTTLE_MS = 100;
     const observer = new ResizeObserver(() => {
       if (resizeRaf) return;
@@ -688,6 +704,14 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
         if (now - resizeLastFired >= RESIZE_THROTTLE_MS) {
           resizeLastFired = now;
           safeFitAndResize();
+          // First time the container has real dimensions, force a repaint of
+          // the buffer. fit.fit() alone is a no-op if xterm happened to land
+          // on the same cols/rows, leaving buffered history invisible.
+          const el = containerRef.current;
+          if (!hasPainted && el && el.offsetWidth > 0 && el.offsetHeight > 0) {
+            hasPainted = true;
+            try { term.refresh(0, term.rows - 1); term.scrollToBottom(); } catch { /* initializing */ }
+          }
         }
       });
     });

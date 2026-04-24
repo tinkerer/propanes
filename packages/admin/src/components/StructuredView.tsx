@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { MessageRenderer } from './MessageRenderer.js';
-import { JsonOutputParser, type ParsedMessage } from '../lib/output-parser.js';
+import { JsonOutputParser, CodexOutputParser, type ParsedMessage } from '../lib/output-parser.js';
 import { api } from '../lib/api.js';
 import { sessionInputStates } from '../lib/session-state.js';
 import { exitedSessions, allSessions } from '../lib/sessions.js';
-import { isMobile } from '../lib/viewport.js';
+import { isMobile, NarrowContext, useContainerNarrow, useNarrow } from '../lib/viewport.js';
 import { ChoicePrompt, type ChoiceOption } from './InteractivePrompt.js';
 import { SubagentBlock } from './SubagentBlock.js';
 
@@ -187,7 +187,15 @@ function shortenModelName(model: string): string | null {
   return parts[0];
 }
 
-export function AssistantGroupHeader({ messages }: { messages: ParsedMessage[] }) {
+export function AssistantGroupHeader({
+  messages,
+  collapsed,
+  onToggle,
+}: {
+  messages: ParsedMessage[];
+  collapsed?: boolean;
+  onToggle?: () => void;
+}) {
   let model = '';
   let totalInput = 0;
   let totalOutput = 0;
@@ -204,11 +212,23 @@ export function AssistantGroupHeader({ messages }: { messages: ParsedMessage[] }
 
   const shortModel = model ? shortenModelName(model) : null;
   const hasTokens = totalInput > 0 || totalOutput > 0;
-
-  if (!shortModel && !hasTokens && toolCount === 0) return null;
+  const toggleable = !!onToggle;
+  // Always render when toggleable so the user has a handle to expand an
+  // empty-ish group header — otherwise groups with no model/tokens/tools
+  // would have no click target.
+  if (!toggleable && !shortModel && !hasTokens && toolCount === 0) return null;
 
   return (
-    <div class="sm-group-header">
+    <div
+      class={`sm-group-header${toggleable ? ' sm-group-header-toggle' : ''}${collapsed ? ' sm-group-header-collapsed' : ''}`}
+      onClick={toggleable ? onToggle : undefined}
+      role={toggleable ? 'button' : undefined}
+      tabIndex={toggleable ? 0 : undefined}
+      onKeyDown={toggleable ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle?.(); }
+      } : undefined}
+    >
+      {toggleable && <span class="sm-group-caret">{collapsed ? '▸' : '▾'}</span>}
       {shortModel && <span class="sm-group-model" title={model}>{shortModel}</span>}
       {toolCount > 0 && (
         <span class="sm-group-tools">{toolCount} tool{toolCount !== 1 ? 's' : ''}</span>
@@ -217,6 +237,9 @@ export function AssistantGroupHeader({ messages }: { messages: ParsedMessage[] }
         <span class="sm-group-tokens" title={`Input: ${totalInput} | Output: ${totalOutput}`}>
           {totalInput.toLocaleString()}↓ {totalOutput.toLocaleString()}↑
         </span>
+      )}
+      {toggleable && collapsed && (
+        <span class="sm-group-collapsed-hint">collapsed</span>
       )}
     </div>
   );
@@ -241,13 +264,22 @@ function AssistantGroup({
   };
 }) {
   const toolCount = group.messages.filter(m => m.role === 'tool_use').length;
-  const defaultCollapsed = toolCount > 4;
+  const narrow = useNarrow();
+  // In narrow containers, collapse tools by default above 2 — a 4-tool cutoff
+  // still wall-papers the viewport when the pane is 350px wide.
+  const toolCollapseCutoff = narrow ? 2 : 4;
+  const defaultCollapsed = toolCount > toolCollapseCutoff;
   const [toolsCollapsed, setToolsCollapsed] = useState(defaultCollapsed);
+  const [groupCollapsed, setGroupCollapsed] = useState(false);
 
   return (
-    <div class={`sm-group sm-group-assistant_group`}>
-      <AssistantGroupHeader messages={group.messages} />
-      {toolCount > 4 && (
+    <div class={`sm-group sm-group-assistant_group${groupCollapsed ? ' sm-group-collapsed' : ''}`}>
+      <AssistantGroupHeader
+        messages={group.messages}
+        collapsed={groupCollapsed}
+        onToggle={() => setGroupCollapsed(c => !c)}
+      />
+      {!groupCollapsed && toolCount > toolCollapseCutoff && (
         <button
           class="sm-tools-toggle"
           onClick={() => setToolsCollapsed(c => !c)}
@@ -255,7 +287,7 @@ function AssistantGroup({
           {toolsCollapsed ? `▸ ${toolCount} tool calls` : '▾ hide tools'}
         </button>
       )}
-      {group.messages.map((msg, idx) => {
+      {!groupCollapsed && group.messages.map((msg, idx) => {
         const isTool = msg.role === 'tool_use' || msg.role === 'tool_result';
         if (isTool && toolsCollapsed) return null;
         const isInteractive = askingForInput && msg === lastGroupMsg && msg === pendingTool;
@@ -301,6 +333,8 @@ export function StructuredView({ sessionId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [choicePrompt, setChoicePrompt] = useState<DetectedChoicePrompt | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const containerNarrow = useContainerNarrow(containerRef);
+  const narrow = isMobile.value || containerNarrow;
   const autoScroll = useRef(true);
   const lastLength = useRef(0);
 
@@ -345,7 +379,9 @@ export function StructuredView({ sessionId }: Props) {
           return;
         }
         lastLength.current = text.length;
-        const parser = new JsonOutputParser();
+        const parser = sessionRecord?.runtime === 'codex'
+          ? new CodexOutputParser()
+          : new JsonOutputParser();
         parser.feed(text + '\n');
         setMessages(parser.getMessages());
         setError(null);
@@ -475,7 +511,8 @@ export function StructuredView({ sessionId }: Props) {
   const askingForInput = isWaiting && pendingTool?.toolName === 'AskUserQuestion';
 
   return (
-    <div class="structured-view" ref={containerRef} onScroll={handleScroll}>
+    <NarrowContext.Provider value={narrow}>
+    <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} ref={containerRef} onScroll={handleScroll}>
       {messages.length === 0 && (
         <div class="sm-empty">No messages yet</div>
       )}
@@ -552,5 +589,6 @@ export function StructuredView({ sessionId }: Props) {
         </div>
       )}
     </div>
+    </NarrowContext.Provider>
   );
 }

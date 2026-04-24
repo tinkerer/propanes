@@ -33,6 +33,14 @@ export function DispatchPicker({ value, onSelect, onClose }: Props) {
     ensureTargetsLoaded();
   }, []);
 
+  useEffect(() => {
+    function onDocKey(e: KeyboardEvent) {
+      if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); onClose(); }
+    }
+    document.addEventListener('keydown', onDocKey);
+    return () => document.removeEventListener('keydown', onDocKey);
+  }, [onClose]);
+
   const targets = cachedTargets.value;
   const machines = targets.filter(t => !t.isHarness && !t.isSprite);
   const harnesses = targets.filter(t => t.isHarness);
@@ -198,7 +206,7 @@ export function DispatchPicker({ value, onSelect, onClose }: Props) {
             onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
             onKeyDown={handleKeyDown}
           />
-          <kbd class="spotlight-esc">esc</kbd>
+          <kbd class="spotlight-esc" onClick={onClose}>esc</kbd>
         </div>
         {flatFiltered.length > 0 && (
           <div class="spotlight-results" ref={listRef}>

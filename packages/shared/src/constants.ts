@@ -58,6 +58,7 @@ export const AGENT_SESSION_STATUSES = [
   'completed',
   'failed',
   'killed',
+  'idle',
 ] as const;
 
 export const API_VERSION = 'v1';

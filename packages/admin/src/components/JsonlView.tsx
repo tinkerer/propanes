@@ -3,21 +3,24 @@ import { MessageRenderer } from './MessageRenderer.js';
 import { groupMessages, AssistantGroupHeader, partitionMergedMessages } from './StructuredView.js';
 import { SubagentBlock } from './SubagentBlock.js';
 import { InterruptBar } from './InterruptBar.js';
-import { JsonOutputParser, type ParsedMessage } from '../lib/output-parser.js';
+import { JsonOutputParser, CodexOutputParser, type ParsedMessage } from '../lib/output-parser.js';
 import { api } from '../lib/api.js';
 import { getJsonlSelectedFile, jsonlSelectedFile } from '../lib/sessions.js';
 import { allSessions, exitedSessions } from '../lib/sessions.js';
-import { isMobile } from '../lib/viewport.js';
+import { isMobile, NarrowContext, useContainerNarrow } from '../lib/viewport.js';
 
 interface Props {
   sessionId: string;
+  hideInterruptBar?: boolean;
 }
 
-export function JsonlView({ sessionId }: Props) {
+export function JsonlView({ sessionId, hideInterruptBar }: Props) {
   const [messages, setMessages] = useState<ParsedMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const containerNarrow = useContainerNarrow(containerRef);
+  const narrow = isMobile.value || containerNarrow;
   const autoScroll = useRef(true);
   const lastLength = useRef(0);
   const lastFileFilter = useRef<string | null>(null);
@@ -55,17 +58,27 @@ export function JsonlView({ sessionId }: Props) {
       }
       lastLength.current = text.length;
 
-      const parser = new JsonOutputParser();
+      const parser = sessionRecord?.runtime === 'codex'
+        ? new CodexOutputParser()
+        : new JsonOutputParser();
       parser.feed(text + '\n');
       const parsed = parser.getMessages();
       setMessages(parsed);
       setError(null);
       setLoading(false);
     } catch (err: any) {
-      const isMissing = err?.status === 404;
+      const status = err?.status;
+      // 404 = jsonl file not written yet; 400 = session has no resolvable
+      // project_dir (e.g. plain terminals). Neither is a real failure — for a
+      // running session we keep polling; for a done session we render an
+      // empty state instead of a red error wall.
+      const isMissing = status === 404 || status === 400;
       if (isMissing && !isSessionDone && messages.length === 0) {
         setLoading(true);
         setError(null);
+      } else if (isMissing && messages.length === 0) {
+        setError(null);
+        setLoading(false);
       } else if (messages.length === 0) {
         setError(err.message);
         setLoading(false);
@@ -107,18 +120,18 @@ export function JsonlView({ sessionId }: Props) {
         ? 'Session running, waiting for output...'
         : 'Waiting for agent to start...';
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', flex: 1, minHeight: 0 }}>
         <div class="structured-view" style={{ flex: 1, minHeight: 0 }}><div class="sm-empty">{msg}</div></div>
-        <InterruptBar sessionId={sessionId} permissionProfile={profile} />
+        {!hideInterruptBar && <InterruptBar sessionId={sessionId} permissionProfile={profile} />}
       </div>
     );
   }
 
   if (error) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', flex: 1, minHeight: 0 }}>
         <div class="structured-view" style={{ flex: 1, minHeight: 0 }}><div class="sm-empty" style="color: #f87171">{error}</div></div>
-        <InterruptBar sessionId={sessionId} permissionProfile={profile} />
+        {!hideInterruptBar && <InterruptBar sessionId={sessionId} permissionProfile={profile} />}
       </div>
     );
   }
@@ -170,18 +183,24 @@ export function JsonlView({ sessionId }: Props) {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <div class="structured-view" style={{ flex: 1, minHeight: 0 }} ref={containerRef} onScroll={handleScroll}>
+    <NarrowContext.Provider value={narrow}>
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', flex: 1, minHeight: 0 }}>
+      <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} style={{ flex: 1, minHeight: 0 }} ref={containerRef} onScroll={handleScroll}>
         {messages.length === 0 && (
           <div class="sm-empty">No messages in JSONL file</div>
         )}
         {groups.map(group => (
-          <div key={group.id} class={`sm-group sm-group-${group.role}`}>
-            {group.role === 'assistant_group' && (
-              <AssistantGroupHeader messages={group.messages} />
-            )}
-            {renderGroupMessages(group.messages)}
-          </div>
+          group.role === 'assistant_group'
+            ? <CollapsibleAssistantGroup
+                key={group.id}
+                messages={group.messages}
+                renderMessages={renderGroupMessages}
+              />
+            : (
+              <div key={group.id} class={`sm-group sm-group-${group.role}`}>
+                {renderGroupMessages(group.messages)}
+              </div>
+            )
         ))}
         {partitioned && partitioned.orphanSubagentIds.length > 0 && (
           <div class="sm-subagent-orphans">
@@ -206,7 +225,28 @@ export function JsonlView({ sessionId }: Props) {
           </div>
         )}
       </div>
-      <InterruptBar sessionId={sessionId} permissionProfile={profile} />
+      {!hideInterruptBar && <InterruptBar sessionId={sessionId} permissionProfile={profile} />}
+    </div>
+    </NarrowContext.Provider>
+  );
+}
+
+function CollapsibleAssistantGroup({
+  messages,
+  renderMessages,
+}: {
+  messages: ParsedMessage[];
+  renderMessages: (msgs: ParsedMessage[]) => any;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <div class={`sm-group sm-group-assistant_group${collapsed ? ' sm-group-collapsed' : ''}`}>
+      <AssistantGroupHeader
+        messages={messages}
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((c) => !c)}
+      />
+      {!collapsed && renderMessages(messages)}
     </div>
   );
 }

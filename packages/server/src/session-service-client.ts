@@ -12,6 +12,7 @@ export interface SpawnParams {
   claudeSessionId?: string;
   resumeSessionId?: string;
   tmuxTarget?: string;
+  appendSystemPrompt?: string;
 }
 
 async function post(path: string, body?: unknown): Promise<Response> {

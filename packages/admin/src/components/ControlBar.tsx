@@ -69,7 +69,7 @@ export function ControlBar() {
 
   function selectApp(id: string) {
     setAppDropdown(false);
-    navigate(`/app/${id}/feedback`);
+    navigate(`/app/${id}/tickets`);
   }
 
   function openSetup() {
