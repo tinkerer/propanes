@@ -96,9 +96,23 @@ export function openPanelExternally(
   }
 }
 
+// Open the Chief of Staff (Ops) panel in its standalone embed mode in a new
+// browser tab/window. URL: `<origin><pathname>?embed=cos` — the App router
+// detects `embed=cos` and renders the CoS-only embed.
+export function openCosExternally(zone: ExternalDragZone) {
+  const url = `${location.origin}${location.pathname}?embed=cos`;
+  if (zone === 'new-tab') {
+    window.open(url, '_blank');
+  } else {
+    const w = Math.min(640, Math.max(420, Math.floor(window.innerWidth * 0.4)));
+    const h = Math.min(900, Math.max(520, Math.floor(window.innerHeight * 0.75)));
+    window.open(url, 'pw-cos-popout', `popup=yes,width=${w},height=${h}`);
+  }
+}
+
 // Show a ghost hint when dragging outside the viewport. Keeps the ghost visible
 // at the viewport edge and changes its text to describe the external action.
-function applyExternalGhostHint(
+export function applyExternalGhostHint(
   ghost: HTMLElement | null,
   baseLabel: string,
   x: number,
@@ -581,6 +595,79 @@ export function startTabDrag(e: MouseEvent, config: TabDragConfig): void {
       } else if (!dropTarget && !hadReorderIndicator) {
         splitFromPanel(config.sessionId);
       }
+    }
+  }
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+// --- Standalone panel tab drag ---
+//
+// Used by the /panel/<ids> route (StandalonePanelPage) when the user is
+// already in a popped-out browser tab/window. Dragging a tab out of the
+// viewport opens that session in its own browser window; dragging within
+// the viewport is a no-op (the standalone page has no in-page drop zones).
+// A plain click (drag threshold not exceeded) falls through to onClickFallback.
+
+export interface StandalonePanelTabDragConfig {
+  sessionId: string;
+  label: string;
+  onExternalPopOut: (sessionId: string, zone: ExternalDragZone) => void;
+  onClickFallback: () => void;
+}
+
+export function startStandalonePanelTabDrag(e: MouseEvent, config: StandalonePanelTabDragConfig): void {
+  const target = e.target as HTMLElement;
+  if (target.closest('.popout-tab-close, .status-dot')) return;
+
+  e.preventDefault();
+  const startX = e.clientX;
+  const startY = e.clientY;
+  let dragging = false;
+  let ghost: HTMLElement | null = null;
+  const sourceTab = e.currentTarget as HTMLElement;
+
+  function createGhost() {
+    ghost = document.createElement('div');
+    ghost.className = 'tab-drag-ghost';
+    ghost.textContent = config.label;
+    document.body.appendChild(ghost);
+    sourceTab.classList.add('tab-dragging');
+  }
+
+  function updateGhost(x: number, y: number) {
+    if (!ghost) return;
+    ghost.style.left = `${x + 12}px`;
+    ghost.style.top = `${y - 12}px`;
+  }
+
+  function onMove(ev: MouseEvent) {
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    if (!dragging && Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD) {
+      dragging = true;
+      createGhost();
+    }
+    if (!dragging) return;
+    updateGhost(ev.clientX, ev.clientY);
+    applyExternalGhostHint(ghost, config.label, ev.clientX, ev.clientY);
+  }
+
+  function onUp(ev: MouseEvent) {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    sourceTab.classList.remove('tab-dragging');
+    if (ghost) { ghost.remove(); ghost = null; }
+
+    if (!dragging) {
+      config.onClickFallback();
+      return;
+    }
+
+    const externalZone = detectExternalZone(ev.clientX, ev.clientY);
+    if (externalZone) {
+      config.onExternalPopOut(config.sessionId, externalZone);
     }
   }
 

@@ -1100,40 +1100,35 @@ export class ProPanesElement {
     const options = document.createElement('div');
     options.className = 'pw-admin-options';
 
-    // Single Workbench button — opens/focuses the full pane-tree workbench
-    const wbBtn = document.createElement('button');
-    wbBtn.className = 'pw-admin-option pw-workbench-btn';
-    wbBtn.innerHTML = `<span class="pw-admin-option-icon">\u2B1A</span><span class="pw-workbench-label">Workbench</span>`;
-    wbBtn.title = 'Open workbench (sessions, terminals, feedback)';
-    wbBtn.addEventListener('click', () => {
-      this.overlayManager.openWorkbench();
-    });
-    options.appendChild(wbBtn);
-
-    // Quick-open legacy panels (collapsed behind a "more" toggle)
-    const moreRow = document.createElement('div');
-    moreRow.className = 'pw-admin-more-row';
-    const moreItems: Array<{ icon: string; label: string; type: PanelType }> = [
-      { icon: '\u{1F4CB}', label: 'Feedback', type: 'feedback' },
-      { icon: '\u{1F4BB}', label: 'Terminal', type: 'terminal' },
-      { icon: '\u2699', label: 'Settings', type: 'settings' },
+    // Icon row — feedback / sessions / ProPanes overlay / Ops / terminal / settings.
+    // Workbench is a small icon, not a full-width row, so it sits next to the
+    // others. Opening it routes through openWorkbench() to focus the existing
+    // panel if one is already open.
+    type IconItem = { icon: string; label: string; onClick: () => void };
+    const iconItems: IconItem[] = [
+      { icon: '\u{1F4CB}', label: 'Feedback', onClick: () => this.overlayManager.openPanel('feedback') },
+      { icon: '\u26A1', label: 'Sessions', onClick: () => this.overlayManager.openPanel('sessions') },
+      { icon: '\u2B1A', label: 'ProPanes Overlay', onClick: () => this.overlayManager.openWorkbench() },
+      { icon: '\u2605', label: 'Ops (Chief of Staff)', onClick: () => this.overlayManager.openPanel('cos') },
+      { icon: '\u{1F4BB}', label: 'Terminal', onClick: () => {
+          const opts: { launcherId?: string } = {};
+          const stored = localStorage.getItem('pw-dispatch-target');
+          if (stored) opts.launcherId = stored;
+          this.overlayManager.openPanel('terminal', opts);
+        } },
+      { icon: '\u2699', label: 'Settings', onClick: () => this.overlayManager.openPanel('settings') },
     ];
-    for (const item of moreItems) {
+    const iconRow = document.createElement('div');
+    iconRow.className = 'pw-admin-more-row';
+    for (const item of iconItems) {
       const btn = document.createElement('button');
       btn.className = 'pw-admin-option pw-admin-option-small';
       btn.innerHTML = `<span class="pw-admin-option-icon">${item.icon}</span>`;
       btn.title = item.label;
-      btn.addEventListener('click', () => {
-        const opts: { launcherId?: string } = {};
-        if (item.type === 'terminal') {
-          const stored = localStorage.getItem('pw-dispatch-target');
-          if (stored) opts.launcherId = stored;
-        }
-        this.overlayManager.openPanel(item.type, opts);
-      });
-      moreRow.appendChild(btn);
+      btn.addEventListener('click', item.onClick);
+      iconRow.appendChild(btn);
     }
-    options.appendChild(moreRow);
+    options.appendChild(iconRow);
 
     // Session ID row
     const sidRow = document.createElement('div');

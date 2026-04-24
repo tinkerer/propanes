@@ -1220,27 +1220,7 @@ export const WIDGET_CSS = `
   line-height: 1;
 }
 
-/* Workbench button — primary action, full width */
-.pw-workbench-btn {
-  width: 100% !important;
-  height: 32px !important;
-  gap: 6px;
-  border-color: #0f7ac7;
-  background: linear-gradient(135deg, #0c4a6e, #1e3a8a);
-}
-
-.pw-workbench-btn:hover {
-  background: linear-gradient(135deg, #1e3a8a, #1e40af);
-  border-color: #60a5fa;
-}
-
-.pw-workbench-label {
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-}
-
-/* Smaller legacy panel buttons */
+/* Icon row for admin panel options */
 .pw-admin-more-row {
   display: flex;
   gap: 4px;

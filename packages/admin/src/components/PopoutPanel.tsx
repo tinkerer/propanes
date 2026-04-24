@@ -52,7 +52,7 @@ import {
   handleBounceCounter,
   termPickerOpen,
 } from '../lib/sessions.js';
-import { startTabDrag, startPanelDrag } from '../lib/tab-drag.js';
+import { startTabDrag, startPanelDrag, detectExternalZone, openPanelExternally, applyExternalGhostHint } from '../lib/tab-drag.js';
 import { ctrlShiftHeld, stickyModeActive } from '../lib/shortcuts.js';
 import { selectedAppId } from '../lib/state.js';
 import { showHotkeyHints } from '../lib/settings.js';
@@ -313,21 +313,58 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
     if (!cp) return;
     const fr = cp.floatingRect;
     startPos.current = { mx: e.clientX, my: e.clientY, x: fr.x, y: fr.y, w: fr.w, h: fr.h, dockedHeight: cp.dockedHeight, dockedTopOffset: cp.dockedTopOffset || 0, dockedBaseTop: cp.docked ? (e.clientY - getDockedPanelTop(panel.id)) : 0 };
+    const ghostLabel = `Panel: ${ids.length} tab${ids.length === 1 ? '' : 's'}`;
+    let ghost: HTMLElement | null = null;
+    const ensureGhost = () => {
+      if (ghost) return;
+      ghost = document.createElement('div');
+      ghost.className = 'tab-drag-ghost pane-drag-ghost';
+      ghost.textContent = ghostLabel;
+      document.body.appendChild(ghost);
+    };
+    const removeGhost = () => {
+      if (ghost) { ghost.remove(); ghost = null; }
+    };
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current) return;
       handleDragMove(ev, panel.id, startPos.current, dragMoved);
+      if (detectExternalZone(ev.clientX, ev.clientY)) {
+        ensureGhost();
+        applyExternalGhostHint(ghost, ghostLabel, ev.clientX, ev.clientY);
+      } else {
+        removeGhost();
+      }
     };
-    const onUp = () => {
+    const onUp = (ev: MouseEvent) => {
       dragging.current = false;
       wrapperRef.current?.classList.remove('popout-dragging');
       snapGuides.value = [];
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      removeGhost();
+
+      const externalZone = detectExternalZone(ev.clientX, ev.clientY);
+      if (externalZone && dragMoved.current) {
+        const src = popoutPanels.value.find((p) => p.id === panel.id);
+        if (src) {
+          const sessionIds = [...src.sessionIds];
+          if (sessionIds.length > 0) {
+            openPanelExternally({
+              sessionIds,
+              activeId: src.activeSessionId,
+              rightIds: src.splitEnabled ? src.rightPaneTabs : undefined,
+              ratio: src.splitRatio,
+            }, externalZone);
+            for (const sid of sessionIds) closeTab(sid);
+            return;
+          }
+        }
+      }
       persistPopoutState();
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, [panel.id]);
+  }, [panel.id, ids.length]);
 
   const onResizeStart = useCallback((edge: string, e: MouseEvent) => {
     e.preventDefault();
