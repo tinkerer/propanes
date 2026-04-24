@@ -158,7 +158,7 @@ export function getUnassociatedApps(): any[] {
 
 export function AppLink({ app }: { app: any }) {
   return (
-    <a href={`#/app/${app.id}/feedback`} style="color:var(--pw-primary);text-decoration:none;font-weight:500">
+    <a href={`#/app/${app.id}/tickets`} style="color:var(--pw-primary);text-decoration:none;font-weight:500">
       {app.name}
     </a>
   );

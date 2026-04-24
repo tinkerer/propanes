@@ -38,14 +38,14 @@ function AggregateWizardInner({ appId, onClose, onTagFilter }: { appId: string; 
     <div class="dispatch-overlay" onClick={(e) => { if ((e.target as HTMLElement).classList.contains('dispatch-overlay')) onClose(); }}>
       <div class="dispatch-dialog" style="max-width:480px">
         <div class="dispatch-header">
-          <h3>Aggregate Feedback</h3>
+          <h3>Aggregate Tickets</h3>
           <button class="dispatch-close" onClick={onClose}>&times;</button>
         </div>
 
         {!result ? (
           <div class="dispatch-body" style="padding:16px;display:flex;flex-direction:column;gap:12px">
             <p style="margin:0;color:var(--pw-text-muted);font-size:13px">
-              Cluster feedback items by title similarity and tag them with theme labels.
+              Cluster tickets by title similarity and tag them with theme labels.
             </p>
             <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
               <input

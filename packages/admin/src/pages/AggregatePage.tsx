@@ -146,7 +146,7 @@ function PlanEditor({ cluster, appId, onSaved }: {
         <textarea
           value={body}
           onInput={(e) => setBody((e.target as HTMLTextAreaElement).value)}
-          placeholder="Describe the action plan — what needs to be done to address this cluster of feedback..."
+          placeholder="Describe the action plan — what needs to be done to address this cluster of tickets..."
           style="width:100%;min-height:100px;font-size:13px"
         />
       </div>
@@ -242,7 +242,7 @@ function ClusterDispatchButton({ cluster, appId }: { cluster: Cluster; appId: st
 function ClusterCard({ cluster, appId }: { cluster: Cluster; appId: string | null }) {
   const [expanded, setExpanded] = useState(false);
   const [showPlanEditor, setShowPlanEditor] = useState(false);
-  const basePath = appId ? `/app/${appId}/feedback` : '/feedback';
+  const basePath = appId ? `/app/${appId}/tickets` : '/tickets';
 
   return (
     <div class="cluster-card">
@@ -361,9 +361,9 @@ function AnalyzeButton({ appId }: { appId: string }) {
       {showModal && (
         <div class="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowModal(false); }}>
           <div class="modal">
-            <h3>AI-Powered Feedback Analysis</h3>
+            <h3>AI-Powered Ticket Analysis</h3>
             <p style="font-size:13px;color:var(--pw-text-muted);margin-bottom:16px">
-              Dispatch all feedback to an agent for intelligent clustering, disambiguation, and action plan generation.
+              Dispatch all tickets to an agent for intelligent clustering, disambiguation, and action plan generation.
             </p>
             {!result ? (
               <>
@@ -427,7 +427,7 @@ export function AggregatePage({ appId }: { appId: string }) {
   return (
     <div>
       <div class="page-header">
-        <h2>Aggregate Feedback ({totalGroups.value} groups, {totalItems.value} items)</h2>
+        <h2>Aggregate Tickets ({totalGroups.value} groups, {totalItems.value} items)</h2>
         <AnalyzeButton appId={appId} />
       </div>
 

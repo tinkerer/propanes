@@ -549,7 +549,7 @@ echo "saved $OUT"
           agentEndpointId: agent.id,
           prompt: fullPrompt,
           cwd: workDir,
-          permissionProfile: 'yolo',
+          permissionProfile: 'headless-yolo',
         });
 
         // Update run with session ID
@@ -632,7 +632,7 @@ echo "saved $OUT"
             agentEndpointId: agent.id,
             prompt,
             cwd: repoDir,
-            permissionProfile: 'yolo',
+            permissionProfile: 'headless-yolo',
           });
 
           db.update(schema.wiggumRuns)

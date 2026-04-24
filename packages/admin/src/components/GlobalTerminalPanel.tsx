@@ -32,10 +32,15 @@ import {
   rightPaneTabs,
   rightPaneActiveId,
   splitRatio,
+  splitCollapsed,
+  splitCollapsedOffset,
   leftPaneTabs,
   enableSplit,
   disableSplit,
   setSplitRatio,
+  toggleSplitCollapsed,
+  setSplitCollapsed,
+  setSplitCollapsedOffset,
   sessionLabels,
   setSessionLabel,
   getSessionLabel,
@@ -47,6 +52,7 @@ import {
   popoutPanels,
   toggleCompanion,
   getCompanions,
+  extractCompanionType,
   type CompanionType,
   resolveSession,
   bringToFront,
@@ -207,7 +213,7 @@ function PaneHeader({
   const sess = realSessionId ? sessionMap.get(realSessionId) : null;
   const appId = selectedAppId.value;
   const feedbackPath = sess?.feedbackId
-    ? appId ? `/app/${appId}/feedback/${sess.feedbackId}` : `/feedback/${sess.feedbackId}`
+    ? appId ? `/app/${appId}/tickets/${sess.feedbackId}` : `/tickets/${sess.feedbackId}`
     : null;
   const viewMode = realSessionId ? getViewMode(realSessionId) : 'terminal';
   const isExited = realSessionId ? exited.has(realSessionId) : false;
@@ -247,7 +253,7 @@ function PaneHeader({
           ) : (
             (() => {
               const showMenu = companionIdMenuOpen.value === sessionId;
-              const label = isFeedbackTab ? `Feedback: pw-${realSessionId!.slice(-6)}`
+              const label = isFeedbackTab ? `Ticket: pw-${realSessionId!.slice(-6)}`
                 : isIframeTab ? `Page: pw-${realSessionId!.slice(-6)}`
                 : isIsolateTab ? `Isolate: ${realSessionId}`
                 : isUrlTab ? (() => { try { return `Iframe: ${new URL(realSessionId!).hostname}`; } catch { return `Iframe: ${realSessionId!.slice(0, 30)}`; } })()
@@ -275,7 +281,7 @@ function PaneHeader({
             })()
           )}
           {feedbackPath && (
-            <a href={`#${feedbackPath}`} onClick={(e) => { e.preventDefault(); if (sess?.feedbackId) openFeedbackItem(sess.feedbackId); }} class="feedback-title-link" title={sess?.feedbackTitle || 'View feedback'}>{sess?.feedbackTitle || 'View feedback'}</a>
+            <a href={`#${feedbackPath}`} onClick={(e) => { e.preventDefault(); if (sess?.feedbackId) openFeedbackItem(sess.feedbackId); }} class="feedback-title-link" title={sess?.feedbackTitle || 'View ticket'}>{sess?.feedbackTitle || 'View ticket'}</a>
           )}
         </>
       )}
@@ -360,9 +366,11 @@ function executePopout(sessionId: string, mode: PopoutMode) {
       popOutTab(sessionId);
       break;
     case 'window':
+      popOutTab(sessionId);
       window.open(`#/session/${sessionId}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no');
       break;
     case 'tab':
+      popOutTab(sessionId);
       window.open(`#/session/${sessionId}`, '_blank');
       break;
   }
@@ -723,6 +731,53 @@ export function GlobalTerminalPanel() {
     document.addEventListener('mouseup', onUp);
   }, []);
 
+  // Collapsed-handle mousedown: click to expand, horizontal drag to expand
+  // with a new ratio, vertical drag to reposition the handle along the edge.
+  const onCollapsedHandleMouseDown = useCallback((e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const container = (e.currentTarget as HTMLElement).closest('.terminal-split-container') as HTMLElement | null;
+    if (!container) return;
+    const containerRect = container.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startOffset = splitCollapsedOffset.value;
+    const DRAG_THRESHOLD = 4;
+    let moved = false;
+    let horizontalDrag = false;
+
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+        moved = true;
+        horizontalDrag = Math.abs(dx) > Math.abs(dy);
+        if (horizontalDrag) container.classList.add('dragging');
+      }
+      if (!moved) return;
+      if (horizontalDrag) {
+        const ratio = (ev.clientX - containerRect.left) / containerRect.width;
+        setSplitRatio(ratio);
+      } else {
+        const maxOffset = Math.max(0, containerRect.height - 80);
+        const next = Math.max(-maxOffset / 2, Math.min(maxOffset / 2, startOffset + dy));
+        setSplitCollapsedOffset(next);
+      }
+    };
+    const onUp = () => {
+      container.classList.remove('dragging');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      // Pure click OR meaningful horizontal drag = expand.
+      // Pure vertical drag (slide along edge) = stay collapsed.
+      if (!moved || horizontalDrag) {
+        setSplitCollapsed(false);
+      }
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, []);
+
   const hasTabs = showTabs.value;
   const maximized = panelMaximized.value;
   const toggleMinimized = () => { panelMinimized.value = !panelMinimized.value; persistPanelState(); };
@@ -914,11 +969,11 @@ export function GlobalTerminalPanel() {
         </div>
       )}
       {!minimized && isSplit && (
-        <div class="terminal-split-container">
+        <div class={`terminal-split-container${splitCollapsed.value ? ' split-collapsed' : ''}`}>
           <div
             class={`terminal-split-pane${activePanelId.value === 'split-left' ? ' split-focused' : ''}`}
             data-split-pane="split-left"
-            style={{ flex: splitRatio.value }}
+            style={{ flex: splitCollapsed.value ? 1 : splitRatio.value }}
             onMouseDown={() => { activePanelId.value = 'split-left'; if (activeId) focusSessionTerminal(activeId); }}
           >
             <div class="split-pane-tab-bar">
@@ -940,37 +995,69 @@ export function GlobalTerminalPanel() {
               {leftTabs.filter((sid) => sid === activeId).map((sid) => renderTabContent(sid, true, sessionMap, (code, text) => markSessionExited(sid, code, text)))}
             </div>
           </div>
-          <div class="terminal-split-divider" onMouseDown={onSplitDividerMouseDown} />
-          <div
-            class={`terminal-split-pane${activePanelId.value === 'split-right' ? ' split-focused' : ''}`}
-            data-split-pane="split-right"
-            style={{ flex: 1 - splitRatio.value }}
-            onMouseDown={() => { activePanelId.value = 'split-right'; if (rightActive) focusSessionTerminal(rightActive); }}
-          >
-            <div class="split-pane-tab-bar">
-              <PaneTabBar
-                tabs={rightTabs}
-                activeId={rightActive}
-                source="split-right"
-                exited={exited}
-                sessionMap={sessionMap}
-                onActivate={(sid) => { rightPaneActiveId.value = sid; }}
-              />
-              <div class="terminal-tab-actions">
-                <button
-                  class="split-pane-unsplit-btn"
-                  onClick={() => disableSplit()}
-                  title="Close split pane"
-                >
-                  &times;
-                </button>
+          {splitCollapsed.value ? (
+            <div
+              class="terminal-split-grab"
+              style={{ transform: `translateY(${splitCollapsedOffset.value}px)` }}
+              onMouseDown={onCollapsedHandleMouseDown}
+              title="Drag to resize, click to expand companion (drag vertically to reposition)"
+            >
+              <div class="terminal-split-grab-chevron">&#9664;</div>
+              <div class="terminal-split-grab-label">
+                {(() => {
+                  const t = rightActive ? extractCompanionType(rightActive) : null;
+                  if (t === 'jsonl') return 'JSONL';
+                  if (t === 'feedback') return 'TICKET';
+                  if (t === 'iframe') return 'IFRAME';
+                  if (t === 'terminal') return 'TERMINAL';
+                  if (t === 'isolate') return 'COMPONENT';
+                  if (t === 'url') return 'URL';
+                  return rightTabs.length > 1 ? `${rightTabs.length} TABS` : 'PANE';
+                })()}
               </div>
             </div>
-            <PaneHeader sessionId={rightActive} sessionMap={sessionMap} exited={exited} />
-            <div class="terminal-body">
-              {rightTabs.filter((sid) => sid === rightActive).map((sid) => renderTabContent(sid, true, sessionMap, (code, text) => markSessionExited(sid, code, text)))}
-            </div>
-          </div>
+          ) : (
+            <>
+              <div class="terminal-split-divider" onMouseDown={onSplitDividerMouseDown} />
+              <div
+                class={`terminal-split-pane${activePanelId.value === 'split-right' ? ' split-focused' : ''}`}
+                data-split-pane="split-right"
+                style={{ flex: 1 - splitRatio.value }}
+                onMouseDown={() => { activePanelId.value = 'split-right'; if (rightActive) focusSessionTerminal(rightActive); }}
+              >
+                <div class="split-pane-tab-bar">
+                  <PaneTabBar
+                    tabs={rightTabs}
+                    activeId={rightActive}
+                    source="split-right"
+                    exited={exited}
+                    sessionMap={sessionMap}
+                    onActivate={(sid) => { rightPaneActiveId.value = sid; }}
+                  />
+                  <div class="terminal-tab-actions">
+                    <button
+                      class="split-pane-unsplit-btn"
+                      onClick={(e) => { e.stopPropagation(); toggleSplitCollapsed(); }}
+                      title="Collapse companion (keeps it available as an edge handle)"
+                    >
+                      &#9654;
+                    </button>
+                    <button
+                      class="split-pane-unsplit-btn"
+                      onClick={() => disableSplit()}
+                      title="Close split pane"
+                    >
+                      &times;
+                    </button>
+                  </div>
+                </div>
+                <PaneHeader sessionId={rightActive} sessionMap={sessionMap} exited={exited} />
+                <div class="terminal-body">
+                  {rightTabs.filter((sid) => sid === rightActive).map((sid) => renderTabContent(sid, true, sessionMap, (code, text) => markSessionExited(sid, code, text)))}
+                </div>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

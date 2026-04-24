@@ -167,6 +167,9 @@ export class ProPanesElement {
   private screenshotMethod: ScreenshotMethod = 'html-to-image';
   private countdownTimer: ReturnType<typeof setInterval> | null = null;
   private dispatchMode: 'off' | 'once' | 'auto' = 'off';
+  private dispatchAgentOverride: string | null = null;
+  private pendingPermissionProfile: 'interactive-yolo' | null = null;
+  private cachedAgents: Array<Record<string, any>> = [];
   private annotatorOpen = false;
   private adminAlwaysShow = false;
   private voiceRecorder = new VoiceRecorder();
@@ -413,6 +416,31 @@ export class ProPanesElement {
     if (sendBtn) this.updateSendButtonTitle(sendBtn);
   }
 
+  // Mirrors admin QuickDispatchPopup.pickYoloAgent: prefer interactive-yolo
+  // (TTY + skip permissions), fall back to any other *-yolo profile. Within
+  // each profile, prefer app-specific default, then global default, then any
+  // app match, then any match.
+  private pickYoloAgent(agents: Array<Record<string, any>>): Record<string, any> | undefined {
+    if (!agents?.length) return undefined;
+    const usable = agents.filter((a) => a.mode !== 'webhook' || !!a.url);
+    for (const profile of ['interactive-yolo', 'headless-yolo', 'headless-stream-yolo'] as const) {
+      const match = (a: Record<string, any>) => a.permissionProfile === profile;
+      const hit =
+        usable.find((a) => match(a) && a.isDefault && a.appId === this.appId) ||
+        usable.find((a) => match(a) && a.isDefault && !a.appId) ||
+        usable.find((a) => match(a) && a.appId === this.appId) ||
+        usable.find(match);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+
+  private getSelectedDispatchAgent(): Record<string, any> | undefined {
+    const selectedId = this.dispatchAgentOverride || localStorage.getItem('pw-dispatch-agent');
+    if (!selectedId || !this.cachedAgents?.length) return undefined;
+    return this.cachedAgents.find((a) => a.id === selectedId);
+  }
+
   private updateSendButtonTitle(sendBtn?: HTMLButtonElement | null) {
     const btn = sendBtn ?? (this.shadow.querySelector('#pw-send-btn') as HTMLButtonElement | null);
     if (!btn) return;
@@ -446,19 +474,34 @@ export class ProPanesElement {
     const menu = document.createElement('div');
     menu.className = 'pw-send-menu';
 
-    const actions: Array<{ label: string; mode: 'off' | 'once'; desc: string }> = [
-      { label: 'Submit', mode: 'off', desc: 'Submit feedback only' },
-      { label: 'Dispatch', mode: 'once', desc: 'Submit & dispatch this time' },
+    const actions: Array<{ label: string; kind: 'submit' | 'dispatch' | 'yolo'; desc: string }> = [
+      { label: 'Submit', kind: 'submit', desc: 'Submit feedback only' },
+      { label: 'Dispatch', kind: 'dispatch', desc: 'Submit & dispatch this time' },
+      { label: '⚡ YOLO', kind: 'yolo', desc: 'Submit & dispatch with skip-permissions agent' },
     ];
 
     for (const item of actions) {
       const btn = document.createElement('button');
-      btn.className = 'pw-send-menu-item';
+      btn.className = item.kind === 'yolo' ? 'pw-send-menu-item pw-send-menu-item-yolo' : 'pw-send-menu-item';
       btn.textContent = item.label;
       btn.title = item.desc;
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.setDispatchMode(item.mode);
+        if (item.kind === 'yolo') {
+          // Prefer a *-yolo profile agent so downstream resume/continue logic
+          // sees a natively-yolo parent, but also pass an explicit
+          // permissionProfile override (interactive-yolo = TTY + skip) so the
+          // dispatch skips permissions even if the selected agent's stored
+          // profile is mis-configured.
+          const agent = this.pickYoloAgent(this.cachedAgents);
+          this.dispatchAgentOverride = agent ? agent.id : null;
+          this.pendingPermissionProfile = 'interactive-yolo';
+          this.setDispatchMode('once');
+        } else {
+          this.dispatchAgentOverride = null;
+          this.pendingPermissionProfile = null;
+          this.setDispatchMode(item.kind === 'dispatch' ? 'once' : 'off');
+        }
         menu.remove();
         this.handleSubmit();
       });
@@ -499,11 +542,13 @@ export class ProPanesElement {
       .then(r => r.json())
       .then((agents: any[]) => {
         if (!agents?.length) return;
+        this.cachedAgents = agents;
         for (const a of agents) {
           const opt = document.createElement('option');
           opt.value = a.id;
           const modeIcon = a.mode === 'headless' ? '\uD83D\uDCE6' : a.mode === 'webhook' ? '\uD83C\uDF10' : '\uD83D\uDCBB';
-          const profileIcon = a.permissionProfile === 'yolo' ? ' \u26A1' : '';
+          const skipPerms = typeof a.permissionProfile === 'string' && a.permissionProfile.endsWith('-yolo');
+          const profileIcon = skipPerms ? ' \u26A1' : '';
           opt.textContent = `${modeIcon} ${a.name}${profileIcon}${a.isDefault ? ' \u2605' : ''}`;
           agentSel.appendChild(opt);
         }
@@ -1453,6 +1498,57 @@ export class ProPanesElement {
       wrap.appendChild(removeBtn);
       container.appendChild(wrap);
     });
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'pw-screenshot-copy-paths';
+    const count = this.pendingScreenshots.length;
+    copyBtn.title = 'Upload and copy /tmp paths to clipboard';
+    copyBtn.innerHTML = `<svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg><span>Copy path${count === 1 ? '' : 's'}</span>`;
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.copyScreenshotPaths(copyBtn);
+    });
+    container.appendChild(copyBtn);
+  }
+
+  private async copyScreenshotPaths(btn: HTMLButtonElement) {
+    if (this.pendingScreenshots.length === 0) return;
+
+    let resolveClipboard: (text: string) => void = () => {};
+    let rejectClipboard: () => void = () => {};
+    const clipboardText = new Promise<string>((res, rej) => {
+      resolveClipboard = res;
+      rejectClipboard = rej;
+    });
+    copyTextDeferred(clipboardText).catch(() => {});
+
+    btn.disabled = true;
+    const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement | null;
+    errorEl?.classList.add('pw-hidden');
+
+    try {
+      const result = await this.submitScreenshotsOnly();
+      const paths: string[] = Array.isArray(result?.screenshots)
+        ? result.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
+        : [];
+      if (paths.length === 0) {
+        rejectClipboard();
+        throw new Error('No paths returned from server');
+      }
+      resolveClipboard(paths.join(' '));
+      this.pendingScreenshots = [];
+      persistScreenshots(this.pendingScreenshots);
+      this.renderScreenshotThumbs();
+      this.updateSendButtonTitle();
+      this.showFlash(undefined, `${paths.length} path${paths.length === 1 ? '' : 's'} copied`);
+    } catch (err) {
+      rejectClipboard();
+      if (errorEl) {
+        errorEl.textContent = err instanceof Error ? err.message : 'Upload failed';
+        errorEl.classList.remove('pw-hidden');
+      }
+      btn.disabled = false;
+    }
   }
 
   private async toggleVoiceRecording() {
@@ -2450,7 +2546,7 @@ export class ProPanesElement {
       this.emit('submit', { type: 'manual', title: '', description, id: result?.id, appId: result?.appId });
 
       const endpointUrl = new URL(this.config.endpoint, window.location.origin);
-      const feedbackUrl = `${endpointUrl.origin}/admin/#/app/${result.appId}/feedback/${result.id}`;
+      const feedbackUrl = `${endpointUrl.origin}/admin/#/fb/${result.id}`;
       const screenshotPaths: string[] = Array.isArray(result?.screenshots)
         ? result.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
         : [];
@@ -2467,6 +2563,9 @@ export class ProPanesElement {
       errorEl.classList.remove('pw-hidden');
       input.disabled = false;
       input.focus();
+    } finally {
+      this.dispatchAgentOverride = null;
+      this.pendingPermissionProfile = null;
     }
   }
 
@@ -2533,9 +2632,19 @@ export class ProPanesElement {
       if (dispatchTarget) {
         feedbackPayload.launcherId = dispatchTarget;
       }
-      const dispatchAgent = localStorage.getItem('pw-dispatch-agent');
+      // One-shot override (e.g., YOLO action) wins over the sticky localStorage choice.
+      const dispatchAgent = this.dispatchAgentOverride || localStorage.getItem('pw-dispatch-agent');
       if (dispatchAgent) {
         feedbackPayload.agentEndpointId = dispatchAgent;
+      }
+      if (this.pendingPermissionProfile) {
+        feedbackPayload.permissionProfile = this.pendingPermissionProfile;
+      } else {
+        const selectedAgent = this.getSelectedDispatchAgent();
+        const selectedProfile = selectedAgent?.permissionProfile;
+        if (selectedProfile === 'yolo' || selectedProfile === 'headless' || selectedProfile === 'interactive-json') {
+          feedbackPayload.permissionProfile = selectedProfile;
+        }
       }
     }
     const dataObj: Record<string, unknown> = {};

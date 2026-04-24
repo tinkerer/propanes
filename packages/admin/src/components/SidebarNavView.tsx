@@ -111,9 +111,9 @@ export function SidebarNavView() {
           return (
             <div key={app.id}>
               <a
-                href={`#/app/${app.id}/feedback`}
+                href={`#/app/${app.id}/tickets`}
                 class={`sidebar-app-item ${isSelected ? 'active' : ''}`}
-                onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/feedback`); }}
+                onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/tickets`); }}
                 title={collapsed ? app.name : undefined}
               >
                 <span class="nav-icon">{'\u{1F4BB}'}</span>
@@ -122,11 +122,11 @@ export function SidebarNavView() {
               {isSelected && !collapsed && (
                 <div class="sidebar-subnav">
                   <a
-                    href={`#/app/${app.id}/feedback`}
-                    class={route === `/app/${app.id}/feedback` || route.startsWith(`/app/${app.id}/feedback/`) ? 'active' : ''}
-                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/feedback`); openPageView('view:feedback'); }}
+                    href={`#/app/${app.id}/tickets`}
+                    class={route === `/app/${app.id}/tickets` || route.startsWith(`/app/${app.id}/tickets/`) || route === `/app/${app.id}/feedback` || route.startsWith(`/app/${app.id}/feedback/`) ? 'active' : ''}
+                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/tickets`); openPageView('view:feedback'); }}
                   >
-                    {'\u{1F4CB}'} Feedback
+                    {'\u{1F4CB}'} Tickets
                     {fbCounts[app.id]?.total > 0 && <span class="sidebar-count">{fbCounts[app.id].total}</span>}
                   </a>
                   <a
@@ -168,9 +168,9 @@ export function SidebarNavView() {
         {hasUnlinked && (
           <div>
             <a
-              href="#/app/__unlinked__/feedback"
+              href="#/app/__unlinked__/tickets"
               class={`sidebar-app-item ${selAppId === '__unlinked__' ? 'active' : ''}`}
-              onClick={(e) => { e.preventDefault(); navigate('/app/__unlinked__/feedback'); }}
+              onClick={(e) => { e.preventDefault(); navigate('/app/__unlinked__/tickets'); }}
               title={collapsed ? 'Unlinked' : undefined}
             >
               <span class="nav-icon">{'\u{1F517}'}</span>
@@ -180,11 +180,11 @@ export function SidebarNavView() {
             {selAppId === '__unlinked__' && !collapsed && (
               <div class="sidebar-subnav">
                 <a
-                  href="#/app/__unlinked__/feedback"
-                  class={route.startsWith('/app/__unlinked__/feedback') ? 'active' : ''}
-                  onClick={(e) => { e.preventDefault(); navigate('/app/__unlinked__/feedback'); }}
+                  href="#/app/__unlinked__/tickets"
+                  class={route.startsWith('/app/__unlinked__/tickets') || route.startsWith('/app/__unlinked__/feedback') ? 'active' : ''}
+                  onClick={(e) => { e.preventDefault(); navigate('/app/__unlinked__/tickets'); }}
                 >
-                  {'\u{1F4CB}'} Feedback
+                  {'\u{1F4CB}'} Tickets
                 </a>
               </div>
             )}

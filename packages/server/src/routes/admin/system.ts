@@ -337,7 +337,7 @@ systemRoutes.post('/setup-assist', async (c) => {
       agentEndpointId,
       prompt,
       cwd: process.cwd(),
-      permissionProfile: 'interactive' as any,
+      permissionProfile: 'interactive-require' as any,
       allowedTools: agentRow.allowedTools,
     });
 
@@ -380,7 +380,7 @@ function buildSetupPrompt(
     parts.push(`- **ID**: ${a.id}`);
     parts.push(`- **Name**: ${a.name}`);
     parts.push(`- **Mode**: ${a.mode || 'interactive'}`);
-    parts.push(`- **Permission Profile**: ${a.permissionProfile || 'interactive'}`);
+    parts.push(`- **Permission Profile**: ${a.permissionProfile || 'interactive-require'}`);
     parts.push(`- **Is Default**: ${a.isDefault ? 'Yes' : 'No'}`);
     parts.push(`- **App ID**: ${a.appId || '(global)'}`);
     parts.push(`- **Allowed Tools**: ${a.allowedTools || '(none)'}`);
@@ -389,7 +389,7 @@ function buildSetupPrompt(
     parts.push('');
     parts.push('## Update API');
     parts.push(`PATCH ${baseUrl}/api/v1/admin/agents/${a.id}`);
-    parts.push('Fields: name, url, authHeader, isDefault, appId, mode (interactive|headless|webhook), promptTemplate, permissionProfile (interactive|auto|yolo), allowedTools, autoPlan');
+    parts.push('Fields: name, url, authHeader, isDefault, appId, mode (interactive|headless|webhook), promptTemplate, permissionProfile (interactive-require|interactive-yolo|headless-yolo|headless-stream-yolo|headless-stream-require|plain), allowedTools, autoPlan');
     parts.push('');
   } else if (entityType === 'machine') {
     const m = entity as any;
@@ -740,7 +740,7 @@ function buildNewEntityPrompt(
     }
     parts.push('## Create API');
     parts.push(`POST ${baseUrl}/api/v1/admin/agents`);
-    parts.push('Fields: name (required), mode (interactive|headless|webhook), permissionProfile (interactive|auto|yolo), isDefault, appId, allowedTools, autoPlan, url (webhook only), authHeader (webhook only), promptTemplate');
+    parts.push('Fields: name (required), mode (interactive|headless|webhook), permissionProfile (interactive-require|interactive-yolo|headless-yolo|headless-stream-yolo|headless-stream-require|plain), isDefault, appId, allowedTools, autoPlan, url (webhook only), authHeader (webhook only), promptTemplate');
     parts.push('');
     parts.push('## Agent Modes');
     parts.push('- **interactive**: Claude Code runs in a terminal with real-time supervision. Best for development.');

@@ -45,29 +45,31 @@ function resolveAppIdFromApiKey(apiKey: string | undefined): string | null {
 }
 
 function resolveYoloAgent(appId: string | null): string | null {
+  // Voice auto-dispatch runs unattended, so prefer a headless agent. We still
+  // call the helper "yolo" internally for continuity with older call sites.
   if (!appId) {
     const any = db
       .select()
       .from(schema.agentEndpoints)
-      .where(eq(schema.agentEndpoints.permissionProfile, 'yolo'))
+      .where(eq(schema.agentEndpoints.permissionProfile, 'headless-yolo'))
       .all();
     return any[0]?.id ?? null;
   }
-  const appYolo = db
+  const appHeadless = db
     .select()
     .from(schema.agentEndpoints)
     .where(and(
       eq(schema.agentEndpoints.appId, appId),
-      eq(schema.agentEndpoints.permissionProfile, 'yolo'),
+      eq(schema.agentEndpoints.permissionProfile, 'headless-yolo'),
     ))
     .all();
-  if (appYolo.length) return appYolo[0].id;
-  const globalYolo = db
+  if (appHeadless.length) return appHeadless[0].id;
+  const globalHeadless = db
     .select()
     .from(schema.agentEndpoints)
-    .where(eq(schema.agentEndpoints.permissionProfile, 'yolo'))
+    .where(eq(schema.agentEndpoints.permissionProfile, 'headless-yolo'))
     .all();
-  if (globalYolo.length) return globalYolo[0].id;
+  if (globalHeadless.length) return globalHeadless[0].id;
   // Fall back: app's default agent
   const agents = db.select().from(schema.agentEndpoints).all();
   const def =

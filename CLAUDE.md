@@ -173,6 +173,62 @@ cd packages/admin && npm run dev
 npm run build --workspaces
 ```
 
+The dev setup runs **two** node processes: the main server (`src/index.ts`, port 3001) and the session-service (`src/session-service.ts`, port 3002). They're watched independently. If session-service code changes aren't taking effect, the service is running stale code — kill the whole `pnpm dev:sessions` chain and relaunch. Live tmux-backed sessions survive the restart via `tryRecoverSession()`.
+
+## Permission Profiles
+
+Agent sessions are spawned with a `permissionProfile` that encodes **two orthogonal axes** — I/O mode × permissions. Profile names follow the `<mode>-<perms>` format so both axes are legible at a glance.
+
+| Axis | Values | Meaning |
+|---|---|---|
+| **I/O mode** | `interactive` / `headless` / `headless-stream` | TTY with visible TUI vs. one-shot `-p` pipe vs. persistent bidirectional JSON stream |
+| **Permissions** | `yolo` (skip) / `require` (ask user) | Whether to pass `--dangerously-skip-permissions` (claude) / `--dangerously-bypass-approvals-and-sandbox` (codex) |
+
+Combining the axes gives the full profile set (`packages/shared/src/constants.ts::PERMISSION_PROFILES`, resolved in `packages/server/src/session-service.ts::buildAgentCommand` and `packages/server/src/launcher-daemon.ts::buildAgentCommand`):
+
+| Profile | Mode | Perms | Claude flags | Codex flags |
+|---|---|---|---|---|
+| `interactive-require` | TTY | ask | `--session-id <uuid>` | (none) |
+| `interactive-yolo` | TTY | skip | `--dangerously-skip-permissions --session-id <uuid>` | `--dangerously-bypass-approvals-and-sandbox` |
+| `headless-yolo` | pipe | skip | `-p <prompt> --output-format stream-json --verbose --dangerously-skip-permissions` | `exec --dangerously-bypass-approvals-and-sandbox <prompt>` |
+| `headless-stream-yolo` | stream | skip | `--print --input-format stream-json --output-format stream-json --include-partial-messages --verbose --dangerously-skip-permissions` | `exec --dangerously-bypass-approvals-and-sandbox` (no native stream protocol; falls back to exec) |
+| `headless-stream-require` | stream | ask | `--print --input-format stream-json --output-format stream-json --include-partial-messages --verbose` (no skip flag — approval prompts arrive as JSON events for the admin UI to answer) | `exec` only (codex exec has no approval back-channel yet; prefer claude for this profile) |
+| `plain` | — | n/a | shell only | shell only |
+
+Helper sets in `buildAgentCommand` keep the logic honest:
+
+```ts
+const PIPE_PROFILES   = { headless-yolo, headless-stream-yolo, headless-stream-require };
+const SKIP_PROFILES   = { interactive-yolo, headless-yolo, headless-stream-yolo };
+const STREAM_PROFILES = { headless-stream-yolo, headless-stream-require };
+```
+
+If `SKIP_PROFILES.has(profile)` the runtime passes the skip flag; otherwise it doesn't. Same for pipe / stream. Adding a new profile = adding it to these sets; don't reintroduce name-by-name comparisons scattered through the code.
+
+**Why `headless-yolo` can't exist as `headless-require`**: claude's `-p` one-shot mode has no channel to answer permission prompts. Running headless *with* permission gating requires `--input-format stream-json` so approvals can be sent back over stdin — that's `headless-stream-require`. "Headless but ask me" = use `headless-stream-require`, not `headless-yolo` minus the flag.
+
+**YOLO button vs. selecting a "yolo" agent from the picker** — they now produce the same behavior. The widget/admin YOLO button (`QuickDispatchPopup.pickYoloAgent`, `widget.ts::pickYoloAgent`) prefers `interactive-yolo`, falling back to `headless-yolo` / `headless-stream-yolo`. The seeded "yolo" / "codex-yolo" endpoints are migrated to `interactive-yolo` at startup (`db/index.ts` migration step 3) so picker selection and the button are both TTY + skip by default. If you *want* headless batch behavior from a named "yolo" endpoint, edit it explicitly — the migration only touches rows still on the legacy `headless-yolo` default.
+
+**Lifecycle: follow-up prompt queue for exiting sessions.** Yolo/headless sessions exit once the current turn completes. Instead of interrupting or killing + resuming manually, enqueue a follow-up:
+
+```bash
+# Enqueue (the prompt fires on parent exit — completed, failed, or killed)
+curl -s -X POST http://localhost:3001/api/v1/admin/agent-sessions/SESSION_ID/followup \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"now also do X"}'
+
+# Inspect queue for a session
+curl -s http://localhost:3001/api/v1/admin/agent-sessions/SESSION_ID/followups
+
+# Cancel a queued followup (before it dispatches)
+curl -s -X DELETE http://localhost:3001/api/v1/admin/agent-sessions/followups/FOLLOWUP_ID
+
+# Manually trigger the sweep (debugging only; normally runs every 5s)
+curl -s -X POST http://localhost:3001/api/v1/admin/session-followups/sweep
+```
+
+Under the hood a 5s timer in the main server (`dispatchPendingFollowups` in `routes/admin/session-followups.ts`) scans for pending followups whose parent has reached a terminal status, then respawns via `resumeAgentSession()` so the new run uses `--resume <claudeSessionId>` and inherits the parent's permission flags. Multiple followups on the same parent chain — each sweep dispatches one, and the next becomes the parent for the subsequent followup.
+
 ## UI Conventions
 
 - **Never use `window.prompt()`, `window.alert()`, or `window.confirm()`** in the admin UI. These are ugly, block the thread, and break the UX. Instead, build proper in-app UI (modals, spotlight pickers, inline inputs).
@@ -277,3 +333,22 @@ Each config specifies machine, app image, ports, env vars, compose dir. When an 
 - `packages/server/src/db/schema.ts` — Database schema (SQLite/Drizzle)
 - `packages/shared/src/` — Shared types and Zod schemas
 - `packages/widget/` — Embeddable feedback overlay widget
+
+## Visible VNC Browser (pw-vnc)
+
+To open a visible browser watchable via NoVNC at `example.com:6080`:
+
+```bash
+~/.claude/bin/pw-vnc-start          # launch/restart visible Chromium on DISPLAY=:1
+~/.claude/bin/pw-vnc goto <url>     # navigate
+~/.claude/bin/pw-vnc screenshot     # saves to /tmp/pw_vnc_screen.png
+~/.claude/bin/pw-vnc eval <js>
+~/.claude/bin/pw-vnc url
+~/.claude/bin/pw-vnc click <selector>
+~/.claude/bin/pw-vnc wait-nav
+```
+
+IPC: `/tmp/pw_vnc_cmd.txt` + `/tmp/pw_vnc_result.txt`. PID: `/tmp/pw_vnc_daemon.pid`.
+Daemon source: `~/.claude/bin/pw-vnc-daemon.py` (uses full Playwright Chromium, DISPLAY=:1).
+Login to staging: use `pw-vnc eval` with the React native-setter hack (no `pw-login` wrapper yet).
+The headless `pw` and visible `pw-vnc` daemons are fully independent.

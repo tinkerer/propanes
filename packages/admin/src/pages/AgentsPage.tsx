@@ -123,7 +123,7 @@ export function AgentsPage() {
         <div class="agent-empty">
           <div class="agent-empty-icon">{'\u{1F916}'}</div>
           <div class="agent-empty-title">No agents configured</div>
-          <div class="agent-empty-desc">Add an agent to start dispatching feedback to Claude, Codex, or custom runtimes.</div>
+          <div class="agent-empty-desc">Add an agent to start dispatching tickets to Claude, Codex, or custom runtimes.</div>
           <button class="btn btn-primary" style="margin-top:12px" onClick={() => openCreate()}>+ Add Agent</button>
         </div>
       )}

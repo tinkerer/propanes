@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'preact/hooks';
-import { theme, setTheme, shortcutsEnabled, tooltipsEnabled, showTabs, arrowTabSwitching, multiDigitTabs, autoNavigateToFeedback, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, popoutMode, localBridgeUrl, sshConfigs, type Theme, type PopoutMode, type SshConfig } from '../lib/settings.js';
+import { theme, setTheme, shortcutsEnabled, tooltipsEnabled, showTabs, arrowTabSwitching, multiDigitTabs, autoNavigateToFeedback, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoOpenChildCompanions, popoutMode, localBridgeUrl, sshConfigs, type Theme, type PopoutMode, type SshConfig } from '../lib/settings.js';
 import { perfOverlayEnabled, perfServerEnabled } from '../lib/perf.js';
 import { getAllShortcuts } from '../lib/shortcuts.js';
 import { Guide, GUIDES, resetGuide } from '../components/Guide.js';
@@ -427,14 +427,29 @@ export function SettingsPage() {
 
           <div class="settings-toggle-row">
             <div>
-              <div class="settings-toggle-label">Auto-navigate to feedback</div>
-              <div class="settings-toggle-desc">When switching sessions, navigate to the associated feedback item</div>
+              <div class="settings-toggle-label">Auto-navigate to ticket</div>
+              <div class="settings-toggle-desc">When switching sessions, navigate to the associated ticket</div>
             </div>
             <label class="toggle-switch">
               <input
                 type="checkbox"
                 checked={autoNavigateToFeedback.value}
                 onChange={(e) => (autoNavigateToFeedback.value = (e.target as HTMLInputElement).checked)}
+              />
+              <span class="toggle-slider" />
+            </label>
+          </div>
+
+          <div class="settings-toggle-row">
+            <div>
+              <div class="settings-toggle-label">Auto-open child sessions as companions</div>
+              <div class="settings-toggle-desc">When a sub-agent spawns under a session that's already open, attach it as a tab in the parent's pane</div>
+            </div>
+            <label class="toggle-switch">
+              <input
+                type="checkbox"
+                checked={autoOpenChildCompanions.value}
+                onChange={(e) => (autoOpenChildCompanions.value = (e.target as HTMLInputElement).checked)}
               />
               <span class="toggle-slider" />
             </label>

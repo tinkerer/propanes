@@ -9,7 +9,7 @@ export const applications = sqliteTable('applications', {
   hooks: text('hooks').notNull().default('[]'),
   description: text('description').notNull().default(''),
   tmuxConfigId: text('tmux_config_id'),
-  defaultPermissionProfile: text('default_permission_profile').default('interactive'),
+  defaultPermissionProfile: text('default_permission_profile').default('interactive-require'),
   defaultAllowedTools: text('default_allowed_tools'),
   agentPath: text('agent_path'),
   screenshotIncludeWidget: integer('screenshot_include_widget', { mode: 'boolean' }).notNull().default(true),
@@ -97,7 +97,7 @@ export const agentEndpoints = sqliteTable('agent_endpoints', {
   promptTemplate: text('prompt_template'),
   mode: text('mode').notNull().default('webhook'),
   runtime: text('runtime').notNull().default('claude'),
-  permissionProfile: text('permission_profile').notNull().default('interactive'),
+  permissionProfile: text('permission_profile').notNull().default('interactive-require'),
   allowedTools: text('allowed_tools'),
   autoPlan: integer('auto_plan', { mode: 'boolean' }).notNull().default(false),
   preferredLauncherId: text('preferred_launcher_id'),
@@ -125,7 +125,8 @@ export const agentSessions = sqliteTable('agent_sessions', {
     .references(() => feedbackItems.id, { onDelete: 'cascade' }),
   agentEndpointId: text('agent_endpoint_id')
     .references(() => agentEndpoints.id, { onDelete: 'cascade' }),
-  permissionProfile: text('permission_profile').notNull().default('interactive'),
+  runtime: text('runtime').notNull().default('claude'),
+  permissionProfile: text('permission_profile').notNull().default('interactive-require'),
   parentSessionId: text('parent_session_id'),
   status: text('status').notNull().default('pending'),
   pid: integer('pid'),
@@ -142,6 +143,8 @@ export const agentSessions = sqliteTable('agent_sessions', {
   cwd: text('cwd'),
   spriteConfigId: text('sprite_config_id'),
   spriteExecSessionId: text('sprite_exec_session_id'),
+  cosThreadId: text('cos_thread_id'),
+  title: text('title'),
   createdAt: text('created_at').notNull(),
   startedAt: text('started_at'),
   completedAt: text('completed_at'),
@@ -344,6 +347,24 @@ export const pendingMessages = sqliteTable('pending_messages', {
   createdAt: text('created_at').notNull(),
 });
 
+// Follow-up prompts queued for yolo/headless sessions. When the parent
+// session dies (completed or failed), the next pending entry is popped and
+// dispatched as a --resume, carrying over the parent's claudeSessionId so
+// the conversation continues. Built to let users queue work on a session
+// they know will exit before they can respond interactively.
+export const sessionFollowups = sqliteTable('session_followups', {
+  id: text('id').primaryKey(),
+  parentSessionId: text('parent_session_id').notNull(),
+  feedbackId: text('feedback_id'),
+  agentEndpointId: text('agent_endpoint_id'),
+  prompt: text('prompt').notNull(),
+  status: text('status').notNull().default('pending'), // pending | dispatched | canceled | failed
+  createdAt: text('created_at').notNull(),
+  dispatchedAt: text('dispatched_at'),
+  dispatchedSessionId: text('dispatched_session_id'),
+  errorMessage: text('error_message'),
+});
+
 // Ambient voice listen-mode sessions. One row per time the user flips on
 // listen mode; rolling transcript windows are stored in voiceTranscripts.
 export const voiceSessions = sqliteTable('voice_sessions', {
@@ -381,6 +402,20 @@ export const cosLearnings = sqliteTable('cos_learnings', {
   title: text('title').notNull(),
   body: text('body').notNull(),
   severity: text('severity').notNull().default('medium'), // 'low' | 'medium' | 'high'
+  tags: text('tags'), // JSON string[] (nullable; defaults to [] in API)
+  createdAt: integer('created_at').notNull(),
+});
+
+// Edges in the learnings knowledge graph. Each row is a directed link
+// from one learning to another with a typed relationship.
+export const cosLearningLinks = sqliteTable('cos_learning_links', {
+  id: text('id').primaryKey(),
+  fromId: text('from_id').notNull().references(() => cosLearnings.id, { onDelete: 'cascade' }),
+  toId: text('to_id').notNull().references(() => cosLearnings.id, { onDelete: 'cascade' }),
+  // 'related' | 'caused_by' | 'resolved_by' | 'duplicate_of'
+  relType: text('rel_type').notNull().default('related'),
+  // 'wiggum' (auto by reflection agent), 'auto' (server-side similarity), 'user' (manual)
+  source: text('source').notNull().default('user'),
   createdAt: integer('created_at').notNull(),
 });
 
@@ -400,6 +435,15 @@ export const cosThreads = sqliteTable('cos_threads', {
   systemPrompt: text('system_prompt'),
   model: text('model'),
   claudeSessionId: text('claude_session_id'),
+  agentSessionId: text('agent_session_id'),
+  // In-flight turn bookkeeping. Set when a turn starts, cleared when it ends.
+  // Survives main-server restarts so the frontend can poll status / re-attach
+  // to an ongoing turn instead of surfacing a spurious "network error" when
+  // the SSE stream drops.
+  turnStartedAt: integer('turn_started_at'),
+  turnStartSeq: integer('turn_start_seq'),
+  turnUserText: text('turn_user_text'),
+  turnRequestId: text('turn_request_id'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });

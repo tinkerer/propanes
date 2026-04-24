@@ -98,7 +98,7 @@ async function handleSpriteCheckStatus(id: string) {
 
 async function handleSpriteLaunchSession(id: string) {
   try {
-    const result = await api.launchSpriteSession(id, { permissionProfile: 'interactive' });
+    const result = await api.launchSpriteSession(id, { permissionProfile: 'interactive-require' });
     if (result.sessionId) window.location.hash = '#/sessions';
   } catch (err: any) { error.value = err.message; }
 }

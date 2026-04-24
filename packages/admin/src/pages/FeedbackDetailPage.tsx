@@ -272,7 +272,7 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
     if (!fb) return;
     await api.updateFeedback(fb.id, { status: 'deleted' });
     if (currentDetailAppIdRef.current) {
-      navigate(`/app/${currentDetailAppIdRef.current}/feedback`);
+      navigate(`/app/${currentDetailAppIdRef.current}/tickets`);
     } else {
       navigate('/');
     }
@@ -457,7 +457,7 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
   const fb = feedback.value;
   if (!fb) return <div>Not found</div>;
 
-  const backPath = appId ? `/app/${appId}/feedback` : '/';
+  const backPath = appId ? `/app/${appId}/tickets` : '/';
 
   return (
     <div>

@@ -3,8 +3,8 @@ import { selectedAppId } from '../lib/state.js';
 export function FeedbackCompanionView({ feedbackId }: { feedbackId: string }) {
   const appId = selectedAppId.value;
   const route = appId
-    ? `/app/${appId}/feedback/${feedbackId}`
-    : `/feedback/${feedbackId}`;
+    ? `/app/${appId}/tickets/${feedbackId}`
+    : `/tickets/${feedbackId}`;
   const src = `/admin/?companion=true#${route}`;
 
   return (

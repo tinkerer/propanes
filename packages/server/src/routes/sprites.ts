@@ -203,7 +203,7 @@ app.post('/:id/session', async (c) => {
 
   const body = await c.req.json().catch(() => ({}));
   const prompt = body.prompt || 'You are running inside a Fly.io Sprite. Await instructions.';
-  const permissionProfile = (body.permissionProfile || 'interactive') as PermissionProfile;
+  const permissionProfile = (body.permissionProfile || 'interactive-require') as PermissionProfile;
 
   try {
     const { sessionId } = await dispatchDirectSpriteSession({

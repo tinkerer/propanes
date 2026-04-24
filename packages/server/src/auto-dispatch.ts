@@ -1,17 +1,27 @@
 import { eq } from 'drizzle-orm';
+import type { PermissionProfile } from '@propanes/shared';
 import { db, schema } from './db/index.js';
 import { feedbackEvents } from './events.js';
 import { dispatchFeedbackToAgent } from './dispatch.js';
 
+type AutoDispatchEvent = {
+  id: string;
+  appId: string | null;
+  autoDispatch?: boolean;
+  launcherId?: string;
+  agentEndpointId?: string;
+  permissionProfile?: PermissionProfile;
+};
+
 export function registerAutoDispatch() {
-  feedbackEvents.on('new', (event: { id: string; appId: string | null; autoDispatch?: boolean; launcherId?: string; agentEndpointId?: string }) => {
+  feedbackEvents.on('new', (event: AutoDispatchEvent) => {
     handleAutoDispatch(event).catch((err) =>
       console.error(`[auto-dispatch] Error for feedback ${event.id}:`, err)
     );
   });
 }
 
-async function handleAutoDispatch(event: { id: string; appId: string | null; autoDispatch?: boolean; launcherId?: string; agentEndpointId?: string }) {
+async function handleAutoDispatch(event: AutoDispatchEvent) {
   if (!event.appId || !event.autoDispatch) return;
 
   const app = db.select().from(schema.applications).where(eq(schema.applications.id, event.appId)).get();
@@ -36,7 +46,12 @@ async function handleAutoDispatch(event: { id: string; appId: string | null; aut
     agentId = defaultAgent.id;
   }
 
-  const result = await dispatchFeedbackToAgent({ feedbackId: event.id, agentEndpointId: agentId, launcherId: event.launcherId });
+  const result = await dispatchFeedbackToAgent({
+    feedbackId: event.id,
+    agentEndpointId: agentId,
+    launcherId: event.launcherId,
+    permissionProfile: event.permissionProfile,
+  });
   const agent = db.select().from(schema.agentEndpoints).where(eq(schema.agentEndpoints.id, agentId)).get();
-  console.log(`[auto-dispatch] ${event.id} -> "${agent?.name || agentId}": ${result.sessionId || 'webhook'}`);
+  console.log(`[auto-dispatch] ${event.id} -> "${agent?.name || agentId}"${event.permissionProfile ? ` (override=${event.permissionProfile})` : ''}: ${result.sessionId || 'webhook'}`);
 }

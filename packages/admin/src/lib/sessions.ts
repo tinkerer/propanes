@@ -7,7 +7,7 @@
 import { signal } from '@preact/signals';
 import { api } from './api.js';
 import { subscribeAdmin } from './admin-ws.js';
-import { autoNavigateToFeedback, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpLogs, localBridgeUrl, sshConfigs } from './settings.js';
+import { autoNavigateToFeedback, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpLogs, autoOpenChildCompanions, localBridgeUrl, sshConfigs } from './settings.js';
 import { navigate, selectedAppId, isEmbedded } from './state.js';
 import { isMobile } from './viewport.js';
 import { timed } from './perf.js';
@@ -34,6 +34,7 @@ import {
   exitedSessions,
   allSessions,
   sessionsLoading,
+  sessionsInitialized,
   sessionInputStates,
   quickDispatchState,
   cachedAgents,
@@ -53,6 +54,11 @@ import {
   getCompanions,
   toggleCompanion,
   syncCompanionsToRightPane,
+  terminalCompanionMap,
+  transferSessionCompanions,
+  companionTabId,
+  extractCompanionType,
+  extractSessionFromTab,
 } from './companion-state.js';
 
 import {
@@ -168,8 +174,8 @@ export function openSession(sessionId: string) {
     if (session?.feedbackId) {
       const appId = selectedAppId.value;
       const path = appId
-        ? `/app/${appId}/feedback/${session.feedbackId}`
-        : `/feedback/${session.feedbackId}`;
+        ? `/app/${appId}/tickets/${session.feedbackId}`
+        : `/tickets/${session.feedbackId}`;
       navigate(path);
     }
   }
@@ -366,7 +372,7 @@ export function markSessionExited(sessionId: string, exitCode?: number, terminal
   }
 }
 
-export async function resumeSession(sessionId: string, opts?: { permissionProfile?: string; additionalPrompt?: string }): Promise<string | null> {
+export async function resumeSession(sessionId: string, opts?: { permissionProfile?: string; runtime?: 'claude' | 'codex'; additionalPrompt?: string }): Promise<string | null> {
   try {
     // Kill running session first before resuming with new profile
     const sess = allSessions.value.find((s) => s.id === sessionId);
@@ -378,31 +384,62 @@ export async function resumeSession(sessionId: string, opts?: { permissionProfil
       markSessionExited(sessionId);
     }
     const { sessionId: newId } = await api.resumeAgentSession(sessionId, opts);
+
+    // Re-key any per-session UI state from oldId → newId so the new session
+    // inherits the user's open companions (JSONL, terminal, etc.) and the
+    // PopoutPanel's syncPanelCompanions effect doesn't wipe the split pane.
+    transferSessionCompanions(sessionId, newId);
+    const renameTab = (tabId: string): string => {
+      const ct = extractCompanionType(tabId);
+      if (ct && extractSessionFromTab(tabId) === sessionId) return companionTabId(newId, ct);
+      return tabId === sessionId ? newId : tabId;
+    };
+
     const panel = findPanelForSession(sessionId);
     if (panel) {
+      const newRightTabs = (panel.rightPaneTabs || []).map(renameTab);
+      const newRightActive = panel.rightPaneActiveId ? renameTab(panel.rightPaneActiveId) : null;
       updatePanel(panel.id, {
         sessionIds: panel.sessionIds.map((id) => id === sessionId ? newId : id),
         activeSessionId: panel.activeSessionId === sessionId ? newId : panel.activeSessionId,
+        rightPaneTabs: newRightTabs,
+        rightPaneActiveId: newRightActive,
       });
       persistPopoutState();
     } else {
-      const tabs = openTabs.value.map((id) => (id === sessionId ? newId : id));
-      openTabs.value = tabs;
-      if (rightPaneTabs.value.includes(sessionId)) {
-        rightPaneTabs.value = rightPaneTabs.value.map((id) => id === sessionId ? newId : id);
-        if (rightPaneActiveId.value === sessionId) rightPaneActiveId.value = newId;
+      openTabs.value = openTabs.value.map(renameTab);
+      const sessionInRightPane = rightPaneTabs.value.includes(sessionId);
+      const rightPaneTouched = rightPaneTabs.value.some(
+        (id) => id === sessionId || extractSessionFromTab(id) === sessionId,
+      );
+      if (rightPaneTouched) {
+        rightPaneTabs.value = rightPaneTabs.value.map(renameTab);
+        if (rightPaneActiveId.value) rightPaneActiveId.value = renameTab(rightPaneActiveId.value);
         persistSplitState();
-      } else {
+      }
+      if (!sessionInRightPane) {
         activeTabId.value = newId;
       }
       const leaf = findLeafWithTab(sessionId);
       if (leaf) replaceTabInLeaf(leaf.id, sessionId, newId);
+      for (const ct of (['jsonl', 'feedback', 'iframe', 'terminal', 'isolate', 'wiggum-runs', 'artifact'] as const)) {
+        const oldTab = companionTabId(sessionId, ct);
+        const compLeaf = findLeafWithTab(oldTab);
+        if (compLeaf) replaceTabInLeaf(compLeaf.id, oldTab, companionTabId(newId, ct));
+      }
     }
     const next = new Set(exitedSessions.value);
     next.delete(sessionId);
     exitedSessions.value = next;
     persistTabs();
     openSession(newId);
+    // If the resume was triggered from a standalone-session window/tab
+    // (e.g. a popped-out window showing just one session), the page is
+    // keyed by the URL hash — navigate it to the new session so the
+    // popout continues to follow it.
+    if (window.location.hash === `#/session/${sessionId}`) {
+      navigate(`/session/${newId}`);
+    }
     loadAllSessions();
     return newId;
   } catch (err: any) {
@@ -480,6 +517,60 @@ export async function batchQuickDispatch(feedbackIds: string[], appId?: string |
 
 // --- Session Loading & Polling ---
 
+// Track sessions we've already observed so we only auto-open *newly arrived*
+// children. Initialised on the first session-list update so pre-existing
+// children don't get auto-opened on every page load.
+const seenSessionIds = new Set<string>();
+let firstSessionUpdate = true;
+
+function autoOpenChildSessions(sessions: any[]) {
+  const isFirst = firstSessionUpdate;
+  firstSessionUpdate = false;
+
+  if (!isFirst && autoOpenChildCompanions.value) {
+    const termCompanionSids = new Set(Object.values(terminalCompanionMap.value));
+    for (const s of sessions) {
+      if (seenSessionIds.has(s.id)) continue;
+      const parentId = s.parentSessionId;
+      if (!parentId) continue;
+      // Skip children that are already wired as a terminal companion — they're
+      // rendered via the `terminal:<parent>` companion tab, not as their own tab.
+      if (termCompanionSids.has(s.id)) continue;
+      // Skip if the child is already represented somewhere in the UI.
+      if (openTabs.value.includes(s.id)) continue;
+      if (rightPaneTabs.value.includes(s.id)) continue;
+      if (findPanelForSession(s.id)) continue;
+
+      const parentPanel = findPanelForSession(parentId);
+      if (parentPanel) {
+        if (!parentPanel.sessionIds.includes(s.id)) {
+          updatePanel(parentPanel.id, { sessionIds: [...parentPanel.sessionIds, s.id] });
+          persistPopoutState();
+        }
+        continue;
+      }
+
+      const parentLeaf = findLeafWithTab(parentId);
+      if (parentLeaf) {
+        openTabs.value = [...openTabs.value, s.id];
+        persistTabs();
+        addTabToLeaf(parentLeaf.id, s.id, false);
+        continue;
+      }
+
+      if (rightPaneTabs.value.includes(parentId)) {
+        openTabs.value = [...openTabs.value, s.id];
+        rightPaneTabs.value = [...rightPaneTabs.value, s.id];
+        persistTabs();
+        persistSplitState();
+        continue;
+      }
+    }
+  }
+
+  for (const s of sessions) seenSessionIds.add(s.id);
+}
+
 export async function loadAllSessions(includeDeleted = false, isAutoPoll = false) {
   if (isAutoPoll && lastTerminalInput.value > 0 && Date.now() - lastTerminalInput.value < 5000) {
     return;
@@ -494,6 +585,8 @@ export async function loadAllSessions(includeDeleted = false, isAutoPoll = false
     }
     const sessions = await timed('sessions:list', () => api.getAgentSessions(undefined, tabs.length > 0 ? tabs : undefined, includeDeleted));
 
+    autoOpenChildSessions(sessions);
+
     const prevSessions = allSessions.value;
     const sessionsChanged = sessions.length !== prevSessions.length || sessions.some((s, i) => {
       const p = prevSessions[i];
@@ -517,6 +610,7 @@ export async function loadAllSessions(includeDeleted = false, isAutoPoll = false
     }
     if (changed) sessionInputStates.value = next;
     syncAutoJumpPanel();
+    sessionsInitialized.value = true;
   } catch {
     // ignore
   } finally {
@@ -531,6 +625,8 @@ export function startSessionPolling(): () => void {
   const unsub = subscribeAdmin('sessions', (sessions: any[]) => {
     if (lastTerminalInput.value > 0 && Date.now() - lastTerminalInput.value < 5000) return;
 
+    autoOpenChildSessions(sessions);
+
     const prevSessions = allSessions.value;
     const sessionsChanged = sessions.length !== prevSessions.length || sessions.some((s, i) => {
       const p = prevSessions[i];
@@ -554,6 +650,7 @@ export function startSessionPolling(): () => void {
     }
     if (changed) sessionInputStates.value = next;
     syncAutoJumpPanel();
+    sessionsInitialized.value = true;
   });
 
   return unsub;
@@ -751,10 +848,10 @@ export function cycleWaitingSession() {
 
 export const sshSetupDialog = signal<{ hostname: string; sessionId: string } | null>(null);
 
-function openBridgeWindow(config: import('./settings.js').SshConfig, sessionId: string) {
+function openBridgeWindow(config: import('./settings.js').SshConfig, sessionId: string): Window | null {
   const bridgeUrl = localBridgeUrl.value;
   const params = encodeURIComponent(JSON.stringify({ ...config, sessionId }));
-  window.open(`${bridgeUrl}/api/v1/local/bridge#${params}`, '_blank', 'width=400,height=200,menubar=no,toolbar=no');
+  return window.open(`${bridgeUrl}/api/v1/local/bridge#${params}`, '_blank', 'width=400,height=200,menubar=no,toolbar=no');
 }
 
 export function openLocalTerminal(sessionId: string) {
@@ -765,6 +862,18 @@ export function openLocalTerminal(sessionId: string) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId }),
+    }).then(async (res) => {
+      if (res.ok) return;
+      // fetch() only rejects on network errors \u2014 surface non-2xx ourselves
+      // so the user isn't left staring at a menu that silently did nothing
+      // (e.g. server returning "Open in Terminal.app is only supported on macOS").
+      let message = `Failed to open terminal (${res.status})`;
+      try {
+        const body = await res.json();
+        if (body?.error) message = body.error;
+      } catch { /* non-JSON response \u2014 keep default */ }
+      console.error('[local-bridge]', message);
+      showActionToast('\u2715', message, 'var(--pw-error)');
     }).catch((err) => {
       console.error('[local-bridge] Failed to open terminal:', err.message);
       showActionToast('\u2715', 'Failed to open terminal', 'var(--pw-error)');
@@ -775,7 +884,11 @@ export function openLocalTerminal(sessionId: string) {
       sshSetupDialog.value = { hostname: location.hostname, sessionId };
       return;
     }
-    openBridgeWindow(config, sessionId);
+    const win = openBridgeWindow(config, sessionId);
+    if (!win) {
+      // Popup blocked \u2014 prompt user to allow popups for this site.
+      showActionToast('\u2715', 'Popup blocked \u2014 allow popups and try again', 'var(--pw-error)');
+    }
   }
 }
 

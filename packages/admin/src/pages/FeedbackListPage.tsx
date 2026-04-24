@@ -215,7 +215,7 @@ export function FeedbackListPage({ appId }: { appId: string }) {
     const ids = Array.from(selected.value);
     await api.batchOperation({ ids, operation: 'permanentDelete' });
     for (const id of ids) {
-      trackDeletion('feedback', id, `Feedback ${id.slice(-6)}`);
+      trackDeletion('feedback', id, `Ticket ${id.slice(-6)}`);
     }
     selected.value = new Set();
     await loadFeedback();
@@ -248,7 +248,7 @@ export function FeedbackListPage({ appId }: { appId: string }) {
       createType.value = 'manual';
       createTags.value = '';
       if (isMobile.value) {
-        navigate(`/app/${appId}/feedback/${result.id}`);
+        navigate(`/app/${appId}/tickets/${result.id}`);
       } else {
         openFeedbackItem(result.id);
       }
@@ -364,7 +364,7 @@ export function FeedbackListPage({ appId }: { appId: string }) {
   }, []);
 
 
-  const basePath = `/app/${appId}/feedback`;
+  const basePath = `/app/${appId}/tickets`;
 
   const viewingDeleted = filterStatuses.value.has('deleted');
   const hasSelection = selected.value.size > 0;
@@ -393,14 +393,14 @@ export function FeedbackListPage({ appId }: { appId: string }) {
         <button class="btn btn-sm btn-primary" onClick={() => (showCreateForm.value = !showCreateForm.value)}>
           + New
         </button>
-        <button class="btn btn-sm" onClick={() => openAggregateWizard(appId)} title="Cluster feedback by similarity and auto-tag">
+        <button class="btn btn-sm" onClick={() => openAggregateWizard(appId)} title="Cluster tickets by similarity and auto-tag">
           Aggregate
         </button>
       </div>
 
       {showCreateForm.value && (
         <div class="detail-card" style="margin-bottom:16px">
-          <h3 style="margin-bottom:12px">New Feedback</h3>
+          <h3 style="margin-bottom:12px">New Ticket</h3>
           <div style="display:flex;flex-direction:column;gap:8px">
             <input
               type="text"
@@ -668,7 +668,7 @@ export function FeedbackListPage({ appId }: { appId: string }) {
             {items.value.length === 0 && !loading.value && (
               <tr>
                 <td colSpan={8} style="text-align:center;padding:32px;color:#94a3b8">
-                  No feedback items found
+                  No tickets found
                 </td>
               </tr>
             )}
