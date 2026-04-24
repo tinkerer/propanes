@@ -8,7 +8,10 @@ import { Layout } from './Layout.js';
 import { GlobalTerminalPanel } from './GlobalTerminalPanel.js';
 import { LoginPage } from '../pages/LoginPage.js';
 import { StandaloneSessionPage } from '../pages/StandaloneSessionPage.js';
+import { StandalonePanelPage, parsePanelRoute } from '../pages/StandalonePanelPage.js';
+import { StandaloneFeedbackPage } from '../pages/StandaloneFeedbackPage.js';
 import { DispatchDialog } from './DispatchDialog.js';
+import { SetupAssistantDialog } from './SetupAssistantDialog.js';
 import { PageView } from './PageView.js';
 import { ChiefOfStaffBubble } from './ChiefOfStaffBubble.js';
 
@@ -73,10 +76,27 @@ export function App() {
     connectAdminWs();
   }, []);
 
-  // Standalone session page — no layout chrome
+  // Standalone session page — no layout chrome. Decode the id so companion
+  // prefixes like `jsonl:` / `feedback:` survive the encodeURIComponent in
+  // openSessionExternally (location.hash keeps percent-encoding intact).
   if (route.startsWith('/session/')) {
-    const sessionId = route.replace('/session/', '');
+    const sessionId = decodeURIComponent(route.replace('/session/', ''));
     return <StandaloneSessionPage sessionId={sessionId} />;
+  }
+
+  // Standalone feedback page — shareable link from the widget. Shows just the
+  // feedback detail without the admin layout/sidebar.
+  if (route.startsWith('/fb/')) {
+    const feedbackId = decodeURIComponent(route.replace('/fb/', ''));
+    return <StandaloneFeedbackPage feedbackId={feedbackId} />;
+  }
+
+  // Standalone multi-tab panel page — opened when dragging a pane's hamburger
+  // out of the window. Encodes all tabs + active tab + optional split in URL.
+  if (route.startsWith('/panel/')) {
+    const params = parsePanelRoute(route);
+    if (!params) return <div style="padding:24px">Invalid panel URL</div>;
+    return <StandalonePanelPage params={params} />;
   }
 
   if (isCompanion.value) {
@@ -89,6 +109,7 @@ export function App() {
       <>
         <Layout />
         <DispatchDialog />
+        <SetupAssistantDialog />
         <ChiefOfStaffBubble floatingButton={false} />
       </>
     );
@@ -100,6 +121,7 @@ export function App() {
         <PageView />
         <GlobalTerminalPanel />
         <DispatchDialog />
+        <SetupAssistantDialog />
         <ChiefOfStaffBubble />
       </div>
     );
@@ -109,6 +131,7 @@ export function App() {
     <>
       <Layout />
       <DispatchDialog />
+      <SetupAssistantDialog />
       <ChiefOfStaffBubble floatingButton={false} />
     </>
   );

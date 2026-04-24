@@ -203,6 +203,7 @@ function buildAgentCommand(
   allowedTools?: string | null,
   claudeSessionId?: string,
   resumeSessionId?: string,
+  appendSystemPrompt?: string,
 ): { command: string; args: string[] } {
   if (runtime === 'codex') {
     const command = process.env.CODEX_BIN || 'codex';
@@ -231,6 +232,7 @@ function buildAgentCommand(
     if (STREAM_PROFILES.has(permissionProfile)) {
       args.push('--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages', '--verbose');
     }
+    if (appendSystemPrompt) args.push('--append-system-prompt', appendSystemPrompt);
     if (prompt) args.push(prompt);
     return { command: process.env.CLAUDE_BIN || 'claude', args };
   }
@@ -240,6 +242,7 @@ function buildAgentCommand(
       const args: string[] = [];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (allowedTools) args.push(`--allowedTools=${allowedTools}`);
+      if (appendSystemPrompt) args.push('--append-system-prompt', appendSystemPrompt);
       if (prompt) args.push(prompt);
       return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
@@ -247,6 +250,7 @@ function buildAgentCommand(
       const args: string[] = ['--dangerously-skip-permissions'];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (allowedTools) args.push(`--allowedTools=${allowedTools}`);
+      if (appendSystemPrompt) args.push('--append-system-prompt', appendSystemPrompt);
       if (prompt) args.push(prompt);
       return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
@@ -254,6 +258,7 @@ function buildAgentCommand(
       const args = ['-p', prompt, '--output-format', 'stream-json', '--verbose', '--dangerously-skip-permissions'];
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (allowedTools) args.push(`--allowedTools=${allowedTools}`);
+      if (appendSystemPrompt) args.push('--append-system-prompt', appendSystemPrompt);
       return { command: process.env.CLAUDE_BIN || 'claude', args };
     }
     case 'headless-stream-yolo':
@@ -274,6 +279,7 @@ function buildAgentCommand(
       if (SKIP_PROFILES.has(permissionProfile)) {
         args.push('--dangerously-skip-permissions');
       }
+      if (appendSystemPrompt) args.push('--append-system-prompt', appendSystemPrompt);
       if (prompt) args.push(prompt);
       if (claudeSessionId) args.push('--session-id', claudeSessionId);
       if (allowedTools) args.push(`--allowedTools=${allowedTools}`);
@@ -375,8 +381,9 @@ function spawnSession(params: {
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
+  appendSystemPrompt?: string;
 }): void {
-  const { sessionId, prompt = '', cwd, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId } = params;
+  const { sessionId, prompt = '', cwd, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt } = params;
 
   if (activeSessions.has(sessionId)) {
     throw new Error(`Session ${sessionId} is already running`);
@@ -389,6 +396,7 @@ function spawnSession(params: {
     allowedTools,
     claudeSessionId,
     resumeSessionId,
+    appendSystemPrompt,
   );
 
   console.log(`[session-service] Spawning session ${sessionId}: runtime=${runtime}, command=${command}, profile=${permissionProfile}, cwd=${cwd}, tmux=${isTmuxAvailable()}`);
@@ -789,7 +797,7 @@ app.get('/waiting', (c) => {
 
 app.post('/spawn', async (c) => {
   const body = await c.req.json();
-  const { sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId } = body;
+  const { sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt } = body;
 
   if (!sessionId || !cwd || !permissionProfile) {
     return c.json({ error: 'Missing required fields' }, 400);
@@ -799,7 +807,7 @@ app.post('/spawn', async (c) => {
   }
 
   try {
-    spawnSession({ sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId });
+    spawnSession({ sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt });
     return c.json({ ok: true, sessionId });
   } catch (err) {
     const pending = pendingConnections.get(sessionId);

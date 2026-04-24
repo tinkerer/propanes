@@ -56,6 +56,24 @@ export function SpotlightSearch({ onClose }: Props) {
     }
   }, [advancedMode]);
 
+  useEffect(() => {
+    function onDocKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      if (advancedMode) {
+        if (advancedResults.length > 0) {
+          setAdvancedResults([]);
+        } else {
+          setAdvancedMode(false);
+        }
+      } else {
+        onClose();
+      }
+    }
+    document.addEventListener('keydown', onDocKey);
+    return () => document.removeEventListener('keydown', onDocKey);
+  }, [advancedMode, advancedResults.length, onClose]);
+
   const search = useCallback((q: string) => {
     if (!q.trim()) {
       setResults([]);
@@ -74,7 +92,7 @@ export function SpotlightSearch({ onClose }: Props) {
           title: app.name,
           subtitle: app.projectDir || app.id.slice(0, 12),
           icon: '\u{1F4E6}',
-          route: `/app/${app.id}/feedback`,
+          route: `/app/${app.id}/tickets`,
         });
       }
     }
@@ -113,10 +131,10 @@ export function SpotlightSearch({ onClose }: Props) {
           const feedbackResults: SearchResult[] = res.items.map((item: any) => ({
             type: 'feedback' as const,
             id: item.id,
-            title: item.title || 'Untitled feedback',
+            title: item.title || 'Untitled ticket',
             subtitle: `${item.status || 'new'}${item.shortId ? ` \u00B7 ${item.shortId}` : ''}`,
             icon: '\u{1F4CB}',
-            route: `/app/${item.appId || '__unlinked__'}/feedback/${item.id}`,
+            route: `/app/${item.appId || '__unlinked__'}/tickets/${item.id}`,
           }));
           const nonFeedback = prev.filter((r) => r.type !== 'feedback');
           return [...nonFeedback, ...feedbackResults];
@@ -297,7 +315,7 @@ export function SpotlightSearch({ onClose }: Props) {
               ref={inputRef}
               type="text"
               class="spotlight-input"
-              placeholder="Search applications, feedback, sessions..."
+              placeholder="Search applications, tickets, sessions..."
               value={query}
               onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
               onKeyDown={handleKeyDown}
@@ -316,7 +334,7 @@ export function SpotlightSearch({ onClose }: Props) {
           >
             Advanced
           </button>
-          <kbd class="spotlight-esc">esc</kbd>
+          <kbd class="spotlight-esc" onClick={onClose}>esc</kbd>
         </div>
 
         {advancedMode ? (
@@ -478,7 +496,7 @@ function groupResults(results: SearchResult[]): [string, SearchResult[]][] {
   const order: [string, string][] = [
     ['application', 'Applications'],
     ['session', 'Sessions'],
-    ['feedback', 'Feedback'],
+    ['feedback', 'Tickets'],
   ];
   for (const [type, label] of order) {
     if (byType[type]?.length) groups.push([label, byType[type]]);

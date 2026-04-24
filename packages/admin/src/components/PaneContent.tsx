@@ -32,6 +32,7 @@ import {
   setSessionInputState,
   markSessionExited,
 } from '../lib/sessions.js';
+import { sessionsInitialized } from '../lib/session-state.js';
 import { applications, selectedAppId } from '../lib/state.js';
 
 export function renderTabContent(
@@ -155,9 +156,17 @@ export function renderTabContent(
       ) : isJsonl ? (
         <JsonlView sessionId={realSid} />
       ) : isFeedback ? (
-        sess?.feedbackId ? <FeedbackCompanionView feedbackId={sess.feedbackId} /> : <div class="companion-error">No feedback linked</div>
+        sess?.feedbackId
+          ? <FeedbackCompanionView feedbackId={sess.feedbackId} />
+          : !sessionsInitialized.value
+            ? <div class="companion-loading">Loading feedback...</div>
+            : <div class="companion-error">No feedback linked</div>
       ) : isIframe ? (
-        sess?.url ? <IframeCompanion url={sess.url} /> : <div class="companion-error">No URL available</div>
+        sess?.url
+          ? <IframeCompanion url={sess.url} />
+          : !sessionsInitialized.value
+            ? <div class="companion-loading">Loading...</div>
+            : <div class="companion-error">No URL available</div>
       ) : isTerminal ? (
         (() => {
           const termSid = getTerminalCompanion(realSid);

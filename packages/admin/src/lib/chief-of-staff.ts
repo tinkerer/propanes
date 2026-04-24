@@ -20,6 +20,7 @@ import {
   SIDEBAR_LEAF_ID,
   getAllLeaves,
 } from './pane-tree.js';
+import { isMobile } from './viewport.js';
 
 export type ChiefOfStaffToolCall = {
   id?: string;
@@ -125,8 +126,26 @@ export type ChiefOfStaffMsg = {
   toolCalls?: ChiefOfStaffToolCall[];
   timestamp: number;
   streaming?: boolean;
+  // Set on the assistant placeholder until the first SSE event arrives, so the
+  // UI can distinguish "request in flight, awaiting first byte" from "actively
+  // streaming a reply".
+  sending?: boolean;
+  // Set when the request failed before/after streaming started. Keeps the
+  // partial text/toolCalls visible and exposes a retry button.
+  error?: string;
+  retryPayload?: {
+    text: string;
+    appId: string | null;
+    attachments?: CosImageAttachment[];
+    elementRefs?: CosElementRef[];
+  };
   attachments?: CosImageAttachment[];
   elementRefs?: CosElementRef[];
+  // Set on user messages that were composed via "Reply in thread" — the
+  // timestamp of the thread-anchor user message they attach to. Used client-
+  // side by groupIntoThreads so the reply renders inline within the existing
+  // thread instead of starting a new one.
+  replyToTs?: number;
 };
 
 export type CosImageAttachment = {
@@ -148,6 +167,7 @@ export type CosElementRef = {
 export type SendCosOptions = {
   attachments?: CosImageAttachment[];
   elementRefs?: CosElementRef[];
+  replyToTs?: number;
 };
 
 export type CosLearning = {
@@ -157,14 +177,58 @@ export type CosLearning = {
   title: string;
   body: string;
   severity: 'low' | 'medium' | 'high';
+  tags: string[];
   createdAt: number;
+};
+
+export type CosLearningRelType = 'related' | 'caused_by' | 'resolved_by' | 'duplicate_of';
+export type CosLearningLinkSource = 'user' | 'wiggum' | 'auto';
+
+export type CosLearningEdge = {
+  id: string;
+  fromId: string;
+  toId: string;
+  relType: CosLearningRelType;
+  source: CosLearningLinkSource;
+  createdAt: number;
+};
+
+export type CosLearningLinkPeer = {
+  linkId: string;
+  relType: CosLearningRelType;
+  source: CosLearningLinkSource;
+  createdAt: number;
+  peer: { id: string; title: string; type: CosLearning['type']; severity: CosLearning['severity'] } | null;
+};
+
+export type CosLearningDetail = {
+  learning: CosLearning;
+  outgoing: CosLearningLinkPeer[];
+  backlinks: CosLearningLinkPeer[];
+};
+
+export type CosLearningGraph = {
+  nodes: CosLearning[];
+  edges: CosLearningEdge[];
+};
+
+export type CosLearningSuggestion = {
+  peer: { id: string; title: string; type: CosLearning['type']; severity: CosLearning['severity'] };
+  similarity: number;
 };
 
 export const cosLearnings = signal<CosLearning[]>([]);
 export const cosLearningsLoading = signal(false);
+export const cosLearningGraph = signal<CosLearningGraph | null>(null);
+export const cosLearningGraphLoading = signal(false);
 
 export type WiggumAnnouncement = { summary: string; threadId: string | null; at: number };
 export const wiggumAnnouncement = signal<WiggumAnnouncement | null>(null);
+
+function adminHeaders(): Record<string, string> {
+  const token = localStorage.getItem('pw-admin-token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 export async function loadWiggumAnnouncement(): Promise<void> {
   try {
@@ -208,7 +272,115 @@ export async function deleteCosLearning(id: string): Promise<void> {
     if (token) headers['Authorization'] = `Bearer ${token}`;
     await fetch(`/api/v1/admin/cos/learnings/${id}`, { method: 'DELETE', headers });
     cosLearnings.value = cosLearnings.value.filter((l) => l.id !== id);
+    // Drop the deleted node + any incident edges from the cached graph.
+    const g = cosLearningGraph.value;
+    if (g) {
+      cosLearningGraph.value = {
+        nodes: g.nodes.filter((n) => n.id !== id),
+        edges: g.edges.filter((e) => e.fromId !== id && e.toId !== id),
+      };
+    }
   } catch { /* non-fatal */ }
+}
+
+export async function loadCosLearningGraph(): Promise<void> {
+  cosLearningGraphLoading.value = true;
+  try {
+    const res = await fetch('/api/v1/admin/cos/learnings/graph', { headers: adminHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (Array.isArray(data?.nodes) && Array.isArray(data?.edges)) {
+      cosLearningGraph.value = data as CosLearningGraph;
+    }
+  } catch { /* non-fatal */ } finally {
+    cosLearningGraphLoading.value = false;
+  }
+}
+
+export async function fetchCosLearningDetail(id: string): Promise<CosLearningDetail | null> {
+  try {
+    const res = await fetch(`/api/v1/admin/cos/learnings/${id}`, { headers: adminHeaders() });
+    if (!res.ok) return null;
+    return await res.json() as CosLearningDetail;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchCosLearningSuggestions(id: string): Promise<CosLearningSuggestion[]> {
+  try {
+    const res = await fetch(`/api/v1/admin/cos/learnings/${id}/suggested-links`, { headers: adminHeaders() });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data?.suggestions) ? data.suggestions as CosLearningSuggestion[] : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function createCosLearningLink(
+  fromId: string,
+  toId: string,
+  relType: CosLearningRelType,
+): Promise<CosLearningEdge | null> {
+  try {
+    const res = await fetch(`/api/v1/admin/cos/learnings/${fromId}/links`, {
+      method: 'POST',
+      headers: { ...adminHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toId, relType, source: 'user' }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const link = data?.link;
+    if (!link) return null;
+    const edge: CosLearningEdge = {
+      id: link.id,
+      fromId: link.fromId,
+      toId: link.toId,
+      relType: link.relType,
+      source: link.source,
+      createdAt: Date.now(),
+    };
+    const g = cosLearningGraph.value;
+    if (g) cosLearningGraph.value = { nodes: g.nodes, edges: [...g.edges, edge] };
+    return edge;
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteCosLearningLink(linkId: string): Promise<void> {
+  try {
+    await fetch(`/api/v1/admin/cos/learnings/links/${linkId}`, {
+      method: 'DELETE',
+      headers: adminHeaders(),
+    });
+    const g = cosLearningGraph.value;
+    if (g) cosLearningGraph.value = { nodes: g.nodes, edges: g.edges.filter((e) => e.id !== linkId) };
+  } catch { /* non-fatal */ }
+}
+
+export async function updateCosLearning(
+  id: string,
+  patch: { title?: string; body?: string; severity?: CosLearning['severity']; tags?: string[] },
+): Promise<CosLearning | null> {
+  try {
+    const res = await fetch(`/api/v1/admin/cos/learnings/${id}`, {
+      method: 'PATCH',
+      headers: { ...adminHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const updated = data?.learning as CosLearning | null;
+    if (!updated) return null;
+    cosLearnings.value = cosLearnings.value.map((l) => (l.id === id ? updated : l));
+    const g = cosLearningGraph.value;
+    if (g) cosLearningGraph.value = { nodes: g.nodes.map((n) => (n.id === id ? updated : n)), edges: g.edges };
+    return updated;
+  } catch {
+    return null;
+  }
 }
 
 export type ChiefOfStaffAgent = {
@@ -223,24 +395,56 @@ export type ChiefOfStaffAgent = {
 };
 
 /**
- * Extract the user-facing reply from an assistant message. The model is
+ * Extract the user-facing reply(s) from an assistant message. The model is
  * instructed to wrap its reply in <cos-reply>...</cos-reply>; anything outside
- * is internal reasoning. If no tag is present (model misbehaved or mid-stream
- * before the open tag arrives), returns the original text so something is
- * visible. isOpen = true while the tag is open but not yet closed (streaming).
+ * is internal reasoning. The model may emit MULTIPLE tags per turn (typically
+ * an ack/ETA tag first, then a final-answer tag) — this extractor concatenates
+ * all closed segments and appends any currently-open tail so streaming stays
+ * visible. If no tag is present (model misbehaved or stream hasn't reached the
+ * first open tag), returns the original text so something is visible.
+ * isOpen = true while a tag is open but not yet closed (streaming).
  */
 export function extractCosReply(text: string): { displayText: string; hasTag: boolean; isOpen: boolean } {
   if (!text) return { displayText: '', hasTag: false, isOpen: false };
-  const openRe = /<cos-reply(?:\s[^>]*)?>/;
-  const openMatch = openRe.exec(text);
-  if (!openMatch) return { displayText: text, hasTag: false, isOpen: false };
-  const contentStart = openMatch.index + openMatch[0].length;
-  const rest = text.slice(contentStart);
-  const closeIdx = rest.indexOf('</cos-reply>');
-  if (closeIdx === -1) {
-    return { displayText: rest.replace(/^\s+/, ''), hasTag: true, isOpen: true };
+  const openRe = /<cos-reply(?:\s[^>]*)?>/g;
+  const segments: string[] = [];
+  let isOpen = false;
+  let hasTag = false;
+  let idx = 0;
+  while (idx < text.length) {
+    openRe.lastIndex = idx;
+    const openMatch = openRe.exec(text);
+    if (!openMatch) break;
+    hasTag = true;
+    const contentStart = openMatch.index + openMatch[0].length;
+    const rest = text.slice(contentStart);
+    const closeIdx = rest.indexOf('</cos-reply>');
+    if (closeIdx === -1) {
+      segments.push(rest.replace(/^\s+/, ''));
+      isOpen = true;
+      break;
+    }
+    segments.push(rest.slice(0, closeIdx).trim());
+    idx = contentStart + closeIdx + '</cos-reply>'.length;
   }
-  return { displayText: rest.slice(0, closeIdx).trim(), hasTag: true, isOpen: false };
+  if (!hasTag) return { displayText: text, hasTag: false, isOpen: false };
+  const joined = segments.filter((s) => s.length > 0).join('\n\n');
+  return { displayText: joined, hasTag: true, isOpen };
+}
+
+/**
+ * Verbose display: strip the <cos-reply> markers so the raw text is visible,
+ * including any scratch-work / planning the model emitted outside the tags.
+ * Used when the agent's verbosity is set to 'verbose' — matches the user
+ * request to "take all the text parts from the jsonl and send them to CoS".
+ */
+export function stripCosReplyMarkers(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/<cos-reply(?:\s[^>]*)?>/g, '')
+    .replace(/<\/cos-reply>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 const STORAGE_KEY = 'pw-chief-of-staff-v1';
@@ -296,8 +500,14 @@ function loadState(): { agents: ChiefOfStaffAgent[]; activeAgentId: string; open
             text: m.text || '',
             toolCalls: m.toolCalls,
             timestamp: m.timestamp,
-            // Never persist streaming=true across reloads — those streams are dead.
+            // Never persist streaming=true / sending=true across reloads — those
+            // streams are dead, so the UI would lie about being mid-request.
             streaming: false,
+            sending: false,
+            // Preserve a prior error string so the user still sees the failure
+            // after a reload, but drop retryPayload — image dataUrls were
+            // stripped on save, so the retry would silently lose attachments.
+            error: typeof m.error === 'string' ? m.error : undefined,
             attachments: Array.isArray(m.attachments) ? m.attachments : undefined,
             elementRefs: Array.isArray(m.elementRefs) ? m.elementRefs : undefined,
           }))
@@ -360,6 +570,11 @@ effect(() => {
     ...a,
     messages: a.messages.map((m) => ({
       ...m,
+      // Drop transient request state — these are bound to the in-memory fetch
+      // and meaningless after reload. retryPayload also has no value once
+      // attachment dataUrls have been stripped for quota.
+      sending: undefined,
+      retryPayload: undefined,
       attachments: m.attachments
         ? m.attachments.map((att) => ({ kind: att.kind, name: att.name, dataUrl: '' }))
         : undefined,
@@ -399,6 +614,7 @@ function serverMessageToClient(m: any): ChiefOfStaffMsg {
   }
   let attachments: CosImageAttachment[] | undefined;
   let elementRefs: CosElementRef[] | undefined;
+  let replyToTs: number | undefined;
   if (m?.attachmentsJson) {
     try {
       const parsed = JSON.parse(m.attachmentsJson);
@@ -409,6 +625,7 @@ function serverMessageToClient(m: any): ChiefOfStaffMsg {
         .map((a: any) => ({ kind: 'image', dataUrl: a.dataUrl, name: a.name }));
       if (mappedImgs.length > 0) attachments = mappedImgs;
       if (els.length > 0) elementRefs = els as CosElementRef[];
+      if (typeof parsed?.replyToTs === 'number') replyToTs = parsed.replyToTs;
     } catch { /* ignore */ }
   }
   return {
@@ -419,6 +636,7 @@ function serverMessageToClient(m: any): ChiefOfStaffMsg {
     streaming: false,
     attachments,
     elementRefs,
+    replyToTs,
   };
 }
 
@@ -678,12 +896,14 @@ export function sendChiefOfStaffMessage(
   const assistantTs = userTs + Math.floor(Math.random() * 1000) + 1;
 
   chiefOfStaffError.value = null;
+  const replyToTs = opts?.replyToTs;
   const userMsg: ChiefOfStaffMsg = {
     role: 'user',
     text: trimmed,
     timestamp: userTs,
     attachments: attachments.length > 0 ? attachments : undefined,
     elementRefs: elementRefs.length > 0 ? elementRefs : undefined,
+    replyToTs,
   };
   const assistantMsg: ChiefOfStaffMsg = {
     role: 'assistant',
@@ -691,6 +911,7 @@ export function sendChiefOfStaffMessage(
     toolCalls: [],
     timestamp: assistantTs,
     streaming: true,
+    sending: true,
   };
   updateAgent(agentId, (a) => ({ ...a, messages: [...a.messages, userMsg, assistantMsg] }));
 
@@ -706,6 +927,9 @@ export function sendChiefOfStaffMessage(
   const commit = (s: StreamAccum) => {
     patchAssistant((m) => ({
       ...m,
+      // Any committed event means the server is producing output — drop the
+      // "Working on it…" early-ack state.
+      sending: false,
       text: s.text,
       toolCalls: s.toolCalls.length > 0 ? s.toolCalls.map((c) => ({ ...c })) : undefined,
     }));
@@ -714,13 +938,170 @@ export function sendChiefOfStaffMessage(
   chiefOfStaffInFlight.value = chiefOfStaffInFlight.value + 1;
 
   void (async () => {
+    // Single accumulator spans the initial POST stream and any /attach
+    // re-attaches after a drop. Server replays from lastSeenSeq+1 so the
+    // accumulator stays idempotent across reconnects.
+    const accum: StreamAccum = {
+      text: '',
+      toolCalls: [],
+      toolCallsById: new Map(),
+    };
+    let lastSeenSeq = 0;
+    let cancelledByServer = false;
+    let threadIdForResume: string | undefined;
+
+    // Process one SSE stream to exhaustion. Returns:
+    //   { kind: 'done' }         — server closed cleanly (turn finished)
+    //   { kind: 'cancelled' }    — server cancelled (interrupt / supersede)
+    //   { kind: 'error', error } — server sent an explicit `error` event
+    //   { kind: 'drop' }         — reader.read() aborted mid-stream
+    type StreamResult =
+      | { kind: 'done' | 'cancelled' | 'drop' }
+      | { kind: 'error'; error: string };
+    const drainStream = async (body: ReadableStream<Uint8Array>): Promise<StreamResult> => {
+      const reader = body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) return { kind: 'done' };
+          buffer += decoder.decode(value, { stream: true });
+
+          let idx = buffer.indexOf('\n\n');
+          while (idx !== -1) {
+            const frame = buffer.slice(0, idx);
+            buffer = buffer.slice(idx + 2);
+            idx = buffer.indexOf('\n\n');
+
+            let event = 'message';
+            const dataLines: string[] = [];
+            for (const ln of frame.split('\n')) {
+              if (ln.startsWith(':')) continue;
+              if (ln.startsWith('event:')) event = ln.slice(6).trim();
+              else if (ln.startsWith('data:')) dataLines.push(ln.slice(5).replace(/^ /, ''));
+            }
+            if (dataLines.length === 0) continue;
+            const data = dataLines.join('\n');
+
+            if (event === 'claude') {
+              try {
+                const envelope = JSON.parse(data);
+                // New envelope: { seq, line: <claude-json> }. Fall back to
+                // the flat shape in case an older server is talking to us.
+                const obj = envelope && typeof envelope === 'object' && 'line' in envelope ? envelope.line : envelope;
+                if (typeof envelope?.seq === 'number' && envelope.seq > lastSeenSeq) {
+                  lastSeenSeq = envelope.seq;
+                }
+                if (processClaudeEvent(obj, accum)) commit(accum);
+              } catch { /* ignore malformed line */ }
+            } else if (event === 'cancelled') {
+              cancelledByServer = true;
+            } else if (event === 'done') {
+              try {
+                const obj = JSON.parse(data);
+                if (obj?.cancelled) cancelledByServer = true;
+              } catch { /* ignore */ }
+              return cancelledByServer ? { kind: 'cancelled' } : { kind: 'done' };
+            } else if (event === 'error') {
+              try {
+                const obj = JSON.parse(data);
+                return { kind: 'error', error: obj?.error || 'Claude error' };
+              } catch {
+                return { kind: 'error', error: 'Claude error' };
+              }
+            } else if (event === 'session') {
+              // No-op. Server also emits a `session` event on /attach so the
+              // client can confirm it reached the running turn.
+            }
+          }
+        }
+      } catch {
+        return { kind: 'drop' };
+      } finally {
+        try { reader.releaseLock(); } catch { /* ignore */ }
+      }
+    };
+
+    // If a re-attach fails because the server says the turn finished, try to
+    // pick up the assistant row the server persisted so the UI shows the
+    // completed reply instead of a dead streaming bubble.
+    const hydrateFromHistory = async (): Promise<boolean> => {
+      try {
+        const token = localStorage.getItem('pw-admin-token');
+        const headers: Record<string, string> = {};
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+        const res = await fetch(
+          `/api/v1/admin/chief-of-staff/history/${encodeURIComponent(agentId)}${appId ? `?appId=${encodeURIComponent(appId)}` : ''}`,
+          { headers },
+        );
+        if (!res.ok) return false;
+        const data = await res.json();
+        const serverMessages: any[] = Array.isArray(data?.messages) ? data.messages : [];
+        // Find the most recent assistant message. If its createdAt is after
+        // the user message we just sent, the server-side turn completed and
+        // we can hydrate the streaming bubble from it.
+        let latestAssistant: any = null;
+        for (let i = serverMessages.length - 1; i >= 0; i--) {
+          if (serverMessages[i]?.role === 'assistant') {
+            latestAssistant = serverMessages[i];
+            break;
+          }
+        }
+        const createdAt = Number(latestAssistant?.createdAt || 0);
+        if (!latestAssistant || createdAt <= userTs) return false;
+        const hydrated = serverMessageToClient(latestAssistant);
+        patchAssistant(() => ({ ...hydrated, timestamp: assistantTs, streaming: false, sending: false }));
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    // Poll /status until inFlight flips or we time out, returning the final
+    // status snapshot. Keeps waits short so we don't stall the UI.
+    const waitForTurnState = async (
+      threadId: string,
+      opts: { expectInFlight: boolean; timeoutMs: number; pollMs?: number },
+    ): Promise<{ inFlight: boolean; resumable: boolean; turnStartSeq: number | null } | null> => {
+      const deadline = Date.now() + opts.timeoutMs;
+      const pollMs = opts.pollMs ?? 500;
+      while (Date.now() < deadline) {
+        try {
+          const token = localStorage.getItem('pw-admin-token');
+          const headers: Record<string, string> = {};
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+          const res = await fetch(
+            `/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(threadId)}/status`,
+            { headers },
+          );
+          if (res.ok) {
+            const data = await res.json();
+            const snapshot = {
+              inFlight: !!data?.inFlight,
+              resumable: !!data?.resumable,
+              turnStartSeq: typeof data?.turnStartSeq === 'number' ? data.turnStartSeq : null,
+            };
+            if (snapshot.inFlight === opts.expectInFlight) return snapshot;
+            // Opposite of expected — keep polling unless we've run out of time.
+            if (Date.now() >= deadline) return snapshot;
+          }
+        } catch {
+          /* ignore and retry */
+        }
+        await new Promise((r) => setTimeout(r, pollMs));
+      }
+      return null;
+    };
+
     try {
       const token = localStorage.getItem('pw-admin-token');
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      // Get or create a server-side thread for this agent
       const threadId = await getOrCreateThread(agent, appId);
+      threadIdForResume = threadId;
 
       const payload: Record<string, unknown> = {
         text: trimmed,
@@ -730,9 +1111,11 @@ export function sendChiefOfStaffMessage(
         threadId: threadId || undefined,
         verbosity: agent.verbosity || DEFAULT_VERBOSITY,
         style: agent.style || DEFAULT_STYLE,
+        clientTs: userTs,
       };
       if (attachments.length > 0) payload.attachments = attachments;
       if (elementRefs.length > 0) payload.elementRefs = elementRefs;
+      if (typeof replyToTs === 'number') payload.replyToTs = replyToTs;
 
       const res = await fetch('/api/v1/admin/chief-of-staff/chat', {
         method: 'POST',
@@ -749,72 +1132,110 @@ export function sendChiefOfStaffMessage(
         throw new Error(errMsg);
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      const accum: StreamAccum = {
-        text: '',
-        toolCalls: [],
-        toolCallsById: new Map(),
-      };
+      let result = await drainStream(res.body);
 
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        // SSE frames are separated by a blank line (\n\n)
-        let idx = buffer.indexOf('\n\n');
-        while (idx !== -1) {
-          const frame = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
-          idx = buffer.indexOf('\n\n');
-
-          let event = 'message';
-          const dataLines: string[] = [];
-          for (const ln of frame.split('\n')) {
-            if (ln.startsWith(':')) continue; // comment / keepalive
-            if (ln.startsWith('event:')) event = ln.slice(6).trim();
-            else if (ln.startsWith('data:')) dataLines.push(ln.slice(5).replace(/^ /, ''));
-          }
-          if (dataLines.length === 0) continue;
-          const data = dataLines.join('\n');
-
-          if (event === 'claude') {
-            try {
-              const obj = JSON.parse(data);
-              if (processClaudeEvent(obj, accum)) commit(accum);
-            } catch { /* ignore malformed line */ }
-          } else if (event === 'error') {
-            try {
-              const obj = JSON.parse(data);
-              throw new Error(obj?.error || 'Claude error');
-            } catch (e: any) {
-              throw new Error(e?.message || 'Claude error');
-            }
-          }
-          // 'session' and 'done' events: no-op now that we don't persist sessionIds.
+      // Mid-stream drop: try to re-attach to the same turn via the session-
+      // service's replay buffer. We loop because an attached stream can also
+      // drop (e.g. a second server restart). Cap retries to avoid looping
+      // forever against a genuinely broken turn.
+      let reconnectAttempts = 0;
+      while (result.kind === 'drop' && threadIdForResume && reconnectAttempts < 5) {
+        reconnectAttempts += 1;
+        patchAssistant((m) => ({ ...m, sending: false, streaming: true, error: undefined }));
+        const statusSnap = await waitForTurnState(threadIdForResume, { expectInFlight: true, timeoutMs: 15_000 });
+        if (!statusSnap) break;
+        if (!statusSnap.inFlight) {
+          // Turn finished while the stream was dropped. Hydrate from the
+          // server's persisted history and exit cleanly.
+          const hydrated = await hydrateFromHistory();
+          if (hydrated) return;
+          break;
         }
+        if (!statusSnap.resumable) break;
+
+        const fromSeq = Math.max(lastSeenSeq + 1, (statusSnap.turnStartSeq ?? 0) + 1);
+        const attachRes = await fetch(
+          `/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(threadIdForResume)}/attach?fromSeq=${fromSeq}`,
+          { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+        ).catch(() => null);
+        if (!attachRes || !attachRes.ok || !attachRes.body) break;
+        result = await drainStream(attachRes.body);
       }
 
-      if (!accum.text && accum.toolCalls.length === 0) {
+      if (result.kind === 'error') throw new Error(result.error);
+      if (result.kind === 'drop') throw new Error('Stream dropped and could not be resumed');
+
+      if (!cancelledByServer && !accum.text && accum.toolCalls.length === 0) {
+        // Last-ditch hydrate: the turn may have finished before our reconnect
+        // window. If the server persisted an assistant row for this turn,
+        // show it instead of surfacing "No response from Claude".
+        if (threadIdForResume) {
+          const hydrated = await hydrateFromHistory();
+          if (hydrated) return;
+        }
         throw new Error('No response from Claude');
       }
 
-      patchAssistant((m) => ({ ...m, streaming: false }));
+      patchAssistant((m) => ({ ...m, streaming: false, sending: false }));
     } catch (err: any) {
       const msg = err?.message || 'Request failed';
       chiefOfStaffError.value = msg;
       patchAssistant((m) => ({
         ...m,
         streaming: false,
-        text: m.text || `(error) ${msg}`,
+        sending: false,
+        // Keep any partial text/toolCalls that arrived before the failure so
+        // the user can see how far it got. The error UI is rendered separately.
+        error: msg,
+        retryPayload: {
+          text: trimmed,
+          appId,
+          attachments: attachments.length > 0 ? attachments : undefined,
+          elementRefs: elementRefs.length > 0 ? elementRefs : undefined,
+        },
       }));
     } finally {
       chiefOfStaffInFlight.value = Math.max(0, chiefOfStaffInFlight.value - 1);
     }
   })();
+}
+
+/**
+ * Re-issue a previously failed assistant turn. Drops the failed assistant
+ * placeholder and the user message that originated it (if directly preceding),
+ * then re-calls sendChiefOfStaffMessage with the captured payload. This keeps
+ * the conversation linear instead of stacking duplicate user prompts on retry.
+ */
+export function retryFailedAssistantMessage(targetTimestamp: number): void {
+  const agent = getActiveAgent();
+  if (!agent) return;
+  const idx = agent.messages.findIndex(
+    (m) => m.role === 'assistant' && m.timestamp === targetTimestamp,
+  );
+  if (idx < 0) return;
+  const failed = agent.messages[idx];
+  const payload = failed.retryPayload;
+  if (!payload) return;
+  const dropFrom = idx > 0 && agent.messages[idx - 1].role === 'user' ? idx - 1 : idx;
+  updateAgent(agent.id, (a) => ({
+    ...a,
+    messages: a.messages.filter((_, i) => i < dropFrom || i > idx),
+  }));
+  sendChiefOfStaffMessage(payload.text, payload.appId, {
+    attachments: payload.attachments,
+    elementRefs: payload.elementRefs,
+  });
+}
+
+export function dismissFailedAssistantMessage(targetTimestamp: number): void {
+  const agent = getActiveAgent();
+  if (!agent) return;
+  updateAgent(agent.id, (a) => ({
+    ...a,
+    messages: a.messages.filter(
+      (m) => !(m.role === 'assistant' && m.timestamp === targetTimestamp),
+    ),
+  }));
 }
 
 export function setChiefOfStaffOpen(open: boolean): void {
@@ -838,6 +1259,17 @@ export const COS_PANE_TAB_ID = 'cos:main';
  * leaf (or split the main content leaf). Hides the floating popout.
  */
 export function openCosInPane(): void {
+  // Mobile: the layout renders MobilePageView instead of the pane tree, so a
+  // cos:main tab added to the tree would be invisible. Fall back to the
+  // floating popout (which has full-screen mobile CSS). Also strip any stale
+  // pane tab so the popout's !hasCosTabInTree guard doesn't suppress it.
+  if (isMobile.value) {
+    const stale = findLeafWithTab(COS_PANE_TAB_ID);
+    if (stale) removeTabFromLeaf(stale.id, COS_PANE_TAB_ID);
+    setChiefOfStaffOpen(true);
+    return;
+  }
+
   // If already open, just activate.
   const existing = findLeafWithTab(COS_PANE_TAB_ID);
   if (existing) {
@@ -884,6 +1316,16 @@ export function isCosInPane(): boolean {
 }
 
 export function closeCosPane(): void {
+  // On mobile the pane-mode surface is the popout (see openCosInPane), so the
+  // "close pane" toggle means "hide the popout." Still sweep any stale pane
+  // tab so a subsequent open isn't blocked by shouldRenderShell's
+  // !hasCosTabInTree guard.
+  if (isMobile.value) {
+    const stale = findLeafWithTab(COS_PANE_TAB_ID);
+    if (stale) removeTabFromLeaf(stale.id, COS_PANE_TAB_ID);
+    setChiefOfStaffOpen(false);
+    return;
+  }
   const existing = findLeafWithTab(COS_PANE_TAB_ID);
   if (!existing) return;
   removeTabFromLeaf(existing.id, COS_PANE_TAB_ID);

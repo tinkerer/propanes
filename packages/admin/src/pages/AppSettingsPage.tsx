@@ -164,7 +164,7 @@ export function AppSettingsPage({ appId }: { appId: string }) {
     await loadApplications();
     const apps = applications.value;
     if (apps.length > 0) {
-      navigate(`/app/${apps[0].id}/feedback`);
+      navigate(`/app/${apps[0].id}/tickets`);
     } else {
       navigate('/settings/getting-started');
     }

@@ -6,6 +6,7 @@ import { allSessions, openSession, deleteSession, permanentlyDeleteSession, spaw
 import { DeletedItemsPanel, trackDeletion } from '../components/DeletedItemsPanel.js';
 import { cachedTargets, ensureTargetsLoaded } from '../components/DispatchTargetSelect.js';
 import { isMobile } from '../lib/viewport.js';
+import { loadCosDispatches, cosGroupForSession } from '../lib/cos-dispatches.js';
 
 const ALL_STATUSES = ['running', 'pending', 'completed', 'failed', 'killed', 'deleted'] as const;
 const DEFAULT_STATUSES = new Set<string>(['running', 'pending', 'completed', 'failed', 'killed']);
@@ -107,12 +108,6 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
   const agentAppMap = useSignal<Record<string, string | null>>({});
   const metaWiggumAgentIds = useSignal<Set<string>>(new Set());
   const mapsLoaded = useSignal(false);
-  // Maps a session (or its feedbackId) to its originating Chief-of-Staff thread.
-  // `sessionToCos` is the precise link (parsed from dispatch result); `feedbackToCos`
-  // is the fallback used when the result couldn't be parsed. Most-recent dispatch wins.
-  type CosLink = { threadId: string; name: string; agentId: string; createdAt: number };
-  const sessionToCos = useSignal<Map<string, CosLink>>(new Map());
-  const feedbackToCos = useSignal<Map<string, CosLink>>(new Map());
   const expandedSwarms = useSignal<Set<string>>(loadSetFromStorage('pw-sessions-expanded-swarms'));
   const collapsedApps = useSignal<Set<string>>(loadSetFromStorage('pw-sessions-collapsed-apps'));
   const filtersCollapsed = useSignal(
@@ -184,31 +179,6 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
       mapsLoaded.value = true;
     } catch {
       // ignore
-    }
-  }
-
-  async function loadCosDispatches() {
-    try {
-      const { dispatches } = await api.getCosDispatches();
-      // Endpoint orders dispatches newest-first, so the *last* write to each
-      // map key wins — flip iteration so the newest dispatch ends up persisted.
-      const sMap = new Map<string, CosLink>();
-      const fMap = new Map<string, CosLink>();
-      for (let i = dispatches.length - 1; i >= 0; i--) {
-        const d = dispatches[i];
-        const link: CosLink = {
-          threadId: d.cosThreadId,
-          name: d.cosThreadName,
-          agentId: d.cosAgentId,
-          createdAt: d.createdAt,
-        };
-        if (d.sessionId) sMap.set(d.sessionId, link);
-        fMap.set(d.feedbackId, link);
-      }
-      sessionToCos.value = sMap;
-      feedbackToCos.value = fMap;
-    } catch {
-      // ignore — sessions still render flat
     }
   }
 
@@ -294,7 +264,7 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
     filtered = filtered.filter((s) => {
       const agentLabel = s.permissionProfile === 'plain' ? 'Terminal' : (agentMap.value[s.agentEndpointId] || s.agentEndpointId?.slice(-8) || '');
       const feedbackTitle = feedbackMap.value[s.feedbackId] || '';
-      const label = feedbackTitle || agentLabel || `Session ${s.id.slice(-8)}`;
+      const label = feedbackTitle || s.title || agentLabel || `Session ${s.id.slice(-8)}`;
       return label.toLowerCase().includes(q)
         || s.id.toLowerCase().includes(q)
         || (s.machineName || '').toLowerCase().includes(q)
@@ -315,11 +285,11 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
     return candidate ? new Date(candidate).getTime() : 0;
   };
   const sortBySelected = (a: any, b: any) => {
-    const statusOrder = (s: string) => s === 'running' ? 0 : s === 'pending' ? 1 : 2;
-    const diff = statusOrder(a.status) - statusOrder(b.status);
-    if (diff !== 0) return diff;
     const score = sortMode.value === 'activity' ? activityTime : startedTime;
-    return score(b) - score(a);
+    const diff = score(b) - score(a);
+    if (diff !== 0) return diff;
+    const statusOrder = (s: string) => s === 'running' ? 0 : s === 'pending' ? 1 : 2;
+    return statusOrder(a.status) - statusOrder(b.status);
   };
 
   // Build swarm hierarchy using server-provided swarmId/wiggumRunId linkage
@@ -386,19 +356,10 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
     | { type: 'parent'; session: any }
     | null;
 
-  // Sessions linked to a CoS thread either by sessionId (precise) or
-  // feedbackId (fallback when the dispatch result wasn't captured).
-  const cosLinkFor = (s: any): CosLink | null => {
-    const bySession = sessionToCos.value.get(s.id);
-    if (bySession) return bySession;
-    if (s.feedbackId) return feedbackToCos.value.get(s.feedbackId) || null;
-    return null;
-  };
-
   const getGroupKey = (s: any): GroupKey => {
     if (s.swarmId) return { type: 'swarm', id: s.swarmId, name: s.swarmName || `Swarm ${s.swarmId.slice(-8)}` };
     if (s.wiggumRunId) return { type: 'wiggum', runId: s.wiggumRunId };
-    const cos = cosLinkFor(s);
+    const cos = cosGroupForSession(s);
     if (cos) return { type: 'cos', threadId: cos.threadId, name: cos.name, agentId: cos.agentId };
     const root = findSwarmRoot(s);
     if (root) return { type: 'orchestrator', session: root };
@@ -538,7 +499,7 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
     return a.localeCompare(b);
   });
 
-  const feedbackPath = appId ? `/app/${appId}/feedback` : '/feedback';
+  const feedbackPath = appId ? `/app/${appId}/tickets` : '/tickets';
 
   const showPurge = activeStatuses.has('deleted') && activeStatuses.size === 1 && totalVisible > 0;
 
@@ -585,7 +546,7 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
             <span class={`session-orchestrator-badge${badge === 'parent' ? ' session-parent-badge' : ''}`}>{badge}</span>
           )}
           <span class="session-card-label">
-            {feedbackTitle || agentLabel || `Session ${s.id.slice(-8)}`}
+            {feedbackTitle || s.title || agentLabel || `Session ${s.id.slice(-8)}`}
           </span>
           <span class="session-card-id">{s.id.slice(-8)}</span>
           <span class={`session-card-status ${s.status}`}>{s.status}</span>

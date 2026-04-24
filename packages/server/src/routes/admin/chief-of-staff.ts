@@ -1,13 +1,20 @@
 import { Hono } from 'hono';
-import { eq, desc, and, inArray, sql } from 'drizzle-orm';
+import { eq, desc, and } from 'drizzle-orm';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { resolve as pathResolve, join as pathJoin } from 'node:path';
-import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, unlinkSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { ulid } from 'ulidx';
+import WebSocket from 'ws';
 import { db, schema } from '../../db/index.js';
 import { findRecentProjectJsonl } from '../../jsonl-scan.js';
+import {
+  spawnSessionRemote,
+  inputSessionRemote,
+  getSessionStatus,
+  getSessionServiceWsUrl,
+} from '../../session-service-client.js';
 
 export const chiefOfStaffRoutes = new Hono();
 
@@ -256,6 +263,207 @@ function resolveRepoRoot(): string {
   return pathResolve(process.cwd());
 }
 
+// Build the static system prompt for a thread's persistent session.
+// Per-turn dynamic context (requestId, other sessions) is injected into each
+// user message instead, since the session lives across multiple turns.
+function buildThreadSystemPrompt(threadId: string, appId: string | null, overridePrompt: string | null): string {
+  const base = (overridePrompt || '').trim() || DEFAULT_SYSTEM_PROMPT;
+  let ctx = '';
+  if (appId) ctx += `\n\nDefault appId context: ${appId}. Filter feedback/sessions by this appId unless asked otherwise.`;
+  ctx += `\n\nYour threadId is ${threadId}. Post replies back to this thread as yourself by calling:\n  POST http://localhost:3001/api/v1/admin/chief-of-staff/threads/${threadId}/messages\n  body: {"role":"assistant","text":"<cos-reply>...</cos-reply>"}\n\nTo share a screenshot:\n  python3 -c "import base64,json,urllib.request; img=open('/tmp/pw_vnc_screen.png','rb').read(); b64='data:image/png;base64,'+base64.b64encode(img).decode(); body=json.dumps({'role':'assistant','text':'Screenshot:','attachmentsJson':json.dumps({'images':[{'dataUrl':b64,'name':'screenshot.png'}]})}); r=urllib.request.Request('http://localhost:3001/api/v1/admin/chief-of-staff/threads/${threadId}/messages',body.encode(),{'Content-Type':'application/json'},'POST'); print(urllib.request.urlopen(r).read())"`;
+  ctx += '\n\n' + COORDINATION_INSTRUCTIONS;
+  return base + ctx;
+}
+
+// Proxy session-service WebSocket output as an SSE ReadableStream.
+//
+// Three callers:
+// 1. New turn: `userMessage` is the prompt; we capture the current outputSeq
+//    as the turn's start seq, call `onTurnStart(startSeq)`, then write stdin.
+// 2. Initial spawn: `userMessage === null` (first turn was passed as the
+//    initial prompt to spawnSessionRemote) — skip stdin write but still
+//    record the turn-start seq.
+// 3. Re-attach: `attach === true` and `fromSeq` is provided — tail an
+//    already-running turn from the given seq without writing stdin, without
+//    persisting a fresh assistant row on finish.
+//
+// Each forwarded claude line is wrapped as an envelope `{"seq":N,"line":...}`
+// so clients can remember the last seq they saw and resume exactly there.
+function streamCosSessionOutput(params: {
+  agentSessionId: string;
+  userMessage: string | null;
+  requestId: string;
+  attach?: boolean;
+  fromSeq?: number;
+  onTurnStart?: (startSeq: number) => void;
+  onAssistantText: (text: string, toolCalls: Map<string, { id: string; name: string; input: unknown; result?: string; error?: string }>, toolOrder: string[]) => void;
+  onCapturedSessionId: (id: string) => void;
+  onDone?: () => void;
+}): ReadableStream {
+  const {
+    agentSessionId,
+    userMessage,
+    requestId,
+    attach = false,
+    fromSeq,
+    onTurnStart,
+    onAssistantText,
+    onCapturedSessionId,
+    onDone,
+  } = params;
+  const encoder = new TextEncoder();
+
+  return new ReadableStream({
+    start(controller) {
+      let closed = false;
+      let startOutputSeq = 0;
+      let finalAssistantText = '';
+      const finalToolCallsById = new Map<string, { id: string; name: string; input: unknown; result?: string; error?: string }>();
+      const finalToolCallOrder: string[] = [];
+      let capturedSessionId: string | null = null;
+      let seqCursor = 0;
+
+      const enqueue = (event: string, data: unknown) => {
+        if (closed) return;
+        try { controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); } catch { closed = true; }
+      };
+      const enqueueClaudeFrame = (seq: number, raw: string) => {
+        if (closed) return;
+        // Wrap the raw claude JSON line so clients learn the session-service
+        // seq they're processing. Kept as one-line JSON for cheap parsing.
+        const envelope = `{"seq":${seq},"line":${raw}}`;
+        try { controller.enqueue(encoder.encode(`event: claude\ndata: ${envelope}\n\n`)); } catch { closed = true; }
+      };
+      const finish = (exitCode: number, cancelled = false) => {
+        if (closed) return;
+        // On re-attach the original turn already owns persistence; don't
+        // double-write the assistant row on every reconnect.
+        if (!attach) {
+          onAssistantText(finalAssistantText, finalToolCallsById, finalToolCallOrder);
+          if (capturedSessionId) onCapturedSessionId(capturedSessionId);
+        }
+        enqueue('done', { exitCode, cancelled, attach });
+        closed = true;
+        try { controller.close(); } catch { /* already closed */ }
+        onDone?.();
+      };
+
+      // Parse a stream-json line and accumulate assistant content
+      const processJsonLine = (line: string, seq: number): boolean => {
+        const trimmed = line.trim();
+        if (!trimmed) return false;
+        let obj: any;
+        try { obj = JSON.parse(trimmed); } catch { return false; }
+        enqueueClaudeFrame(seq, trimmed);
+        if (!capturedSessionId && typeof obj.session_id === 'string' && obj.session_id) {
+          capturedSessionId = obj.session_id;
+        }
+        if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
+          for (const block of obj.message.content) {
+            if (block.type === 'text' && block.text) {
+              finalAssistantText += (finalAssistantText ? '\n\n' : '') + block.text;
+            } else if (block.type === 'tool_use') {
+              const id = String(block.id || `tu-${finalToolCallOrder.length}`);
+              if (!finalToolCallsById.has(id)) {
+                finalToolCallsById.set(id, { id, name: String(block.name || 'tool'), input: block.input });
+                finalToolCallOrder.push(id);
+              }
+            }
+          }
+        } else if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
+          for (const block of obj.message.content) {
+            if (block.type !== 'tool_result') continue;
+            const call = finalToolCallsById.get(String(block.tool_use_id || ''));
+            if (!call) continue;
+            const raw = block.content;
+            let content = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.map((c: any) => c?.text || JSON.stringify(c)).join('\n') : JSON.stringify(raw);
+            if (content.length > 4000) content = `${content.slice(0, 4000)}…`;
+            if (block.is_error) call.error = content; else call.result = content;
+          }
+        } else if (obj.type === 'result') {
+          if (!finalAssistantText && obj.result) finalAssistantText = String(obj.result).trim();
+          return true; // signal end of turn
+        }
+        return false;
+      };
+
+      (async () => {
+        if (attach) {
+          // Passive re-attach: use the given fromSeq without writing stdin.
+          startOutputSeq = Math.max(0, (fromSeq ?? 1) - 1);
+        } else {
+          // Get current output seq before writing — we only want output after our message.
+          const status = await getSessionStatus(agentSessionId).catch(() => null);
+          startOutputSeq = status?.outputSeq ?? 0;
+          onTurnStart?.(startOutputSeq);
+        }
+        seqCursor = startOutputSeq;
+
+        enqueue('session', { sessionId: agentSessionId, requestId, startSeq: startOutputSeq, attach });
+
+        if (!attach && userMessage !== null) {
+          // Write user message as stream-json to stdin (first-turn message is
+          // passed as the initial prompt to spawnSessionRemote instead).
+          const stdinPayload = JSON.stringify({
+            type: 'user',
+            message: { role: 'user', content: [{ type: 'text', text: userMessage }] },
+          }) + '\n';
+          await inputSessionRemote(agentSessionId, stdinPayload).catch((err) => {
+            enqueue('error', { error: String(err) });
+            finish(1);
+          });
+          if (closed) return;
+        }
+
+        // Open WebSocket to session-service and replay output from startOutputSeq.
+        const wsUrl = getSessionServiceWsUrl(agentSessionId);
+        const ws = new WebSocket(wsUrl);
+        let outputBuf = '';
+
+        ws.on('open', () => {
+          ws.send(JSON.stringify({ type: 'replay_request', fromSeq: startOutputSeq + 1 }));
+        });
+
+        ws.on('message', (raw) => {
+          if (closed) { ws.close(); return; }
+          let msg: any;
+          try { msg = JSON.parse(raw.toString()); } catch { return; }
+          // Session-service emits SequencedOutput envelopes:
+          //   { type: 'sequenced_output', seq, content: { kind, data } }
+          // Fall back to flat fields in case of legacy frames.
+          const kind = msg?.content?.kind ?? msg?.kind;
+          const data = typeof msg?.content?.data === 'string'
+            ? msg.content.data
+            : (typeof msg?.data === 'string' ? msg.data : null);
+          const exitCode = msg?.content?.exitCode ?? msg?.exitCode;
+          if (typeof msg?.seq === 'number') seqCursor = msg.seq;
+          if (kind === 'output' && data != null) {
+            outputBuf += data;
+            const lines = outputBuf.split('\n');
+            outputBuf = lines.pop() || '';
+            for (const line of lines) {
+              const done = processJsonLine(line, seqCursor);
+              if (done) { ws.close(); finish(0); return; }
+            }
+          } else if (kind === 'exit') {
+            ws.close();
+            finish(exitCode ?? 0, false);
+          }
+        });
+
+        ws.on('error', (err) => {
+          enqueue('error', { error: String(err) });
+          finish(1);
+        });
+
+        ws.on('close', () => {
+          if (!closed) finish(0);
+        });
+      })();
+    },
+  });
+}
+
 type ActiveSession = {
   requestId: string;
   sessionId: string;
@@ -332,6 +540,34 @@ chiefOfStaffRoutes.get('/chief-of-staff/threads', async (c) => {
   return c.json({ threads: rows });
 });
 
+// Every CoS thread has exactly one persistent headless-stream agent session.
+// Provision it if missing (e.g. a thread created before the auto-provision
+// migration). Returns the agentSessionId that's now linked to the thread.
+async function ensureAgentSessionForThread(
+  thread: typeof schema.cosThreads.$inferSelect,
+): Promise<string> {
+  if (thread.agentSessionId) return thread.agentSessionId;
+  const agentSessionId = ulid();
+  const nowIso = new Date().toISOString();
+  await db.insert(schema.agentSessions).values({
+    id: agentSessionId,
+    cosThreadId: thread.id,
+    runtime: 'claude',
+    permissionProfile: 'headless-stream-yolo',
+    status: 'idle',
+    outputBytes: 0,
+    title: thread.name,
+    cwd: resolveRepoRoot(),
+    createdAt: nowIso,
+    startedAt: nowIso,
+    lastActivityAt: nowIso,
+  });
+  await db.update(schema.cosThreads)
+    .set({ agentSessionId })
+    .where(eq(schema.cosThreads.id, thread.id));
+  return agentSessionId;
+}
+
 chiefOfStaffRoutes.post('/chief-of-staff/threads', async (c) => {
   let body: { agentId?: string; appId?: string; name?: string; systemPrompt?: string; model?: string };
   try {
@@ -346,6 +582,9 @@ chiefOfStaffRoutes.post('/chief-of-staff/threads', async (c) => {
 
   const now = Date.now();
   const id = ulid();
+  const agentSessionId = ulid();
+  const nowIso = new Date(now).toISOString();
+
   const thread = {
     id,
     agentId,
@@ -353,11 +592,27 @@ chiefOfStaffRoutes.post('/chief-of-staff/threads', async (c) => {
     name,
     systemPrompt: body.systemPrompt || null,
     model: body.model || null,
+    agentSessionId,
     createdAt: now,
     updatedAt: now,
   };
 
+  const cwd = resolveRepoRoot();
   await db.insert(schema.cosThreads).values(thread);
+  await db.insert(schema.agentSessions).values({
+    id: agentSessionId,
+    cosThreadId: id,
+    runtime: 'claude',
+    permissionProfile: 'headless-stream-yolo',
+    status: 'idle',
+    outputBytes: 0,
+    title: name,
+    cwd,
+    createdAt: nowIso,
+    startedAt: nowIso,
+    lastActivityAt: nowIso,
+  });
+
   return c.json(thread);
 });
 
@@ -566,6 +821,81 @@ chiefOfStaffRoutes.get('/chief-of-staff/sessions', (c) => {
   return c.json({ sessions });
 });
 
+// Query thread status without invoking the LLM. Answers "is the bot working?"
+// and, when the turn is running through the session-service (persistent-
+// stream path), "what seq should I re-attach from if my SSE dropped?".
+chiefOfStaffRoutes.get('/chief-of-staff/threads/:id/status', async (c) => {
+  const threadId = c.req.param('id');
+  const thread = await db.query.cosThreads.findFirst({
+    where: eq(schema.cosThreads.id, threadId),
+  });
+  if (!thread) return c.json({ error: 'Thread not found' }, 404);
+
+  const live = thread.agentSessionId
+    ? await getSessionStatus(thread.agentSessionId).catch(() => null)
+    : null;
+  const inFlight = thread.turnStartedAt != null;
+  // A re-attach is possible when the session-service is still holding the
+  // output buffer for this turn. For the direct-spawn (non-persistent) path
+  // turnStartSeq is null — the turn is observable but not re-attachable.
+  const resumable = inFlight && thread.turnStartSeq != null && live?.active === true;
+
+  return c.json({
+    threadId,
+    inFlight,
+    resumable,
+    turnStartedAt: thread.turnStartedAt,
+    turnStartSeq: thread.turnStartSeq,
+    turnUserText: thread.turnUserText,
+    turnRequestId: thread.turnRequestId,
+    agentSessionId: thread.agentSessionId,
+    agentSessionStatus: live?.status ?? null,
+    agentSessionActive: live?.active ?? null,
+    currentOutputSeq: live?.outputSeq ?? null,
+    updatedAt: thread.updatedAt,
+    serverTime: Date.now(),
+  });
+});
+
+// Re-attach SSE stream to an in-flight turn. Used by the frontend to resume
+// after the main-server restarts or after a transient network drop — the
+// session-service's output buffer lets us replay from the last-seen seq so
+// nothing is lost or duplicated.
+chiefOfStaffRoutes.get('/chief-of-staff/threads/:id/attach', async (c) => {
+  const threadId = c.req.param('id');
+  const fromSeqRaw = c.req.query('fromSeq');
+  const fromSeq = fromSeqRaw != null && !Number.isNaN(Number(fromSeqRaw)) ? Number(fromSeqRaw) : undefined;
+
+  const thread = await db.query.cosThreads.findFirst({
+    where: eq(schema.cosThreads.id, threadId),
+  });
+  if (!thread) return c.json({ error: 'Thread not found' }, 404);
+  if (!thread.agentSessionId) return c.json({ error: 'Thread has no session to attach to' }, 404);
+  if (thread.turnStartedAt == null || thread.turnStartSeq == null) {
+    return c.json({ error: 'No in-flight turn to attach to' }, 409);
+  }
+
+  const requestId = thread.turnRequestId || randomUUID();
+  const stream = streamCosSessionOutput({
+    agentSessionId: thread.agentSessionId,
+    userMessage: null,
+    requestId,
+    attach: true,
+    fromSeq: fromSeq ?? (thread.turnStartSeq + 1),
+    onAssistantText: () => { /* primary turn owns persistence */ },
+    onCapturedSessionId: () => { /* primary turn owns session-id capture */ },
+  });
+
+  return c.body(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+});
+
 chiefOfStaffRoutes.post('/chief-of-staff/lock', async (c) => {
   let body: { requestId?: string; key?: string };
   try {
@@ -705,13 +1035,25 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
 
   const cwd = resolveRepoRoot();
 
-  // Load thread if provided
-  let thread: typeof schema.cosThreads.$inferSelect | undefined;
+  // Every chat turn belongs to a thread. The client always creates one via
+  // POST /chief-of-staff/threads before sending, which also provisions the
+  // persistent headless-stream agent session for that thread.
+  if (!body.threadId) return c.json({ error: 'threadId is required' }, 400);
+  let thread = await db.query.cosThreads.findFirst({
+    where: eq(schema.cosThreads.id, body.threadId),
+  });
+  if (!thread) return c.json({ error: 'Thread not found' }, 404);
 
-  if (body.threadId) {
+  // Pre-migration threads may not yet have an agentSessionId — provision one
+  // now so the persistent-stream path below always has a session to drive.
+  if (!thread.agentSessionId) {
+    await ensureAgentSessionForThread(thread);
     thread = await db.query.cosThreads.findFirst({
       where: eq(schema.cosThreads.id, body.threadId),
     });
+    if (!thread?.agentSessionId) {
+      return c.json({ error: 'Failed to provision CoS agent session' }, 500);
+    }
   }
 
   // Stop keyword: if the operator sent just "stop"/"halt"/"cancel"/"kill",
@@ -776,23 +1118,11 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
     });
   }
 
-  // Concurrent follow-up: if a turn is already in flight for this thread, kill
-  // it and wait for the process to flush before starting a new one. This
-  // implements "new message resumes the session" — the next spawn uses
-  // --resume on the same claudeSessionId, so context carries over.
-  if (body.threadId) {
-    const existing = inFlightByThread.get(body.threadId);
-    if (existing) {
-      const prevProc = existing.proc;
-      killProc(existing);
-      inFlightByThread.delete(body.threadId);
-      await new Promise<void>((resolveWait) => {
-        const done = () => resolveWait();
-        prevProc.once('close', done);
-        setTimeout(done, 3000);
-      });
-    }
-  }
+  // Concurrent follow-up: the persistent session-service session accepts
+  // stream-json messages over stdin, so a new turn from the operator queues
+  // naturally behind the running one. Just clear any stale inFlightByThread
+  // stub from a prior turn so the new turn's stub replaces it cleanly.
+  if (body.threadId) inFlightByThread.delete(body.threadId);
 
   let appContext = '';
   const appId = body.appId || (thread?.appId ?? undefined);
@@ -813,7 +1143,32 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
   // full prior context itself (no need to re-inject history into the prompt).
   // Otherwise we start a fresh session with a new UUID, and capture the session
   // id from the stream to persist on the thread for the next turn.
-  const resumeSessionId = thread?.claudeSessionId ?? null;
+  //
+  // Safety guard: if the JSONL file for the stored session exceeds 5 MB, loading
+  // it on every turn makes startup slow enough that the concurrent-follow-up
+  // killer fires before the first ack goes out (SIGTERM → exit 143). In that
+  // case drop the resume and let the thread start fresh.
+  const JSONL_SIZE_LIMIT = 5 * 1024 * 1024; // 5 MB
+  let rawResumeId = thread?.claudeSessionId ?? null;
+  if (rawResumeId) {
+    const cwdForSize = resolveRepoRoot();
+    const projectSlug = cwdForSize.replace(/\//g, '-');
+    const jsonlPath = pathJoin(homedir(), '.claude', 'projects', projectSlug, `${rawResumeId}.jsonl`);
+    try {
+      const { size } = statSync(jsonlPath);
+      if (size > JSONL_SIZE_LIMIT) {
+        console.warn(`[cos] session ${rawResumeId} JSONL is ${size} bytes (>${JSONL_SIZE_LIMIT}) — dropping resume to avoid slow startup`);
+        rawResumeId = null;
+        if (body.threadId) {
+          db.update(schema.cosThreads)
+            .set({ claudeSessionId: null })
+            .where(eq(schema.cosThreads.id, body.threadId))
+            .run();
+        }
+      }
+    } catch { /* file not found or unreadable — proceed normally */ }
+  }
+  const resumeSessionId = rawResumeId;
   const requestId = randomUUID();
   const startedAt = Date.now();
   const otherSessions = Array.from(activeSessions.values()).map(serializeSession);
@@ -872,375 +1227,168 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
     ? `${contextBlocks.join('\n\n')}\n\n---\n\n${text}`
     : text;
 
-  // --resume and --session-id conflict: pick one.
-  const args: string[] = [
-    '-p', promptText,
-    '--output-format', 'stream-json',
-    '--verbose',
-    '--dangerously-skip-permissions',
-    '--append-system-prompt', systemPrompt,
-  ];
-  if (resumeSessionId) {
-    args.push('--resume', resumeSessionId);
-  } else {
-    args.push('--session-id', requestId);
-  }
-  if (resolvedModel) args.push('--model', resolvedModel);
+  // ── Persistent headless-stream path ──────────────────────────────────────
+  // Every CoS thread has exactly one persistent headless-stream agent session
+  // (provisioned at thread creation or backfilled above). If the session is
+  // alive in the session-service, forward the turn's user message as stdin
+  // JSON and proxy the output as SSE; otherwise spawn it fresh with this
+  // message as the initial prompt. Per-turn context (requestId, other active
+  // sessions) is prepended so the persistent session sees it.
+  {
+    // Prepend per-turn metadata so the model has requestId / lock context.
+    const turnMeta = [
+      `[TURN requestId=${requestId}]`,
+      otherSessions.length > 0 ? `Other active CoS sessions: ${JSON.stringify(otherSessions)}` : null,
+    ].filter(Boolean).join('\n');
+    const fullTurnText = turnMeta ? `${turnMeta}\n\n${promptText}` : promptText;
 
-  const bin = process.env.CLAUDE_BIN || 'claude';
+    const liveStatus = await getSessionStatus(thread.agentSessionId).catch(() => null);
+    const isLive = liveStatus?.active && liveStatus.status === 'running';
 
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    start(controller) {
-      let closed = false;
-      let cleanedUp = false;
+    // If session is dead or idle, spawn it with the first user message as the initial prompt.
+    // headless-stream requires at least one prompt to start; subsequent turns go via stdin.
+    if (!isLive) {
+      const nowIso2 = new Date().toISOString();
+      // If the thread already has a claudeSessionId from an earlier turn, pass
+      // it as `resumeSessionId` so the CLI runs `--resume <id>` and picks up
+      // prior context. Passing it as `claudeSessionId` would map to
+      // `--session-id <id>`, which claude rejects with
+      // "Session ID … is already in use" when the JSONL already exists — that
+      // made the session exit in <1s and the UI showed "send failed" with no
+      // reply. `resumeSessionId` honours the JSONL-size guard above (rawResumeId
+      // gets nulled if the stored session's JSONL exceeds 5 MB).
+      const priorResumeId = resumeSessionId;
+      const freshSessionId = priorResumeId ? null : randomUUID();
+      const effectiveClaudeSessionId = priorResumeId ?? freshSessionId!;
+      db.update(schema.agentSessions)
+        .set({ status: 'running', claudeSessionId: effectiveClaudeSessionId, startedAt: nowIso2, lastActivityAt: nowIso2 })
+        .where(eq(schema.agentSessions.id, thread.agentSessionId))
+        .run();
+      const threadSp = buildThreadSystemPrompt(thread.id, thread.appId, thread.systemPrompt);
+      let spawnErr: unknown = null;
+      try {
+        await spawnSessionRemote({
+          sessionId: thread.agentSessionId,
+          prompt: fullTurnText,
+          cwd,
+          permissionProfile: 'headless-stream-yolo',
+          claudeSessionId: freshSessionId ?? undefined,
+          resumeSessionId: priorResumeId ?? undefined,
+          appendSystemPrompt: threadSp,
+        });
+      } catch (err) {
+        spawnErr = err;
+        console.error('[cos] spawn failed:', err);
+      }
+      // Give it a moment to start before we try to proxy output
+      await new Promise((r) => setTimeout(r, 800));
 
-      // Accumulate the final assistant text for persistence. Tool calls are
-      // keyed by tool_use id so we can splice tool_result content back onto
-      // the matching call when it arrives on a later `user` frame.
-      let finalAssistantText = '';
-      const finalToolCallsById = new Map<string, { id: string; name: string; input: unknown; result?: string; error?: string }>();
-      const finalToolCallOrder: string[] = [];
+      // If the spawn itself rejected, surface a real error to the client
+      // instead of falling through to a WebSocket that'll time out against a
+      // non-running session. Also flip the agentSessions row back to failed
+      // so the sidebar reflects reality.
+      if (spawnErr) {
+        db.update(schema.agentSessions)
+          .set({ status: 'failed', completedAt: new Date().toISOString() })
+          .where(eq(schema.agentSessions.id, thread.agentSessionId))
+          .run();
+        activeSessions.delete(requestId);
+        if (body.threadId) inFlightByThread.delete(body.threadId);
+        for (const p of tmpImagePaths) { try { unlinkSync(p.absPath); } catch { /* ignore */ } }
+        const msg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
+        return c.json({ error: `Failed to start CoS agent session: ${msg}` }, 502);
+      }
+    }
 
-      const cleanup = () => {
-        if (cleanedUp) return;
-        cleanedUp = true;
+    // Persist user message row upfront.
+    const userMsgStartedAt2 = typeof body.clientTs === 'number' ? body.clientTs : Date.now();
+    const userMsgId2 = ulid();
+    const hasExtras2 = attachmentsIn.length > 0 || elementRefs.length > 0 || typeof body.replyToTs === 'number';
+    const userAttachmentsJson2 = hasExtras2 ? JSON.stringify({
+      images: attachmentsIn.filter((a) => a.kind === 'image').map((a) => ({ dataUrl: a.dataUrl, name: a.name })),
+      elements: elementRefs,
+      ...(typeof body.replyToTs === 'number' ? { replyToTs: body.replyToTs } : {}),
+    }) : null;
+    if (body.threadId && thread) {
+      db.insert(schema.cosMessages).values({
+        id: userMsgId2, threadId: thread.id, role: 'user', text,
+        toolCallsJson: null, attachmentsJson: userAttachmentsJson2, createdAt: userMsgStartedAt2,
+      }).run();
+    }
+
+    // Update agentSession to show running state.
+    db.update(schema.agentSessions).set({
+      status: 'running',
+      lastActivityAt: new Date().toISOString(),
+      title: text.slice(0, 160),
+    }).where(eq(schema.agentSessions.id, thread.agentSessionId)).run();
+
+    activeSessions.set(requestId, { requestId, sessionId: thread.agentSessionId, text, startedAt, lockKeys: new Set() });
+    if (body.threadId) inFlightByThread.set(body.threadId, { proc: { pid: undefined } as any, cancelled: false });
+
+    const streamOut = streamCosSessionOutput({
+      agentSessionId: thread.agentSessionId,
+      userMessage: isLive ? fullTurnText : null,
+      requestId,
+      onTurnStart: (startSeq) => {
+        if (!thread) return;
+        // Mark the turn as in-flight so /threads/:id/status can answer
+        // "is the bot busy?" without invoking the LLM, and so the frontend
+        // can re-attach from startSeq if the SSE stream drops.
+        db.update(schema.cosThreads).set({
+          turnStartedAt: startedAt,
+          turnStartSeq: startSeq,
+          turnUserText: text.slice(0, 500),
+          turnRequestId: requestId,
+        }).where(eq(schema.cosThreads.id, thread.id)).run();
+      },
+      onAssistantText: (finalText, toolCallsById, toolOrder) => {
+        if (!finalText || !thread) return;
+        const now2 = Date.now();
+        const toolCallsArr = toolOrder.map((id) => toolCallsById.get(id)).filter(Boolean);
+        db.insert(schema.cosMessages).values({
+          id: ulid(), threadId: thread.id, role: 'assistant', text: finalText,
+          toolCallsJson: toolCallsArr.length > 0 ? JSON.stringify(toolCallsArr) : null,
+          attachmentsJson: null, createdAt: now2,
+        }).run();
+        db.update(schema.cosThreads).set({ updatedAt: now2 }).where(eq(schema.cosThreads.id, thread.id)).run();
+        db.update(schema.agentSessions).set({
+          status: 'running', lastActivityAt: new Date().toISOString(),
+        }).where(eq(schema.agentSessions.id, thread.agentSessionId!)).run();
+      },
+      onCapturedSessionId: (sid) => {
+        if (!thread) return;
+        db.update(schema.cosThreads).set({ claudeSessionId: sid }).where(eq(schema.cosThreads.id, thread.id)).run();
+        db.update(schema.agentSessions).set({ claudeSessionId: sid }).where(eq(schema.agentSessions.id, thread.agentSessionId!)).run();
+      },
+      onDone: () => {
         releaseAllLocks(requestId);
         activeSessions.delete(requestId);
         if (body.threadId) inFlightByThread.delete(body.threadId);
-        // Remove any tmp images we wrote for this turn. Keep non-fatal.
-        for (const p of tmpImagePaths) {
-          try { unlinkSync(p.absPath); } catch { /* ignore */ }
+        if (thread) {
+          db.update(schema.cosThreads).set({
+            turnStartedAt: null,
+            turnStartSeq: null,
+            turnUserText: null,
+            turnRequestId: null,
+          }).where(eq(schema.cosThreads.id, thread.id)).run();
         }
-      };
-      const send = (event: string, data: unknown) => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-        } catch {
-          closed = true;
-        }
-      };
-      const sendRaw = (event: string, rawJson: string) => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${rawJson}\n\n`));
-        } catch {
-          closed = true;
-        }
-      };
+        for (const p of tmpImagePaths) { try { unlinkSync(p.absPath); } catch { /* ignore */ } }
+      },
+    });
 
-      send('session', { sessionId: resumeSessionId || requestId, requestId });
+    return c.body(streamOut, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    });
+  }
+  // ── End persistent headless-stream path ───────────────────────────────────
 
-      // Persist the user message upfront (before the stream) so it survives a
-      // stream failure. The assistant row is written on successful close.
-      // Prefer the client-supplied send timestamp so in-memory replyToTs
-      // references still resolve after rehydration from the server.
-      const userMsgStartedAt = typeof body.clientTs === 'number' ? body.clientTs : Date.now();
-      const userMsgId = ulid();
-      const replyToTs = typeof body.replyToTs === 'number' ? body.replyToTs : undefined;
-      const hasExtras =
-        attachmentsIn.length > 0 || elementRefs.length > 0 || replyToTs !== undefined;
-      const userAttachmentsJson = hasExtras
-        ? JSON.stringify({
-            images: attachmentsIn
-              .filter((a) => a.kind === 'image' && typeof a.dataUrl === 'string')
-              .map((a) => ({ dataUrl: a.dataUrl, name: a.name })),
-            elements: elementRefs,
-            ...(replyToTs !== undefined ? { replyToTs } : {}),
-          })
-        : null;
-      if (body.threadId && thread) {
-        db.insert(schema.cosMessages).values({
-          id: userMsgId,
-          threadId: thread.id,
-          role: 'user',
-          text,
-          toolCallsJson: null,
-          attachmentsJson: userAttachmentsJson,
-          createdAt: userMsgStartedAt,
-        }).catch(() => { /* non-fatal */ });
-      }
-
-      // Session id the CLI actually used (captured from the first `system`
-      // init event). On the first turn we persist it on the thread so
-      // subsequent turns can --resume.
-      let capturedSessionId: string | null = null;
-
-      let proc;
-      try {
-        proc = spawn(bin, args, {
-          cwd,
-          env: process.env,
-          stdio: ['ignore', 'pipe', 'pipe'],
-          detached: true,
-        });
-      } catch (err: any) {
-        send('error', { error: err?.message || 'Failed to spawn claude CLI' });
-        closed = true;
-        cleanup();
-        try { controller.close(); } catch { /* already closed */ }
-        return;
-      }
-
-      // Register in-flight for interrupt support. We also hold this entry
-      // locally so the close handler can distinguish intentional kills
-      // (entry.cancelled === true) from real failures even after the map
-      // entry has been deleted by a superseding request.
-      const inFlightEntry: InFlightEntry = { proc, cancelled: false };
-      if (body.threadId) {
-        inFlightByThread.set(body.threadId, inFlightEntry);
-      }
-
-      // One agent_sessions row PER THREAD (not per turn). The underlying
-      // claude session is --resumed across turns, so each turn is really just
-      // another message on the same process lineage — modelling that as a
-      // single row keeps the Sessions list stable and the claude_session_id
-      // field meaningfully persistent. We upsert: reuse the most recent row
-      // for the thread if it exists, delete any stragglers from the earlier
-      // per-turn behaviour, or insert fresh on first turn.
-      let agentSessionId: string | null = null;
-      let agentSessionOutputBytes = 0;
-      if (body.threadId && thread) {
-        const nowIso = new Date().toISOString();
-        // Drop markdown-quote lines (leading `>`) before titling — the admin
-        // composer prepends the parent message as a `> ` block when replying
-        // in-thread, and that's context for the model, not the label.
-        const rawTitle = text
-          .split('\n')
-          .filter((line) => !line.trimStart().startsWith('>'))
-          .join(' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-        const title = rawTitle.length > 160 ? `${rawTitle.slice(0, 160)}…` : rawTitle;
-
-        const existing = db.select({ id: schema.agentSessions.id })
-          .from(schema.agentSessions)
-          .where(eq(schema.agentSessions.cosThreadId, thread.id))
-          .orderBy(desc(schema.agentSessions.createdAt))
-          .all();
-
-        if (existing.length > 0) {
-          agentSessionId = existing[0].id;
-          const stragglers = existing.slice(1).map((e) => e.id);
-          if (stragglers.length > 0) {
-            db.delete(schema.agentSessions)
-              .where(inArray(schema.agentSessions.id, stragglers))
-              .run();
-          }
-          db.update(schema.agentSessions).set({
-            status: 'running',
-            pid: proc.pid ?? null,
-            claudeSessionId: resumeSessionId,
-            title: title || null,
-            completedAt: null,
-            exitCode: null,
-            lastActivityAt: nowIso,
-          }).where(eq(schema.agentSessions.id, agentSessionId)).run();
-        } else {
-          agentSessionId = ulid();
-          db.insert(schema.agentSessions).values({
-            id: agentSessionId,
-            cosThreadId: thread.id,
-            runtime: 'claude',
-            permissionProfile: 'interactive-yolo',
-            status: 'running',
-            pid: proc.pid ?? null,
-            outputBytes: 0,
-            claudeSessionId: resumeSessionId,
-            title: title || null,
-            cwd,
-            createdAt: nowIso,
-            startedAt: nowIso,
-            lastActivityAt: nowIso,
-          }).run();
-        }
-      }
-
-      let stdoutBuf = '';
-      proc.stdout.on('data', (chunk: Buffer) => {
-        if (agentSessionId) agentSessionOutputBytes += chunk.length;
-        stdoutBuf += chunk.toString('utf8');
-        const lines = stdoutBuf.split('\n');
-        stdoutBuf = lines.pop() || '';
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          // Validate it's JSON; forward opaque — client parses.
-          let ok = false;
-          let obj: any;
-          try {
-            obj = JSON.parse(trimmed);
-            ok = true;
-          } catch {
-            /* skip non-JSON line */
-          }
-          if (ok) {
-            sendRaw('claude', trimmed);
-            // Accumulate assistant text for persistence
-            if (obj) {
-              if (!capturedSessionId && typeof obj.session_id === 'string' && obj.session_id) {
-                capturedSessionId = obj.session_id;
-                if (agentSessionId && capturedSessionId !== resumeSessionId) {
-                  db.update(schema.agentSessions)
-                    .set({ claudeSessionId: capturedSessionId })
-                    .where(eq(schema.agentSessions.id, agentSessionId))
-                    .run();
-                }
-              }
-              if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
-                for (const block of obj.message.content) {
-                  if (block.type === 'text' && block.text) {
-                    finalAssistantText += (finalAssistantText ? '\n\n' : '') + block.text;
-                  } else if (block.type === 'tool_use') {
-                    const id = String(block.id || `tu-${finalToolCallOrder.length}`);
-                    if (!finalToolCallsById.has(id)) {
-                      finalToolCallsById.set(id, { id, name: String(block.name || 'tool'), input: block.input });
-                      finalToolCallOrder.push(id);
-                    }
-                  }
-                }
-              } else if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
-                for (const block of obj.message.content) {
-                  if (block.type !== 'tool_result') continue;
-                  const id = String(block.tool_use_id || '');
-                  const call = finalToolCallsById.get(id);
-                  if (!call) continue;
-                  const raw = block.content;
-                  let content: string;
-                  if (typeof raw === 'string') content = raw;
-                  else if (Array.isArray(raw)) {
-                    content = raw
-                      .map((c: any) => (typeof c === 'string' ? c : c?.text || JSON.stringify(c)))
-                      .join('\n');
-                  } else content = JSON.stringify(raw);
-                  // Cap to keep row size sane — full output is still in the JSONL transcript.
-                  if (content.length > 4000) content = `${content.slice(0, 4000)}…[${content.length - 4000} more chars truncated]`;
-                  if (block.is_error) call.error = content;
-                  else call.result = content;
-                }
-              } else if (obj.type === 'result' && !finalAssistantText && obj.result) {
-                finalAssistantText = String(obj.result).trim();
-              }
-            }
-          }
-        }
-      });
-
-      let stderrBuf = '';
-      proc.stderr.on('data', (chunk: Buffer) => {
-        stderrBuf += chunk.toString('utf8');
-      });
-
-      proc.on('error', (err: any) => {
-        send('error', { error: err?.message || 'claude process error' });
-        if (agentSessionId) {
-          const nowIso = new Date().toISOString();
-          db.update(schema.agentSessions)
-            .set({
-              status: 'failed',
-              completedAt: nowIso,
-              lastActivityAt: nowIso,
-              outputBytes: sql`${schema.agentSessions.outputBytes} + ${agentSessionOutputBytes}`,
-            })
-            .where(eq(schema.agentSessions.id, agentSessionId))
-            .run();
-        }
-        closed = true;
-        cleanup();
-        try { controller.close(); } catch { /* already closed */ }
-      });
-
-      proc.on('close', (code, signal) => {
-        // Distinguish deliberate cancellation from a real crash. SIGTERM-caught
-        // claude exits with code 143; SIGKILL with 137. If we flagged this
-        // proc as cancelled (interrupt, superseded by a follow-up) or the
-        // process died to a kill signal, surface a `cancelled` event instead
-        // of an `error` so the UI doesn't show "Send failed" for a user-
-        // initiated stop.
-        const killedBySignal = signal === 'SIGTERM' || signal === 'SIGKILL';
-        const cancelled = inFlightEntry.cancelled || killedBySignal || code === 143 || code === 137;
-        if (cancelled) {
-          send('cancelled', { exitCode: code ?? null, signal: signal ?? null });
-        } else if (code !== 0) {
-          send('error', {
-            error: `claude exited with code ${code}${stderrBuf ? `: ${stderrBuf.slice(0, 500)}` : ''}`,
-            exitCode: code,
-          });
-        }
-
-        if (agentSessionId) {
-          const nowIso = new Date().toISOString();
-          db.update(schema.agentSessions)
-            .set({
-              status: code === 0 ? 'completed' : cancelled ? 'cancelled' : 'failed',
-              exitCode: code ?? null,
-              completedAt: nowIso,
-              lastActivityAt: nowIso,
-              outputBytes: sql`${schema.agentSessions.outputBytes} + ${agentSessionOutputBytes}`,
-            })
-            .where(eq(schema.agentSessions.id, agentSessionId))
-            .run();
-        }
-
-        // Persist assistant message + thread bookkeeping. The user message was
-        // already written before the stream started. We also stash the
-        // captured claude session id on the thread the first time we see it,
-        // so the next turn can --resume.
-        if (body.threadId && thread) {
-          const now = Date.now();
-          const ops: Promise<unknown>[] = [];
-          const orderedToolCalls = finalToolCallOrder
-            .map((id) => finalToolCallsById.get(id))
-            .filter((c): c is NonNullable<typeof c> => !!c);
-          if (finalAssistantText || orderedToolCalls.length > 0) {
-            ops.push(db.insert(schema.cosMessages).values({
-              id: ulid(),
-              threadId: thread.id,
-              role: 'assistant',
-              text: finalAssistantText || '',
-              toolCallsJson: orderedToolCalls.length > 0 ? JSON.stringify(orderedToolCalls) : null,
-              createdAt: now,
-            }));
-          }
-          const threadPatch: Partial<typeof schema.cosThreads.$inferInsert> = { updatedAt: now };
-          if (capturedSessionId && capturedSessionId !== thread.claudeSessionId) {
-            threadPatch.claudeSessionId = capturedSessionId;
-          }
-          ops.push(db.update(schema.cosThreads)
-            .set(threadPatch)
-            .where(eq(schema.cosThreads.id, thread.id)));
-          Promise.all(ops).catch(() => { /* non-fatal */ });
-        }
-
-        send('done', { exitCode: code ?? 0, cancelled });
-        closed = true;
-        cleanup();
-        try { controller.close(); } catch { /* already closed */ }
-
-        // Wiggum self-reflection: fire-and-forget background pass over recent
-        // JSONL transcripts. Single-flight so concurrent closes coalesce.
-        const port = Number(process.env.PORT) || 3001;
-        spawnWiggumReflection(port);
-      });
-
-      c.req.raw.signal.addEventListener('abort', () => {
-        // HTTP connection dropped (page refresh, tab close). Don't kill the
-        // claude proc — leave it running and tracked in inFlightByThread so
-        // the next message for this thread finds and replaces it via killProc().
-        // The proc's own close handler will persist results to the DB.
-        releaseAllLocks(requestId);
-        activeSessions.delete(requestId);
-      });
-    },
-  });
-
-  return c.body(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    },
-  });
+  // Unreachable: every chat turn above routed through the persistent path and
+  // already returned.
+  return c.json({ error: 'Internal routing error' }, 500);
 });

@@ -101,15 +101,15 @@ export function Layout() {
     };
   }, []);
 
-  // Intercept feedback detail routes and open them as separate pane tabs
+  // Intercept ticket detail routes and open them as separate pane tabs
   // (desktop only — mobile renders the detail page via MobilePageView and keeps the URL).
   useEffect(() => {
     if (isMobile.value) return;
-    const detailMatch = route.match(/^\/app\/([^/]+)\/feedback\/(.+)$/);
+    const detailMatch = route.match(/^\/app\/([^/]+)\/(?:tickets|feedback)\/(.+)$/);
     if (detailMatch) {
       const [, appId, feedbackId] = detailMatch;
       openFeedbackItem(feedbackId);
-      navigate(`/app/${appId}/feedback`);
+      navigate(`/app/${appId}/tickets`);
     }
   }, [route]);
 
@@ -211,11 +211,11 @@ export function Layout() {
       registerShortcut({
         sequence: 'g f',
         key: 'f',
-        label: 'Go to Feedback',
+        label: 'Go to Tickets',
         category: 'Navigation',
         action: () => {
           const appId = selectedAppId.value || applications.value[0]?.id;
-          if (appId) navigate(`/app/${appId}/feedback`);
+          if (appId) navigate(`/app/${appId}/tickets`);
         },
       }),
       registerShortcut({

@@ -3,7 +3,7 @@ import { marked } from 'marked';
 import hljs from 'highlight.js/lib/common';
 import type { ParsedMessage } from '../lib/output-parser.js';
 import { openFileViewer } from '../lib/file-viewer.js';
-import { isMobile } from '../lib/viewport.js';
+import { isMobile, useNarrow } from '../lib/viewport.js';
 import { CopyCommand } from './CopyCommand.js';
 import { AskUserQuestionPrompt, type Question } from './InteractivePrompt.js';
 
@@ -237,11 +237,17 @@ function BashToolUse({ toolInput, cat }: { toolInput?: Record<string, unknown>; 
   const background = toolInput?.run_in_background === true || toolInput?.run_in_background === 'true';
 
   const cmdLines = command ? command.split('\n') : [];
-  const mobile = isMobile.value;
-  const collapsible = mobile && (cmdLines.length > 1 || command.length > 120);
+  const containerNarrow = useNarrow(); const narrow = isMobile.value || containerNarrow;
+  // In a narrow pane, even a single long line wraps into a wall of text.
+  // Collapse aggressively there; keep desktop permissive only when the
+  // command clearly spans many lines or exceeds ~1K chars.
+  const collapsible = narrow
+    ? (cmdLines.length > 1 || command.length > 80)
+    : (cmdLines.length > 12 || command.length > 1000);
   const [expanded, setExpanded] = useState(false);
+  const previewLimit = narrow ? 80 : 200;
   const preview = collapsible && !expanded
-    ? cmdLines[0].slice(0, 120) + (cmdLines.length > 1 || cmdLines[0].length > 120 ? ' …' : '')
+    ? cmdLines[0].slice(0, previewLimit) + (cmdLines.length > 1 || cmdLines[0].length > previewLimit ? ' …' : '')
     : command;
 
   return (
@@ -276,8 +282,8 @@ function EditToolUse({ toolInput, cat }: { toolInput?: Record<string, unknown>; 
   const replaceAll = toolInput?.replace_all === true || toolInput?.replace_all === 'true';
 
   const diffLines = computeDiff(oldStr, newStr);
-  const mobile = isMobile.value;
-  const collapsible = mobile && diffLines.length > 6;
+  const containerNarrow = useNarrow(); const narrow = isMobile.value || containerNarrow;
+  const collapsible = narrow ? diffLines.length > 4 : diffLines.length > 40;
   const [expanded, setExpanded] = useState(!collapsible);
 
   // Keep expand state in sync when viewport flips between mobile/desktop
@@ -327,8 +333,8 @@ function WriteToolUse({ toolInput, cat }: { toolInput?: Record<string, unknown>;
   const content = String(toolInput?.content || '');
   const lines = content.split('\n');
   const lang = getLangFromPath(filePath);
-  const mobile = isMobile.value;
-  const collapsible = mobile && lines.length > 4;
+  const containerNarrow = useNarrow(); const narrow = isMobile.value || containerNarrow;
+  const collapsible = narrow ? lines.length > 3 : lines.length > 30;
   const [expanded, setExpanded] = useState(!collapsible);
 
   useEffect(() => { if (!collapsible) setExpanded(true); }, [collapsible]);
@@ -346,7 +352,7 @@ function WriteToolUse({ toolInput, cat }: { toolInput?: Record<string, unknown>;
         <span class="sm-tool-badge">{lines.length} lines</span>
         {collapsible && <span class="sm-expand-indicator">{expanded ? '▾' : '▸'}</span>}
       </div>
-      {expanded && <HighlightedCode content={content} lang={lang} maxLines={mobile ? 8 : 20} />}
+      {expanded && <HighlightedCode content={content} lang={lang} maxLines={narrow ? 8 : 20} />}
     </div>
   );
 }
@@ -391,8 +397,8 @@ function SearchToolUse({ toolName, toolInput, cat }: { toolName: string; toolInp
 
 function TodoToolUse({ toolInput, cat }: { toolInput?: Record<string, unknown>; cat: string }) {
   const todos = toolInput?.todos as Array<{ content: string; status: string }> | undefined;
-  const mobile = isMobile.value;
-  const collapsible = mobile && !!todos && todos.length > 0;
+  const containerNarrow = useNarrow(); const narrow = isMobile.value || containerNarrow;
+  const collapsible = narrow && !!todos && todos.length > 0;
   const [expanded, setExpanded] = useState(!collapsible);
 
   useEffect(() => { if (!collapsible) setExpanded(true); }, [collapsible]);
@@ -654,10 +660,10 @@ function ToolResultMessage({ message, prevToolUse }: { message: ParsedMessage; p
   const isError = message.isError;
   const content = message.content;
   const lines = content.split('\n');
-  const mobile = isMobile.value;
-  const longLineThreshold = mobile ? 5 : 15;
-  const longCharThreshold = mobile ? 200 : 500;
-  const previewLineCount = mobile ? 3 : 10;
+  const containerNarrow = useNarrow(); const narrow = isMobile.value || containerNarrow;
+  const longLineThreshold = narrow ? 4 : 12;
+  const longCharThreshold = narrow ? 160 : 400;
+  const previewLineCount = narrow ? 2 : 8;
   const isLong = lines.length > longLineThreshold || content.length > longCharThreshold;
   const [expanded, setExpanded] = useState(!isLong);
   const [viewMode, setViewMode] = useState<'raw' | 'highlighted' | 'markdown'>('highlighted');
@@ -767,9 +773,32 @@ function ImageViewer({ src }: { src: string }) {
 }
 
 function AssistantMessage({ message }: { message: ParsedMessage }) {
+  const containerNarrow = useNarrow(); const narrow = isMobile.value || containerNarrow;
+  const content = message.content || '';
+  const lines = content.split('\n');
+  const longChars = narrow ? 360 : 1200;
+  const longLines = narrow ? 6 : 20;
+  const long = content.length > longChars || lines.length > longLines;
+  const [expanded, setExpanded] = useState(!long);
+  useEffect(() => { if (!long) setExpanded(true); }, [long]);
+
+  if (!long) {
+    return (
+      <div class="sm-message sm-assistant">
+        <div class="sm-assistant-content">{renderMarkdown(content)}</div>
+      </div>
+    );
+  }
+
+  const preview = lines.slice(0, narrow ? 2 : 6).join('\n');
   return (
     <div class="sm-message sm-assistant">
-      <div class="sm-assistant-content">{renderMarkdown(message.content)}</div>
+      <div class="sm-assistant-content">
+        {expanded ? renderMarkdown(content) : renderMarkdown(preview + '\n\n…')}
+      </div>
+      <button class="sm-msg-toggle" onClick={() => setExpanded((e) => !e)}>
+        {expanded ? '▾ Show less' : `▸ Show full message (${lines.length} lines)`}
+      </button>
     </div>
   );
 }
@@ -792,9 +821,32 @@ function ThinkingMessage({ message }: { message: ParsedMessage }) {
 }
 
 function UserInputMessage({ message }: { message: ParsedMessage }) {
+  const containerNarrow = useNarrow(); const narrow = isMobile.value || containerNarrow;
+  const content = message.content || '';
+  const lines = content.split('\n');
+  const longChars = narrow ? 280 : 800;
+  const longLines = narrow ? 5 : 14;
+  const long = content.length > longChars || lines.length > longLines;
+  const [expanded, setExpanded] = useState(!long);
+  useEffect(() => { if (!long) setExpanded(true); }, [long]);
+
+  if (!long) {
+    return (
+      <div class="sm-message sm-user-input">
+        <div class="sm-user-bubble">{content}</div>
+      </div>
+    );
+  }
+
+  const previewLines = lines.slice(0, narrow ? 2 : 4);
   return (
     <div class="sm-message sm-user-input">
-      <div class="sm-user-bubble">{message.content}</div>
+      <div class={`sm-user-bubble${expanded ? '' : ' sm-user-bubble-preview'}`}>
+        {expanded ? content : previewLines.join('\n') + (lines.length > previewLines.length ? ' …' : '')}
+      </div>
+      <button class="sm-msg-toggle" onClick={() => setExpanded((e) => !e)}>
+        {expanded ? '▾ Show less' : `▸ Show full prompt (${lines.length} lines)`}
+      </button>
     </div>
   );
 }

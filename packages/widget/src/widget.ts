@@ -2250,7 +2250,7 @@ export class ProPanesElement {
       this.emit('submit', { type: 'manual', title: '', description, id: result?.id, appId: result?.appId });
 
       const endpointUrl = new URL(this.config.endpoint, window.location.origin);
-      const feedbackUrl = `${endpointUrl.origin}/admin/#/app/${result.appId}/feedback/${result.id}`;
+      const feedbackUrl = `${endpointUrl.origin}/admin/#/fb/${result.id}`;
       const screenshotPaths: string[] = Array.isArray(result?.screenshots)
         ? result.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
         : [];

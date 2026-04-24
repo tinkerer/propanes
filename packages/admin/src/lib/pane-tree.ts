@@ -32,6 +32,10 @@ export interface LeafNode {
   activeTabId: string | null;
   singleton?: boolean;
   collapsed?: boolean;
+  // When collapsed, the handle is rendered as an edge tab in the parent split.
+  // `collapsedOffset` slides the handle along the parallel axis (pixels from
+  // the default position). Bounded by the PaneTree at render time.
+  collapsedOffset?: number;
 }
 
 export type PaneNode = SplitNode | LeafNode;
@@ -299,22 +303,21 @@ export function findParent(root: PaneNode, nodeId: string): SplitNode | null {
   return findParent(root.children[0], nodeId) ?? findParent(root.children[1], nodeId);
 }
 
-// Find a sibling leaf that contains companion tabs for a given session
-export function findCompanionSibling(sessionLeafId: string, sessionId: string): LeafNode | null {
-  const tree = layoutTree.value;
+// Find a sibling leaf suitable for hosting companion tabs.
+// Accepts any sibling that is empty or consists entirely of companion tabs
+// (from any session), so all companions share one pane instead of each
+// session spawning a new split.
+export function findCompanionSibling(sessionLeafId: string, _sessionId: string): LeafNode | null {
+  const tree = getLatestTree();
   const parent = findParent(tree.root, sessionLeafId);
   if (!parent) return null;
   const sibling = parent.children[0].id === sessionLeafId ? parent.children[1] : parent.children[0];
   if (sibling.type !== 'leaf') return null;
-  // Check if sibling has any companion tabs for this session
-  const companionPrefixes = ['jsonl:', 'feedback:', 'iframe:', 'terminal:', 'isolate:', 'url:'];
-  const hasCompanionForSession = sibling.tabs.some(t => {
-    for (const prefix of companionPrefixes) {
-      if (t.startsWith(prefix) && t.slice(prefix.length) === sessionId) return true;
-    }
-    return false;
-  });
-  if (hasCompanionForSession || sibling.tabs.length === 0) return sibling;
+  const companionPrefixes = ['jsonl:', 'feedback:', 'iframe:', 'terminal:', 'isolate:', 'url:', 'file:', 'wiggum-runs:', 'artifact:'];
+  const allTabsAreCompanions = sibling.tabs.every(t =>
+    companionPrefixes.some(prefix => t.startsWith(prefix))
+  );
+  if (allTabsAreCompanions) return sibling;
   return null;
 }
 
@@ -602,40 +605,141 @@ export function moveTab(fromLeafId: string, toLeafId: string, tabId: string) {
   }
 }
 
-export function setSplitRatio(splitId: string, ratio: number) {
-  const clamped = Math.max(0.05, Math.min(0.95, ratio));
+// Minimum pixel size for a leaf pane. When a divider drag would push the
+// adjacent leaf below this, the deficit cascades to the next sibling along the
+// drag axis (instead of the drag stopping).
+const MIN_LEAF_PX = 60;
+const COLLAPSED_LEAF_PX = 28;
+const DIVIDER_PX = 4;
+
+/**
+ * Recursive minimum size of a subtree along the given axis. For splits in the
+ * same direction, mins sum (with divider). For splits in the perpendicular
+ * direction, mins take the max (each child must fit within the constrained
+ * dimension).
+ */
+function getMinSize(node: PaneNode, axis: SplitDirection): number {
+  if (node.type === 'leaf') {
+    return node.collapsed ? COLLAPSED_LEAF_PX : MIN_LEAF_PX;
+  }
+  const a = getMinSize(node.children[0], axis);
+  const b = getMinSize(node.children[1], axis);
+  if (node.direction === axis) return a + b + DIVIDER_PX;
+  return Math.max(a, b);
+}
+
+export function setSplitRatio(splitId: string, ratio: number, containerSizePx?: number) {
   const tree = cloneTree(getLatestTree());
   const node = findNodeById(tree.root, splitId);
   if (!node || node.type !== 'split') return;
 
   const oldRatio = node.ratio;
-  node.ratio = clamped;
 
-  // When dragging a split's divider, both children resize. If a child is itself
-  // a split in the same direction, all its sub-panels resize proportionally —
-  // but the user expects only the sub-panel directly adjacent to the divider to
-  // change. Fix by adjusting child split ratios to preserve non-adjacent panels.
-  const [first, second] = node.children;
-
-  if (first.type === 'split' && first.direction === node.direction) {
-    // First child shrank/grew from oldRatio to clamped.
-    // Its second sub-child (index 1) is adjacent to our divider.
-    preserveNonAdjacentSizes(first, oldRatio, clamped, 1);
+  // Pixel-aware clamp: enforce minimum size for each side based on the actual
+  // recursive minimum of its subtree (so cascading can absorb the rest).
+  let clamped: number;
+  if (containerSizePx && containerSizePx > 0) {
+    const firstMin = getMinSize(node.children[0], node.direction);
+    const secondMin = getMinSize(node.children[1], node.direction);
+    const minRatio = Math.min(0.499, firstMin / containerSizePx);
+    const maxRatio = Math.max(0.501, 1 - secondMin / containerSizePx);
+    clamped = Math.max(minRatio, Math.min(maxRatio, ratio));
+  } else {
+    clamped = Math.max(0.05, Math.min(0.95, ratio));
   }
 
-  if (second.type === 'split' && second.direction === node.direction) {
-    // Second child shrank/grew from (1-oldRatio) to (1-clamped).
-    // Its first sub-child (index 0) is adjacent to our divider.
-    preserveNonAdjacentSizes(second, 1 - oldRatio, 1 - clamped, 0);
+  node.ratio = clamped;
+
+  const [first, second] = node.children;
+
+  if (containerSizePx && containerSizePx > 0) {
+    // Cascade: distribute the new pixel size for each side into nested
+    // same-direction splits, shrinking the pane closest to the outer divider
+    // first (down to its min), then continuing into the next pane.
+    const firstNewPx = clamped * containerSizePx;
+    const secondNewPx = (1 - clamped) * containerSizePx;
+    const firstOldPx = oldRatio * containerSizePx;
+    const secondOldPx = (1 - oldRatio) * containerSizePx;
+    if (first.type === 'split' && first.direction === node.direction) {
+      cascadeResize(first, firstOldPx, firstNewPx, 1);
+    }
+    if (second.type === 'split' && second.direction === node.direction) {
+      cascadeResize(second, secondOldPx, secondNewPx, 0);
+    }
+  } else {
+    // Fallback (no container size): preserve non-adjacent absolute sizes
+    // as before. This path is hit only by callers that don't pass container
+    // size (currently none; kept for safety).
+    if (first.type === 'split' && first.direction === node.direction) {
+      preserveNonAdjacentSizes(first, oldRatio, clamped, 1);
+    }
+    if (second.type === 'split' && second.direction === node.direction) {
+      preserveNonAdjacentSizes(second, 1 - oldRatio, 1 - clamped, 0);
+    }
   }
 
   commitTree(tree);
 }
 
 /**
- * When a same-direction child split's container resizes, adjust its ratio so
- * that the sub-panel NOT adjacent to the external divider keeps its absolute
- * size. Recurses for deeply nested same-direction splits.
+ * Resize a same-direction nested split so its new total pixel size is
+ * newSizePx. The sub-pane on the side `adjacentChildIndex` (the one closest to
+ * the outer divider) absorbs the change first; once it hits its minimum, the
+ * far sub-pane starts shrinking. This makes a chain of splits behave like one
+ * continuous track for the user dragging the divider.
+ */
+function cascadeResize(
+  node: SplitNode,
+  oldSizePx: number,
+  newSizePx: number,
+  adjacentChildIndex: 0 | 1,
+) {
+  if (oldSizePx < 0.001 || newSizePx < 0.001) return;
+
+  const adjChild = node.children[adjacentChildIndex];
+  const farChild = node.children[1 - adjacentChildIndex];
+
+  const oldAdjSize = (adjacentChildIndex === 1 ? (1 - node.ratio) : node.ratio) * oldSizePx;
+  const oldFarSize = oldSizePx - oldAdjSize;
+
+  const adjMin = getMinSize(adjChild, node.direction);
+  const farMin = getMinSize(farChild, node.direction);
+
+  let newFarSize: number;
+  let newAdjSize: number;
+  if (newSizePx >= oldFarSize + adjMin) {
+    // Far stays put; the adjacent absorbs the entire size change.
+    newFarSize = oldFarSize;
+    newAdjSize = newSizePx - oldFarSize;
+  } else if (newSizePx >= adjMin + farMin) {
+    // Adjacent pinned at its minimum; the far pane absorbs the rest.
+    newAdjSize = adjMin;
+    newFarSize = newSizePx - adjMin;
+  } else {
+    // Even both at minimum won't fit; distribute proportionally to the mins.
+    const total = adjMin + farMin;
+    newAdjSize = newSizePx * (adjMin / total);
+    newFarSize = newSizePx - newAdjSize;
+  }
+
+  const newRatio = adjacentChildIndex === 1
+    ? newFarSize / newSizePx
+    : newAdjSize / newSizePx;
+  node.ratio = Math.max(0.001, Math.min(0.999, newRatio));
+
+  if (adjChild.type === 'split' && adjChild.direction === node.direction) {
+    cascadeResize(adjChild, oldAdjSize, newAdjSize, adjacentChildIndex);
+  }
+  if (farChild.type === 'split' && farChild.direction === node.direction) {
+    const farIndex: 0 | 1 = adjacentChildIndex === 1 ? 0 : 1;
+    cascadeResize(farChild, oldFarSize, newFarSize, farIndex);
+  }
+}
+
+/**
+ * Legacy fallback: when a same-direction child split's container resizes,
+ * adjust its ratio so that the sub-panel NOT adjacent to the external divider
+ * keeps its absolute size. Used only when container size is unavailable.
  */
 function preserveNonAdjacentSizes(
   node: SplitNode,
@@ -649,18 +753,13 @@ function preserveNonAdjacentSizes(
   let newRatio: number;
 
   if (adjacentChildIndex === 1) {
-    // Second child is adjacent — preserve first child's absolute size
-    // firstAbs = ratio * proportion → newRatio = oldRatio * old / new
     newRatio = oldRatio * oldProportion / newProportion;
   } else {
-    // First child is adjacent — preserve second child's absolute size
-    // secondAbs = (1-ratio) * proportion → newRatio = 1 - (1-oldRatio) * old / new
     newRatio = 1 - (1 - oldRatio) * oldProportion / newProportion;
   }
 
   node.ratio = Math.max(0.05, Math.min(0.95, newRatio));
 
-  // Recurse into the adjacent child if it's also a same-direction split
   const adjChild = node.children[adjacentChildIndex];
   if (adjChild.type === 'split' && adjChild.direction === node.direction) {
     const oldAdj = adjacentChildIndex === 1
@@ -683,6 +782,68 @@ export function toggleLeafCollapsed(leafId: string) {
   const leaf = findLeaf(tree.root, leafId);
   if (!leaf) return;
   leaf.collapsed = !leaf.collapsed;
+  // Reset offset when opening back up — otherwise the next collapse would
+  // inherit a stale slide position from a previous session.
+  if (!leaf.collapsed) leaf.collapsedOffset = 0;
+  commitTree(tree);
+}
+
+export function setLeafCollapsed(leafId: string, collapsed: boolean) {
+  const tree = cloneTree(getLatestTree());
+  const leaf = findLeaf(tree.root, leafId);
+  if (!leaf || leaf.collapsed === collapsed) return;
+  leaf.collapsed = collapsed;
+  if (!collapsed) leaf.collapsedOffset = 0;
+  commitTree(tree);
+}
+
+export function setLeafCollapsedOffset(leafId: string, offset: number) {
+  const tree = cloneTree(getLatestTree());
+  const leaf = findLeaf(tree.root, leafId);
+  if (!leaf) return;
+  leaf.collapsedOffset = offset;
+  commitTree(tree);
+}
+
+/**
+ * Collapse a leaf to a specific edge of its parent split. If the parent's
+ * direction doesn't align with the desired edge, we swap the parent's
+ * direction and child order so the collapsed handle lives on the chosen edge.
+ *
+ * Edge → (parent direction, leaf position in parent):
+ *   'W' left  → horizontal, first
+ *   'E' right → horizontal, second
+ *   'N' top   → vertical,   first
+ *   'S' bottom→ vertical,   second
+ */
+export function collapseLeafToEdge(leafId: string, edge: 'N' | 'S' | 'E' | 'W') {
+  const tree = cloneTree(getLatestTree());
+  const leaf = findLeaf(tree.root, leafId);
+  const parent = findParent(tree.root, leafId);
+  if (!leaf) return;
+  leaf.collapsed = true;
+  leaf.collapsedOffset = 0;
+
+  if (parent) {
+    const wantDir: SplitDirection = (edge === 'E' || edge === 'W') ? 'horizontal' : 'vertical';
+    const wantFirst = (edge === 'W' || edge === 'N');
+    const currentIdx = parent.children[0].id === leafId ? 0 : 1;
+    const currentFirst = currentIdx === 0;
+
+    if (parent.direction !== wantDir) {
+      parent.direction = wantDir;
+    }
+    if (currentFirst !== wantFirst) {
+      // Swap children so leaf sits on the correct side.
+      const other = parent.children[currentIdx === 0 ? 1 : 0];
+      parent.children = wantFirst
+        ? [parent.children[currentIdx], other] as [PaneNode, PaneNode]
+        : [other, parent.children[currentIdx]] as [PaneNode, PaneNode];
+      // Flip ratio so the non-leaf side keeps its share.
+      parent.ratio = 1 - parent.ratio;
+    }
+  }
+
   commitTree(tree);
 }
 

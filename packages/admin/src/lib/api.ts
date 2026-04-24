@@ -309,7 +309,7 @@ export const api = {
       method: 'POST',
     }),
 
-  resumeAgentSession: (id: string, opts?: { permissionProfile?: string; additionalPrompt?: string }) =>
+  resumeAgentSession: (id: string, opts?: { permissionProfile?: string; runtime?: 'claude' | 'codex'; additionalPrompt?: string }) =>
     request<{ sessionId: string }>(`/admin/agent-sessions/${id}/resume`, {
       method: 'POST',
       body: opts ? JSON.stringify(opts) : undefined,
@@ -678,6 +678,20 @@ export const api = {
       method: 'POST',
       body: fd,
     });
+  },
+
+  uploadScreenshots: (
+    blobs: Blob[],
+    meta: { sessionId?: string; appId?: string; sourceUrl?: string } = {},
+  ) => {
+    const fd = new FormData();
+    for (const [i, b] of blobs.entries()) fd.append('screenshots', b, `attach-${i}.png`);
+    fd.append('meta', JSON.stringify(meta));
+    return request<{
+      appId: string | null;
+      createdAt: string;
+      screenshots: { id: string; filename: string; path: string }[];
+    }>('/screenshots', { method: 'POST', body: fd });
   },
 
   // Wiggum runs

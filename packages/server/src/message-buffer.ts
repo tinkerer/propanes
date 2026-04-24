@@ -7,6 +7,26 @@ interface PendingEntry {
   createdAt: number;
 }
 
+// Sqlite writes on the PTY hot path can race with other writers (main server
+// flushes, drizzle updates) and return SQLITE_BUSY even with busy_timeout=5000.
+// Letting the exception propagate kills the session-service from inside
+// node-pty's synchronous onData dispatch, which takes down every live
+// AgentTerminal. The in-memory queue is authoritative for replay during a
+// single process lifetime; the sqlite mirror only matters across restarts, so
+// dropping a row on SQLITE_BUSY is strictly better than crashing.
+function safeRun(label: string, fn: () => void): void {
+  try {
+    fn();
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    if (code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED') {
+      console.warn(`[message-buffer] ${label}: ${code} — dropping durable mirror (in-memory buffer intact)`);
+    } else {
+      console.error(`[message-buffer] ${label} failed:`, err);
+    }
+  }
+}
+
 export class MessageBuffer {
   private pending = new Map<string, PendingEntry[]>();
   private pruneTimer: ReturnType<typeof setInterval>;
@@ -37,11 +57,13 @@ export class MessageBuffer {
     const now = Date.now();
     queue.push({ seq, content, createdAt: now });
 
-    sqlite
-      .prepare(
-        `INSERT INTO pending_messages (session_id, direction, seq_num, content, created_at) VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(sessionId, direction, seq, content, new Date(now).toISOString());
+    safeRun('append', () => {
+      sqlite
+        .prepare(
+          `INSERT INTO pending_messages (session_id, direction, seq_num, content, created_at) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(sessionId, direction, seq, content, new Date(now).toISOString());
+    });
   }
 
   ack(sessionId: string, direction: 'output' | 'input', ackSeq: number): void {
@@ -59,11 +81,13 @@ export class MessageBuffer {
       }
     }
 
-    sqlite
-      .prepare(
-        `DELETE FROM pending_messages WHERE session_id = ? AND direction = ? AND seq_num <= ?`,
-      )
-      .run(sessionId, direction, ackSeq);
+    safeRun('ack', () => {
+      sqlite
+        .prepare(
+          `DELETE FROM pending_messages WHERE session_id = ? AND direction = ? AND seq_num <= ?`,
+        )
+        .run(sessionId, direction, ackSeq);
+    });
   }
 
   getUnacked(
@@ -85,7 +109,9 @@ export class MessageBuffer {
     for (const dir of ['output', 'input'] as const) {
       this.pending.delete(this.bufferKey(sessionId, dir));
     }
-    sqlite.prepare(`DELETE FROM pending_messages WHERE session_id = ?`).run(sessionId);
+    safeRun('clearSession', () => {
+      sqlite.prepare(`DELETE FROM pending_messages WHERE session_id = ?`).run(sessionId);
+    });
   }
 
   private prune(): void {
@@ -101,15 +127,19 @@ export class MessageBuffer {
       }
     }
 
-    sqlite.prepare(`DELETE FROM pending_messages WHERE created_at < ?`).run(cutoff);
+    safeRun('prune', () => {
+      sqlite.prepare(`DELETE FROM pending_messages WHERE created_at < ?`).run(cutoff);
+    });
   }
 
   private deleteFromDb(sessionId: string, direction: string, seq: number): void {
-    sqlite
-      .prepare(
-        `DELETE FROM pending_messages WHERE session_id = ? AND direction = ? AND seq_num = ?`,
-      )
-      .run(sessionId, direction, seq);
+    safeRun('deleteFromDb', () => {
+      sqlite
+        .prepare(
+          `DELETE FROM pending_messages WHERE session_id = ? AND direction = ? AND seq_num = ?`,
+        )
+        .run(sessionId, direction, seq);
+    });
   }
 
   private loadFromDb(): void {

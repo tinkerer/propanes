@@ -213,6 +213,7 @@ export const dispatchSchema = z.object({
   instructions: z.string().max(5000).optional(),
   launcherId: z.string().optional(),
   harnessConfigId: z.string().optional(),
+  permissionProfile: z.enum(PERMISSION_PROFILES).optional(),
 });
 
 export const powwowSchema = z.object({

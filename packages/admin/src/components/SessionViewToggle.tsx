@@ -1,5 +1,5 @@
 import { AgentTerminal } from './AgentTerminal.js';
-import { StructuredView } from './StructuredView.js';
+import { JsonlView } from './JsonlView.js';
 import { InterruptBar } from './InterruptBar.js';
 import type { InputState } from '../lib/sessions.js';
 import { isMobile } from '../lib/viewport.js';
@@ -26,7 +26,7 @@ export function SessionViewToggle({ sessionId, isActive, onExit, onInputStateCha
       <div class="view-content" style={{ flex: 1, overflow: 'hidden', display: 'flex', minHeight: 0 }}>
         {effectiveMode === 'split' && (
           <div style={{ width: '55%', height: '100%', borderRight: '1px solid #334155', overflow: 'hidden' }}>
-            {showStructured && <StructuredView sessionId={sessionId} isActive={isActive} permissionProfile={permissionProfile} />}
+            {showStructured && <JsonlView sessionId={sessionId} hideInterruptBar />}
           </div>
         )}
         {showTerminal && (
@@ -40,7 +40,7 @@ export function SessionViewToggle({ sessionId, isActive, onExit, onInputStateCha
         )}
         {effectiveMode === 'structured' && (
           <div style={{ width: '100%', height: '100%' }}>
-            <StructuredView sessionId={sessionId} isActive={isActive} permissionProfile={permissionProfile} />
+            <JsonlView sessionId={sessionId} hideInterruptBar />
           </div>
         )}
       </div>
