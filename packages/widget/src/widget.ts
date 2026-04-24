@@ -29,7 +29,10 @@ function micErrorMessage(err: unknown): string {
   const code = (err as any)?.code;
   const name = (err as any)?.name;
   if (code === 'INSECURE_CONTEXT') return 'Mic requires HTTPS — this page is loaded over HTTP';
-  if (code === 'NOT_SUPPORTED') return 'Mic not supported in this browser';
+  if (code === 'NOT_SUPPORTED') return 'Mic/SpeechRecognition not supported in this browser';
+  if (code === 'NOT_ALLOWED') return 'Mic access denied — allow in browser settings';
+  if (code === 'NOT_FOUND') return 'No microphone found';
+  if (code === 'NOT_READABLE') return 'Mic is in use by another app';
   if (name === 'NotAllowedError' || name === 'SecurityError') return 'Mic access denied — allow in browser settings';
   if (name === 'NotFoundError') return 'No microphone found';
   if (name === 'NotReadableError') return 'Mic is in use by another app';
@@ -186,6 +189,14 @@ export class ProPanesElement {
   private voiceListenWindowSender: ((win: import('./voice-recorder.js').AmbientWindow) => void) | null = null;
   private brainstormDisabled = false;
   private brainstormGestureHandler: (() => void) | null = null;
+  private ccOverlay: HTMLElement | null = null;
+  private ccOpen = true;
+  private ccSizeLarge = false;
+  private ccTextEl: HTMLElement | null = null;
+  private ccInterimSpan: HTMLElement | null = null;
+  private ccTicketsEl: HTMLElement | null = null;
+  private ccChunks: { text: string; windowIndex: number }[] = [];
+  private ccPendingTickets: Map<string, { title: string; description: string; appName?: string; feedbackId: string }> = new Map();
   private escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && this.isOpen) {
       // Let sub-overlays (annotator, element picker) handle Escape first
@@ -349,10 +360,6 @@ export class ProPanesElement {
   private autoStartBrainstorm() {
     if (this.brainstormDisabled) return;
     if (this.voiceListenSessionId) return;
-    // Skip entirely when the page isn't a secure context — iOS Safari and
-    // modern desktop browsers refuse getUserMedia on HTTP origins, so
-    // retrying on every gesture would burn battery with no chance of working.
-    if (typeof window !== 'undefined' && window.isSecureContext === false) return;
 
     const attempt = async () => {
       try {
@@ -364,9 +371,13 @@ export class ProPanesElement {
     attempt().then(() => {
       if (this.voiceListenSessionId) return;
       // Skip the gesture fallback if the browser has no SpeechRecognition
-      // at all — e.g. iOS Safari — otherwise every tap/keypress retries.
-      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (!SR) return;
+      // at all — e.g. iOS Safari — unless we're on an insecure context where
+      // the iframe bridge provides SpeechRecognition from localhost.
+      const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
+      if (!insecure) {
+        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (!SR) return;
+      }
       this.installBrainstormGestureFallback();
     });
   }
@@ -1048,9 +1059,9 @@ export class ProPanesElement {
 
       const onMove = (ev: PointerEvent) => {
         if (ev.pointerId !== activePointerId) return;
-        const dx = Math.max(0, ev.clientX - startX);
-        const dy = Math.max(0, ev.clientY - startY);
-        if (!dragged && dx < 4 && dy < 4) return;
+        const dx = ev.clientX - startX;
+        const dy = ev.clientY - startY;
+        if (!dragged && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
         dragged = true;
         btn.classList.add('pw-trigger-dragging');
         btn.style.right = (20 - dx) + 'px';
@@ -1717,10 +1728,12 @@ export class ProPanesElement {
       }
     };
 
+    const insecureContext = typeof window !== 'undefined' && window.isSecureContext === false;
+
     // If silent (auto-start / gesture fallback), skip quietly on browsers
-    // without SpeechRecognition — e.g. iOS Safari — so users don't see a
-    // scary error for a feature they never asked for.
-    if (silent) {
+    // without SpeechRecognition — e.g. iOS Safari — unless we can use the
+    // iframe bridge on insecure contexts.
+    if (silent && !insecureContext) {
       const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SR) return;
     }
@@ -1747,10 +1760,23 @@ export class ProPanesElement {
     }
 
     try {
-      await this.voiceRecorder.startAmbient({ windowMs: 30_000 });
+      if (insecureContext) {
+        // Use iframe bridge: load mic-bridge from localhost server
+        const bridgeUrl = `${baseOrigin}/api/v1/local/mic-bridge`;
+        await this.voiceRecorder.startAmbientViaIframe(bridgeUrl, {
+          windowMs: 30_000,
+          silenceMs: 10_000,
+          maxLength: 500,
+        });
+      } else {
+        await this.voiceRecorder.startAmbient({
+          windowMs: 30_000,
+          silenceMs: 10_000,
+          maxLength: 500,
+        });
+      }
     } catch (err) {
       showError(micErrorMessage(err));
-      // Best-effort close the server session
       try {
         await fetch(`${baseOrigin}/api/v1/voice/sessions/${sessionId}/stop`, {
           method: 'POST',
@@ -1762,7 +1788,15 @@ export class ProPanesElement {
     }
 
     this.voiceListenSessionId = sessionId;
+
+    // Show CC overlay and wire segment display
+    this.removeCCToggleBar();
+    this.showCCOverlay();
+    this.voiceRecorder.onAmbientSegment = (seg) => this.appendCCSegment(seg);
+
+    // Window sender with response handling for ticket display
     this.voiceListenWindowSender = (win) => {
+      this.markCCChunk(win.text, win.windowIndex);
       fetch(`${baseOrigin}/api/v1/voice/sessions/${sessionId}/windows`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
@@ -1772,7 +1806,19 @@ export class ProPanesElement {
           endedAt: win.endedAt,
           windowIndex: win.windowIndex,
         }),
-      }).catch(() => { /* best-effort */ });
+      })
+        .then((r) => r.ok ? r.json() : null)
+        .then((data) => {
+          if (data?.feedbackId && data?.classification?.actionable) {
+            this.addCCTicket({
+              title: data.classification.title || 'Voice idea',
+              description: data.classification.description || win.text,
+              appName: data.classification.appName,
+              feedbackId: data.feedbackId,
+            });
+          }
+        })
+        .catch(() => {});
     };
     this.voiceRecorder.onAmbientWindow = this.voiceListenWindowSender;
 
@@ -1820,9 +1866,18 @@ export class ProPanesElement {
     }
     this.voiceListenBlurStart = null;
     this.voiceRecorder.onAmbientWindow = null;
+    this.voiceRecorder.onAmbientSegment = null;
     this.voiceListenWindowSender = null;
 
-    try { await this.voiceRecorder.stopAmbient(); } catch {}
+    try {
+      if (this.voiceRecorder.usingMicBridge) {
+        await this.voiceRecorder.stopAmbientViaIframe();
+      } else {
+        await this.voiceRecorder.stopAmbient();
+      }
+    } catch {}
+
+    this.cleanupCCOverlay();
 
     const trigger = this.shadow.querySelector('.pw-trigger') as HTMLElement;
     if (trigger) trigger.classList.remove('pw-trigger-listening');
@@ -1835,6 +1890,288 @@ export class ProPanesElement {
         body: JSON.stringify({ reason }),
       });
     } catch { /* best-effort */ }
+  }
+
+  // ===== Brainstorm Closed-Caption Overlay =====
+
+  private showCCOverlay() {
+    if (this.ccOverlay) return;
+    this.ccOpen = true;
+    this.ccChunks = [];
+    this.ccPendingTickets.clear();
+
+    const overlay = document.createElement('div');
+    overlay.className = 'pw-cc-overlay';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'pw-cc-header';
+
+    const title = document.createElement('span');
+    title.className = 'pw-cc-header-title';
+    title.textContent = 'Brainstorm';
+
+    const appLabel = document.createElement('span');
+    appLabel.className = 'pw-cc-header-app';
+    appLabel.textContent = '';
+
+    const sizeBtn = document.createElement('button');
+    sizeBtn.textContent = 'Aa';
+    sizeBtn.title = 'Toggle text size';
+    sizeBtn.addEventListener('click', () => this.toggleCCSize());
+
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Minimize';
+    closeBtn.addEventListener('click', () => this.toggleCCOpen());
+
+    header.append(title, appLabel, sizeBtn, closeBtn);
+    overlay.appendChild(header);
+
+    // Body (transcript text)
+    const body = document.createElement('div');
+    body.className = 'pw-cc-body';
+
+    const text = document.createElement('div');
+    text.className = 'pw-cc-text pw-cc-size-normal';
+    body.appendChild(text);
+    overlay.appendChild(body);
+
+    // Tickets area
+    const tickets = document.createElement('div');
+    tickets.className = 'pw-cc-tickets';
+    tickets.style.display = 'none';
+    overlay.appendChild(tickets);
+
+    // Footer
+    const footer = document.createElement('div');
+    footer.className = 'pw-cc-footer';
+
+    const flushBtn = document.createElement('button');
+    flushBtn.className = 'pw-cc-flush-btn';
+    flushBtn.textContent = 'Chunk now';
+    flushBtn.title = 'Send current text as a chunk';
+    flushBtn.addEventListener('click', () => {
+      if (this.voiceRecorder.usingMicBridge) {
+        this.voiceRecorder.manualFlushViaIframe();
+      } else {
+        this.voiceRecorder.manualFlush();
+      }
+    });
+
+    const closeFooterBtn = document.createElement('button');
+    closeFooterBtn.textContent = 'Close';
+    closeFooterBtn.addEventListener('click', () => this.hideCCOverlay());
+
+    footer.append(flushBtn, closeFooterBtn);
+    overlay.appendChild(footer);
+
+    this.ccOverlay = overlay;
+    this.ccTextEl = text;
+    this.ccInterimSpan = null;
+    this.ccTicketsEl = tickets;
+    this.shadow.appendChild(overlay);
+  }
+
+  private hideCCOverlay() {
+    if (this.ccOverlay) {
+      this.ccOverlay.remove();
+      this.ccOverlay = null;
+      this.ccTextEl = null;
+      this.ccInterimSpan = null;
+      this.ccTicketsEl = null;
+    }
+    // Show a minimized toggle bar
+    this.showCCToggleBar();
+  }
+
+  private showCCToggleBar() {
+    const existing = this.shadow.querySelector('.pw-cc-toggle-bar');
+    if (existing) return;
+    const bar = document.createElement('div');
+    bar.className = 'pw-cc-toggle-bar';
+    bar.innerHTML = '<div class="pw-cc-toggle-dot"></div><span>Brainstorm</span>';
+    bar.addEventListener('click', () => {
+      bar.remove();
+      this.showCCOverlay();
+    });
+    this.shadow.appendChild(bar);
+  }
+
+  private removeCCToggleBar() {
+    const bar = this.shadow.querySelector('.pw-cc-toggle-bar');
+    if (bar) bar.remove();
+  }
+
+  private toggleCCOpen() {
+    if (!this.ccOverlay) return;
+    this.ccOpen = !this.ccOpen;
+    if (this.ccOpen) {
+      this.ccOverlay.classList.remove('pw-cc-collapsed');
+    } else {
+      this.ccOverlay.classList.add('pw-cc-collapsed');
+    }
+  }
+
+  private toggleCCSize() {
+    this.ccSizeLarge = !this.ccSizeLarge;
+    if (this.ccTextEl) {
+      this.ccTextEl.classList.toggle('pw-cc-size-normal', !this.ccSizeLarge);
+      this.ccTextEl.classList.toggle('pw-cc-size-large', this.ccSizeLarge);
+    }
+  }
+
+  private appendCCSegment(seg: import('./voice-recorder.js').TranscriptSegment) {
+    if (!this.ccTextEl) return;
+    if (seg.isFinal) {
+      // Remove interim span
+      if (this.ccInterimSpan) {
+        this.ccInterimSpan.remove();
+        this.ccInterimSpan = null;
+      }
+      const span = document.createElement('span');
+      span.className = 'pw-cc-final';
+      span.textContent = seg.text + ' ';
+      this.ccTextEl.appendChild(span);
+    } else {
+      // Update or create interim span
+      if (!this.ccInterimSpan) {
+        this.ccInterimSpan = document.createElement('span');
+        this.ccInterimSpan.className = 'pw-cc-interim';
+        this.ccTextEl.appendChild(this.ccInterimSpan);
+      }
+      this.ccInterimSpan.textContent = seg.text;
+    }
+    // Auto-scroll
+    const body = this.ccTextEl.parentElement;
+    if (body) body.scrollTop = body.scrollHeight;
+  }
+
+  private markCCChunk(chunkText: string, windowIndex: number) {
+    if (!this.ccTextEl) return;
+    this.ccChunks.push({ text: chunkText, windowIndex });
+
+    // Highlight the final spans that make up this chunk
+    const finals = this.ccTextEl.querySelectorAll('.pw-cc-final:not(.pw-cc-chunk-highlight)');
+    finals.forEach((el) => el.classList.add('pw-cc-chunk-highlight'));
+
+    // Add a divider
+    const divider = document.createElement('div');
+    divider.className = 'pw-cc-chunk-divider';
+    divider.textContent = `chunk ${windowIndex + 1}`;
+    this.ccTextEl.appendChild(divider);
+  }
+
+  private addCCTicket(ticket: { title: string; description: string; appName?: string; feedbackId: string }) {
+    this.ccPendingTickets.set(ticket.feedbackId, ticket);
+    if (!this.ccTicketsEl) return;
+    this.ccTicketsEl.style.display = '';
+
+    const card = document.createElement('div');
+    card.className = 'pw-cc-ticket';
+    card.dataset.feedbackId = ticket.feedbackId;
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'pw-cc-ticket-title';
+    titleEl.textContent = ticket.title;
+
+    const descEl = document.createElement('div');
+    descEl.className = 'pw-cc-ticket-desc';
+    descEl.textContent = ticket.description;
+
+    if (ticket.appName) {
+      const appEl = document.createElement('div');
+      appEl.className = 'pw-cc-ticket-app';
+      appEl.textContent = ticket.appName;
+      card.appendChild(appEl);
+    }
+
+    // Runtime + mode pickers
+    const pickers = document.createElement('div');
+    pickers.className = 'pw-cc-ticket-pickers';
+
+    const runtimeSel = document.createElement('select');
+    runtimeSel.className = 'pw-cc-select';
+    runtimeSel.innerHTML = '<option value="claude">Claude</option><option value="codex">Codex</option>';
+
+    const modeSel = document.createElement('select');
+    modeSel.className = 'pw-cc-select';
+    modeSel.innerHTML = '<option value="interactive">Interactive</option><option value="headless">Headless</option>';
+
+    pickers.append(runtimeSel, modeSel);
+
+    const actions = document.createElement('div');
+    actions.className = 'pw-cc-ticket-actions';
+
+    const goBtn = document.createElement('button');
+    goBtn.className = 'pw-cc-doit-btn';
+    goBtn.textContent = 'Just do it';
+    goBtn.addEventListener('click', () => this.dispatchCCTicket(ticket.feedbackId, runtimeSel.value, modeSel.value));
+
+    const planBtn = document.createElement('button');
+    planBtn.className = 'pw-cc-plan-btn';
+    planBtn.textContent = 'Create plan';
+    planBtn.addEventListener('click', () => this.dispatchCCTicket(ticket.feedbackId, runtimeSel.value, modeSel.value, 'Create a detailed plan before implementing. Present the plan for review.'));
+
+    const dismissBtn = document.createElement('button');
+    dismissBtn.className = 'pw-cc-dismiss-btn';
+    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.addEventListener('click', () => this.dismissCCTicket(ticket.feedbackId));
+
+    actions.append(goBtn, planBtn, dismissBtn);
+    card.append(titleEl, descEl, pickers, actions);
+    this.ccTicketsEl.appendChild(card);
+  }
+
+  private async dispatchCCTicket(feedbackId: string, runtime: string, mode: string, instructions?: string) {
+    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
+    const base = endpointUrl.origin;
+
+    try {
+      await fetch(`${base}/api/v1/voice/dispatch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
+        body: JSON.stringify({ feedbackId, runtime, mode, instructions }),
+      });
+    } catch {}
+
+    this.removeCCTicketCard(feedbackId);
+  }
+
+  private async dismissCCTicket(feedbackId: string) {
+    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
+    const base = endpointUrl.origin;
+
+    try {
+      await fetch(`${base}/api/v1/voice/dismiss`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
+        body: JSON.stringify({ feedbackId }),
+      });
+    } catch {}
+
+    this.removeCCTicketCard(feedbackId);
+  }
+
+  private removeCCTicketCard(feedbackId: string) {
+    this.ccPendingTickets.delete(feedbackId);
+    if (this.ccTicketsEl) {
+      const card = this.ccTicketsEl.querySelector(`[data-feedback-id="${feedbackId}"]`);
+      if (card) card.remove();
+      if (this.ccTicketsEl.children.length === 0) this.ccTicketsEl.style.display = 'none';
+    }
+  }
+
+  private cleanupCCOverlay() {
+    if (this.ccOverlay) {
+      this.ccOverlay.remove();
+      this.ccOverlay = null;
+    }
+    this.removeCCToggleBar();
+    this.ccTextEl = null;
+    this.ccInterimSpan = null;
+    this.ccTicketsEl = null;
+    this.ccChunks = [];
+    this.ccPendingTickets.clear();
   }
 
   private showTimeline() {
