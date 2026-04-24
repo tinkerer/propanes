@@ -22,6 +22,7 @@ import {
 } from '../lib/sessions.js';
 import { applyTheme } from '../lib/settings.js';
 import { selectedAppId } from '../lib/state.js';
+import { startStandalonePanelTabDrag, openSessionExternally } from '../lib/tab-drag.js';
 
 export interface PanelRouteParams {
   sessionIds: string[];
@@ -186,7 +187,18 @@ export function StandalonePanelPage({ params }: { params: PanelRouteParams }) {
               <button
                 key={sid}
                 class={`popout-tab ${isActiveTab ? 'active' : ''}`}
-                onClick={() => onActivate(sid)}
+                onMouseDown={(e) => {
+                  if (e.button !== 0) return;
+                  startStandalonePanelTabDrag(e, {
+                    sessionId: sid,
+                    label: tabLabel(sid, sessionMap),
+                    onExternalPopOut: (draggedSid, zone) => {
+                      openSessionExternally(draggedSid, zone);
+                      handleCloseTab(draggedSid);
+                    },
+                    onClickFallback: () => onActivate(sid),
+                  });
+                }}
                 title={tabSess?.feedbackTitle || sid}
               >
                 {!isComp && (

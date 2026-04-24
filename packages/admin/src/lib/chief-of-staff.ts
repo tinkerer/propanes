@@ -125,6 +125,10 @@ export type ChiefOfStaffMsg = {
   text: string;
   toolCalls?: ChiefOfStaffToolCall[];
   timestamp: number;
+  // Server-side cosThread this message belongs to. Each top-level UI thread
+  // maps 1:1 to a cosThread (= one Claude session). Reply-in-thread messages
+  // inherit the threadId from the anchor user message.
+  threadId?: string;
   streaming?: boolean;
   // Set on the assistant placeholder until the first SSE event arrives, so the
   // UI can distinguish "request in flight, awaiting first byte" from "actively
@@ -394,6 +398,31 @@ export type ChiefOfStaffAgent = {
   style?: ChiefOfStaffStyle;
 };
 
+// threadId → backing agentSessionId. Each cosThread owns exactly one
+// persistent headless-stream agent session; this map lets the UI jump
+// straight to its jsonl log without round-tripping the server.
+export const cosThreadSessions = signal<Record<string, string>>({});
+
+function mergeThreadSessions(threads: Array<{ id?: unknown; agentSessionId?: unknown }>): void {
+  if (!Array.isArray(threads) || threads.length === 0) return;
+  const next = { ...cosThreadSessions.value };
+  let changed = false;
+  for (const t of threads) {
+    const tid = typeof t?.id === 'string' ? t.id : null;
+    const sid = typeof t?.agentSessionId === 'string' ? t.agentSessionId : null;
+    if (tid && sid && next[tid] !== sid) {
+      next[tid] = sid;
+      changed = true;
+    }
+  }
+  if (changed) cosThreadSessions.value = next;
+}
+
+export function getSessionIdForThread(threadId: string | undefined | null): string | null {
+  if (!threadId) return null;
+  return cosThreadSessions.value[threadId] ?? null;
+}
+
 /**
  * Extract the user-facing reply(s) from an assistant message. The model is
  * instructed to wrap its reply in <cos-reply>...</cos-reply>; anything outside
@@ -633,6 +662,7 @@ function serverMessageToClient(m: any): ChiefOfStaffMsg {
     text: String(m?.text || ''),
     toolCalls,
     timestamp: Number(m?.createdAt) || Date.now(),
+    threadId: typeof m?.threadId === 'string' ? m.threadId : undefined,
     streaming: false,
     attachments,
     elementRefs,
@@ -641,10 +671,11 @@ function serverMessageToClient(m: any): ChiefOfStaffMsg {
 }
 
 /**
- * Fetch the most recent server-side thread + messages for an agent and
- * replace the local in-memory messages with the authoritative server log.
- * Called on module startup so a fresh page load (or cleared localStorage)
- * still sees prior CoS history.
+ * Fetch ALL server-side threads + messages for an agent and replace the
+ * local in-memory message log. Messages are interleaved across threads and
+ * each one carries its threadId, so the client can route replies back to the
+ * right Claude session. Called on module startup so a fresh page load (or
+ * cleared localStorage) still sees prior CoS history.
  */
 export async function loadChiefOfStaffHistory(agentId: string, appId: string | null = null): Promise<void> {
   try {
@@ -658,7 +689,10 @@ export async function loadChiefOfStaffHistory(agentId: string, appId: string | n
     );
     if (!res.ok) return;
     const data = await res.json();
-    const thread = data?.thread || null;
+    const threads = Array.isArray(data?.threads) ? data.threads : (data?.thread ? [data.thread] : []);
+    mergeThreadSessions(threads);
+    // Server returns rows with `threadId` column — propagate it into each
+    // ChiefOfStaffMsg via serverMessageToClient.
     const serverMessages: ChiefOfStaffMsg[] = Array.isArray(data?.messages)
       ? data.messages.map(serverMessageToClient)
       : [];
@@ -666,12 +700,14 @@ export async function loadChiefOfStaffHistory(agentId: string, appId: string | n
     // Only replace the local log if the server has something. Otherwise
     // leave locally-cached messages untouched (e.g. if the user wrote a
     // turn offline).
-    if (!thread && serverMessages.length === 0) return;
+    if (threads.length === 0 && serverMessages.length === 0) return;
 
     updateAgent(agentId, (a) => ({
       ...a,
       messages: serverMessages,
-      threadId: thread?.id ?? a.threadId,
+      // agent.threadId is retained only as a legacy hint; every message now
+      // carries its own threadId and each top-level send mints a fresh one.
+      threadId: undefined,
     }));
   } catch {
     /* non-fatal */
@@ -686,34 +722,64 @@ void (async () => {
   }
 })();
 
-async function getOrCreateThread(agent: ChiefOfStaffAgent, appId: string | null): Promise<string | undefined> {
-  if (agent.threadId) return agent.threadId;
-
+/**
+ * Mint a fresh cosThread for this agent. Every top-level UI thread gets its
+ * own cosThread — the server provisions a dedicated headless-stream agent
+ * session alongside, giving each thread its own Claude context.
+ */
+async function createCosThread(
+  agent: ChiefOfStaffAgent,
+  appId: string | null,
+  nameHint: string,
+): Promise<string | undefined> {
   try {
     const token = localStorage.getItem('pw-admin-token');
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
+    const trimmedHint = nameHint.trim();
+    const name = (trimmedHint ? trimmedHint.slice(0, 80) : agent.name) || 'New thread';
     const res = await fetch('/api/v1/admin/chief-of-staff/threads', {
       method: 'POST',
       headers,
       body: JSON.stringify({
         agentId: agent.id,
         appId: appId || undefined,
-        name: agent.name,
+        name,
         systemPrompt: agent.systemPrompt || undefined,
         model: agent.model || undefined,
       }),
     });
     if (!res.ok) return undefined;
     const data = await res.json();
-    const threadId = data?.id as string | undefined;
-    if (threadId) {
-      updateAgent(agent.id, (a) => ({ ...a, threadId }));
-    }
-    return threadId;
+    if (data && typeof data === 'object') mergeThreadSessions([data]);
+    return typeof data?.id === 'string' ? data.id : undefined;
   } catch {
     return undefined;
+  }
+}
+
+/** Find the anchor user message whose timestamp matches — used to inherit
+ *  the server-side threadId when the operator picks "Reply in thread". */
+function findAnchorMessage(agent: ChiefOfStaffAgent, anchorTs: number | undefined): ChiefOfStaffMsg | null {
+  if (typeof anchorTs !== 'number') return null;
+  return agent.messages.find((m) => m.role === 'user' && m.timestamp === anchorTs) || null;
+}
+
+async function listThreadIdsForAgent(agentId: string, appId: string | null): Promise<string[]> {
+  try {
+    const token = localStorage.getItem('pw-admin-token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const qs = new URLSearchParams({ agentId });
+    if (appId) qs.set('appId', appId);
+    const res = await fetch(`/api/v1/admin/chief-of-staff/threads?${qs.toString()}`, { headers });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const threads = Array.isArray(data?.threads) ? data.threads : [];
+    return threads.map((t: any) => t?.id).filter((id: any): id is string => typeof id === 'string');
+  } catch {
+    return [];
   }
 }
 
@@ -721,33 +787,76 @@ export async function clearActiveAgentHistory(): Promise<void> {
   const agent = getActiveAgent();
   if (!agent) return;
 
-  // Delete server-side thread if it exists
-  if (agent.threadId) {
-    try {
-      const token = localStorage.getItem('pw-admin-token');
-      const headers: Record<string, string> = {};
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      await fetch(`/api/v1/admin/chief-of-staff/threads/${agent.threadId}`, {
-        method: 'DELETE',
-        headers,
-      });
-    } catch {
-      /* non-fatal */
-    }
-  }
+  const token = localStorage.getItem('pw-admin-token');
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  // Delete ALL server-side threads for this agent (across apps). Legacy rows
+  // only had one thread per agent; post-fix each top-level UI message has its
+  // own thread, so "Clear history" needs to sweep them all.
+  const threadIds = await listThreadIdsForAgent(agent.id, null);
+  // Include any legacy singleton threadId the UI remembered that might not be
+  // visible on the current app filter.
+  if (agent.threadId && !threadIds.includes(agent.threadId)) threadIds.push(agent.threadId);
+  await Promise.all(
+    threadIds.map(async (id) => {
+      try {
+        await fetch(`/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+          headers,
+        });
+      } catch {
+        /* non-fatal */
+      }
+    }),
+  );
 
   updateAgent(agent.id, (a) => ({ ...a, messages: [], threadId: undefined }));
 }
 
+/**
+ * Interrupt any in-flight turns for this agent. A turn is in-flight when at
+ * least one local message is still streaming; we derive the targeted thread
+ * ids from those messages. If nothing is streaming locally, fall back to the
+ * agent's legacy singleton threadId (pre-multi-thread clients).
+ */
 export async function interruptActiveAgent(): Promise<void> {
   const agent = getActiveAgent();
-  if (!agent?.threadId) return;
+  if (!agent) return;
 
+  const targets = new Set<string>();
+  for (const m of agent.messages) {
+    if (m.streaming && m.threadId) targets.add(m.threadId);
+  }
+  if (targets.size === 0 && agent.threadId) targets.add(agent.threadId);
+  if (targets.size === 0) return;
+
+  const token = localStorage.getItem('pw-admin-token');
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  await Promise.all(
+    Array.from(targets).map(async (id) => {
+      try {
+        await fetch(`/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(id)}/interrupt`, {
+          method: 'POST',
+          headers,
+        });
+      } catch {
+        /* non-fatal */
+      }
+    }),
+  );
+}
+
+/** Interrupt a single, known thread. Used by per-thread Stop buttons. */
+export async function interruptThread(threadId: string): Promise<void> {
+  if (!threadId) return;
   try {
     const token = localStorage.getItem('pw-admin-token');
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
-    await fetch(`/api/v1/admin/chief-of-staff/threads/${agent.threadId}/interrupt`, {
+    await fetch(`/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(threadId)}/interrupt`, {
       method: 'POST',
       headers,
     });
@@ -1100,8 +1209,38 @@ export function sendChiefOfStaffMessage(
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const threadId = await getOrCreateThread(agent, appId);
+      // Resolve the target cosThread:
+      //   • Reply-in-thread → inherit the anchor user-message's threadId so the
+      //     existing Claude session continues.
+      //   • Top-level send  → mint a fresh cosThread so a new headless Claude
+      //     session spawns. This is the behavior contract the operator expects:
+      //     every "new chat" = its own session, not a continuation of the
+      //     previous one.
+      let threadId: string | undefined;
+      if (typeof replyToTs === 'number') {
+        const anchor = findAnchorMessage(agent, replyToTs);
+        threadId = anchor?.threadId;
+      }
+      if (!threadId) {
+        threadId = await createCosThread(agent, appId, trimmed);
+      }
       threadIdForResume = threadId;
+
+      // Tag the optimistic user message + assistant placeholder with the
+      // resolved threadId so grouping, reply resolution, and targeted
+      // interrupts line up with the backend.
+      if (threadId) {
+        updateAgent(agentId, (a) => ({
+          ...a,
+          messages: a.messages.map((m) => {
+            if ((m.role === 'user' && m.timestamp === userTs) ||
+                (m.role === 'assistant' && m.timestamp === assistantTs)) {
+              return { ...m, threadId };
+            }
+            return m;
+          }),
+        }));
+      }
 
       const payload: Record<string, unknown> = {
         text: trimmed,

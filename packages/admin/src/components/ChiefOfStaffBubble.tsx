@@ -18,6 +18,8 @@ import {
   updateActiveAgentStyle,
   clearActiveAgentHistory,
   interruptActiveAgent,
+  interruptThread,
+  getSessionIdForThread,
   ensureCosPanel,
   extractCosReply,
   stripCosReplyMarkers,
@@ -82,6 +84,7 @@ import {
   toggleCompanion,
 } from '../lib/sessions.js';
 import { handleDragMove, handleResizeMove } from '../lib/popout-physics.js';
+import { detectExternalZone, openCosExternally, applyExternalGhostHint } from '../lib/tab-drag.js';
 import { isMobile } from '../lib/viewport.js';
 import {
   registerCosArtifact,
@@ -800,46 +803,98 @@ function MessageBubble({
         {showAttachments && (
           <MessageAttachments attachments={msg.attachments} elementRefs={msg.elementRefs} />
         )}
-        {msg.streaming && (
-          <div class="cos-thinking-row">
-            <div class="cos-thinking">
-              <span /><span /><span />
+        {msg.streaming && (() => {
+          // Surface a shortcut to the backing session's jsonl log so the
+          // operator can peek at the in-flight turn directly when the reply
+          // takes too long or extraction drops output. The session is
+          // provisioned at thread creation; even if the UI hasn't received
+          // any assistant bytes yet, the jsonl file is already live.
+          const linkSid = getSessionIdForThread(msg.threadId);
+          const openJsonl = () => {
+            if (!linkSid) return;
+            openSession(linkSid);
+            toggleCompanion(linkSid, 'jsonl');
+          };
+          return (
+            <div class="cos-thinking-row">
+              <div class="cos-thinking">
+                <span /><span /><span />
+              </div>
+              {showEarlyAck && (
+                linkSid ? (
+                  <button
+                    type="button"
+                    class="cos-thinking-label cos-thinking-label-link"
+                    onClick={(e) => { e.stopPropagation(); openJsonl(); }}
+                    title="Open session jsonl log"
+                  >
+                    Working on it…
+                  </button>
+                ) : (
+                  <span class="cos-thinking-label">Working on it…</span>
+                )
+              )}
+              {showElapsed && (
+                linkSid ? (
+                  <button
+                    type="button"
+                    class="cos-thinking-label cos-thinking-label-elapsed cos-thinking-label-link"
+                    onClick={(e) => { e.stopPropagation(); openJsonl(); }}
+                    title="Open session jsonl log"
+                  >
+                    <ElapsedSince ts={msg.timestamp} />
+                  </button>
+                ) : (
+                  <span class="cos-thinking-label cos-thinking-label-elapsed">
+                    <ElapsedSince ts={msg.timestamp} />
+                  </span>
+                )
+              )}
             </div>
-            {showEarlyAck && (
-              <span class="cos-thinking-label">Working on it…</span>
-            )}
-            {showElapsed && (
-              <span class="cos-thinking-label cos-thinking-label-elapsed">
-                <ElapsedSince ts={msg.timestamp} />
-              </span>
-            )}
-          </div>
-        )}
-        {msg.error && (
-          <div class="cos-msg-error" role="alert">
-            <div class="cos-msg-error-text">
-              <strong>Send failed:</strong> {msg.error}
-            </div>
-            <div class="cos-msg-error-actions">
-              {msg.retryPayload && (
+          );
+        })()}
+        {msg.error && (() => {
+          const linkSid = getSessionIdForThread(msg.threadId);
+          return (
+            <div class="cos-msg-error" role="alert">
+              <div class="cos-msg-error-text">
+                <strong>Send failed:</strong> {msg.error}
+              </div>
+              <div class="cos-msg-error-actions">
+                {msg.retryPayload && (
+                  <button
+                    type="button"
+                    class="cos-msg-error-btn"
+                    onClick={(e) => { e.stopPropagation(); retryFailedAssistantMessage(msg.timestamp); }}
+                  >
+                    Retry
+                  </button>
+                )}
+                {linkSid && (
+                  <button
+                    type="button"
+                    class="cos-msg-error-btn cos-msg-error-btn-secondary"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openSession(linkSid);
+                      toggleCompanion(linkSid, 'jsonl');
+                    }}
+                    title="Open session jsonl log"
+                  >
+                    Open JSONL
+                  </button>
+                )}
                 <button
                   type="button"
-                  class="cos-msg-error-btn"
-                  onClick={(e) => { e.stopPropagation(); retryFailedAssistantMessage(msg.timestamp); }}
+                  class="cos-msg-error-btn cos-msg-error-btn-secondary"
+                  onClick={(e) => { e.stopPropagation(); dismissFailedAssistantMessage(msg.timestamp); }}
                 >
-                  Retry
+                  Dismiss
                 </button>
-              )}
-              <button
-                type="button"
-                class="cos-msg-error-btn cos-msg-error-btn-secondary"
-                onClick={(e) => { e.stopPropagation(); dismissFailedAssistantMessage(msg.timestamp); }}
-              >
-                Dismiss
-              </button>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );
@@ -853,32 +908,65 @@ type Thread = {
 
 function groupIntoThreads(messages: ChiefOfStaffMsg[]): Thread[] {
   const threads: Thread[] = [];
-  let current: Thread | null = null;
+  const byThreadId = new Map<string, Thread>();
   // Route a "Reply in thread" user message back to its anchor thread instead
   // of starting a new top-level thread. Keyed by the anchor user-msg timestamp.
   const byAnchorTs = new Map<number, Thread>();
-  const pushCurrent = () => {
-    if (current && !threads.includes(current)) threads.push(current);
-  };
+  let legacyCurrent: Thread | null = null;
+  const pushIfNew = (t: Thread) => { if (!threads.includes(t)) threads.push(t); };
+
   messages.forEach((m, i) => {
+    const tid = m.threadId;
+    if (tid) {
+      // Primary grouping: backend cosThread id. Handles interleaved parallel
+      // turns cleanly — an assistant reply from thread A that arrives after a
+      // user message in thread B lands back in thread A.
+      let t = byThreadId.get(tid);
+      if (!t) {
+        t = m.role === 'user'
+          ? { userIdx: i, userMsg: m, replies: [] }
+          : { userIdx: null, userMsg: null, replies: [{ idx: i, msg: m }] };
+        byThreadId.set(tid, t);
+        pushIfNew(t);
+        if (m.role === 'user' && m.timestamp) byAnchorTs.set(m.timestamp, t);
+      } else if (m.role === 'user') {
+        if (!t.userMsg) {
+          t.userIdx = i;
+          t.userMsg = m;
+          if (m.timestamp) byAnchorTs.set(m.timestamp, t);
+        } else {
+          t.replies.push({ idx: i, msg: m });
+        }
+      } else {
+        t.replies.push({ idx: i, msg: m });
+      }
+      legacyCurrent = t;
+      return;
+    }
+
+    // Legacy fallback for messages without a threadId (pre-fix rows).
     if (m.role === 'user') {
       if (typeof m.replyToTs === 'number') {
         const target = byAnchorTs.get(m.replyToTs);
         if (target) {
           target.replies.push({ idx: i, msg: m });
-          current = target;
+          legacyCurrent = target;
           return;
         }
       }
-      pushCurrent();
-      current = { userIdx: i, userMsg: m, replies: [] };
-      if (m.timestamp) byAnchorTs.set(m.timestamp, current);
+      const t: Thread = { userIdx: i, userMsg: m, replies: [] };
+      threads.push(t);
+      if (m.timestamp) byAnchorTs.set(m.timestamp, t);
+      legacyCurrent = t;
     } else {
-      if (!current) current = { userIdx: null, userMsg: null, replies: [] };
-      current.replies.push({ idx: i, msg: m });
+      if (!legacyCurrent) {
+        legacyCurrent = { userIdx: null, userMsg: null, replies: [] };
+      }
+      legacyCurrent.replies.push({ idx: i, msg: m });
+      pushIfNew(legacyCurrent);
     }
   });
-  pushCurrent();
+
   return threads;
 }
 
@@ -1814,7 +1902,15 @@ function ThreadBlock({
   const showExpandedReplies = !userMsg || !collapsed;
   const threadContext = userMsg?.text || '';
   const anchorTs = userMsg?.timestamp;
-  const handleThreadStop = () => onStop();
+  // Each UI thread maps to one server-side cosThread. Pull the id from any
+  // tagged message so Stop targets just this thread's Claude session instead
+  // of interrupting unrelated in-flight threads for the same agent.
+  const threadServerId =
+    userMsg?.threadId ?? replies.find((r) => r.msg.threadId)?.msg.threadId ?? null;
+  const handleThreadStop = () => {
+    if (threadServerId) void interruptThread(threadServerId);
+    else onStop();
+  };
   const handleThreadReply = () => {
     if (threadContext) onReply('user', threadContext, anchorTs);
   };
@@ -2044,7 +2140,7 @@ export function ChiefOfStaffBubble({
   });
   const [pickerExcludeWidget, setPickerExcludeWidget] = useState<boolean>(() => {
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-pick-excl-widget') : null;
-    return v === null ? true : v === '1';
+    return v === '1';
   });
   const [pickerMultiSelect, setPickerMultiSelect] = useState<boolean>(() => {
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-pick-multi') : null;
@@ -2663,16 +2759,42 @@ export function ChiefOfStaffBubble({
       dockedHeight: cp.dockedHeight, dockedTopOffset: cp.dockedTopOffset || 0,
       dockedBaseTop: cp.docked ? (e.clientY - getDockedPanelTop(COS_PANEL_ID)) : 0,
     };
+    const ghostLabel = 'Ops chat';
+    let ghost: HTMLElement | null = null;
+    const ensureGhost = () => {
+      if (ghost) return;
+      ghost = document.createElement('div');
+      ghost.className = 'tab-drag-ghost pane-drag-ghost';
+      ghost.textContent = ghostLabel;
+      document.body.appendChild(ghost);
+    };
+    const removeGhost = () => {
+      if (ghost) { ghost.remove(); ghost = null; }
+    };
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current) return;
       handleDragMove(ev, COS_PANEL_ID, dragStart.current, dragMoved);
+      if (detectExternalZone(ev.clientX, ev.clientY)) {
+        ensureGhost();
+        applyExternalGhostHint(ghost, ghostLabel, ev.clientX, ev.clientY);
+      } else {
+        removeGhost();
+      }
     };
-    const onUp = () => {
+    const onUp = (ev: MouseEvent) => {
       dragging.current = false;
       wrapperRef.current?.classList.remove('popout-dragging');
       snapGuides.value = [];
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      removeGhost();
+
+      const externalZone = detectExternalZone(ev.clientX, ev.clientY);
+      if (externalZone && dragMoved.current) {
+        openCosExternally(externalZone);
+        setChiefOfStaffOpen(false);
+        return;
+      }
       persistPopoutState();
     };
     document.addEventListener('mousemove', onMove);
@@ -2858,7 +2980,11 @@ export function ChiefOfStaffBubble({
                   <button
                     key={a.id}
                     class={`popout-tab ${isActiveTab ? 'active' : ''}`}
-                    onClick={() => { chiefOfStaffActiveId.value = a.id; setShowSettings(false); }}
+                    onClick={() => {
+                      chiefOfStaffActiveId.value = a.id;
+                      setShowSettings(false);
+                      if (!inPane) bringToFront(COS_PANEL_ID);
+                    }}
                     title={a.name}
                   >
                     <span class="popout-tab-label">{a.name}</span>
@@ -2908,8 +3034,9 @@ export function ChiefOfStaffBubble({
                   onClick={() => setMenuOpen((v) => !v)}
                   onMouseDown={(e) => {
                     // Drag-to-popout: if the user drags the hamburger >40px, open
-                    // Chief of Staff in a new browser window instead of showing the
-                    // menu. Preserves click-to-open-menu for short gestures.
+                    // a standalone CoS window via ?embed=cos (chat-only, no admin
+                    // chrome) so the popped-out window matches what the
+                    // CosEmbedRoot renders. Click-only opens the menu instead.
                     const startX = (e as MouseEvent).clientX;
                     const startY = (e as MouseEvent).clientY;
                     let dragged = false;
@@ -2921,6 +3048,7 @@ export function ChiefOfStaffBubble({
                         document.removeEventListener('mousemove', onMove);
                         document.removeEventListener('mouseup', onUp);
                         setMenuOpen(false);
+                        const cosUrl = `${location.origin}${location.pathname}?embed=cos`;
                         // Decide window vs tab based on drop position: near screen
                         // edge → detached window, anywhere else → new tab.
                         const nearEdge =
@@ -2929,9 +3057,9 @@ export function ChiefOfStaffBubble({
                           ev.clientY < 20 ||
                           ev.clientY > window.innerHeight - 20;
                         if (nearEdge) {
-                          window.open(location.href, '_blank', 'width=900,height=700,menubar=no,toolbar=no');
+                          window.open(cosUrl, '_blank', 'width=900,height=700,menubar=no,toolbar=no');
                         } else {
-                          window.open(location.href, '_blank');
+                          window.open(cosUrl, '_blank');
                         }
                       }
                     };

@@ -8,7 +8,8 @@ import { initEmbedGestures } from './embed-gestures.js';
 // Embed mode detection
 const params = new URLSearchParams(window.location.search);
 export const isWorkbench = signal(params.get('embed') === 'workbench');
-export const isEmbedded = signal(params.get('embed') === 'true' || isWorkbench.value);
+export const isCosEmbed = signal(params.get('embed') === 'cos');
+export const isEmbedded = signal(params.get('embed') === 'true' || isWorkbench.value || isCosEmbed.value);
 export const isCompanion = signal(params.get('companion') === 'true');
 const embedAppId = params.get('appId');
 
@@ -16,6 +17,8 @@ if (isWorkbench.value) {
   document.body.classList.add('pw-workbench');
   // Two-finger pan + pinch-zoom relay so iOS Safari can move/zoom the popout
   initEmbedGestures();
+} else if (isCosEmbed.value) {
+  document.body.classList.add('pw-embed', 'pw-cos-embed');
 } else if (isEmbedded.value) {
   document.body.classList.add('pw-embed');
 }

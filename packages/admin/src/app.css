@@ -4479,6 +4479,25 @@ input:focus, select:focus, textarea:focus {
   vertical-align: middle;
 }
 
+/* Per-thread caption inside a CoS agent group — separates rows that belong to
+   different threads of the same agent. Subtle teal-tinted label, no row chrome. */
+.sidebar-cos-thread-divider {
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(20, 184, 166, 0.85);
+  padding: 4px 4px 2px;
+  margin-top: 2px;
+  text-transform: none;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-cos-thread-divider:first-child {
+  margin-top: 0;
+}
+
 .session-swarm-count {
   font-size: 11px;
   color: var(--pw-text-faint);
@@ -7334,7 +7353,9 @@ kbd {
 .popout-tab.active {
   background: #334155;
   color: #f1f5f9;
-  box-shadow: inset 0 -2px 0 #1d9bf0;
+  box-shadow: inset 0 -3px 0 #1d9bf0;
+  font-weight: 600;
+  border-color: #1d9bf0;
 }
 .popout-tab-label {
   overflow: hidden;
@@ -7814,6 +7835,23 @@ body.pw-workbench {
   padding: 0;
   background: var(--pw-bg-body);
   overflow: hidden;
+}
+
+/* CoS embed mode — Ops chat fills the iframe; no admin chrome. */
+body.pw-cos-embed {
+  padding: 0;
+  overflow: hidden;
+}
+body.pw-cos-embed .pw-embed-root,
+body.pw-cos-embed .pw-cos-embed-root {
+  padding: 0;
+  width: 100vw;
+  height: 100vh;
+  min-height: 100vh;
+}
+body.pw-cos-embed .pw-cos-embed-root .cos-pane {
+  width: 100%;
+  height: 100%;
 }
 
 body.pw-workbench .layout {
@@ -13061,6 +13099,19 @@ a.cos-dispatch-status-title:hover {
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
 }
+button.cos-thinking-label-link {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  font-style: italic;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+button.cos-thinking-label-link.cos-thinking-label-elapsed { font-style: normal; }
+button.cos-thinking-label-link:hover { color: var(--pw-text); text-decoration-style: solid; }
 .cos-thinking { display: flex; gap: 4px; padding: 10px 14px; }
 .cos-thinking span {
   width: 6px;
