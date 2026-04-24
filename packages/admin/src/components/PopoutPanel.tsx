@@ -969,7 +969,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
 
         const divider = panel.splitCollapsed ? null : (
           <div
-            class={`popout-split-divider popout-split-divider-${isHoriz ? 'h' : 'v'}`}
+            class={`popout-split-divider${isHoriz ? '' : ' popout-split-divider-h'}`}
             onMouseDown={onSplitDividerMouseDown}
           />
         );
