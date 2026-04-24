@@ -1,6 +1,7 @@
 import { useEffect } from 'preact/hooks';
 import { ComponentChildren } from 'preact';
-import { isAuthenticated, currentRoute, loadApplications, isEmbedded, isCompanion, isWorkbench, clearToken } from '../lib/state.js';
+import { isAuthenticated, currentRoute, loadApplications, isEmbedded, isCompanion, isWorkbench, isCosEmbed, clearToken } from '../lib/state.js';
+import { setChiefOfStaffOpen } from '../lib/chief-of-staff.js';
 import { connectAdminWs } from '../lib/admin-ws.js';
 import { initNotifications } from '../lib/notifications.js';
 import { isolatedComponent, getIsolateEntry, getIsolateParams } from '../lib/isolate.js';
@@ -14,6 +15,21 @@ import { DispatchDialog } from './DispatchDialog.js';
 import { SetupAssistantDialog } from './SetupAssistantDialog.js';
 import { PageView } from './PageView.js';
 import { ChiefOfStaffBubble } from './ChiefOfStaffBubble.js';
+
+function CosEmbedRoot() {
+  // Force the Ops chat open and load apps so dispatch / app context resolves.
+  useEffect(() => {
+    loadApplications();
+    initNotifications();
+    connectAdminWs();
+    setChiefOfStaffOpen(true);
+  }, []);
+  return (
+    <div class="pw-cos-embed-root">
+      <ChiefOfStaffBubble floatingButton={false} mode="pane" />
+    </div>
+  );
+}
 
 function CompanionRoot({ children }: { children: ComponentChildren }) {
   useEffect(() => {
@@ -113,6 +129,11 @@ export function App() {
         <ChiefOfStaffBubble floatingButton={false} />
       </>
     );
+  }
+
+  // CoS-only embed: just the Ops chat in pane mode, filling the iframe.
+  if (isCosEmbed.value) {
+    return <CosEmbedRoot />;
   }
 
   if (embedded) {

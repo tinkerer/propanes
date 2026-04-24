@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, inArray } from 'drizzle-orm';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { resolve as pathResolve, join as pathJoin } from 'node:path';
@@ -348,13 +348,25 @@ function streamCosSessionOutput(params: {
         onDone?.();
       };
 
-      // Parse a stream-json line and accumulate assistant content
+      // Parse a stream-json line and accumulate assistant content.
+      //
+      // Sessions run through a tmux-wrapped PTY (see session-service.ts), so
+      // claude's stream-json stdout arrives interleaved with CSI/OSC escape
+      // sequences + CR bytes. JSON.parse bails on that noise, which silently
+      // drops the assistant reply and surfaces as "No response from Claude"
+      // on the frontend even though the turn completed normally. Strip any
+      // ANSI sequences + CRs before parsing.
+      const ANSI_RE = /\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x20-\x2f]*[\x30-\x7e])/g;
       const processJsonLine = (line: string, seq: number): boolean => {
-        const trimmed = line.trim();
-        if (!trimmed) return false;
+        const cleaned = line.replace(ANSI_RE, '').replace(/\r/g, '').trim();
+        if (!cleaned) return false;
+        // Fast-path: only try to parse lines that look like a JSON object.
+        // Keeps this resilient to tmux status/banner lines that survive the
+        // strip (e.g. `[exited]`).
+        if (cleaned.charCodeAt(0) !== 0x7b /* '{' */) return false;
         let obj: any;
-        try { obj = JSON.parse(trimmed); } catch { return false; }
-        enqueueClaudeFrame(seq, trimmed);
+        try { obj = JSON.parse(cleaned); } catch { return false; }
+        enqueueClaudeFrame(seq, cleaned);
         if (!capturedSessionId && typeof obj.session_id === 'string' && obj.session_id) {
           capturedSessionId = obj.session_id;
         }
@@ -672,9 +684,11 @@ chiefOfStaffRoutes.get('/chief-of-staff/threads/:id/messages', async (c) => {
   return c.json({ messages });
 });
 
-// History lookup keyed by agentId — returns the most recent thread for this
-// agent and its message log. Client uses this on startup to rehydrate CoS
-// conversation state without depending on localStorage.
+// History lookup keyed by agentId — returns ALL threads for the agent and the
+// interleaved message log across them. Client uses this on startup to
+// rehydrate CoS conversation state without depending on localStorage. Each
+// message carries its threadId so the client can route replies back to the
+// right server-side thread (== its own Claude session).
 chiefOfStaffRoutes.get('/chief-of-staff/history/:agentId', async (c) => {
   const agentId = c.req.param('agentId');
   const appId = c.req.query('appId');
@@ -686,19 +700,22 @@ chiefOfStaffRoutes.get('/chief-of-staff/history/:agentId', async (c) => {
     .select()
     .from(schema.cosThreads)
     .where(and(...conditions))
-    .orderBy(desc(schema.cosThreads.updatedAt))
-    .limit(1);
-  const thread = threads[0];
+    .orderBy(desc(schema.cosThreads.updatedAt));
 
-  if (!thread) return c.json({ thread: null, messages: [] });
+  if (threads.length === 0) {
+    return c.json({ threads: [], thread: null, messages: [] });
+  }
 
+  const threadIds = threads.map((t) => t.id);
   const messages = await db
     .select()
     .from(schema.cosMessages)
-    .where(eq(schema.cosMessages.threadId, thread.id))
+    .where(inArray(schema.cosMessages.threadId, threadIds))
     .orderBy(schema.cosMessages.createdAt);
 
-  return c.json({ thread, messages });
+  // `thread` retained for backward-compat — points at the most-recently
+  // updated thread. New clients read `threads` + per-message threadId.
+  return c.json({ threads, thread: threads[0], messages });
 });
 
 // ────────────────────────────────────────────────────────────────────────────

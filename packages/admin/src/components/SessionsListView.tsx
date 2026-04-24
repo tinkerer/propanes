@@ -56,6 +56,7 @@ import { selectedAppId, applications, navigate } from '../lib/state.js';
 import { PopupMenu } from './PopupMenu.js';
 import { QuickDispatchPopup, type DispatchType } from './QuickDispatchPopup.js';
 import { loadCosDispatches, cosGroupForSession } from '../lib/cos-dispatches.js';
+import { chiefOfStaffAgents } from '../lib/chief-of-staff.js';
 
 const autoJumpMenuOpen = signal(false);
 const quickDispatchAppKey = signal<string | null>(null);
@@ -497,9 +498,15 @@ export function SessionsListView() {
           const childrenByParent = new Map<string, any[]>();
           const childIds = new Set<string>();
 
-          // Group by swarmId, wiggumRunId, or CoS thread
+          // Group by swarmId, wiggumRunId, or CoS agent (one root per agent — all
+          // threads belonging to the same agent collapse into a single hierarchy).
           const swarmGroups = new Map<string, { label: string; type: string; children: any[] }>();
           const swarmChildIds = new Set<string>();
+          const cosAgents = chiefOfStaffAgents.value;
+          const cosAgentLabel = (agentId: string) => {
+            const found = cosAgents.find((a) => a.id === agentId);
+            return found?.name || 'Chief of Staff';
+          };
 
           for (const s of restAgents) {
             if (s.swarmId) {
@@ -523,10 +530,11 @@ export function SessionsListView() {
             } else {
               const cos = cosGroupForSession(s);
               if (cos) {
-                const key = `cos:${cos.threadId}`;
+                const agentId = cos.agentId || 'default';
+                const key = `cos:${agentId}`;
                 let grp = swarmGroups.get(key);
                 if (!grp) {
-                  grp = { label: cos.name || 'Chief of Staff', type: 'cos', children: [] };
+                  grp = { label: cosAgentLabel(agentId), type: 'cos', children: [] };
                   swarmGroups.set(key, grp);
                 }
                 grp.children.push(s);
@@ -534,6 +542,40 @@ export function SessionsListView() {
               }
             }
           }
+
+          // Cluster CoS children by threadId so same-thread rows are adjacent.
+          for (const grp of swarmGroups.values()) {
+            if (grp.type !== 'cos') continue;
+            grp.children.sort((a, b) => {
+              const at = (cosGroupForSession(a)?.threadId || '');
+              const bt = (cosGroupForSession(b)?.threadId || '');
+              if (at !== bt) return at.localeCompare(bt);
+              const ad = new Date(a.startedAt || a.createdAt || 0).getTime();
+              const bd = new Date(b.startedAt || b.createdAt || 0).getTime();
+              return ad - bd;
+            });
+          }
+
+          // Renders CoS children with a per-thread divider so operators can
+          // distinguish which thread each row belongs to.
+          const renderCosChildren = (children: any[]) => {
+            const out: any[] = [];
+            let lastThreadId = '';
+            for (const child of children) {
+              const link = cosGroupForSession(child);
+              const tid = link?.threadId || '';
+              if (tid && tid !== lastThreadId) {
+                out.push(
+                  <div key={`cos-thread-${tid}`} class="sidebar-cos-thread-divider" title={tid}>
+                    {link?.name || 'Thread'}
+                  </div>,
+                );
+                lastThreadId = tid;
+              }
+              out.push(renderItem(child));
+            }
+            return out;
+          };
 
           // Remaining: parentSessionId-based hierarchy (only for non-swarm sessions)
           for (const s of restAgents) {
@@ -637,7 +679,7 @@ export function SessionsListView() {
                   </div>
                   {expanded && (
                     <div class="sidebar-session-tree-children">
-                      {grp.children.map(renderItem)}
+                      {isCos ? renderCosChildren(grp.children) : grp.children.map(renderItem)}
                     </div>
                   )}
                 </div>
@@ -754,7 +796,7 @@ export function SessionsListView() {
                                 title={isCos ? 'New powwow in this app' : 'New wiggum in this app'}
                               >+</button>
                             </div>
-                            {exp && <div class="sidebar-session-tree-children">{grp.children.map(renderItem)}</div>}
+                            {exp && <div class="sidebar-session-tree-children">{isCos ? renderCosChildren(grp.children) : grp.children.map(renderItem)}</div>}
                           </div>
                         );
                       })}

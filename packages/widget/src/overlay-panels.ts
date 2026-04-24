@@ -1,6 +1,6 @@
 import { OVERLAY_CSS } from './overlay-styles.js';
 
-export type PanelType = 'feedback' | 'detail' | 'sessions' | 'files' | 'settings' | 'terminal' | 'workbench';
+export type PanelType = 'feedback' | 'detail' | 'sessions' | 'files' | 'settings' | 'terminal' | 'workbench' | 'cos';
 
 export type DockedEdge = 'left' | 'right' | 'bottom' | null;
 
@@ -20,7 +20,8 @@ const PANEL_CONFIGS: Record<PanelType, PanelConfig> = {
   files: { icon: '\u{1F4C2}', title: 'Files', path: (a) => `/app/${a}/sessions`, width: 650, height: 500 },
   settings: { icon: '\u2699', title: 'Settings', path: () => '/settings/applications', width: 550, height: 500 },
   terminal: { icon: '\u{1F4BB}', title: 'Terminal', path: (a) => `/app/${a}/sessions`, width: 750, height: 500 },
-  workbench: { icon: '\u2B1A', title: 'Workbench', path: (a) => `/app/${a}/sessions`, width: 900, height: 600, embedMode: 'workbench' },
+  workbench: { icon: '\u2B1A', title: 'ProPanes Overlay', path: (a) => `/app/${a}/sessions`, width: 900, height: 600, embedMode: 'workbench' },
+  cos: { icon: '★', title: 'Ops', path: () => '/', width: 480, height: 620, embedMode: 'cos' },
 };
 
 interface PanelState {
@@ -346,7 +347,7 @@ export class OverlayPanelManager {
     // Drawer handle (visible when collapsed to edge)
     const drawerHandle = document.createElement('div');
     drawerHandle.className = 'pw-drawer-handle';
-    drawerHandle.innerHTML = '<span class="pw-drawer-handle-icon">\u2B1A</span><span class="pw-drawer-handle-label">Workbench</span>';
+    drawerHandle.innerHTML = '<span class="pw-drawer-handle-icon">\u2B1A</span><span class="pw-drawer-handle-label">ProPanes</span>';
     drawerHandle.addEventListener('click', () => this.toggleDrawer(id));
     panel.appendChild(drawerHandle);
 
@@ -558,6 +559,11 @@ export class OverlayPanelManager {
     if (!state) return;
     // Only react to primary button / first contact
     if (e.button !== 0) return;
+    // Don't hijack pointerdown when the user is clicking a header button —
+    // setPointerCapture on the header otherwise swallows the pointerup so the
+    // child button never fires its click event (close / dock buttons fail).
+    const tgt = e.target as HTMLElement | null;
+    if (tgt?.closest('button')) return;
     e.preventDefault();
 
     // If docked, undock first and start drag from float
