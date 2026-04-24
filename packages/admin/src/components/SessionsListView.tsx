@@ -54,10 +54,12 @@ import { ctrlShiftHeld } from '../lib/shortcuts.js';
 import { autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce } from '../lib/settings.js';
 import { selectedAppId, applications, navigate } from '../lib/state.js';
 import { PopupMenu } from './PopupMenu.js';
-import { QuickDispatchPopup } from './QuickDispatchPopup.js';
+import { QuickDispatchPopup, type DispatchType } from './QuickDispatchPopup.js';
+import { loadCosDispatches, cosGroupForSession } from '../lib/cos-dispatches.js';
 
 const autoJumpMenuOpen = signal(false);
 const quickDispatchAppKey = signal<string | null>(null);
+const quickDispatchInitialType = signal<DispatchType | null>(null);
 const renamingSessionId = signal<string | null>(null);
 const renameValue = signal<string>('');
 const renameSaving = signal(false);
@@ -135,9 +137,19 @@ export function SessionsListView() {
       const bOpen = tabSet.has(b.id) ? 0 : 1;
       if (aOpen !== bOpen) return aOpen - bOpen;
       const statusOrder = (s: string) =>
-        s === 'running' ? 0 : s === 'pending' ? 1 : 2;
-      const diff = statusOrder(a.status) - statusOrder(b.status);
-      if (diff !== 0) return diff;
+        s === 'running' ? 0 : s === 'idle' ? 1 : s === 'pending' ? 2 : 3;
+      const aTier = statusOrder(a.status);
+      const bTier = statusOrder(b.status);
+      if (aTier !== bTier) return aTier - bTier;
+      // Completed tier (completed/failed/killed): order by completion time so the
+      // most-recently-finished session surfaces first. Fall back to start/create
+      // time if completedAt is missing (older rows). Running/pending keep the
+      // startedAt ordering.
+      if (aTier === 2) {
+        const aTime = new Date(a.completedAt || a.startedAt || a.createdAt || 0).getTime();
+        const bTime = new Date(b.completedAt || b.startedAt || b.createdAt || 0).getTime();
+        return bTime - aTime;
+      }
       return new Date(b.startedAt || b.createdAt || 0).getTime() -
         new Date(a.startedAt || a.createdAt || 0).getTime();
     });
@@ -185,6 +197,12 @@ export function SessionsListView() {
     return () => document.removeEventListener('click', close);
   }, [sidebarItemMenu.value]);
 
+  useEffect(() => {
+    loadCosDispatches();
+    const timer = window.setInterval(() => { loadCosDispatches(); }, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const autoJumpBtnRef = useRef<HTMLSpanElement>(null);
 
   const renderItem = (s: any) => {
@@ -199,7 +217,7 @@ export function SessionsListView() {
       : (s.paneTitle || s.id.slice(-6));
     const customLabel = getSessionLabel(s.id);
     const locationPrefix = s.isHarness ? '\u{1F4E6}' : s.isRemote ? '\u{1F310}' : '';
-    const raw = customLabel || (isPlain ? `${locationPrefix || '\u{1F5A5}\uFE0F'} ${plainLabel}` : `${locationPrefix ? locationPrefix + ' ' : ''}${s.feedbackTitle || s.agentName || `Session ${s.id.slice(-6)}`}`);
+    const raw = customLabel || (isPlain ? `${locationPrefix || '\u{1F5A5}\uFE0F'} ${plainLabel}` : `${locationPrefix ? locationPrefix + ' ' : ''}${s.feedbackTitle || s.title || s.agentName || `Session ${s.id.slice(-6)}`}`);
     const tooltipParts: string[] = [];
     if (s.isHarness) tooltipParts.push(`Harness: ${s.harnessName || 'unknown'}`);
     else if (s.isRemote) tooltipParts.push(`Remote: ${s.machineName || s.launcherHostname || 'unknown'}`);
@@ -209,7 +227,8 @@ export function SessionsListView() {
       ? `Terminal \u2014 ${s.status}`
       : s.feedbackTitle
         ? `${s.feedbackTitle} \u2014 ${s.status}`
-        : `${s.agentName || 'Session'} \u2014 ${s.status}`);
+        : `${s.agentName || s.title || 'Session'} \u2014 ${s.status}`);
+    if (s.claudeSessionId) tooltipParts.push(`Claude session: ${s.claudeSessionId}`);
     const tooltip = tooltipParts.join('\n');
     const globalIdx = globalSessions.indexOf(s.id);
     const globalNum = globalIdx >= 0 ? globalIdx + 1 : null;
@@ -399,7 +418,7 @@ export function SessionsListView() {
           <div class="sidebar-filter-section">
             <div class="sidebar-filter-section-label">Status</div>
             <div class="sidebar-filter-checkboxes">
-              {(['running', 'pending', 'completed', 'failed', 'killed'] as const).map((status) => (
+              {(['running', 'idle', 'pending', 'completed', 'failed', 'killed'] as const).map((status) => (
                 <label key={status} class="sidebar-filter-checkbox">
                   <input
                     type="checkbox"
@@ -478,7 +497,7 @@ export function SessionsListView() {
           const childrenByParent = new Map<string, any[]>();
           const childIds = new Set<string>();
 
-          // Group by swarmId or wiggumRunId
+          // Group by swarmId, wiggumRunId, or CoS thread
           const swarmGroups = new Map<string, { label: string; type: string; children: any[] }>();
           const swarmChildIds = new Set<string>();
 
@@ -501,6 +520,18 @@ export function SessionsListView() {
               }
               grp.children.push(s);
               swarmChildIds.add(s.id);
+            } else {
+              const cos = cosGroupForSession(s);
+              if (cos) {
+                const key = `cos:${cos.threadId}`;
+                let grp = swarmGroups.get(key);
+                if (!grp) {
+                  grp = { label: cos.name || 'Chief of Staff', type: 'cos', children: [] };
+                  swarmGroups.set(key, grp);
+                }
+                grp.children.push(s);
+                swarmChildIds.add(s.id);
+              }
             }
           }
 
@@ -554,8 +585,9 @@ export function SessionsListView() {
             return entries.map(([key, grp]) => {
               const expanded = sessionExpandedParents.value.has(key);
               const activeCount = grp.children.filter((c: any) => c.status === 'running').length;
+              const isCos = grp.type === 'cos';
               return (
-                <div key={`sgrp-${key}`} class="sidebar-session-tree">
+                <div key={`sgrp-${key}`} class={`sidebar-session-tree${isCos ? ' sidebar-cos-group' : ''}`}>
                   <div class="sidebar-session-tree-row">
                     <button
                       class="sidebar-tree-toggle"
@@ -565,6 +597,7 @@ export function SessionsListView() {
                       {expanded ? '\u25be' : '\u25b8'}
                     </button>
                     <span class="sidebar-tree-count">{grp.children.length}</span>
+                    {isCos && <span class="sidebar-cos-badge">CoS</span>}
                     <span
                       class="sidebar-swarm-group-label"
                       style={{
@@ -579,6 +612,11 @@ export function SessionsListView() {
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (isCos) {
+                          // No /wiggum page for CoS threads — just toggle expand.
+                          toggleExpandedParent(key);
+                          return;
+                        }
                         const appId = grp.children[0]?.appId || selectedAppId.value;
                         if (appId) navigate(`/app/${appId}/wiggum`);
                       }}
@@ -586,6 +624,16 @@ export function SessionsListView() {
                       {grp.label}
                       {activeCount > 0 && <span style={{ color: '#4CAF50', marginLeft: 4, fontWeight: 400 }}>{activeCount} running</span>}
                     </span>
+                    <button
+                      class="sidebar-new-terminal-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const groupAppId = grp.children[0]?.appId || selectedAppId.value || '__unlinked__';
+                        quickDispatchInitialType.value = isCos ? 'powwow' : 'wiggum';
+                        quickDispatchAppKey.value = quickDispatchAppKey.value === groupAppId ? null : groupAppId;
+                      }}
+                      title={isCos ? 'New powwow in this app' : 'New wiggum in this app'}
+                    >+</button>
                   </div>
                   {expanded && (
                     <div class="sidebar-session-tree-children">
@@ -615,6 +663,17 @@ export function SessionsListView() {
               appSwarms.set(sgKey, grp);
               // Ensure the app key exists even if it has no standalone sessions
               if (!appMap.has(appKey)) appMap.set(appKey, []);
+            }
+
+            // Keep registered apps in the list even with zero sessions so users can
+            // launch a new one via the + button. Skip when searching (search should
+            // only surface matching sessions) and respect active app filters.
+            if (!sessionSearchQuery.value) {
+              const appFilter = sessionAppFilters.value;
+              for (const app of applications.value) {
+                if (appFilter.size > 0 && !appFilter.has(app.id)) continue;
+                if (!appMap.has(app.id)) appMap.set(app.id, []);
+              }
             }
 
             const appList = applications.value;
@@ -647,35 +706,53 @@ export function SessionsListView() {
                       class="sidebar-new-terminal-btn"
                       onClick={(e) => {
                         e.stopPropagation();
+                        quickDispatchInitialType.value = null;
                         quickDispatchAppKey.value = quickDispatchAppKey.value === appKey ? null : appKey;
                       }}
                       title="New session"
                     >+</button>
                   </div>
                   {quickDispatchAppKey.value === appKey && (
-                    <QuickDispatchPopup appKey={appKey} appName={appName(appKey)} onClose={() => { quickDispatchAppKey.value = null; }} />
+                    <QuickDispatchPopup
+                      appKey={appKey}
+                      appName={appName(appKey)}
+                      initialDispatchType={quickDispatchInitialType.value || undefined}
+                      onClose={() => { quickDispatchAppKey.value = null; quickDispatchInitialType.value = null; }}
+                    />
                   )}
                   {!collapsed && (
                     <>
                       {appSwarms && [...appSwarms.entries()].map(([key, grp]) => {
                         const exp = sessionExpandedParents.value.has(key);
                         const activeCount = grp.children.filter((c: any) => c.status === 'running').length;
+                        const isCos = grp.type === 'cos';
                         return (
-                          <div key={`sgrp-${key}`} class="sidebar-session-tree">
+                          <div key={`sgrp-${key}`} class={`sidebar-session-tree${isCos ? ' sidebar-cos-group' : ''}`}>
                             <div class="sidebar-session-tree-row">
                               <button class="sidebar-tree-toggle" onClick={(e) => { e.stopPropagation(); toggleExpandedParent(key); }}>
                                 {exp ? '\u25be' : '\u25b8'}
                               </button>
                               <span class="sidebar-tree-count">{grp.children.length}</span>
+                              {isCos && <span class="sidebar-cos-badge">CoS</span>}
                               <span style={{ fontSize: 11, color: 'var(--pw-text-faint)', fontWeight: 600, cursor: 'pointer', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  if (isCos) { toggleExpandedParent(key); return; }
                                   const swarmAppId = grp.children[0]?.appId || appKey;
                                   if (swarmAppId && swarmAppId !== '__unlinked__') navigate(`/app/${swarmAppId}/wiggum`);
                                 }}>
                                 {grp.label}
                                 {activeCount > 0 && <span style={{ color: '#4CAF50', marginLeft: 4, fontWeight: 400 }}>{activeCount} running</span>}
                               </span>
+                              <button
+                                class="sidebar-new-terminal-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  quickDispatchInitialType.value = isCos ? 'powwow' : 'wiggum';
+                                  quickDispatchAppKey.value = quickDispatchAppKey.value === appKey ? null : appKey;
+                                }}
+                                title={isCos ? 'New powwow in this app' : 'New wiggum in this app'}
+                              >+</button>
                             </div>
                             {exp && <div class="sidebar-session-tree-children">{grp.children.map(renderItem)}</div>}
                           </div>
@@ -697,13 +774,19 @@ export function SessionsListView() {
                   class="sidebar-new-terminal-btn"
                   onClick={(e) => {
                     e.stopPropagation();
+                    quickDispatchInitialType.value = null;
                     quickDispatchAppKey.value = quickDispatchAppKey.value === ungroupedKey ? null : ungroupedKey;
                   }}
                   title="New session"
                 >+</button>
               </div>
               {quickDispatchAppKey.value === ungroupedKey && (
-                <QuickDispatchPopup appKey={selectedAppId.value || '__unlinked__'} appName={selectedAppId.value ? (applications.value.find((a: any) => a.id === selectedAppId.value)?.name || selectedAppId.value.slice(-8)) : undefined} onClose={() => { quickDispatchAppKey.value = null; }} />
+                <QuickDispatchPopup
+                  appKey={selectedAppId.value || '__unlinked__'}
+                  appName={selectedAppId.value ? (applications.value.find((a: any) => a.id === selectedAppId.value)?.name || selectedAppId.value.slice(-8)) : undefined}
+                  initialDispatchType={quickDispatchInitialType.value || undefined}
+                  onClose={() => { quickDispatchAppKey.value = null; quickDispatchInitialType.value = null; }}
+                />
               )}
               {renderSwarmGroups()}
               {renderHierarchical(topLevel)}

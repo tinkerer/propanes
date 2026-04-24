@@ -197,7 +197,7 @@ applicationRoutes.post('/onboard-assist', async (c) => {
       agentEndpointId,
       prompt,
       cwd: process.cwd(),
-      permissionProfile: 'interactive' as any,
+      permissionProfile: 'interactive-require' as any,
       allowedTools: agentRow.allowedTools,
     });
 

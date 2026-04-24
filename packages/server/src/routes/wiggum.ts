@@ -871,7 +871,7 @@ Rules:
       agentEndpointId: agent.id,
       prompt: decompositionPrompt,
       cwd: process.cwd(),
-      permissionProfile: 'yolo',
+      permissionProfile: 'headless-yolo',
     });
 
     return c.json({

@@ -38,8 +38,11 @@ export const splitEnabled = signal<boolean>(loadJson('pw-split-enabled', false))
 export const rightPaneTabs = signal<string[]>(loadJson('pw-right-pane-tabs', []));
 export const rightPaneActiveId = signal<string | null>(loadJson('pw-right-pane-active', null));
 export const splitRatio = signal<number>(loadJson('pw-split-ratio', 0.5));
+export const splitCollapsed = signal<boolean>(loadJson('pw-split-collapsed', false));
+export const splitCollapsedOffset = signal<number>(loadJson('pw-split-collapsed-offset', 0));
 export const activePanelId = signal<string | null>('split-left');
 export const popInPickerSessionId = signal<string | null>(null);
+export const popInPickerPanelId = signal<string | null>(null);
 
 // Seed pane tree from flat signals on first load (migration)
 {
@@ -78,6 +81,26 @@ export function persistSplitState() {
   localStorage.setItem('pw-right-pane-tabs', JSON.stringify(rightPaneTabs.value));
   localStorage.setItem('pw-right-pane-active', JSON.stringify(rightPaneActiveId.value));
   localStorage.setItem('pw-split-ratio', JSON.stringify(splitRatio.value));
+  localStorage.setItem('pw-split-collapsed', JSON.stringify(splitCollapsed.value));
+  localStorage.setItem('pw-split-collapsed-offset', JSON.stringify(splitCollapsedOffset.value));
+}
+
+export function toggleSplitCollapsed() {
+  splitCollapsed.value = !splitCollapsed.value;
+  persistSplitState();
+  nudgeResize();
+}
+
+export function setSplitCollapsed(collapsed: boolean) {
+  if (splitCollapsed.value === collapsed) return;
+  splitCollapsed.value = collapsed;
+  persistSplitState();
+  nudgeResize();
+}
+
+export function setSplitCollapsedOffset(offset: number) {
+  splitCollapsedOffset.value = offset;
+  persistSplitState();
 }
 
 export function nudgeResize() {
@@ -90,16 +113,19 @@ export function nudgeResize() {
 
 export const viewModes = signal<Record<string, ViewMode>>({});
 
-const TERMINAL_STATUSES = new Set(['completed', 'exited', 'failed', 'killed', 'deleted', 'archived']);
-
 export function getViewMode(sessionId: string): ViewMode {
   const explicit = viewModes.value[sessionId];
-  if (explicit) return explicit;
-  // For finished sessions the terminal shows only "Session exited (code: 0)" —
-  // the JSONL content is what the user actually wants to read. Default to it.
-  const sess = allSessions.value.find((s: any) => s.id === sessionId);
-  const isDone = exitedSessions.value.has(sessionId) || (sess?.status && TERMINAL_STATUSES.has(sess.status));
-  return isDone ? 'structured' : 'terminal';
+  if (explicit) {
+    // If the user previously selected structured/split but the session has no
+    // JSONL output, fall back to terminal — the structured view would be empty
+    // and the dropdown to switch back is hidden.
+    if (explicit !== 'terminal') {
+      const sess = allSessions.value.find((s: any) => s.id === sessionId);
+      if (!sess?.jsonlPath) return 'terminal';
+    }
+    return explicit;
+  }
+  return 'terminal';
 }
 
 export function setViewMode(sessionId: string, mode: ViewMode) {
@@ -138,6 +164,8 @@ export function disableSplit() {
   splitEnabled.value = false;
   rightPaneTabs.value = [];
   rightPaneActiveId.value = null;
+  splitCollapsed.value = false;
+  splitCollapsedOffset.value = 0;
   if (rightActive && openTabs.value.includes(rightActive)) {
     activeTabId.value = rightActive;
   }
@@ -235,6 +263,7 @@ export const sessionMapComputed = computed(() => {
   return _sessionMapCache;
 });
 export const sessionsLoading = signal(false);
+export const sessionsInitialized = signal(false);
 
 // --- Session Status Filters ---
 
@@ -260,8 +289,15 @@ export function toggleSessionFiltersOpen() {
 
 export function sessionPassesFilters(s: any, _tabSet: Set<string>): boolean {
   if (s.status === 'deleted') return false;
-  const statusFilters = sessionStatusFilters.value;
-  if (!statusFilters.has(s.status)) return false;
+  // CoS chat turns complete in seconds, so the default running/pending filter
+  // would hide them almost immediately and they'd never persist as chat
+  // history. Bypass the status filter for CoS rows — the CoS thread group in
+  // the sidebar is the user's message log, and every turn belongs there.
+  const isCosChat = !!s.cosThreadId;
+  if (!isCosChat) {
+    const statusFilters = sessionStatusFilters.value;
+    if (!statusFilters.has(s.status)) return false;
+  }
   // App filter
   const appFilter = sessionAppFilters.value;
   if (appFilter.size > 0) {

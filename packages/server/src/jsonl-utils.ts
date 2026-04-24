@@ -12,6 +12,115 @@ export function computeJsonlPath(projectDir: string, claudeSessionId: string): s
   return join(computeJsonlDir(projectDir), `${claudeSessionId}.jsonl`);
 }
 
+// Codex stores rollout files at ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl,
+// keyed by date and a per-session UUID. Codex doesn't expose --session-id, so
+// we have to find the file by scanning. Strategy:
+//   1. If `claudeSessionId` is set (we may have stashed the codex thread id
+//      there after detection), look for rollout-*-${id}.jsonl directly.
+//   2. Otherwise, find the most-recently-modified rollout file whose
+//      session_meta.payload.cwd matches the session's cwd.
+// Returns the resolved path or null if nothing matches.
+export function computeCodexJsonlPath(cwd: string | null, codexSessionId: string | null, startedAt?: string | null): string | null {
+  const codexRoot = join(homedir(), '.codex', 'sessions');
+  if (!existsSync(codexRoot)) return null;
+
+  // Direct lookup by id — rollout files embed the UUID in the filename.
+  if (codexSessionId) {
+    const found = findRolloutByCodexId(codexRoot, codexSessionId);
+    if (found) return found;
+  }
+
+  if (!cwd) return null;
+  return findRolloutByCwd(codexRoot, cwd, startedAt);
+}
+
+function findRolloutByCodexId(codexRoot: string, sessionId: string): string | null {
+  // Scan year/month/day directories. Bounded by ~3 years of history; in
+  // practice the file is in the past few days so we walk newest-first.
+  try {
+    const years = readdirSync(codexRoot).filter(d => /^\d{4}$/.test(d)).sort().reverse();
+    for (const year of years) {
+      const yearDir = join(codexRoot, year);
+      const months = readdirSync(yearDir).filter(d => /^\d{2}$/.test(d)).sort().reverse();
+      for (const month of months) {
+        const monthDir = join(yearDir, month);
+        const days = readdirSync(monthDir).filter(d => /^\d{2}$/.test(d)).sort().reverse();
+        for (const day of days) {
+          const dayDir = join(monthDir, day);
+          const files = readdirSync(dayDir);
+          const match = files.find(f => f.endsWith(`${sessionId}.jsonl`));
+          if (match) return join(dayDir, match);
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+// Read just the first line of a file. Codex rollout session_meta lines can
+// be >10KB, so we can't rely on a small fixed buffer.
+function readFirstLine(filePath: string): string | null {
+  const fd = openSync(filePath, 'r');
+  try {
+    const chunk = Buffer.alloc(8192);
+    let offset = 0;
+    let acc = '';
+    while (true) {
+      const n = readSync(fd, chunk, 0, chunk.length, offset);
+      if (n <= 0) return acc || null;
+      const str = chunk.toString('utf-8', 0, n);
+      const nl = str.indexOf('\n');
+      if (nl >= 0) return acc + str.slice(0, nl);
+      acc += str;
+      offset += n;
+      // Bounded: a rollout first line is tens of KB at most; stop well before OOM.
+      if (acc.length > 1024 * 1024) return acc;
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function findRolloutByCwd(codexRoot: string, cwd: string, startedAt?: string | null): string | null {
+  // Search recent days (up to 7) for a rollout whose session_meta.cwd matches.
+  // Codex sessions are typically active within minutes of startedAt; cap how
+  // far back we look to bound IO.
+  const startTs = startedAt ? Date.parse(startedAt) : Date.now();
+  const startDate = isNaN(startTs) ? new Date() : new Date(startTs);
+  const candidates: { path: string; mtime: number }[] = [];
+
+  for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+    const d = new Date(startDate.getTime() - dayOffset * 86400000);
+    const yyyy = String(d.getUTCFullYear());
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    const dayDir = join(codexRoot, yyyy, mm, dd);
+    if (!existsSync(dayDir)) continue;
+    let entries: string[] = [];
+    try { entries = readdirSync(dayDir); } catch { continue; }
+    for (const file of entries) {
+      if (!file.startsWith('rollout-') || !file.endsWith('.jsonl')) continue;
+      const filePath = join(dayDir, file);
+      try {
+        const firstLine = readFirstLine(filePath);
+        if (!firstLine) continue;
+        const obj = JSON.parse(firstLine);
+        if (obj?.type !== 'session_meta') continue;
+        const fileCwd = obj?.payload?.cwd;
+        if (fileCwd !== cwd) continue;
+        const ts = Date.parse(obj?.payload?.timestamp || obj?.timestamp || '');
+        candidates.push({ path: filePath, mtime: isNaN(ts) ? 0 : ts });
+      } catch { /* skip unreadable */ }
+    }
+  }
+
+  if (candidates.length === 0) return null;
+  // Pick the candidate closest in time to startedAt.
+  const targetTs = isNaN(startTs) ? Date.now() : startTs;
+  candidates.sort((a, b) => Math.abs(a.mtime - targetTs) - Math.abs(b.mtime - targetTs));
+  return candidates[0].path;
+}
+
 // Find continuation JSONL files when Claude Code rotates sessionId mid-conversation.
 // A continuation file's first `sessionId` field references a *different* UUID than the
 // file's own name — that's the parent it continues from.

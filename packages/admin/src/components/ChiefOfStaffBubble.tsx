@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { marked } from 'marked';
-import hljs from 'highlight.js/lib/common';
 import { selectedAppId } from '../lib/state.js';
 import {
   chiefOfStaffOpen,
   chiefOfStaffAgents,
   chiefOfStaffActiveId,
   chiefOfStaffError,
-  chiefOfStaffInFlight,
   toggleChiefOfStaff,
   setChiefOfStaffOpen,
   sendChiefOfStaffMessage,
@@ -22,6 +20,9 @@ import {
   interruptActiveAgent,
   ensureCosPanel,
   extractCosReply,
+  stripCosReplyMarkers,
+  retryFailedAssistantMessage,
+  dismissFailedAssistantMessage,
   DEFAULT_VERBOSITY,
   DEFAULT_STYLE,
   type ChiefOfStaffToolCall,
@@ -35,6 +36,19 @@ import {
   loadCosLearnings,
   deleteCosLearning,
   type CosLearning,
+  type CosLearningRelType,
+  type CosLearningGraph,
+  type CosLearningDetail,
+  type CosLearningLinkPeer,
+  type CosLearningSuggestion,
+  cosLearningGraph,
+  cosLearningGraphLoading,
+  loadCosLearningGraph,
+  fetchCosLearningDetail,
+  fetchCosLearningSuggestions,
+  createCosLearningLink,
+  deleteCosLearningLink,
+  updateCosLearning,
   wiggumAnnouncement,
   extractDispatchInfo,
   fetchFeedbackTitle,
@@ -46,9 +60,10 @@ import {
   closeCosPane,
   COS_PANE_TAB_ID,
 } from '../lib/chief-of-staff.js';
-import { layoutTree as layoutTreeSignal } from '../lib/pane-tree.js';
+import { layoutTree as layoutTreeSignal, findLeafWithTab, setFocusedLeaf } from '../lib/pane-tree.js';
 import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-picker';
 import { captureScreenshot } from '@propanes/widget/screenshot';
+import { ImageEditor } from '@propanes/widget/image-editor';
 import {
   popoutPanels,
   persistPopoutState,
@@ -63,13 +78,34 @@ import {
   snapGuides,
   openSession,
   openFeedbackItem,
+  updatePanel,
+  toggleCompanion,
 } from '../lib/sessions.js';
 import { handleDragMove, handleResizeMove } from '../lib/popout-physics.js';
 import { isMobile } from '../lib/viewport.js';
-import { registerCosArtifact, artifactIdFor } from '../lib/cos-artifacts.js';
-import { openArtifactCompanion } from '../lib/companion-state.js';
+import {
+  registerCosArtifact,
+  artifactIdFor,
+  cosArtifacts,
+} from '../lib/cos-artifacts.js';
+import { openArtifactCompanion, openUrlCompanion } from '../lib/companion-state.js';
+import { ArtifactCompanionView } from './ArtifactCompanionView.js';
+import { PopupMenu } from './PopupMenu.js';
+import { WindowMenu } from './PopoutPanelContent.js';
+import {
+  cosPopoutTree,
+  cosOpenArtifactTab,
+  cosToggleLearningsTab,
+  cosIsLearningsOpen,
+} from '../lib/cos-popout-tree.js';
+import { CosPopoutTreeView } from './CosPopoutTreeView.js';
 
 marked.setOptions({ gfm: true, breaks: false });
+
+function hasAnyArtifactLeaf(node: import('../lib/pane-tree.js').PaneNode): boolean {
+  if (node.type === 'leaf') return node.tabs.some((t) => t.startsWith('artifact:'));
+  return hasAnyArtifactLeaf(node.children[0]) || hasAnyArtifactLeaf(node.children[1]);
+}
 
 const EXT_TO_LANG: Record<string, string> = {
   ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
@@ -86,18 +122,13 @@ const EXT_TO_LANG: Record<string, string> = {
   diff: 'diff', patch: 'diff', md: 'markdown', mdx: 'markdown',
 };
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 const ULID_RE = /\b01[A-Z0-9]{24}\b/g;
+// Matches http(s) URLs and bare host:port patterns (e.g. staging.example.com:6080)
+const URL_RE = /\bhttps?:\/\/[^\s<>"')\]]+|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?::\d{1,5})(?:\/[^\s<>"')\]]*)?/gi;
 
-// Wrap ULID matches in CoS-rendered HTML with clickable anchors. Skips text
-// inside <code>, <pre>, and existing <a> tags so we don't double-link or
-// scribble inside code blocks.
-function linkifyUlidsInHtml(html: string): string {
-  if (!ULID_RE.test(html)) return html;
-  ULID_RE.lastIndex = 0;
+// Wrap ULID matches and URL matches in CoS-rendered HTML with clickable anchors.
+// Skips text inside <code>, <pre>, and existing <a> tags.
+function linkifyHtml(html: string): string {
   const tokens = html.split(/(<[^>]*>)/);
   let inCode = 0, inPre = 0, inAnchor = 0;
   for (let i = 0; i < tokens.length; i++) {
@@ -112,10 +143,37 @@ function linkifyUlidsInHtml(html: string): string {
       else if (lower.startsWith('</a')) inAnchor = Math.max(0, inAnchor - 1);
       continue;
     }
-    if (inCode || inPre || inAnchor) continue;
-    tokens[i] = tok.replace(ULID_RE, (m) =>
-      `<a class="cos-ulid-link" data-cos-session-id="${m}" href="#" title="Open session ${m}">${m}</a>`
-    );
+    if (inPre || inAnchor) continue;
+    // Apply ULID linkification first, then URL linkification on non-ULID spans
+    ULID_RE.lastIndex = 0;
+    URL_RE.lastIndex = 0;
+    let out = '';
+    let last = 0;
+    const text = tokens[i];
+    // Collect all matches (ULIDs and URLs) sorted by index
+    const matches: { index: number; len: number; replacement: string }[] = [];
+    let m: RegExpExecArray | null;
+    ULID_RE.lastIndex = 0;
+    while ((m = ULID_RE.exec(text)) !== null) {
+      matches.push({ index: m.index, len: m[0].length,
+        replacement: `<a class="cos-ulid-link" data-cos-session-id="${m[0]}" href="#" title="Open session ${m[0]}">${m[0]}</a>` });
+    }
+    URL_RE.lastIndex = 0;
+    while ((m = URL_RE.exec(text)) !== null) {
+      const raw = m[0];
+      const href = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+      // Skip if overlaps with an already-found ULID match
+      if (matches.some(ex => m!.index < ex.index + ex.len && m!.index + raw.length > ex.index)) continue;
+      matches.push({ index: m.index, len: raw.length,
+        replacement: `<a class="cos-url-link" data-cos-url="${href}" href="#" title="Open in companion: ${raw}">${raw}</a>` });
+    }
+    matches.sort((a, b) => a.index - b.index);
+    for (const mx of matches) {
+      out += text.slice(last, mx.index) + mx.replacement;
+      last = mx.index + mx.len;
+    }
+    out += text.slice(last);
+    tokens[i] = out;
   }
   return tokens.join('');
 }
@@ -123,6 +181,12 @@ function linkifyUlidsInHtml(html: string): string {
 function handleCosProseClick(e: MouseEvent) {
   const target = e.target as HTMLElement | null;
   if (!target) return;
+  const urlLink = target.closest('a[data-cos-url]') as HTMLElement | null;
+  if (urlLink) {
+    const url = urlLink.getAttribute('data-cos-url');
+    if (url) { e.preventDefault(); e.stopPropagation(); openUrlCompanion(url); }
+    return;
+  }
   const link = target.closest('a[data-cos-session-id]') as HTMLElement | null;
   if (!link) return;
   const sid = link.getAttribute('data-cos-session-id');
@@ -240,33 +304,29 @@ function parseAssistantContent(text: string): ContentSegment[] {
 
 function ArtifactCard({
   seg,
-  expandedDefault,
+  onPopout,
 }: {
   seg: Extract<ContentSegment, { type: 'artifact' }>;
-  expandedDefault: boolean;
+  onPopout: (artifactId: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(expandedDefault);
-  useEffect(() => { setExpanded(expandedDefault); }, [expandedDefault]);
-
-  const body = useMemo(() => {
-    if (seg.kind === 'code') {
-      const m = seg.raw.match(/^```[^\n]*\n([\s\S]*?)\n?```\s*$/);
-      const code = m ? m[1] : seg.raw;
-      try {
-        if (seg.lang && hljs.getLanguage(seg.lang)) {
-          return { __html: hljs.highlight(code, { language: seg.lang }).value };
-        }
-      } catch { /* fall through */ }
-      return { __html: escapeHtml(code) };
-    }
-    const html = marked.parse(seg.raw) as string;
-    return { __html: typeof html === 'string' ? linkifyUlidsInHtml(html) : '' };
-  }, [seg.raw, seg.kind, seg.lang]);
+  // Register eagerly so the CoS artifact drawer and companion pane can look up
+  // labels/content after a page reload (drawer/pane tab IDs are persisted; the
+  // artifact contents are re-derived from message text on each render).
+  useEffect(() => {
+    registerCosArtifact({
+      id: artifactIdFor(seg.kind, seg.raw),
+      kind: seg.kind,
+      label: seg.label,
+      meta: seg.meta,
+      lang: seg.lang,
+      filename: seg.filename,
+      raw: seg.raw,
+    });
+  }, [seg.kind, seg.raw, seg.label, seg.meta, seg.lang, seg.filename]);
 
   const icon = seg.kind === 'code' ? '❮❯' : seg.kind === 'table' ? '▦' : '☰';
 
-  const popout = (e: Event) => {
-    e.stopPropagation();
+  const popout = () => {
     const id = artifactIdFor(seg.kind, seg.raw);
     registerCosArtifact({
       id,
@@ -277,58 +337,43 @@ function ArtifactCard({
       filename: seg.filename,
       raw: seg.raw,
     });
-    openArtifactCompanion(id);
+    onPopout(id);
   };
 
   return (
-    <div class={`cos-artifact cos-artifact-${seg.kind}${expanded ? ' cos-artifact-open' : ''}`}>
+    <div class={`cos-artifact cos-artifact-${seg.kind}`}>
       <button
         type="button"
         class="cos-artifact-header"
-        onClick={() => setExpanded(!expanded)}
-        aria-expanded={expanded}
+        onClick={popout}
+        title="Open in companion pane"
+        aria-label={`Open ${seg.label} in companion pane`}
       >
         <span class="cos-artifact-icon" aria-hidden="true">{icon}</span>
         <span class="cos-artifact-label">{seg.label}</span>
         <span class="cos-artifact-meta">{seg.meta}</span>
-        <span
-          role="button"
-          tabIndex={0}
-          class="cos-artifact-popout"
-          onClick={popout}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') popout(e); }}
-          title="Open in companion pane"
-          aria-label="Open in companion pane"
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <span class="cos-artifact-popout-hint" aria-hidden="true">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M15 3h6v6" />
             <path d="M10 14L21 3" />
             <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
           </svg>
         </span>
-        <span class="cos-artifact-toggle">{expanded ? '▼' : '▶'}</span>
       </button>
-      {expanded && (
-        seg.kind === 'code' ? (
-          <pre class="cos-artifact-body cos-artifact-body-code"><code class="hljs" dangerouslySetInnerHTML={body} /></pre>
-        ) : (
-          <div class="cos-artifact-body cos-md-prose" onClick={handleCosProseClick} dangerouslySetInnerHTML={body} />
-        )
-      )}
     </div>
   );
 }
 
-function AssistantContent({ text, expandArtifacts }: { text: string; expandArtifacts: boolean }) {
+function AssistantContent({ text, onArtifactPopout }: { text: string; onArtifactPopout: (artifactId: string) => void }) {
   const segments = useMemo(() => parseAssistantContent(text), [text]);
   return (
     <div class="cos-msg-md">
       {segments.map((seg, i) => {
         if (seg.type === 'artifact') {
-          return <ArtifactCard key={i} seg={seg} expandedDefault={expandArtifacts} />;
+          return <ArtifactCard key={i} seg={seg} onPopout={onArtifactPopout} />;
         }
         const html = marked.parse(seg.markdown) as string;
-        const safeHtml = typeof html === 'string' ? linkifyUlidsInHtml(html) : '';
+        const safeHtml = typeof html === 'string' ? linkifyHtml(html) : '';
         return <div key={i} class="cos-md-prose" onClick={handleCosProseClick} dangerouslySetInnerHTML={{ __html: safeHtml }} />;
       })}
     </div>
@@ -456,6 +501,53 @@ function Timestamp({ ts }: { ts: number }) {
   }, [ts]);
   const { rel, abs } = formatRelativeTime(ts, now);
   return <span class="cos-msg-time" title={abs}>{rel}</span>;
+}
+
+function dayKeyOf(ts: number): string {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function dayLabel(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfYesterday = startOfToday - 86_400_000;
+  if (ts >= startOfToday) return 'Today';
+  if (ts >= startOfYesterday) return 'Yesterday';
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return d.toLocaleDateString(undefined, sameYear
+    ? { weekday: 'short', month: 'short', day: 'numeric' }
+    : { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function DayDivider({ ts }: { ts: number }) {
+  const label = dayLabel(ts);
+  return (
+    <div class="cos-day-divider" role="separator" aria-label={label}>
+      <span class="cos-day-divider-label">{label}</span>
+    </div>
+  );
+}
+
+function MessageAvatar({ role, label, size }: { role: 'user' | 'assistant' | string; label: string; size?: 'sm' }) {
+  const cls = `cos-avatar cos-avatar-${role === 'user' ? 'user' : 'assistant'}${size ? ' cos-avatar-' + size : ''}`;
+  if (role === 'user') {
+    return (
+      <div class={cls} title={label} aria-hidden="true">
+        <svg width={size === 'sm' ? 10 : 14} height={size === 'sm' ? 10 : 14} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+          <circle cx="12" cy="7" r="4" />
+        </svg>
+      </div>
+    );
+  }
+  const initial = (label || 'O').trim().charAt(0).toUpperCase() || 'O';
+  return (
+    <div class={cls} title={label} aria-hidden="true">
+      <span class="cos-avatar-initial">{initial}</span>
+    </div>
+  );
 }
 
 function MessageImageThumb({ src, name }: { src: string; name?: string }) {
@@ -619,74 +711,136 @@ function MessageAttachments({
   );
 }
 
-function ReplyButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      class="cos-msg-reply-btn"
-      onClick={(e) => { e.stopPropagation(); onClick(); }}
-      title="Reply to this message"
-      aria-label="Reply to this message"
-    >
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="9 17 4 12 9 7" />
-        <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
-      </svg>
-    </button>
-  );
+function ElapsedSince({ ts }: { ts: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const sec = Math.max(0, Math.floor((now - ts) / 1000));
+  if (sec < 60) return <>{sec}s</>;
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  return <>{min}m {remSec.toString().padStart(2, '0')}s</>;
 }
 
 function MessageBubble({
   msg,
+  msgIdx,
+  highlighted,
   showTools,
-  expandArtifacts,
-  onReply,
+  onArtifactPopout,
+  agentName,
+  verbosity,
 }: {
   msg: ChiefOfStaffMsg;
+  msgIdx: number;
+  highlighted: boolean;
   showTools: boolean;
-  expandArtifacts: boolean;
-  onReply: (role: string, text: string) => void;
+  onArtifactPopout: (artifactId: string) => void;
+  agentName: string;
+  verbosity: ChiefOfStaffVerbosity;
 }) {
   const hasTools = !!(msg.toolCalls && msg.toolCalls.length > 0);
-  const extracted = msg.role === 'assistant' ? extractCosReply(msg.text) : null;
-  const assistantDisplay = extracted ? extracted.displayText : '';
+  // Verbose mode: bypass the <cos-reply> filter and show every text part the
+  // model emitted, including planning/scratch-work outside the tags. Terse
+  // and normal keep the default tag-scoped display.
+  const assistantDisplay = msg.role === 'assistant'
+    ? (verbosity === 'verbose' ? stripCosReplyMarkers(msg.text) : extractCosReply(msg.text).displayText)
+    : '';
   const showAssistantText = msg.role === 'assistant' && assistantDisplay;
   const showUserText = msg.role === 'user' && msg.text;
-  const replyText = showAssistantText ? assistantDisplay : (showUserText ? msg.text : '');
-  const canReply = !!replyText && !msg.streaming;
+  const showEarlyAck =
+    msg.role === 'assistant' && msg.streaming && msg.sending && !showAssistantText && !hasTools;
+  const showElapsed = msg.role === 'assistant' && msg.streaming && !msg.sending;
+  const authorLabel = msg.role === 'user' ? 'You' : (agentName || 'Ops');
+  const showAttachments = !!(msg.attachments?.length || msg.elementRefs?.length);
+
+  // Skip rendering empty assistant messages (no text, no tools, not streaming, no error)
+  if (
+    msg.role === 'assistant' &&
+    !assistantDisplay &&
+    !hasTools &&
+    !msg.streaming &&
+    !msg.error &&
+    !showAttachments
+  ) return null;
+
   return (
-    <div class={`cos-msg cos-msg-${msg.role}`}>
-      {hasTools && showTools && (
-        <div class="cos-tools">
-          {msg.toolCalls!.map((c, i) => <ToolCallChip key={i} call={c} />)}
+    <div
+      class={`cos-msg cos-row cos-row-${msg.role}${highlighted ? ' cos-msg-highlight' : ''}`}
+      data-cos-msg-idx={msgIdx}
+    >
+      <div class="cos-row-avatar">
+        <MessageAvatar role={msg.role} label={authorLabel} />
+      </div>
+      <div class="cos-row-main">
+        <div class="cos-row-header">
+          <span class="cos-row-author">{authorLabel}</span>
+          {msg.timestamp && !msg.streaming && <Timestamp ts={msg.timestamp} />}
         </div>
-      )}
-      {hasTools && !showTools && !msg.streaming && (
-        <div class="cos-tools-hidden-hint" aria-hidden="true">
-          {msg.toolCalls!.length} tool call{msg.toolCalls!.length === 1 ? '' : 's'} hidden
-        </div>
-      )}
-      {showAssistantText && (
-        <div class="cos-msg-bubble">
-          <div class="cos-msg-text cos-msg-text-md"><AssistantContent text={assistantDisplay} expandArtifacts={expandArtifacts} /></div>
-          {canReply && <ReplyButton onClick={() => onReply(msg.role, replyText)} />}
-        </div>
-      )}
-      {(showUserText || msg.attachments?.length || msg.elementRefs?.length) && msg.role === 'user' && (
-        <div class="cos-msg-bubble">
-          {showUserText && <div class="cos-msg-text">{msg.text}</div>}
+        {hasTools && showTools && (
+          <div class="cos-tools">
+            {msg.toolCalls!.map((c, i) => <ToolCallChip key={i} call={c} />)}
+          </div>
+        )}
+        {hasTools && !showTools && !msg.streaming && (
+          <div class="cos-tools-hidden-hint" aria-hidden="true">
+            {msg.toolCalls!.length} tool call{msg.toolCalls!.length === 1 ? '' : 's'} hidden
+          </div>
+        )}
+        {showAssistantText && (
+          <div class="cos-row-content cos-msg-text cos-msg-text-md">
+            <AssistantContent text={assistantDisplay} onArtifactPopout={onArtifactPopout} />
+          </div>
+        )}
+        {showUserText && (
+          <div class="cos-row-content cos-msg-text">{msg.text}</div>
+        )}
+        {showAttachments && (
           <MessageAttachments attachments={msg.attachments} elementRefs={msg.elementRefs} />
-          {canReply && <ReplyButton onClick={() => onReply(msg.role, replyText)} />}
-        </div>
-      )}
-      {msg.streaming && (
-        <div class="cos-thinking">
-          <span /><span /><span />
-        </div>
-      )}
-      {msg.timestamp && !msg.streaming && (
-        <div class="cos-msg-footer"><Timestamp ts={msg.timestamp} /></div>
-      )}
+        )}
+        {msg.streaming && (
+          <div class="cos-thinking-row">
+            <div class="cos-thinking">
+              <span /><span /><span />
+            </div>
+            {showEarlyAck && (
+              <span class="cos-thinking-label">Working on it…</span>
+            )}
+            {showElapsed && (
+              <span class="cos-thinking-label cos-thinking-label-elapsed">
+                <ElapsedSince ts={msg.timestamp} />
+              </span>
+            )}
+          </div>
+        )}
+        {msg.error && (
+          <div class="cos-msg-error" role="alert">
+            <div class="cos-msg-error-text">
+              <strong>Send failed:</strong> {msg.error}
+            </div>
+            <div class="cos-msg-error-actions">
+              {msg.retryPayload && (
+                <button
+                  type="button"
+                  class="cos-msg-error-btn"
+                  onClick={(e) => { e.stopPropagation(); retryFailedAssistantMessage(msg.timestamp); }}
+                >
+                  Retry
+                </button>
+              )}
+              <button
+                type="button"
+                class="cos-msg-error-btn cos-msg-error-btn-secondary"
+                onClick={(e) => { e.stopPropagation(); dismissFailedAssistantMessage(msg.timestamp); }}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -700,26 +854,83 @@ type Thread = {
 function groupIntoThreads(messages: ChiefOfStaffMsg[]): Thread[] {
   const threads: Thread[] = [];
   let current: Thread | null = null;
+  // Route a "Reply in thread" user message back to its anchor thread instead
+  // of starting a new top-level thread. Keyed by the anchor user-msg timestamp.
+  const byAnchorTs = new Map<number, Thread>();
+  const pushCurrent = () => {
+    if (current && !threads.includes(current)) threads.push(current);
+  };
   messages.forEach((m, i) => {
     if (m.role === 'user') {
-      if (current) threads.push(current);
+      if (typeof m.replyToTs === 'number') {
+        const target = byAnchorTs.get(m.replyToTs);
+        if (target) {
+          target.replies.push({ idx: i, msg: m });
+          current = target;
+          return;
+        }
+      }
+      pushCurrent();
       current = { userIdx: i, userMsg: m, replies: [] };
+      if (m.timestamp) byAnchorTs.set(m.timestamp, current);
     } else {
       if (!current) current = { userIdx: null, userMsg: null, replies: [] };
       current.replies.push({ idx: i, msg: m });
     }
   });
-  if (current) threads.push(current);
+  pushCurrent();
   return threads;
 }
+
+type LearningsView = 'list' | 'graph';
+
+const LEARNING_TYPE_LABELS: Record<CosLearning['type'], string> = {
+  pitfall: 'Pitfalls',
+  suggestion: 'Suggestions',
+  tool_gap: 'Tool gaps',
+};
+
+const LEARNING_TYPE_ORDER: CosLearning['type'][] = ['pitfall', 'suggestion', 'tool_gap'];
+
+const LEARNING_TYPE_COLOR: Record<CosLearning['type'], string> = {
+  pitfall: '#e5484d',
+  suggestion: '#3e63dd',
+  tool_gap: '#d97706',
+};
+
+const REL_TYPE_LABELS: Record<CosLearningRelType, string> = {
+  related: 'related',
+  caused_by: 'caused by',
+  resolved_by: 'resolved by',
+  duplicate_of: 'duplicate of',
+};
+
+const REL_TYPE_COLOR: Record<CosLearningRelType, string> = {
+  related: '#9ca3af',
+  caused_by: '#e5484d',
+  resolved_by: '#22c55e',
+  duplicate_of: '#a855f7',
+};
 
 function LearningsPanel({ onClose }: { onClose: () => void }) {
   const items = cosLearnings.value;
   const loading = cosLearningsLoading.value;
+  const graph = cosLearningGraph.value;
+  const graphLoading = cosLearningGraphLoading.value;
+  const announcement = wiggumAnnouncement.value;
+
+  const [view, setView] = useState<LearningsView>('list');
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   useEffect(() => {
     void loadCosLearnings();
   }, []);
+
+  // Lazy-load graph the first time the user flips to graph view, and again
+  // whenever the underlying list changes (so a new learning shows up).
+  useEffect(() => {
+    if (view === 'graph') void loadCosLearningGraph();
+  }, [view, items.length]);
 
   const grouped = useMemo(() => {
     const out: Record<CosLearning['type'], CosLearning[]> = {
@@ -733,22 +944,44 @@ function LearningsPanel({ onClose }: { onClose: () => void }) {
     return out;
   }, [items]);
 
-  const labels: Record<CosLearning['type'], string> = {
-    pitfall: 'Pitfalls',
-    suggestion: 'Suggestions',
-    tool_gap: 'Tool gaps',
-  };
+  const refreshAll = useCallback(() => {
+    void loadCosLearnings();
+    if (view === 'graph') void loadCosLearningGraph();
+  }, [view]);
 
-  const order: CosLearning['type'][] = ['pitfall', 'suggestion', 'tool_gap'];
-
-  const announcement = wiggumAnnouncement.value;
+  if (detailId) {
+    return (
+      <LearningDetailView
+        id={detailId}
+        allLearnings={items}
+        onBack={() => setDetailId(null)}
+        onClose={onClose}
+        onOpenPeer={(peerId) => setDetailId(peerId)}
+        onChanged={refreshAll}
+      />
+    );
+  }
 
   return (
     <div class="cos-learnings-panel">
       <div class="cos-learnings-header">
         <span class="cos-learnings-title">Wiggum learnings</span>
-        <button class="cos-link-btn" onClick={() => void loadCosLearnings()} title="Reload">
-          {loading ? 'loading…' : 'refresh'}
+        <div class="cos-view-segmented" role="radiogroup" aria-label="Learnings view">
+          {(['list', 'graph'] as LearningsView[]).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="radio"
+              aria-checked={view === v}
+              class={`cos-view-seg${view === v ? ' cos-view-seg-active' : ''}`}
+              onClick={() => setView(v)}
+            >
+              {v}
+            </button>
+          ))}
+        </div>
+        <button class="cos-link-btn" onClick={refreshAll} title="Reload">
+          {loading || graphLoading ? 'loading…' : 'refresh'}
         </button>
         <button class="cos-link-btn" onClick={onClose} aria-label="Close">close</button>
       </div>
@@ -760,13 +993,29 @@ function LearningsPanel({ onClose }: { onClose: () => void }) {
       {items.length === 0 && !loading && (
         <div class="cos-learnings-empty">No learnings yet. Wiggum reflects after each CoS session closes.</div>
       )}
-      {order.map((type) => {
+      {view === 'list'
+        ? <LearningsListView grouped={grouped} onOpen={setDetailId} />
+        : <LearningsGraphView graph={graph} loading={graphLoading} onOpen={setDetailId} />}
+    </div>
+  );
+}
+
+function LearningsListView({
+  grouped,
+  onOpen,
+}: {
+  grouped: Record<CosLearning['type'], CosLearning[]>;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <>
+      {LEARNING_TYPE_ORDER.map((type) => {
         const group = grouped[type];
         if (!group || group.length === 0) return null;
         return (
           <div key={type} class="cos-learnings-group">
             <div class="cos-learnings-group-title">
-              {labels[type]} <span class="cos-muted">({group.length})</span>
+              {LEARNING_TYPE_LABELS[type]} <span class="cos-muted">({group.length})</span>
             </div>
             {group.map((l) => (
               <div key={l.id} class={`cos-learning cos-learning-sev-${l.severity}`}>
@@ -776,16 +1025,28 @@ function LearningsPanel({ onClose }: { onClose: () => void }) {
                     title={`severity: ${l.severity}`}
                     aria-label={`severity ${l.severity}`}
                   />
-                  <span class="cos-learning-title">{l.title}</span>
+                  <button
+                    type="button"
+                    class="cos-learning-title cos-learning-title-btn"
+                    onClick={() => onOpen(l.id)}
+                    title="Open detail"
+                  >
+                    {l.title}
+                  </button>
                   <button
                     class="cos-link-btn cos-danger-text"
-                    onClick={() => void deleteCosLearning(l.id)}
+                    onClick={(e) => { e.stopPropagation(); void deleteCosLearning(l.id); }}
                     title="Dismiss"
                     aria-label="Dismiss learning"
                   >
                     ×
                   </button>
                 </div>
+                {(l.tags?.length ?? 0) > 0 && (
+                  <div class="cos-learning-tags">
+                    {l.tags!.map((t) => <span key={t} class="cos-learning-tag">#{t}</span>)}
+                  </div>
+                )}
                 {l.body && <div class="cos-learning-body">{l.body}</div>}
                 {l.sessionJsonl && (
                   <div class="cos-learning-source" title={l.sessionJsonl}>
@@ -797,78 +1058,723 @@ function LearningsPanel({ onClose }: { onClose: () => void }) {
           </div>
         );
       })}
+    </>
+  );
+}
+
+// Tiny force-directed layout. Runs once per (nodes,edges) signature, freezes
+// after a fixed number of ticks so the SVG stays static. Not a real physics
+// sim — just enough to keep nodes from overlapping and pull related nodes
+// closer. Bounded at 80 nodes; beyond that the UI tells the user to filter.
+function computeGraphLayout(
+  nodes: CosLearning[],
+  edges: CosLearningGraph['edges'],
+  width: number,
+  height: number,
+): Map<string, { x: number; y: number }> {
+  const positions = new Map<string, { x: number; y: number; vx: number; vy: number }>();
+  const cx = width / 2;
+  const cy = height / 2;
+  const r = Math.min(width, height) * 0.35;
+  // Seed deterministically so the layout doesn't shuffle on every render.
+  let seed = 1;
+  const rand = () => {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
+  nodes.forEach((n, i) => {
+    const angle = (i / Math.max(nodes.length, 1)) * Math.PI * 2;
+    positions.set(n.id, {
+      x: cx + r * Math.cos(angle) + (rand() - 0.5) * 10,
+      y: cy + r * Math.sin(angle) + (rand() - 0.5) * 10,
+      vx: 0,
+      vy: 0,
+    });
+  });
+  const ticks = nodes.length <= 30 ? 250 : 150;
+  const targetEdgeLen = Math.max(60, Math.min(120, 300 / Math.sqrt(Math.max(nodes.length, 1))));
+  for (let t = 0; t < ticks; t++) {
+    // Repulsion (Coulomb-ish)
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = positions.get(nodes[i].id)!;
+        const b = positions.get(nodes[j].id)!;
+        let dx = b.x - a.x;
+        let dy = b.y - a.y;
+        let dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 0.01) { dx = rand(); dy = rand(); dist = 1; }
+        const force = 1200 / (dist * dist);
+        const fx = (dx / dist) * force;
+        const fy = (dy / dist) * force;
+        a.vx -= fx; a.vy -= fy;
+        b.vx += fx; b.vy += fy;
+      }
+    }
+    // Spring on edges
+    for (const e of edges) {
+      const a = positions.get(e.fromId);
+      const b = positions.get(e.toId);
+      if (!a || !b) continue;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const force = (dist - targetEdgeLen) * 0.08;
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      a.vx += fx; a.vy += fy;
+      b.vx -= fx; b.vy -= fy;
+    }
+    // Centering
+    for (const n of nodes) {
+      const p = positions.get(n.id)!;
+      p.vx += (cx - p.x) * 0.01;
+      p.vy += (cy - p.y) * 0.01;
+    }
+    // Integrate with damping; clamp to viewport
+    for (const n of nodes) {
+      const p = positions.get(n.id)!;
+      p.vx *= 0.82;
+      p.vy *= 0.82;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.x = Math.max(24, Math.min(width - 24, p.x));
+      p.y = Math.max(24, Math.min(height - 24, p.y));
+    }
+  }
+  const out = new Map<string, { x: number; y: number }>();
+  for (const [id, p] of positions) out.set(id, { x: p.x, y: p.y });
+  return out;
+}
+
+function LearningsGraphView({
+  graph,
+  loading,
+  onOpen,
+}: {
+  graph: CosLearningGraph | null;
+  loading: boolean;
+  onOpen: (id: string) => void;
+}) {
+  const width = 560;
+  const height = 420;
+  const [hoverId, setHoverId] = useState<string | null>(null);
+
+  // Memoize layout against node/edge identity so re-renders don't re-simulate.
+  const layoutKey = useMemo(() => {
+    if (!graph) return '';
+    return [
+      graph.nodes.length,
+      graph.edges.length,
+      graph.nodes.map((n) => n.id).join(','),
+      graph.edges.map((e) => e.id).join(','),
+    ].join('|');
+  }, [graph]);
+  const positions = useMemo(() => {
+    if (!graph || graph.nodes.length === 0) return new Map<string, { x: number; y: number }>();
+    return computeGraphLayout(graph.nodes, graph.edges, width, height);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutKey]);
+
+  if (loading && !graph) {
+    return <div class="cos-learnings-empty">Loading graph…</div>;
+  }
+  if (!graph || graph.nodes.length === 0) {
+    return <div class="cos-learnings-empty">No learnings to graph yet.</div>;
+  }
+
+  return (
+    <div class="cos-learnings-graph-wrap">
+      <div class="cos-learnings-graph-legend">
+        {LEARNING_TYPE_ORDER.map((t) => (
+          <span key={t} class="cos-learnings-graph-legend-item">
+            <span class="cos-learnings-graph-legend-dot" style={{ background: LEARNING_TYPE_COLOR[t] }} />
+            {LEARNING_TYPE_LABELS[t]}
+          </span>
+        ))}
+        <span class="cos-muted">— click a node to open</span>
+      </div>
+      <svg
+        class="cos-learnings-graph-svg"
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="Learnings knowledge graph"
+      >
+        <defs>
+          <marker id="cos-graph-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#9ca3af" />
+          </marker>
+        </defs>
+        {graph.edges.map((e) => {
+          const a = positions.get(e.fromId);
+          const b = positions.get(e.toId);
+          if (!a || !b) return null;
+          const isHover = hoverId !== null && (e.fromId === hoverId || e.toId === hoverId);
+          return (
+            <line
+              key={e.id}
+              x1={a.x}
+              y1={a.y}
+              x2={b.x}
+              y2={b.y}
+              stroke={REL_TYPE_COLOR[e.relType]}
+              stroke-width={isHover ? 2 : 1}
+              stroke-opacity={hoverId && !isHover ? 0.18 : 0.7}
+              stroke-dasharray={e.relType === 'duplicate_of' ? '4 3' : undefined}
+              marker-end="url(#cos-graph-arrow)"
+            >
+              <title>{`${REL_TYPE_LABELS[e.relType]}${e.source === 'auto' ? ' (auto)' : ''}`}</title>
+            </line>
+          );
+        })}
+        {graph.nodes.map((n) => {
+          const p = positions.get(n.id);
+          if (!p) return null;
+          const isHover = hoverId === n.id;
+          const radius = n.severity === 'high' ? 9 : n.severity === 'medium' ? 7 : 5;
+          return (
+            <g
+              key={n.id}
+              class="cos-learnings-graph-node"
+              transform={`translate(${p.x}, ${p.y})`}
+              onMouseEnter={() => setHoverId(n.id)}
+              onMouseLeave={() => setHoverId((cur) => (cur === n.id ? null : cur))}
+              onClick={() => onOpen(n.id)}
+            >
+              <circle
+                r={radius}
+                fill={LEARNING_TYPE_COLOR[n.type]}
+                stroke={isHover ? '#fff' : 'rgba(0,0,0,0.4)'}
+                stroke-width={isHover ? 2 : 1}
+              >
+                <title>{`${n.title} — ${n.type} / ${n.severity}`}</title>
+              </circle>
+              {isHover && (
+                <text
+                  x={radius + 4}
+                  y={4}
+                  fill="var(--pw-text-primary)"
+                  font-size="11"
+                  style={{ pointerEvents: 'none' }}
+                >
+                  {n.title.length > 40 ? n.title.slice(0, 38) + '…' : n.title}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function LearningDetailView({
+  id,
+  allLearnings,
+  onBack,
+  onClose,
+  onOpenPeer,
+  onChanged,
+}: {
+  id: string;
+  allLearnings: CosLearning[];
+  onBack: () => void;
+  onClose: () => void;
+  onOpenPeer: (peerId: string) => void;
+  onChanged: () => void;
+}) {
+  const [detail, setDetail] = useState<CosLearningDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<CosLearningSuggestion[]>([]);
+  const [tagsEdit, setTagsEdit] = useState<string | null>(null);
+  const [bodyEdit, setBodyEdit] = useState<string | null>(null);
+  const [titleEdit, setTitleEdit] = useState<string | null>(null);
+  const [linkPickerFor, setLinkPickerFor] = useState<CosLearningRelType | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [d, s] = await Promise.all([
+        fetchCosLearningDetail(id),
+        fetchCosLearningSuggestions(id),
+      ]);
+      setDetail(d);
+      setSuggestions(s);
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    void refresh();
+    setTagsEdit(null);
+    setBodyEdit(null);
+    setTitleEdit(null);
+    setLinkPickerFor(null);
+  }, [id, refresh]);
+
+  const handleSaveTags = async () => {
+    if (tagsEdit === null) return;
+    const tags = tagsEdit.split(',').map((t) => t.trim()).filter(Boolean);
+    await updateCosLearning(id, { tags });
+    setTagsEdit(null);
+    await refresh();
+    onChanged();
+  };
+
+  const handleSaveBody = async () => {
+    if (bodyEdit === null) return;
+    await updateCosLearning(id, { body: bodyEdit });
+    setBodyEdit(null);
+    await refresh();
+    onChanged();
+  };
+
+  const handleSaveTitle = async () => {
+    if (titleEdit === null) return;
+    const t = titleEdit.trim();
+    if (!t) { setTitleEdit(null); return; }
+    await updateCosLearning(id, { title: t });
+    setTitleEdit(null);
+    await refresh();
+    onChanged();
+  };
+
+  const handleSeverity = async (sev: CosLearning['severity']) => {
+    await updateCosLearning(id, { severity: sev });
+    await refresh();
+    onChanged();
+  };
+
+  const handleAddLink = async (peerId: string, relType: CosLearningRelType) => {
+    await createCosLearningLink(id, peerId, relType);
+    setLinkPickerFor(null);
+    await refresh();
+    onChanged();
+  };
+
+  const handleDeleteLink = async (linkId: string) => {
+    await deleteCosLearningLink(linkId);
+    await refresh();
+    onChanged();
+  };
+
+  const handleDeleteLearning = async () => {
+    await deleteCosLearning(id);
+    onChanged();
+    onBack();
+  };
+
+  if (!detail) {
+    return (
+      <div class="cos-learnings-panel">
+        <div class="cos-learnings-header">
+          <button class="cos-link-btn" onClick={onBack}>← back</button>
+          <span class="cos-learnings-title">{loading ? 'Loading…' : 'Not found'}</span>
+          <button class="cos-link-btn" onClick={onClose} aria-label="Close">close</button>
+        </div>
+      </div>
+    );
+  }
+
+  const l = detail.learning;
+  const existingPeerIds = new Set<string>([
+    ...detail.outgoing.map((x) => x.peer?.id).filter(Boolean) as string[],
+    ...detail.backlinks.map((x) => x.peer?.id).filter(Boolean) as string[],
+    id,
+  ]);
+
+  return (
+    <div class="cos-learnings-panel cos-learning-detail">
+      <div class="cos-learnings-header">
+        <button class="cos-link-btn" onClick={onBack}>← back</button>
+        <span class="cos-learnings-title cos-learning-detail-title-host">
+          {titleEdit === null ? (
+            <button
+              type="button"
+              class="cos-learning-title-btn"
+              onClick={() => setTitleEdit(l.title)}
+              title="Edit title"
+            >
+              {l.title}
+            </button>
+          ) : (
+            <span class="cos-inline-edit">
+              <input
+                class="cos-inline-input"
+                value={titleEdit}
+                onInput={(e) => setTitleEdit((e.target as HTMLInputElement).value)}
+                autoFocus
+              />
+              <button class="cos-link-btn" onClick={() => void handleSaveTitle()}>save</button>
+              <button class="cos-link-btn" onClick={() => setTitleEdit(null)}>cancel</button>
+            </span>
+          )}
+        </span>
+        <button class="cos-link-btn" onClick={() => void refresh()}>{loading ? 'loading…' : 'refresh'}</button>
+        <button class="cos-link-btn" onClick={onClose} aria-label="Close">close</button>
+      </div>
+
+      <div class="cos-learning-detail-meta">
+        <span class="cos-learning-badge" style={{ background: LEARNING_TYPE_COLOR[l.type] }}>{l.type}</span>
+        <div class="cos-view-segmented" role="radiogroup" aria-label="Severity">
+          {(['low', 'medium', 'high'] as CosLearning['severity'][]).map((s) => (
+            <button
+              key={s}
+              type="button"
+              role="radio"
+              aria-checked={l.severity === s}
+              class={`cos-view-seg${l.severity === s ? ' cos-view-seg-active' : ''}`}
+              onClick={() => void handleSeverity(s)}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+        <span class="cos-muted" title={new Date(l.createdAt).toLocaleString()}>
+          {new Date(l.createdAt).toLocaleDateString()}
+        </span>
+        <button
+          class="cos-link-btn cos-danger-text"
+          onClick={() => void handleDeleteLearning()}
+          title="Delete this learning"
+        >
+          delete
+        </button>
+      </div>
+
+      {l.sessionJsonl && (
+        <div class="cos-learning-source" title={l.sessionJsonl}>
+          source: {l.sessionJsonl.split('/').pop()}
+        </div>
+      )}
+
+      <div class="cos-learning-detail-section">
+        <div class="cos-learning-detail-section-head">
+          <span class="cos-learning-detail-section-title">Tags</span>
+          {tagsEdit === null
+            ? <button class="cos-link-btn" onClick={() => setTagsEdit(l.tags.join(', '))}>edit</button>
+            : (
+              <span class="cos-inline-actions">
+                <button class="cos-link-btn" onClick={() => void handleSaveTags()}>save</button>
+                <button class="cos-link-btn" onClick={() => setTagsEdit(null)}>cancel</button>
+              </span>
+            )}
+        </div>
+        {tagsEdit === null ? (
+          <div class="cos-learning-tags">
+            {(l.tags?.length ?? 0) === 0
+              ? <span class="cos-muted">no tags</span>
+              : l.tags!.map((t) => <span key={t} class="cos-learning-tag">#{t}</span>)}
+          </div>
+        ) : (
+          <input
+            class="cos-inline-input"
+            placeholder="comma, separated, tags"
+            value={tagsEdit}
+            onInput={(e) => setTagsEdit((e.target as HTMLInputElement).value)}
+            autoFocus
+          />
+        )}
+      </div>
+
+      <div class="cos-learning-detail-section">
+        <div class="cos-learning-detail-section-head">
+          <span class="cos-learning-detail-section-title">Body</span>
+          {bodyEdit === null
+            ? <button class="cos-link-btn" onClick={() => setBodyEdit(l.body)}>edit</button>
+            : (
+              <span class="cos-inline-actions">
+                <button class="cos-link-btn" onClick={() => void handleSaveBody()}>save</button>
+                <button class="cos-link-btn" onClick={() => setBodyEdit(null)}>cancel</button>
+              </span>
+            )}
+        </div>
+        {bodyEdit === null ? (
+          <div class="cos-learning-body cos-learning-detail-body">
+            {l.body || <span class="cos-muted">no body</span>}
+          </div>
+        ) : (
+          <textarea
+            class="cos-prompt-textarea"
+            rows={6}
+            value={bodyEdit}
+            onInput={(e) => setBodyEdit((e.target as HTMLTextAreaElement).value)}
+            autoFocus
+          />
+        )}
+      </div>
+
+      <LearningLinksSection
+        title="Outgoing links"
+        links={detail.outgoing}
+        emptyText="no outgoing links"
+        onOpen={onOpenPeer}
+        onDelete={(linkId) => void handleDeleteLink(linkId)}
+        onAdd={(rel) => setLinkPickerFor(rel)}
+      />
+
+      <LearningLinksSection
+        title="Backlinks"
+        links={detail.backlinks}
+        emptyText="no backlinks"
+        onOpen={onOpenPeer}
+        backlinks
+      />
+
+      {suggestions.length > 0 && (
+        <div class="cos-learning-detail-section">
+          <div class="cos-learning-detail-section-head">
+            <span class="cos-learning-detail-section-title">Suggested links</span>
+            <span class="cos-muted">based on text overlap</span>
+          </div>
+          <div class="cos-learning-suggestions">
+            {suggestions.map((s) => (
+              <div key={s.peer.id} class="cos-learning-suggestion">
+                <span
+                  class="cos-learning-dot"
+                  style={{ background: LEARNING_TYPE_COLOR[s.peer.type] }}
+                  title={s.peer.type}
+                />
+                <button
+                  type="button"
+                  class="cos-learning-title-btn"
+                  onClick={() => onOpenPeer(s.peer.id)}
+                >
+                  {s.peer.title}
+                </button>
+                <span class="cos-muted">{Math.round(s.similarity * 100)}%</span>
+                <span class="cos-inline-actions">
+                  {(['related', 'duplicate_of', 'caused_by', 'resolved_by'] as CosLearningRelType[]).map((rel) => (
+                    <button
+                      key={rel}
+                      class="cos-link-btn"
+                      onClick={() => void handleAddLink(s.peer.id, rel)}
+                      title={`Link as "${REL_TYPE_LABELS[rel]}"`}
+                    >
+                      +{REL_TYPE_LABELS[rel]}
+                    </button>
+                  ))}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {linkPickerFor !== null && (
+        <LearningLinkPicker
+          allLearnings={allLearnings}
+          excludeIds={existingPeerIds}
+          relType={linkPickerFor}
+          onPick={(peerId, rel) => void handleAddLink(peerId, rel)}
+          onCancel={() => setLinkPickerFor(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function LearningLinksSection({
+  title,
+  links,
+  emptyText,
+  onOpen,
+  onDelete,
+  onAdd,
+  backlinks,
+}: {
+  title: string;
+  links: CosLearningLinkPeer[];
+  emptyText: string;
+  onOpen: (peerId: string) => void;
+  onDelete?: (linkId: string) => void;
+  onAdd?: (rel: CosLearningRelType) => void;
+  backlinks?: boolean;
+}) {
+  return (
+    <div class="cos-learning-detail-section">
+      <div class="cos-learning-detail-section-head">
+        <span class="cos-learning-detail-section-title">{title}</span>
+        {onAdd && (
+          <span class="cos-inline-actions">
+            {(['related', 'caused_by', 'resolved_by', 'duplicate_of'] as CosLearningRelType[]).map((rel) => (
+              <button
+                key={rel}
+                class="cos-link-btn"
+                onClick={() => onAdd(rel)}
+                title={`Add a "${REL_TYPE_LABELS[rel]}" link`}
+              >
+                +{REL_TYPE_LABELS[rel]}
+              </button>
+            ))}
+          </span>
+        )}
+      </div>
+      {links.length === 0 ? (
+        <div class="cos-muted cos-learning-empty-row">{emptyText}</div>
+      ) : (
+        <div class="cos-learning-links">
+          {links.map((lp) => (
+            <div key={lp.linkId} class="cos-learning-link-row">
+              <span
+                class="cos-learning-link-rel"
+                style={{ color: REL_TYPE_COLOR[lp.relType] }}
+                title={lp.source === 'auto' ? 'auto-suggested' : lp.source}
+              >
+                {backlinks ? '←' : '→'} {REL_TYPE_LABELS[lp.relType]}
+                {lp.source !== 'user' && <span class="cos-muted"> ({lp.source})</span>}
+              </span>
+              {lp.peer ? (
+                <button
+                  type="button"
+                  class="cos-learning-title-btn"
+                  onClick={() => onOpen(lp.peer!.id)}
+                >
+                  {lp.peer.title}
+                </button>
+              ) : (
+                <span class="cos-muted">[deleted learning]</span>
+              )}
+              {onDelete && (
+                <button
+                  class="cos-link-btn cos-danger-text"
+                  onClick={() => onDelete(lp.linkId)}
+                  title="Remove this link"
+                  aria-label="Remove link"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LearningLinkPicker({
+  allLearnings,
+  excludeIds,
+  relType,
+  onPick,
+  onCancel,
+}: {
+  allLearnings: CosLearning[];
+  excludeIds: Set<string>;
+  relType: CosLearningRelType;
+  onPick: (peerId: string, rel: CosLearningRelType) => void;
+  onCancel: () => void;
+}) {
+  const [filter, setFilter] = useState('');
+  const candidates = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    return allLearnings
+      .filter((l) => !excludeIds.has(l.id))
+      .filter((l) => !q || l.title.toLowerCase().includes(q) || l.body.toLowerCase().includes(q))
+      .slice(0, 50);
+  }, [allLearnings, excludeIds, filter]);
+  return (
+    <div class="cos-learning-link-picker">
+      <div class="cos-learning-link-picker-head">
+        <span>Pick a learning to link as <strong>{REL_TYPE_LABELS[relType]}</strong></span>
+        <button class="cos-link-btn" onClick={onCancel}>cancel</button>
+      </div>
+      <input
+        class="cos-inline-input"
+        placeholder="Filter by title or body…"
+        value={filter}
+        onInput={(e) => setFilter((e.target as HTMLInputElement).value)}
+        autoFocus
+      />
+      <div class="cos-learning-link-picker-list">
+        {candidates.length === 0
+          ? <div class="cos-muted">No matches.</div>
+          : candidates.map((l) => (
+              <button
+                key={l.id}
+                type="button"
+                class="cos-learning-link-picker-row"
+                onClick={() => onPick(l.id, relType)}
+              >
+                <span
+                  class="cos-learning-dot"
+                  style={{ background: LEARNING_TYPE_COLOR[l.type] }}
+                  title={l.type}
+                />
+                <span class="cos-learning-link-picker-title">{l.title}</span>
+                <span class="cos-muted">{l.severity}</span>
+              </button>
+            ))}
+      </div>
     </div>
   );
 }
 
 function DispatchStatusLine({ dispatches }: { dispatches: DispatchInfo[] }) {
-  const [expanded, setExpanded] = useState(false);
   // Observe title-cache invalidation so titles re-render after async fetch.
   const _titlesVersion = feedbackTitlesVersion.value;
 
   useEffect(() => {
-    if (!expanded) return;
     for (const d of dispatches) {
       if (!getCachedFeedbackTitle(d.feedbackId)) {
         void fetchFeedbackTitle(d.feedbackId);
       }
     }
-  }, [expanded, dispatches]);
+  }, [dispatches]);
 
-  const count = dispatches.length;
-  const label = `→ ${count} agent${count === 1 ? '' : 's'} dispatched`;
   return (
-    <div class={`cos-dispatch-status${expanded ? ' cos-dispatch-status-open' : ''}`} role="status">
-      <button
-        type="button"
-        class="cos-dispatch-status-toggle"
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
-        title={expanded ? 'Hide session IDs' : 'Show session IDs'}
-      >
-        <span class="cos-dispatch-status-label">{label}</span>
-        <span class="cos-dispatch-status-caret" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
-      </button>
-      {expanded && (
-        <ul class="cos-dispatch-status-list">
-          {dispatches.map((d, i) => {
-            const title = getCachedFeedbackTitle(d.feedbackId);
-            const appId = selectedAppId.value;
-            const feedbackHref = `#${appId ? `/app/${appId}/feedback/${d.feedbackId}` : `/feedback/${d.feedbackId}`}`;
-            return (
-              <li key={`${d.feedbackId}-${i}`} class="cos-dispatch-status-item">
-                <a
-                  class="cos-dispatch-status-title"
-                  href={feedbackHref}
-                  title={title || d.feedbackId}
+    <div class="cos-dispatch-status" role="status">
+      {dispatches.map((d, i) => {
+        const title = getCachedFeedbackTitle(d.feedbackId);
+        const appId = selectedAppId.value;
+        const feedbackHref = `#${appId ? `/app/${appId}/tickets/${d.feedbackId}` : `/tickets/${d.feedbackId}`}`;
+        return (
+          <div key={`${d.feedbackId}-${i}`} class="cos-dispatch-status-item">
+            <a
+              class="cos-dispatch-status-title"
+              href={feedbackHref}
+              title={d.feedbackId}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openFeedbackItem(d.feedbackId);
+              }}
+            >
+              → {title || d.feedbackId.slice(0, 14) + '…'}
+            </a>
+            {d.sessionId && (
+              <span class="cos-dispatch-session-pills">
+                <button
+                  type="button"
+                  class="cos-dispatch-session-pill"
+                  title={`Open terminal for session ${d.sessionId}`}
                   onClick={(e) => {
-                    e.preventDefault();
                     e.stopPropagation();
-                    openFeedbackItem(d.feedbackId);
+                    openSession(d.sessionId!);
                   }}
                 >
-                  {title || d.feedbackId.slice(0, 12) + '…'}
-                </a>
-                {d.sessionId ? (
-                  <button
-                    type="button"
-                    class="cos-dispatch-status-sid cos-dispatch-status-sid-btn"
-                    title={`Open session ${d.sessionId}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openSession(d.sessionId!);
-                    }}
-                  >
-                    {d.sessionId.slice(0, 16)}
-                  </button>
-                ) : (
-                  <span class="cos-dispatch-status-sid cos-muted" title="session id not captured">—</span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                  ⌥ {d.sessionId.slice(0, 14)}
+                </button>
+                <button
+                  type="button"
+                  class="cos-dispatch-session-pill cos-dispatch-session-pill-jsonl"
+                  title={`Open JSONL viewer for session ${d.sessionId}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openSession(d.sessionId!);
+                    toggleCompanion(d.sessionId!, 'jsonl');
+                  }}
+                >
+                  JSONL
+                </button>
+              </span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -877,61 +1783,159 @@ function ThreadBlock({
   thread,
   collapsed,
   onToggle,
+  onStop,
   showTools,
-  expandArtifacts,
+  highlightMsgIdx,
   onReply,
+  onArtifactPopout,
+  hasUnread,
+  agentName,
+  verbosity,
 }: {
   thread: Thread;
   collapsed: boolean;
   onToggle: () => void;
+  onStop: () => void;
   showTools: boolean;
-  expandArtifacts: boolean;
-  onReply: (role: string, text: string) => void;
+  highlightMsgIdx: number | null;
+  onReply: (role: string, text: string, anchorTs?: number) => void;
+  onArtifactPopout: (artifactId: string) => void;
+  hasUnread: boolean;
+  agentName: string;
+  verbosity: ChiefOfStaffVerbosity;
 }) {
-  const { userMsg, replies } = thread;
-  const showReplies = !userMsg || !collapsed;
+  const { userMsg, userIdx, replies } = thread;
   const dispatches = useMemo(() => collectDispatches(replies), [replies]);
+  const isRunning = replies.some((r) => r.msg.streaming);
+  const replyCount = replies.length;
+  const hasReplies = replyCount > 0;
+  const lastReply = replies[replies.length - 1]?.msg;
+  const showSummaryCollapsed = !!userMsg && collapsed && hasReplies;
+  const showExpandedReplies = !userMsg || !collapsed;
+  const threadContext = userMsg?.text || '';
+  const anchorTs = userMsg?.timestamp;
+  const handleThreadStop = () => onStop();
+  const handleThreadReply = () => {
+    if (threadContext) onReply('user', threadContext, anchorTs);
+  };
   return (
-    <>
+    <div class={`cos-thread-block${hasUnread ? ' cos-thread-block-unread' : ''}${userMsg ? '' : ' cos-thread-block-orphan'}`}>
       {userMsg && (
-        <div class="cos-msg cos-msg-user">
-          <div class="cos-thread-user-row">
+        <div
+          class={`cos-msg cos-row cos-row-user cos-row-post${highlightMsgIdx === userIdx ? ' cos-msg-highlight' : ''}${hasUnread ? ' cos-row-unread' : ''}`}
+          data-cos-msg-idx={userIdx ?? undefined}
+          data-cos-thread-anchor={userIdx ?? undefined}
+        >
+          <div class="cos-row-avatar">
+            <MessageAvatar role="user" label="You" />
+          </div>
+          <div class="cos-row-main">
+            <div class="cos-row-header">
+              <span class="cos-row-author">You</span>
+              {userMsg.timestamp && <Timestamp ts={userMsg.timestamp} />}
+              {hasUnread && (
+                <span class="cos-row-unread-dot" title="Unread reply" aria-label="Unread reply" />
+              )}
+            </div>
+            {userMsg.text && (
+              <div class="cos-row-content cos-msg-text">{userMsg.text}</div>
+            )}
+            <MessageAttachments attachments={userMsg.attachments} elementRefs={userMsg.elementRefs} />
+          </div>
+        </div>
+      )}
+      {(hasReplies || dispatches.length > 0) && (
+        <div class="cos-thread-children">
+          {dispatches.length > 0 && <DispatchStatusLine dispatches={dispatches} />}
+          {showSummaryCollapsed && (
             <button
               type="button"
-              class={`cos-thread-toggle${collapsed ? ' cos-thread-toggle-collapsed' : ''}`}
+              class={`cos-thread-summary${hasUnread ? ' cos-thread-summary-unread' : ''}`}
               onClick={onToggle}
-              aria-label={collapsed ? 'Expand thread' : 'Collapse thread'}
-              aria-expanded={!collapsed}
-              title={collapsed ? 'Expand thread' : 'Collapse thread'}
+              aria-expanded="false"
+              aria-label={`Expand ${replyCount} repl${replyCount === 1 ? 'y' : 'ies'}`}
             >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M6 9l6 6 6-6" />
-              </svg>
+              <span class="cos-thread-summary-avatars" aria-hidden="true">
+                <MessageAvatar role="assistant" label={agentName} size="sm" />
+              </span>
+              <span class="cos-thread-summary-count">
+                {replyCount} repl{replyCount === 1 ? 'y' : 'ies'}
+              </span>
+              {lastReply?.timestamp && (
+                <span class="cos-thread-summary-time">
+                  Last reply <Timestamp ts={lastReply.timestamp} />
+                </span>
+              )}
+              <span class="cos-thread-summary-hint">View thread</span>
             </button>
-            <div class="cos-msg-bubble">
-              {userMsg.text && <div class="cos-msg-text">{userMsg.text}</div>}
-              <MessageAttachments attachments={userMsg.attachments} elementRefs={userMsg.elementRefs} />
-              {userMsg.text && <ReplyButton onClick={() => onReply('user', userMsg.text)} />}
-            </div>
-          </div>
-          {userMsg.timestamp && (
-            <div class="cos-msg-footer cos-msg-footer-user"><Timestamp ts={userMsg.timestamp} /></div>
+          )}
+          {showExpandedReplies && (
+            <>
+              {userMsg && (
+                <div class="cos-thread-header-row">
+                  <span class="cos-thread-header-count">
+                    {replyCount} repl{replyCount === 1 ? 'y' : 'ies'}
+                  </span>
+                  <button
+                    type="button"
+                    class="cos-thread-header-btn"
+                    onClick={onToggle}
+                    aria-expanded="true"
+                    title="Collapse thread"
+                  >
+                    Collapse
+                  </button>
+                </div>
+              )}
+              {replies.map((r) => (
+                <MessageBubble
+                  key={r.idx}
+                  msg={r.msg}
+                  msgIdx={r.idx}
+                  highlighted={highlightMsgIdx === r.idx}
+                  showTools={showTools}
+                  onArtifactPopout={onArtifactPopout}
+                  agentName={agentName}
+                  verbosity={verbosity}
+                />
+              ))}
+            </>
           )}
         </div>
       )}
-      {userMsg && dispatches.length > 0 && (
-        <DispatchStatusLine dispatches={dispatches} />
+      {userMsg && !(collapsed && hasReplies) && (
+        <div class="cos-thread-actions">
+          {isRunning && (
+            <button
+              type="button"
+              class="cos-thread-reply-btn cos-thread-reply-btn-running"
+              onClick={handleThreadStop}
+              title="Interrupt current response"
+              aria-label="Interrupt current response"
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <rect x="5" y="5" width="14" height="14" rx="2" />
+              </svg>
+              <span>Stop</span>
+            </button>
+          )}
+          <button
+            type="button"
+            class="cos-thread-reply-btn"
+            onClick={handleThreadReply}
+            title="Reply in thread"
+            aria-label="Reply in thread"
+            disabled={!threadContext}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="9 17 4 12 9 7" />
+              <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+            </svg>
+            <span>Reply in thread</span>
+          </button>
+        </div>
       )}
-      {showReplies && replies.map((r) => (
-        <MessageBubble
-          key={r.idx}
-          msg={r.msg}
-          showTools={showTools}
-          expandArtifacts={expandArtifacts}
-          onReply={onReply}
-        />
-      ))}
-    </>
+    </div>
   );
 }
 
@@ -941,28 +1945,40 @@ export function ChiefOfStaffToggle() {
   // is opened/closed via another entry point.
   const _layout = layoutTreeSignal.value;
   const paneOpen = isCosInPane();
+  const mobile = isMobile.value;
+  // On mobile the pane mode falls back to the popout (openCosInPane does the
+  // redirect), so the toggle's "active" state must key off `open` too —
+  // `paneOpen` stays false because we never add `cos:main` to the tree there.
   const active = open || paneOpen;
 
   function handleClick(e: MouseEvent) {
-    // Shift-click → float the old popout, useful when the layout is cramped.
-    // Close the pane first since the two surfaces are mutually exclusive.
+    // Shift-click → dock CoS into the pane tree for users who want it inline.
+    // Close the popout first since the two surfaces are mutually exclusive.
     if (e.shiftKey) {
-      if (paneOpen) closeCosPane();
-      setChiefOfStaffOpen(!open);
+      if (open) setChiefOfStaffOpen(false);
+      if (paneOpen) closeCosPane(); else openCosInPane();
       return;
     }
-    if (paneOpen) {
-      closeCosPane();
-    } else {
-      openCosInPane();
+    // Default: always toggle the popout. Close any docked pane first so the
+    // two surfaces don't fight over the same `cos:main` tab.
+    if (paneOpen) closeCosPane();
+    if (!open && mobile) {
+      // If the user tapped the toggle while an input elsewhere still held
+      // focus (e.g. the feedback widget textarea), the iOS keyboard stays
+      // up and squeezes the popout to near-zero height via
+      // --pw-keyboard-inset. Blur first so the keyboard retracts before
+      // the popout positions itself.
+      const el = document.activeElement as HTMLElement | null;
+      if (el && typeof el.blur === 'function') el.blur();
     }
+    setChiefOfStaffOpen(!open);
   }
 
   return (
     <button
       class={`control-bar-btn control-bar-cos-btn${active ? ' control-bar-cos-btn-open' : ''}`}
       onClick={handleClick}
-      title="Ops (shift-click for popout)"
+      title="Ops (shift-click to dock in pane)"
       aria-label="Open Ops chat"
     >
       <span class="control-bar-icon" aria-hidden="true">
@@ -991,7 +2007,6 @@ export function ChiefOfStaffBubble({
   const activeId = chiefOfStaffActiveId.value;
   const activeAgent = getActiveAgent();
   const error = chiefOfStaffError.value;
-  const inFlight = chiefOfStaffInFlight.value;
 
   const allPanels = popoutPanels.value;
   const _zOrders = panelZOrders.value;
@@ -1007,6 +2022,8 @@ export function ChiefOfStaffBubble({
   const pickerCleanupRef = useRef<(() => void) | null>(null);
   const [cameraMenuOpen, setCameraMenuOpen] = useState(false);
   const [pickerMenuOpen, setPickerMenuOpen] = useState(false);
+  const [cameraMenuPos, setCameraMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const [pickerMenuPos, setPickerMenuPos] = useState<{ top: number; left: number } | null>(null);
   const cameraGroupRef = useRef<HTMLDivElement | null>(null);
   const pickerGroupRef = useRef<HTMLDivElement | null>(null);
   const [screenshotExcludeWidget, setScreenshotExcludeWidget] = useState<boolean>(() => {
@@ -1044,26 +2061,45 @@ export function ChiefOfStaffBubble({
   useEffect(() => { try { localStorage.setItem('pw-cos-pick-excl-widget', pickerExcludeWidget ? '1' : '0'); } catch { /* ignore */ } }, [pickerExcludeWidget]);
   useEffect(() => { try { localStorage.setItem('pw-cos-pick-multi', pickerMultiSelect ? '1' : '0'); } catch { /* ignore */ } }, [pickerMultiSelect]);
   useEffect(() => { try { localStorage.setItem('pw-cos-pick-children', pickerIncludeChildren ? '1' : '0'); } catch { /* ignore */ } }, [pickerIncludeChildren]);
-  const [replyTo, setReplyTo] = useState<{ role: string; text: string } | null>(null);
+  const [replyTo, setReplyTo] = useState<{ role: string; text: string; anchorTs?: number } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
   const [collapsedThreads, setCollapsedThreads] = useState<Set<number>>(new Set());
-  const [viewMode, setViewMode] = useState<'summary' | 'full'>(() => {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-view-mode') : null;
-    return v === 'full' ? 'full' : 'summary';
-  });
   const [showTools, setShowTools] = useState<boolean>(() => {
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-show-tools') : null;
     return v === '1';
   });
   const [showLearnings, setShowLearnings] = useState(false);
+  const [editingAttachment, setEditingAttachment] = useState<{ id: string; dataUrl: string } | null>(null);
+  const [learningsSide, setLearningsSide] = useState<'left' | 'right'>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-learnings-side') : null;
+    return v === 'right' ? 'right' : 'left';
+  });
+  const [shellRect, setShellRect] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
   const [inputHeight, setInputHeight] = useState<number | null>(null);
-  useEffect(() => {
-    try { localStorage.setItem('pw-cos-view-mode', viewMode); } catch { /* ignore */ }
-  }, [viewMode]);
   useEffect(() => {
     try { localStorage.setItem('pw-cos-show-tools', showTools ? '1' : '0'); } catch { /* ignore */ }
   }, [showTools]);
-  const expandArtifacts = viewMode === 'full';
+  useEffect(() => {
+    try { localStorage.setItem('pw-cos-learnings-side', learningsSide); } catch { /* ignore */ }
+  }, [learningsSide]);
+  useEffect(() => {
+    if (!showLearnings) { setShellRect(null); return; }
+    const el = wrapperRef.current;
+    if (!el) return;
+    let raf: number | null = null;
+    const update = () => {
+      const r = el.getBoundingClientRect();
+      setShellRect((prev) => {
+        if (prev && prev.top === r.top && prev.left === r.left && prev.width === r.width && prev.height === r.height) return prev;
+        return { top: r.top, left: r.left, width: r.width, height: r.height };
+      });
+    };
+    const tick = () => { update(); raf = requestAnimationFrame(tick); };
+    raf = requestAnimationFrame(tick);
+    return () => { if (raf !== null) cancelAnimationFrame(raf); };
+  }, [showLearnings, inPane]);
 
   const [nameEdit, setNameEdit] = useState<string | null>(null);
   const [promptEdit, setPromptEdit] = useState<string | null>(null);
@@ -1078,6 +2114,7 @@ export function ChiefOfStaffBubble({
   const collapsibleThreads = threads.filter((t) => t.userIdx !== null);
   const hasMultipleThreads = collapsibleThreads.length >= 2;
   const anyExpanded = collapsibleThreads.some((t) => !collapsedThreads.has(t.userIdx!));
+  const isAgentStreaming = (activeAgent?.messages || []).some((m) => m.streaming);
 
   function toggleThread(userIdx: number) {
     setCollapsedThreads((prev) => {
@@ -1104,11 +2141,200 @@ export function ChiefOfStaffBubble({
   const resizing = useRef<string | null>(null);
   const dragStart = useRef({ mx: 0, my: 0, x: 0, y: 0, w: 0, h: 0, dockedHeight: 0, dockedTopOffset: 0, dockedBaseTop: 0 });
 
-  useEffect(() => {
-    if (!open) return;
+  type ReplyNotification = {
+    id: string;
+    threadKey: string;
+    userIdx: number | null;
+    messageIdx: number;
+    threadTitle: string;
+    snippet: string;
+  };
+  const [replyNotifs, setReplyNotifs] = useState<ReplyNotification[]>([]);
+  const [highlightMsgIdx, setHighlightMsgIdx] = useState<number | null>(null);
+  const [showScrollDown, setShowScrollDown] = useState(false);
+  const wasAtBottomRef = useRef(true);
+  const seenMsgsRef = useRef<Map<number, boolean>>(new Map());
+  const seenInitializedRef = useRef(false);
+  const notifTimersRef = useRef<Map<string, number>>(new Map());
+
+  const isVisible = open || inPane;
+
+  function isScrollAtBottom(el: HTMLElement | null): boolean {
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  }
+
+  function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [open, activeAgent?.messages.length]);
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }
+
+  // Reset notification + seen state when the active agent changes; the next
+  // run of the messages effect will repopulate `seen` without firing notifs
+  // for already-loaded history.
+  useEffect(() => {
+    seenMsgsRef.current = new Map();
+    seenInitializedRef.current = false;
+    for (const t of notifTimersRef.current.values()) clearTimeout(t);
+    notifTimersRef.current.clear();
+    setReplyNotifs([]);
+    setHighlightMsgIdx(null);
+    wasAtBottomRef.current = true;
+  }, [activeId]);
+
+  // Auto-scroll to bottom on load (panel open, agent switch, or when history
+  // count changes while user is already pinned to the bottom).
+  useEffect(() => {
+    if (!isVisible) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (!seenInitializedRef.current || wasAtBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      wasAtBottomRef.current = true;
+      setShowScrollDown(false);
+    }
+  }, [isVisible, activeId, activeAgent?.messages.length]);
+
+  // Scroll listener: toggle the floating scroll-down button and remember the
+  // user's "at bottom" state so new messages don't yank them around.
+  useEffect(() => {
+    if (!isVisible) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const atBottom = isScrollAtBottom(el);
+      wasAtBottomRef.current = atBottom;
+      setShowScrollDown(!atBottom);
+      // Clear any pending notifications once the user is back at the bottom.
+      if (atBottom) {
+        for (const t of notifTimersRef.current.values()) clearTimeout(t);
+        notifTimersRef.current.clear();
+        setReplyNotifs((prev) => (prev.length === 0 ? prev : []));
+      }
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [isVisible, activeId]);
+
+  // Detect newly-completed assistant replies that arrive while the user is
+  // scrolled away from the bottom and surface a stackable notification chip.
+  useEffect(() => {
+    if (!isVisible) return;
+    const agent = activeAgent;
+    if (!agent) return;
+    const seen = seenMsgsRef.current;
+
+    if (!seenInitializedRef.current) {
+      agent.messages.forEach((m, i) => {
+        if (m.role === 'assistant') seen.set(i, !!m.streaming);
+      });
+      seenInitializedRef.current = true;
+      return;
+    }
+
+    const atBottom = isScrollAtBottom(scrollRef.current);
+
+    const newlyComplete: { idx: number; msg: ChiefOfStaffMsg }[] = [];
+    for (let i = 0; i < agent.messages.length; i++) {
+      const msg = agent.messages[i];
+      if (msg.role !== 'assistant') continue;
+      const wasStreaming = seen.get(i);
+      const isStreaming = !!msg.streaming;
+      seen.set(i, isStreaming);
+      if (isStreaming) continue;
+      // New completion: streaming→done OR previously-unseen complete msg.
+      if (wasStreaming === true || wasStreaming === undefined) {
+        newlyComplete.push({ idx: i, msg });
+      }
+    }
+
+    if (atBottom || newlyComplete.length === 0) return;
+
+    const notifsToAdd: ReplyNotification[] = [];
+    for (const { idx, msg } of newlyComplete) {
+      const thread = threads.find(
+        (t) => t.replies.some((r) => r.idx === idx),
+      );
+      if (!thread) continue;
+      const threadKey = thread.userIdx !== null ? `t-${thread.userIdx}` : 'pre';
+      const userText = thread.userMsg?.text?.trim() || '(no prompt)';
+      const threadTitle = userText.length > 48 ? userText.slice(0, 48) + '…' : userText;
+      const reply = extractCosReply(msg.text);
+      const replyText = (reply.displayText || msg.text || '').trim();
+      const snippet = replyText.length > 90 ? replyText.slice(0, 90) + '…' : replyText;
+      notifsToAdd.push({
+        id: `n-${idx}-${Date.now()}`,
+        threadKey,
+        userIdx: thread.userIdx,
+        messageIdx: idx,
+        threadTitle,
+        snippet,
+      });
+    }
+
+    if (notifsToAdd.length === 0) return;
+
+    setReplyNotifs((prev) => {
+      const replacedKeys = new Set(notifsToAdd.map((n) => n.threadKey));
+      const kept = prev.filter((n) => {
+        if (!replacedKeys.has(n.threadKey)) return true;
+        const t = notifTimersRef.current.get(n.id);
+        if (t) { clearTimeout(t); notifTimersRef.current.delete(n.id); }
+        return false;
+      });
+      return [...kept, ...notifsToAdd];
+    });
+
+    for (const n of notifsToAdd) {
+      const handle = window.setTimeout(() => {
+        notifTimersRef.current.delete(n.id);
+        setReplyNotifs((prev) => prev.filter((p) => p.id !== n.id));
+      }, 8000);
+      notifTimersRef.current.set(n.id, handle);
+    }
+  }, [activeAgent?.messages, threads, isVisible]);
+
+  useEffect(() => {
+    return () => {
+      for (const t of notifTimersRef.current.values()) clearTimeout(t);
+      notifTimersRef.current.clear();
+    };
+  }, []);
+
+  function dismissReplyNotif(id: string) {
+    const handle = notifTimersRef.current.get(id);
+    if (handle) { clearTimeout(handle); notifTimersRef.current.delete(id); }
+    setReplyNotifs((prev) => prev.filter((n) => n.id !== id));
+  }
+
+  function activateReplyNotif(notif: ReplyNotification) {
+    if (notif.userIdx !== null && collapsedThreads.has(notif.userIdx)) {
+      setCollapsedThreads((prev) => {
+        const next = new Set(prev);
+        next.delete(notif.userIdx!);
+        return next;
+      });
+    }
+    // Wait for the expand re-render before measuring scroll target.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const root = scrollRef.current;
+        if (!root) return;
+        const sel = `[data-cos-msg-idx="${notif.messageIdx}"]`;
+        const target = root.querySelector(sel) as HTMLElement | null;
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          setHighlightMsgIdx(notif.messageIdx);
+          window.setTimeout(() => {
+            setHighlightMsgIdx((cur) => (cur === notif.messageIdx ? null : cur));
+          }, 2400);
+        }
+      });
+    });
+    dismissReplyNotif(notif.id);
+  }
 
   useEffect(() => {
     if (open && inputRef.current && !showSettings) inputRef.current.focus();
@@ -1160,22 +2386,19 @@ export function ChiefOfStaffBubble({
   function submit() {
     const hasAttach = pendingAttachments.length > 0 || pendingElementRefs.length > 0;
     if (!input.trim() && !hasAttach) return;
-    let text = input;
-    if (replyTo) {
-      const quoted = replyTo.text.replace(/\n/g, '\n> ');
-      text = `> ${quoted}\n\n${text}`;
-    }
+    const text = input;
     const attachments: CosImageAttachment[] = pendingAttachments.map((a) => ({
       kind: 'image',
       dataUrl: a.dataUrl,
       name: a.name,
     }));
     const elementRefs: CosElementRef[] = pendingElementRefs.map((e) => ({ ...e }));
+    const replyToTs = replyTo?.anchorTs;
     setInput('');
     setReplyTo(null);
     setPendingAttachments([]);
     setPendingElementRefs([]);
-    sendChiefOfStaffMessage(text, selectedAppId.value, { attachments, elementRefs });
+    sendChiefOfStaffMessage(text, selectedAppId.value, { attachments, elementRefs, replyToTs });
   }
 
   function blobToDataUrl(blob: Blob): Promise<string> {
@@ -1353,10 +2576,48 @@ export function ChiefOfStaffBubble({
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [cameraMenuOpen, pickerMenuOpen]);
 
-  function handleReply(role: string, text: string) {
+  function handleReply(role: string, text: string, anchorTs?: number) {
     const excerpt = text.length > 120 ? text.slice(0, 120) : text;
-    setReplyTo({ role, text: excerpt });
+    setReplyTo({ role, text: excerpt, anchorTs });
     inputRef.current?.focus();
+  }
+
+  function handleArtifactPopout(artifactId: string) {
+    // In pane mode the CoS is already a leaf in the main layout tree, so the
+    // existing companion splitter gives the user the familiar left/right/
+    // top/bottom pane placement.
+    if (inPane) {
+      // Anchor the split to the CoS leaf so the artifact becomes a companion
+      // of the chat, no matter which leaf currently holds focus.
+      const cosLeaf = findLeafWithTab(COS_PANE_TAB_ID);
+      if (cosLeaf) setFocusedLeaf(cosLeaf.id);
+      openArtifactCompanion(artifactId);
+      return;
+    }
+    // Popout mode: the popout window hosts its own pane-tree. Opening an
+    // artifact inserts a new split pane next to the chat.
+    const wasEmpty = !hasAnyArtifactLeaf(cosPopoutTree.value.root);
+    cosOpenArtifactTab(artifactId, 'right');
+    // When opening the first artifact split, widen the floating panel so the
+    // chat and artifact both have room. Skip when docked — docked width is
+    // part of the user's layout and shouldn't jump.
+    if (wasEmpty && panel && !panel.docked) {
+      const needed = 720;
+      if (panel.floatingRect.w < needed) {
+        const maxW = typeof window !== 'undefined' ? window.innerWidth - 32 : needed;
+        const targetW = Math.max(panel.floatingRect.w, Math.min(needed, maxW));
+        const rightEdge = panel.floatingRect.x + targetW;
+        const overflow = typeof window !== 'undefined' ? Math.max(0, rightEdge - (window.innerWidth - 8)) : 0;
+        updatePanel(COS_PANEL_ID, {
+          floatingRect: {
+            ...panel.floatingRect,
+            w: targetW,
+            x: Math.max(8, panel.floatingRect.x - overflow),
+          },
+        });
+        persistPopoutState();
+      }
+    }
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -1489,10 +2750,47 @@ export function ChiefOfStaffBubble({
   // changes (keeps the popout hidden while the cos: tab is live in the tree).
   const _layout = layoutTreeSignal.value;
   const hasCosTabInTree = isCosInPane();
+  // Subscribe to the popout-local tree so the CoS panel re-renders when
+  // artifact/learnings leaves are added or split ratios change. We mirror the
+  // signal into useState via an effect because relying on Preact's
+  // signal-auto-subscription alone has missed re-renders when a collapsed
+  // tree root happens to share node ids with a previously-rendered snapshot.
+  // Subscribe to the popout-local tree so the CoS panel re-renders when
+  // artifact/learnings leaves are added or split ratios change.
+  const _cosTree = cosPopoutTree.value;
+  // In popout mode the learnings panel is a tab in the popout-local tree, so
+  // the toolbar button's "open" state is derived from the tree — not from the
+  // local `showLearnings` state (which only drives the pane-mode side drawer).
+  const learningsPopoutOpen = !inPane && cosIsLearningsOpen();
+  const learningsButtonActive = inPane ? showLearnings : learningsPopoutOpen;
 
   const shouldRenderShell = inPane
     ? !!activeAgent
     : !!(open && activeAgent && panel && panel.visible && !hasCosTabInTree);
+
+  const learningsDrawerWidth = 340;
+  const learningsDrawerStyle = (() => {
+    if (!showLearnings || !shellRect) return null;
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
+    let side: 'left' | 'right' = learningsSide;
+    const leftSpot = shellRect.left - learningsDrawerWidth;
+    const rightSpot = shellRect.left + shellRect.width;
+    if (side === 'left' && leftSpot < 0 && rightSpot + learningsDrawerWidth <= vw) side = 'right';
+    if (side === 'right' && rightSpot + learningsDrawerWidth > vw && leftSpot >= 0) side = 'left';
+    const leftPx = side === 'left'
+      ? Math.max(0, leftSpot)
+      : Math.min(vw - learningsDrawerWidth, rightSpot);
+    const zIdx = !inPane && panel ? getPanelZIndex(panel) + 1 : 900;
+    return {
+      position: 'fixed' as const,
+      top: shellRect.top,
+      height: shellRect.height,
+      left: leftPx,
+      width: learningsDrawerWidth,
+      zIndex: zIdx,
+      side,
+    };
+  })();
 
   return (
     <>
@@ -1513,6 +2811,33 @@ export function ChiefOfStaffBubble({
             </svg>
           )}
         </button>
+      )}
+
+      {shouldRenderShell && activeAgent && inPane && showLearnings && learningsDrawerStyle && (
+        <div
+          class={`cos-learnings-side cos-learnings-side-${learningsDrawerStyle.side}`}
+          style={{
+            position: learningsDrawerStyle.position,
+            top: learningsDrawerStyle.top,
+            left: learningsDrawerStyle.left,
+            width: learningsDrawerStyle.width,
+            height: learningsDrawerStyle.height,
+            zIndex: learningsDrawerStyle.zIndex,
+          }}
+        >
+          <div class="cos-learnings-side-controls">
+            <button
+              type="button"
+              class="cos-link-btn"
+              onClick={() => setLearningsSide(learningsDrawerStyle.side === 'left' ? 'right' : 'left')}
+              title={`Move to ${learningsDrawerStyle.side === 'left' ? 'right' : 'left'}`}
+              aria-label="Flip drawer side"
+            >
+              {learningsDrawerStyle.side === 'left' ? '→' : '←'}
+            </button>
+          </div>
+          <LearningsPanel onClose={() => setShowLearnings(false)} />
+        </div>
       )}
 
       {shouldRenderShell && activeAgent && (
@@ -1575,9 +2900,64 @@ export function ChiefOfStaffBubble({
                 <span class="popout-tab-label">Settings</span>
               </button>
             </div>
-            {!inPane && (
+            {!inPane && panel && (
               <div class="popout-window-controls">
+                <button
+                  ref={menuButtonRef}
+                  class="btn-close-panel cos-hamburger-draggable"
+                  onClick={() => setMenuOpen((v) => !v)}
+                  onMouseDown={(e) => {
+                    // Drag-to-popout: if the user drags the hamburger >40px, open
+                    // Chief of Staff in a new browser window instead of showing the
+                    // menu. Preserves click-to-open-menu for short gestures.
+                    const startX = (e as MouseEvent).clientX;
+                    const startY = (e as MouseEvent).clientY;
+                    let dragged = false;
+                    const onMove = (ev: MouseEvent) => {
+                      const dx = ev.clientX - startX;
+                      const dy = ev.clientY - startY;
+                      if (!dragged && Math.hypot(dx, dy) > 40) {
+                        dragged = true;
+                        document.removeEventListener('mousemove', onMove);
+                        document.removeEventListener('mouseup', onUp);
+                        setMenuOpen(false);
+                        // Decide window vs tab based on drop position: near screen
+                        // edge → detached window, anywhere else → new tab.
+                        const nearEdge =
+                          ev.clientX < 20 ||
+                          ev.clientX > window.innerWidth - 20 ||
+                          ev.clientY < 20 ||
+                          ev.clientY > window.innerHeight - 20;
+                        if (nearEdge) {
+                          window.open(location.href, '_blank', 'width=900,height=700,menubar=no,toolbar=no');
+                        } else {
+                          window.open(location.href, '_blank');
+                        }
+                      }
+                    };
+                    const onUp = () => {
+                      document.removeEventListener('mousemove', onMove);
+                      document.removeEventListener('mouseup', onUp);
+                    };
+                    document.addEventListener('mousemove', onMove);
+                    document.addEventListener('mouseup', onUp);
+                  }}
+                  title="Panel options (drag to pop out to new window/tab)"
+                  aria-haspopup="true"
+                  aria-expanded={menuOpen}
+                >{'☰'}</button>
                 <button class="btn-close-panel" onClick={toggleChiefOfStaff} title="Hide panel">&times;</button>
+                {menuOpen && (
+                  <WindowMenu
+                    panel={panel}
+                    activeId={COS_PANE_TAB_ID}
+                    docked={isDocked}
+                    isLeftDocked={isLeftDocked}
+                    isMinimized={isMinimized}
+                    anchorRef={menuButtonRef}
+                    onClose={() => setMenuOpen(false)}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -1711,35 +3091,10 @@ export function ChiefOfStaffBubble({
                     )}
                   </div>
                 </div>
-              ) : (
-                <>
-                  {showLearnings && (
-                    <div class="cos-drawer cos-drawer-left">
-                      <LearningsPanel onClose={() => setShowLearnings(false)} />
-                    </div>
-                  )}
+              ) : ((() => {
+                const chatPane = (
                   <div class="cos-chat-pane">
                     <div class="cos-scroll-toolbar">
-                      <div class="cos-view-segmented" role="tablist" aria-label="View mode">
-                        <button
-                          type="button"
-                          class={`cos-view-seg${viewMode === 'summary' ? ' cos-view-seg-active' : ''}`}
-                          onClick={() => setViewMode('summary')}
-                          aria-pressed={viewMode === 'summary'}
-                          title="Prose-first view; artifacts collapsed, tool calls hidden"
-                        >
-                          Summary
-                        </button>
-                        <button
-                          type="button"
-                          class={`cos-view-seg${viewMode === 'full' ? ' cos-view-seg-active' : ''}`}
-                          onClick={() => setViewMode('full')}
-                          aria-pressed={viewMode === 'full'}
-                          title="Full view; artifacts expanded"
-                        >
-                          Full
-                        </button>
-                      </div>
                       {activeAgent.messages.length > 0 && (
                         <>
                           <button
@@ -1765,19 +3120,28 @@ export function ChiefOfStaffBubble({
                       )}
                       <button
                         type="button"
-                        class={`cos-scroll-toolbar-btn${showLearnings ? ' cos-scroll-toolbar-btn-active' : ''}`}
+                        class={`cos-scroll-toolbar-btn${learningsButtonActive ? ' cos-scroll-toolbar-btn-active' : ''}`}
                         onClick={() => {
-                          const next = !showLearnings;
-                          setShowLearnings(next);
-                          if (next) void loadCosLearnings();
+                          if (inPane) {
+                            const next = !showLearnings;
+                            setShowLearnings(next);
+                            if (next) void loadCosLearnings();
+                          } else {
+                            // Popout mode: toggle the learnings tab in the
+                            // popout-local pane-tree instead of opening a
+                            // fixed-position side drawer.
+                            const opened = cosToggleLearningsTab('left');
+                            if (opened) void loadCosLearnings();
+                          }
                         }}
                         title="Wiggum self-reflection learnings"
-                        aria-pressed={showLearnings}
+                        aria-pressed={learningsButtonActive}
                       >
                         Learnings{cosLearnings.value.length > 0 ? ` (${cosLearnings.value.length})` : ''}
                       </button>
                     </div>
 
+                    <div class="cos-scroll-wrap">
                     <div class="cos-scroll" ref={scrollRef}>
                       {activeAgent.messages.length === 0 && (
                         <div class="cos-empty">
@@ -1796,20 +3160,74 @@ export function ChiefOfStaffBubble({
                           </div>
                         </div>
                       )}
-                      {threads.map((t, i) => (
-                        <ThreadBlock
-                          key={t.userIdx ?? `pre-${i}`}
-                          thread={t}
-                          collapsed={t.userIdx !== null && collapsedThreads.has(t.userIdx)}
-                          onToggle={() => t.userIdx !== null && toggleThread(t.userIdx)}
-                          showTools={showTools}
-                          expandArtifacts={expandArtifacts}
-                          onReply={handleReply}
-                        />
-                      ))}
+                      {(() => {
+                        const unreadThreadIdxs = new Set<number>();
+                        for (const n of replyNotifs) {
+                          if (n.userIdx !== null) unreadThreadIdxs.add(n.userIdx);
+                        }
+                        const nodes: import('preact').VNode[] = [];
+                        let lastDayKey: string | null = null;
+                        threads.forEach((t, i) => {
+                          const ts = t.userMsg?.timestamp ?? t.replies[0]?.msg.timestamp ?? null;
+                          if (ts) {
+                            const k = dayKeyOf(ts);
+                            if (k !== lastDayKey) {
+                              nodes.push(<DayDivider key={`day-${k}-${i}`} ts={ts} />);
+                              lastDayKey = k;
+                            }
+                          }
+                          nodes.push(
+                            <ThreadBlock
+                              key={t.userIdx ?? `pre-${i}`}
+                              thread={t}
+                              collapsed={t.userIdx !== null && collapsedThreads.has(t.userIdx)}
+                              onToggle={() => t.userIdx !== null && toggleThread(t.userIdx)}
+                              onStop={() => void interruptActiveAgent()}
+                              showTools={showTools}
+                              highlightMsgIdx={highlightMsgIdx}
+                              onReply={handleReply}
+                              onArtifactPopout={handleArtifactPopout}
+                              hasUnread={t.userIdx !== null && unreadThreadIdxs.has(t.userIdx)}
+                              agentName={activeAgent.name}
+                              verbosity={activeAgent.verbosity || DEFAULT_VERBOSITY}
+                            />
+                          );
+                        });
+                        return nodes;
+                      })()}
                       {error && (
-                        <div class="cos-error">{error}</div>
+                        <div class="cos-error">
+                          <span>{error}</span>
+                          <button
+                            type="button"
+                            class="cos-error-dismiss"
+                            onClick={() => { chiefOfStaffError.value = null; }}
+                            aria-label="Dismiss error"
+                          >
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                          </button>
+                        </div>
                       )}
+                    </div>
+
+                    <div class="cos-floating-actions" aria-hidden={!showScrollDown}>
+                      {showScrollDown && (
+                        <button
+                          type="button"
+                          class={`cos-scroll-down-btn${replyNotifs.length > 0 ? ' cos-scroll-down-btn-unread' : ''}`}
+                          onClick={() => scrollToBottom('smooth')}
+                          title={replyNotifs.length > 0 ? `${replyNotifs.length} new repl${replyNotifs.length === 1 ? 'y' : 'ies'} — scroll to latest` : 'Scroll to latest'}
+                          aria-label="Scroll to latest message"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M6 9l6 6 6-6" />
+                          </svg>
+                          {replyNotifs.length > 0 && (
+                            <span class="cos-scroll-down-badge" aria-hidden="true">{replyNotifs.length}</span>
+                          )}
+                        </button>
+                      )}
+                    </div>
                     </div>
 
                     {replyTo && (
@@ -1842,7 +3260,13 @@ export function ChiefOfStaffBubble({
                         <div class="cos-attach-strip">
                           {pendingAttachments.map((att) => (
                             <div class="cos-attach-thumb" key={att.id}>
-                              <img src={att.dataUrl} alt={att.name || 'attachment'} />
+                              <img
+                                src={att.dataUrl}
+                                alt={att.name || 'attachment'}
+                                style="cursor:pointer"
+                                title="Click to edit"
+                                onClick={() => setEditingAttachment({ id: att.id, dataUrl: att.dataUrl })}
+                              />
                               <button
                                 type="button"
                                 class="cos-attach-remove"
@@ -1908,7 +3332,7 @@ export function ChiefOfStaffBubble({
                           <button
                             type="button"
                             class="cos-tool-dropdown-toggle"
-                            onClick={(e) => { e.stopPropagation(); setPickerMenuOpen(false); setCameraMenuOpen((v) => !v); }}
+                            onClick={(e) => { e.stopPropagation(); setPickerMenuOpen(false); const r = cameraGroupRef.current?.getBoundingClientRect(); if (r) setCameraMenuPos({ top: r.top - 4, left: r.left }); setCameraMenuOpen((v) => !v); }}
                             title="Screenshot options"
                             aria-label="Screenshot options"
                             aria-expanded={cameraMenuOpen}
@@ -1916,7 +3340,7 @@ export function ChiefOfStaffBubble({
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z" /></svg>
                           </button>
                           {cameraMenuOpen && (
-                            <div class="cos-tool-menu">
+                            <div class="cos-tool-menu" style={cameraMenuPos ? { top: `${cameraMenuPos.top}px`, left: `${cameraMenuPos.left}px`, transform: 'translateY(-100%)' } : undefined}>
                               <label class="cos-tool-menu-item">
                                 <input
                                   type="checkbox"
@@ -1981,7 +3405,7 @@ export function ChiefOfStaffBubble({
                           <button
                             type="button"
                             class="cos-tool-dropdown-toggle"
-                            onClick={(e) => { e.stopPropagation(); setCameraMenuOpen(false); setPickerMenuOpen((v) => !v); }}
+                            onClick={(e) => { e.stopPropagation(); setCameraMenuOpen(false); const r = pickerGroupRef.current?.getBoundingClientRect(); if (r) setPickerMenuPos({ top: r.top - 4, left: r.left }); setPickerMenuOpen((v) => !v); }}
                             title="Picker options"
                             aria-label="Picker options"
                             aria-expanded={pickerMenuOpen}
@@ -1989,7 +3413,7 @@ export function ChiefOfStaffBubble({
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z" /></svg>
                           </button>
                           {pickerMenuOpen && (
-                            <div class="cos-tool-menu">
+                            <div class="cos-tool-menu" style={pickerMenuPos ? { top: `${pickerMenuPos.top}px`, left: `${pickerMenuPos.left}px`, transform: 'translateY(-100%)' } : undefined}>
                               <label class="cos-tool-menu-item">
                                 <input
                                   type="checkbox"
@@ -2018,31 +3442,42 @@ export function ChiefOfStaffBubble({
                           )}
                         </div>
                         <div class="cos-input-toolbar-spacer" />
-                        {inFlight > 0 && (
+                        {isAgentStreaming ? (
                           <button
                             class="cos-stop"
                             onClick={() => void interruptActiveAgent()}
-                            title="Stop (interrupt)"
-                            type="button"
+                            title="Stop (interrupt response)"
+                            aria-label="Interrupt current response"
                           >
-                            &#9632;
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                              <rect x="5" y="5" width="14" height="14" rx="2" />
+                            </svg>
+                          </button>
+                        ) : (
+                          <button
+                            class="cos-send"
+                            onClick={submit}
+                            disabled={!input.trim() && pendingAttachments.length === 0 && pendingElementRefs.length === 0}
+                            title="Send (Enter)"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                              <path d="M5 12l14-7-7 14-2-5z" />
+                            </svg>
                           </button>
                         )}
-                        <button
-                          class="cos-send"
-                          onClick={submit}
-                          disabled={!input.trim() && pendingAttachments.length === 0 && pendingElementRefs.length === 0}
-                          title="Send (Enter)"
-                        >
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M5 12l14-7-7 14-2-5z" />
-                          </svg>
-                        </button>
                       </div>
                     </div>
                   </div>
-                </>
-              )}
+                );
+                if (inPane) return chatPane;
+                return (
+                  <CosPopoutTreeView
+                    tree={_cosTree}
+                    chatContent={chatPane}
+                    learningsContent={<LearningsPanel onClose={() => cosToggleLearningsTab('left')} />}
+                  />
+                );
+              })())}
             </div>
           )}
 
@@ -2078,6 +3513,56 @@ export function ChiefOfStaffBubble({
           ))}
         </div>
       )}
+      {editingAttachment && (
+        <AttachmentEditorModal
+          dataUrl={editingAttachment.dataUrl}
+          onSave={(newDataUrl) => {
+            setPendingAttachments((prev) =>
+              prev.map((a) => a.id === editingAttachment!.id ? { ...a, dataUrl: newDataUrl } : a)
+            );
+            setEditingAttachment(null);
+          }}
+          onClose={() => setEditingAttachment(null)}
+        />
+      )}
     </>
+  );
+}
+
+function AttachmentEditorModal({ dataUrl, onSave, onClose }: { dataUrl: string; onSave: (newDataUrl: string) => void; onClose: () => void }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const editor = new ImageEditor({
+      container: containerRef.current,
+      image: dataUrl,
+      tools: ['highlight', 'crop'],
+      initialTool: 'highlight',
+      saveActions: [
+        {
+          label: 'Apply',
+          primary: true,
+          handler: (blob: Blob) => {
+            const reader = new FileReader();
+            reader.onload = () => onSave(reader.result as string);
+            reader.readAsDataURL(blob);
+          },
+        },
+      ],
+      onCancel: onClose,
+    });
+    return () => editor.destroy();
+  }, [dataUrl]);
+
+  return (
+    <div
+      style="position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div style="background:var(--cos-bg,#1a1a2e);border-radius:8px;padding:12px;max-width:90vw;max-height:90vh;overflow:auto;min-width:400px">
+        <div ref={containerRef} style="display:flex;flex-direction:column;align-items:center;width:100%" />
+      </div>
+    </div>
   );
 }

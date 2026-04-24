@@ -24,6 +24,7 @@ import { spawnAgentSession } from './agent-sessions.js';
 import { getLauncher, addSessionToLauncher, sendAndWait } from './launcher-registry.js';
 import { feedbackEvents } from './events.js';
 import { getSession } from './sessions.js';
+import { inputSessionRemote } from './session-service-client.js';
 import { extractArtifactPaths, exportSessionFiles } from './jsonl-utils.js';
 import { launchSpriteSession } from './sprite-sessions.js';
 
@@ -67,6 +68,73 @@ App description: {{app.description}}
 {{feedback.networkErrors}}
 {{feedback.data}}
 {{instructions}}`;
+
+const AUTO_CONTINUE_TEXT = 'continue';
+const AUTO_CONTINUE_INITIAL_DELAY_MS = 1200;
+const AUTO_CONTINUE_RETRY_MS = 1000;
+const AUTO_CONTINUE_MAX_ATTEMPTS = 12;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function sendKeysToSession(sessionId: string, launcherId: string | null | undefined, keys: string, enter = true): Promise<boolean> {
+  if (launcherId) {
+    const launcher = getLauncher(launcherId);
+    if (launcher && !launcher.isLocal && launcher.ws.readyState === 1) {
+      const reqId = ulid();
+      const result = await sendAndWait(launcherId, {
+        type: 'send_keys',
+        sessionId: reqId,
+        targetSessionId: sessionId,
+        keys,
+        enter,
+      }, 'send_keys_result', 5_000) as { ok?: boolean };
+      return !!result.ok;
+    }
+  }
+
+  await inputSessionRemote(sessionId, keys + (enter ? '\r' : ''));
+  return true;
+}
+
+function scheduleAutoContinueForYoloResume(sessionId: string, launcherId: string | null | undefined): void {
+  setTimeout(() => {
+    void (async () => {
+      for (let attempt = 1; attempt <= AUTO_CONTINUE_MAX_ATTEMPTS; attempt++) {
+        const session = db
+          .select({ status: schema.agentSessions.status })
+          .from(schema.agentSessions)
+          .where(eq(schema.agentSessions.id, sessionId))
+          .get();
+
+        if (!session) return;
+        if (session.status === 'completed' || session.status === 'failed' || session.status === 'killed' || session.status === 'deleted') {
+          return;
+        }
+        if (session.status !== 'running') {
+          await sleep(AUTO_CONTINUE_RETRY_MS);
+          continue;
+        }
+
+        try {
+          const ok = await sendKeysToSession(sessionId, launcherId, AUTO_CONTINUE_TEXT, true);
+          if (ok) {
+            console.log(`[dispatch] Auto-sent "${AUTO_CONTINUE_TEXT}" to resumed yolo session ${sessionId}`);
+            return;
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[dispatch] Auto-continue attempt ${attempt}/${AUTO_CONTINUE_MAX_ATTEMPTS} failed for ${sessionId}: ${msg}`);
+        }
+
+        await sleep(AUTO_CONTINUE_RETRY_MS);
+      }
+
+      console.warn(`[dispatch] Gave up auto-sending "${AUTO_CONTINUE_TEXT}" to resumed yolo session ${sessionId}`);
+    })();
+  }, AUTO_CONTINUE_INITIAL_DELAY_MS);
+}
 
 export function renderPromptTemplate(
   template: string,
@@ -141,8 +209,9 @@ export async function dispatchFeedbackToAgent(params: {
   instructions?: string;
   launcherId?: string;
   harnessConfigId?: string;
+  permissionProfile?: PermissionProfile;
 }): Promise<{ dispatched: boolean; sessionId?: string; status: number; response: string; existing?: boolean }> {
-  const { feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId: explicitHarnessConfigId } = params;
+  const { feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId: explicitHarnessConfigId, permissionProfile: overrideProfile } = params;
 
   const [feedback, agent] = await Promise.all([
     db.query.feedbackItems.findFirst({
@@ -233,8 +302,8 @@ export async function dispatchFeedbackToAgent(params: {
     const cwd = app?.projectDir || process.cwd();
     const isHarness = !!(explicitHarnessConfigId || agent.harnessConfigId);
     const permissionProfile: PermissionProfile = isHarness
-      ? 'yolo'
-      : (agent.permissionProfile || 'interactive') as PermissionProfile;
+      ? 'headless-yolo'
+      : (overrideProfile || agent.permissionProfile || 'interactive-require') as PermissionProfile;
 
     const template = agent.promptTemplate || DEFAULT_PROMPT_TEMPLATE;
     const prompt = renderPromptTemplate(template, hydratedFeedback, app, instructions);
@@ -508,6 +577,7 @@ export async function dispatchAgentSession(params: {
       id: sessionId,
       feedbackId: params.feedbackId,
       agentEndpointId: params.agentEndpointId,
+      runtime,
       permissionProfile: params.permissionProfile,
       status: 'pending',
       outputBytes: 0,
@@ -613,6 +683,7 @@ export async function dispatchTerminalSession(params: {
       id: sessionId,
       feedbackId: null,
       agentEndpointId: null,
+      runtime: 'claude',
       permissionProfile: profile,
       status: 'pending',
       outputBytes: 0,
@@ -667,6 +738,7 @@ export async function dispatchCompanionTerminal(params: {
       id: sessionId,
       feedbackId: null,
       agentEndpointId: null,
+      runtime: 'claude',
       permissionProfile: 'plain',
       parentSessionId: params.parentSessionId,
       status: 'pending',
@@ -681,7 +753,13 @@ export async function dispatchCompanionTerminal(params: {
   return { sessionId };
 }
 
-export async function resumeAgentSession(parentSessionId: string, targetLauncherId?: string | null, overridePermissionProfile?: PermissionProfile | null, additionalPrompt?: string | null): Promise<{ sessionId: string }> {
+export async function resumeAgentSession(
+  parentSessionId: string,
+  targetLauncherId?: string | null,
+  overridePermissionProfile?: PermissionProfile | null,
+  additionalPrompt?: string | null,
+  overrideRuntime?: AgentRuntime | null,
+): Promise<{ sessionId: string }> {
   const parent = db
     .select()
     .from(schema.agentSessions)
@@ -762,22 +840,38 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
   }
 
   const launcher = resolvedLauncherId ? getLauncher(resolvedLauncherId) : undefined;
-  const runtime = (agent.runtime || 'claude') as AgentRuntime;
+  const runtime = (overrideRuntime || parent.runtime || agent.runtime || 'claude') as AgentRuntime;
 
   const sessionId = ulid();
   const now = new Date().toISOString();
 
-  // Inherit parent's permission profile by default; allow explicit override (e.g. restart-as)
-  const permissionProfile: PermissionProfile = overridePermissionProfile || parent.permissionProfile as PermissionProfile;
+  // Plain Resume inherits the parent's profile (so --dangerously-skip-permissions sticks across
+  // resumes). "Restart as ..." via the SessionIdMenu sends an explicit overridePermissionProfile
+  // — that's the user's intentional opt-out, so we honor it as-is.
+  //
+  // Belt-and-suspenders: if the parent ran with skip-permissions (any *-yolo
+  // profile) and the inherited profile somehow comes out as a -require variant
+  // (e.g. an old row, an upstream bug, or a missing-default), promote to
+  // interactive-yolo so we never silently weaken permissions on a plain
+  // resume. This only fires when there is NO explicit override.
+  const PARENT_HAD_SKIP_FLAG = typeof parent.permissionProfile === 'string'
+    && parent.permissionProfile.endsWith('-yolo');
+  let permissionProfile: PermissionProfile = overridePermissionProfile || parent.permissionProfile as PermissionProfile;
+  if (!overridePermissionProfile && PARENT_HAD_SKIP_FLAG && permissionProfile === 'interactive-require') {
+    console.log(`[dispatch] Resume of ${parentSessionId} (parent profile=${parent.permissionProfile}): preserving --dangerously-skip-permissions by promoting interactive-require → interactive-yolo`);
+    permissionProfile = 'interactive-yolo';
+  }
+  const shouldAutoContinue = runtime === 'claude' && parent.runtime === 'claude' && !!parent.claudeSessionId && permissionProfile === 'interactive-yolo';
 
   // If parent has a Claude session ID, use --resume for full context restoration
-  if (runtime === 'claude' && parent.claudeSessionId) {
+  if (runtime === 'claude' && parent.runtime === 'claude' && parent.claudeSessionId) {
     db.insert(schema.agentSessions)
       .values({
         id: sessionId,
         feedbackId: parent.feedbackId,
         agentEndpointId: parent.agentEndpointId,
         parentSessionId,
+        runtime,
         permissionProfile,
         status: 'pending',
         outputBytes: 0,
@@ -806,6 +900,7 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
         launcher.ws.send(JSON.stringify(msg));
         addSessionToLauncher(launcher.id, sessionId);
         console.log(`[dispatch] Sent resume session ${sessionId} to launcher ${launcher.id}${resumePrompt ? ' (with additional prompt)' : ''}`);
+        if (shouldAutoContinue) scheduleAutoContinueForYoloResume(sessionId, launcher.id);
       } catch (err) {
         console.error(`[dispatch] Failed to send resume to launcher, falling back to local:`, err);
         spawnLocal(sessionId, {
@@ -815,6 +910,7 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
           permissionProfile,
           resumeSessionId: parent.claudeSessionId,
         }).catch(() => {});
+        if (shouldAutoContinue) scheduleAutoContinueForYoloResume(sessionId, null);
       }
     } else {
       spawnLocal(sessionId, {
@@ -824,13 +920,14 @@ export async function resumeAgentSession(parentSessionId: string, targetLauncher
         permissionProfile,
         resumeSessionId: parent.claudeSessionId,
       }).catch(() => {});
+      if (shouldAutoContinue) scheduleAutoContinueForYoloResume(sessionId, null);
     }
 
     return { sessionId };
   }
 
   // Legacy fallback: no stored Claude session ID, use context-dump approach
-  const claudeSessionId = crypto.randomUUID();
+  const claudeSessionId = runtime === 'claude' ? crypto.randomUUID() : null;
   const publicBaseUrl = (process.env.PW_PUBLIC_BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
   const originalPrompt = `Feedback: ${publicBaseUrl}/api/v1/admin/feedback/${parent.feedbackId}\n\nTitle: ${feedbackRow.title}${feedbackRow.description ? `\nDescription: ${feedbackRow.description}` : ''}`;
 
@@ -861,10 +958,11 @@ IMPORTANT: The previous session may have made partial progress. Check the curren
       feedbackId: parent.feedbackId,
       agentEndpointId: parent.agentEndpointId,
       parentSessionId,
+      runtime,
       permissionProfile,
       status: 'pending',
       outputBytes: 0,
-      claudeSessionId,
+      claudeSessionId: claudeSessionId || null,
       launcherId: launcher ? launcher.id : null,
       cwd,
       createdAt: now,
@@ -879,7 +977,7 @@ IMPORTANT: The previous session may have made partial progress. Check the curren
       cwd,
       runtime,
       permissionProfile,
-      claudeSessionId,
+      claudeSessionId: claudeSessionId || undefined,
       cols: 120,
       rows: 40,
     };
@@ -888,10 +986,10 @@ IMPORTANT: The previous session may have made partial progress. Check the curren
       addSessionToLauncher(launcher.id, sessionId);
     } catch (err) {
       console.error(`[dispatch] Failed to send to launcher, falling back to local:`, err);
-      spawnLocal(sessionId, { prompt: resumePrompt, cwd, runtime, permissionProfile, claudeSessionId }).catch(() => {});
+      spawnLocal(sessionId, { prompt: resumePrompt, cwd, runtime, permissionProfile, claudeSessionId: claudeSessionId || undefined }).catch(() => {});
     }
   } else {
-    spawnLocal(sessionId, { prompt: resumePrompt, cwd, runtime, permissionProfile, claudeSessionId }).catch(() => {});
+    spawnLocal(sessionId, { prompt: resumePrompt, cwd, runtime, permissionProfile, claudeSessionId: claudeSessionId || undefined }).catch(() => {});
   }
 
   return { sessionId };
@@ -939,6 +1037,7 @@ export async function dispatchHarnessSession(params: {
       id: sessionId,
       feedbackId: params.feedbackId || null,
       agentEndpointId: params.agentEndpointId || null,
+      runtime,
       permissionProfile: params.permissionProfile,
       status: 'pending',
       outputBytes: 0,
@@ -1253,11 +1352,13 @@ function buildSpriteCommandArgs(params: {
 }): string[] {
   const runtime = params.runtime || 'claude';
 
+  const profile = params.permissionProfile;
+  const skipPerms = profile.endsWith('-yolo');
+  const isStream = profile === 'headless-stream-yolo' || profile === 'headless-stream-require';
+
   if (runtime === 'codex') {
     const cmdArgs = ['codex'];
-    if (params.permissionProfile === 'auto') {
-      cmdArgs.push('--full-auto');
-    } else if (params.permissionProfile === 'yolo' || params.permissionProfile === 'interactive-yolo') {
+    if (skipPerms) {
       cmdArgs.push('--dangerously-bypass-approvals-and-sandbox');
     }
     if (params.cwd) {
@@ -1270,10 +1371,13 @@ function buildSpriteCommandArgs(params: {
   }
 
   const cmdArgs = ['claude'];
-  if (params.permissionProfile === 'yolo' || params.permissionProfile === 'interactive-yolo') {
+  if (skipPerms) {
     cmdArgs.push('--dangerously-skip-permissions');
   }
-  if (params.prompt) {
+  if (isStream) {
+    cmdArgs.push('--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages', '--verbose');
+    if (params.prompt) cmdArgs.push(params.prompt);
+  } else if (params.prompt) {
     cmdArgs.push('-p', params.prompt);
   }
   if (params.cwd) {
@@ -1303,6 +1407,7 @@ async function dispatchSpriteSession(params: {
       id: params.sessionId,
       feedbackId: params.feedbackId,
       agentEndpointId: params.agentEndpointId,
+      runtime: params.runtime || 'claude',
       permissionProfile: params.permissionProfile,
       status: 'pending',
       outputBytes: 0,
@@ -1347,7 +1452,7 @@ export async function dispatchDirectSpriteSession(params: {
 
   const sessionId = ulid();
   const now = new Date().toISOString();
-  const profile = params.permissionProfile || 'interactive';
+  const profile = params.permissionProfile || 'interactive-require';
   const runtime = params.runtime || 'claude';
 
   db.insert(schema.agentSessions)
@@ -1355,6 +1460,7 @@ export async function dispatchDirectSpriteSession(params: {
       id: sessionId,
       feedbackId: null,
       agentEndpointId: null,
+      runtime,
       permissionProfile: profile,
       status: 'pending',
       outputBytes: 0,

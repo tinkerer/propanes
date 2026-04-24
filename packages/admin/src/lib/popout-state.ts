@@ -11,6 +11,7 @@ import {
   panelHeight,
   exitedSessions,
   popInPickerSessionId,
+  popInPickerPanelId,
   persistTabs,
   persistPanelState,
   persistSplitState,
@@ -32,6 +33,7 @@ import {
   getTerminalCompanion,
 } from './companion-state.js';
 import {
+  findLeaf,
   findLeafWithTab,
   addTabToLeaf,
   removeTabFromLeaf,
@@ -41,6 +43,7 @@ import {
   SESSIONS_LEAF_ID,
   showSessionsLeaf,
   batch as batchTreeOps,
+  layoutTree,
 } from './pane-tree.js';
 
 // --- Autojump Constants ---
@@ -175,6 +178,9 @@ export interface PopoutPanelState {
   splitRatio?: number;
   rightPaneTabs?: string[];
   rightPaneActiveId?: string | null;
+  splitCollapsed?: boolean;
+  splitCollapsedOffset?: number;
+  splitEdge?: 'N' | 'S' | 'E' | 'W';
   autoOpened?: boolean;
   maximized?: boolean;
   preMaximizeRect?: { x: number; y: number; w: number; h: number };
@@ -256,6 +262,15 @@ export function bringToFront(panelId: string) {
   panelZCounter++;
   const map = new Map(panelZOrders.value);
   map.set(panelId, panelZCounter);
+  // Keep the counter bounded so getPanelZIndex can't drift above the modal
+  // overlay stack (see .modal-overlay at z-index 10000). Re-rank panels by
+  // their relative order and reset the counter when it climbs too high.
+  if (panelZCounter > 1000) {
+    const ranked = [...map.entries()].sort((a, b) => a[1] - b[1]);
+    map.clear();
+    ranked.forEach(([id], i) => map.set(id, i + 1));
+    panelZCounter = ranked.length;
+  }
   panelZOrders.value = map;
   pushPaneMru({ type: 'panel', panelId });
   requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
@@ -471,9 +486,146 @@ export function popOutTab(sessionId: string) {
   nudgeResize();
 }
 
+export function popOutLeafAsPanel(leafId: string) {
+  const leaf = findLeaf(layoutTree.value.root, leafId);
+  if (!leaf || leaf.tabs.length === 0) return;
+  const sessionIds = [...leaf.tabs];
+  const activeSessionId = leaf.activeTabId || sessionIds[0];
+
+  batchTreeOps(() => {
+    for (let i = 0; i < sessionIds.length; i++) {
+      // Let the last removal auto-merge the now-empty source leaf so the
+      // pane goes away instead of leaving an empty leaf behind.
+      const isLast = i === sessionIds.length - 1;
+      removeTabFromLeaf(leafId, sessionIds[i], isLast);
+    }
+  });
+
+  const sessionSet = new Set(sessionIds);
+  openTabs.value = openTabs.value.filter((id) => !sessionSet.has(id));
+  if (activeTabId.value && sessionSet.has(activeTabId.value)) {
+    activeTabId.value = openTabs.value.length > 0 ? openTabs.value[openTabs.value.length - 1] : null;
+  }
+  if (splitEnabled.value) {
+    const remainingRight = rightPaneTabs.value.filter((id) => !sessionSet.has(id));
+    if (remainingRight.length !== rightPaneTabs.value.length) {
+      rightPaneTabs.value = remainingRight;
+      if (rightPaneActiveId.value && sessionSet.has(rightPaneActiveId.value)) {
+        rightPaneActiveId.value = remainingRight.length > 0 ? remainingRight[remainingRight.length - 1] : null;
+      }
+      if (remainingRight.length === 0) splitEnabled.value = false;
+      persistSplitState();
+    }
+  }
+
+  const panel: PopoutPanelState = {
+    id: 'p-' + Math.random().toString(36).slice(2, 8),
+    sessionIds,
+    activeSessionId,
+    docked: true,
+    visible: true,
+    floatingRect: { x: 200, y: 100, w: 700, h: 500 },
+    dockedHeight: 400,
+    dockedWidth: 500,
+  };
+  popoutPanels.value = [...popoutPanels.value, panel];
+  persistTabs();
+  persistPopoutState();
+  nudgeResize();
+}
+
 export function popBackIn(sessionId: string) {
   if (!sessionId) return;
+  popInPickerPanelId.value = null;
   popInPickerSessionId.value = sessionId;
+}
+
+export function popBackInPanel(panelId: string) {
+  if (!panelId) return;
+  const panel = popoutPanels.value.find((p) => p.id === panelId);
+  if (!panel || panel.sessionIds.length === 0) return;
+  popInPickerSessionId.value = null;
+  popInPickerPanelId.value = panelId;
+}
+
+export function popBackInPanelToLeaf(panelId: string, leafId: string) {
+  const panel = popoutPanels.value.find((p) => p.id === panelId);
+  if (!panel) return;
+  const sessionIds = [...panel.sessionIds];
+  const panelRightTabs = [...(panel.rightPaneTabs || [])];
+  const panelRightActive = panel.rightPaneActiveId ?? null;
+  const panelWasSplit = !!panel.splitEnabled;
+  const panelSplitRatio = panel.splitRatio ?? 0.5;
+  const activeSessionId = panel.activeSessionId || sessionIds[0];
+
+  removePanel(panelId);
+
+  const existing = new Set(openTabs.value);
+  const nextOpen = [...openTabs.value];
+  for (const sid of sessionIds) {
+    if (!existing.has(sid)) nextOpen.push(sid);
+  }
+  for (const rpt of panelRightTabs) {
+    if (!nextOpen.includes(rpt)) nextOpen.push(rpt);
+  }
+  openTabs.value = nextOpen;
+  activeTabId.value = activeSessionId;
+  panelMinimized.value = false;
+
+  batchTreeOps(() => {
+    for (const sid of sessionIds) {
+      addTabToLeaf(leafId, sid, sid === activeSessionId);
+    }
+    if (panelRightTabs.length > 0) {
+      if (panelWasSplit) {
+        // Preserve the split: companions go in a sibling leaf, with the
+        // previously active right tab first so splitLeaf activates it.
+        const ordered = panelRightActive && panelRightTabs.includes(panelRightActive)
+          ? [panelRightActive, ...panelRightTabs.filter((t) => t !== panelRightActive)]
+          : panelRightTabs;
+        splitLeaf(leafId, 'horizontal', 'second', ordered, panelSplitRatio);
+      } else {
+        for (const rpt of panelRightTabs) {
+          addTabToLeaf(leafId, rpt, false);
+        }
+      }
+    }
+    if (leafId === SESSIONS_LEAF_ID) showSessionsLeaf();
+  });
+
+  persistTabs();
+  persistPopoutState();
+  persistPanelState();
+  nudgeResize();
+}
+
+export function popBackInPanelToLeafWithSplit(panelId: string, leafId: string, direction: 'horizontal' | 'vertical') {
+  const panel = popoutPanels.value.find((p) => p.id === panelId);
+  if (!panel) return;
+  const sessionIds = [...panel.sessionIds];
+  const panelRightTabs = [...(panel.rightPaneTabs || [])];
+  const activeSessionId = panel.activeSessionId || sessionIds[0];
+
+  removePanel(panelId);
+
+  const existing = new Set(openTabs.value);
+  const nextOpen = [...openTabs.value];
+  for (const sid of sessionIds) {
+    if (!existing.has(sid)) nextOpen.push(sid);
+  }
+  for (const rpt of panelRightTabs) {
+    if (!nextOpen.includes(rpt)) nextOpen.push(rpt);
+  }
+  openTabs.value = nextOpen;
+  activeTabId.value = activeSessionId;
+  panelMinimized.value = false;
+
+  splitLeaf(leafId, direction, 'second', [...sessionIds, ...panelRightTabs]);
+
+  persistTabs();
+  persistPopoutState();
+  persistPanelState();
+  nudgeResize();
 }
 
 export function popBackInToLeaf(sessionId: string, leafId: string) {
@@ -481,9 +633,19 @@ export function popBackInToLeaf(sessionId: string, leafId: string) {
   const panel = findPanelForSession(sessionId);
   const isAutoJump = panel?.id === AUTOJUMP_PANEL_ID;
   if (isAutoJump) saveAutoJumpDimsForActiveSession();
+  // When popping the last session out of a panel the panel is removed, and we
+  // need to carry its companion tabs along so they don't get orphaned.
+  let carriedRightTabs: string[] = [];
+  let carriedRightActive: string | null = null;
+  let carriedWasSplit = false;
+  let carriedSplitRatio = 0.5;
   if (panel) {
     const remaining = panel.sessionIds.filter((id) => id !== sessionId);
     if (remaining.length === 0) {
+      carriedRightTabs = [...(panel.rightPaneTabs || [])];
+      carriedRightActive = panel.rightPaneActiveId ?? null;
+      carriedWasSplit = !!panel.splitEnabled;
+      carriedSplitRatio = panel.splitRatio ?? 0.5;
       removePanel(panel.id);
     } else {
       updatePanel(panel.id, {
@@ -497,12 +659,27 @@ export function popBackInToLeaf(sessionId: string, leafId: string) {
   if (!openTabs.value.includes(sessionId)) {
     openTabs.value = [...openTabs.value, sessionId];
   }
+  for (const rpt of carriedRightTabs) {
+    if (!openTabs.value.includes(rpt)) openTabs.value = [...openTabs.value, rpt];
+  }
   activeTabId.value = sessionId;
   panelMinimized.value = false;
   if (isAutoJump) transferAutoJumpToGlobalPanel(sessionId);
 
   batchTreeOps(() => {
     addTabToLeaf(leafId, sessionId, true);
+    if (carriedRightTabs.length > 0) {
+      if (carriedWasSplit) {
+        const ordered = carriedRightActive && carriedRightTabs.includes(carriedRightActive)
+          ? [carriedRightActive, ...carriedRightTabs.filter((t) => t !== carriedRightActive)]
+          : carriedRightTabs;
+        splitLeaf(leafId, 'horizontal', 'second', ordered, carriedSplitRatio);
+      } else {
+        for (const rpt of carriedRightTabs) {
+          addTabToLeaf(leafId, rpt, false);
+        }
+      }
+    }
     if (leafId === SESSIONS_LEAF_ID) showSessionsLeaf();
   });
 
@@ -517,9 +694,11 @@ export function popBackInToLeafWithSplit(sessionId: string, leafId: string, dire
   const panel = findPanelForSession(sessionId);
   const isAutoJump = panel?.id === AUTOJUMP_PANEL_ID;
   if (isAutoJump) saveAutoJumpDimsForActiveSession();
+  let carriedRightTabs: string[] = [];
   if (panel) {
     const remaining = panel.sessionIds.filter((id) => id !== sessionId);
     if (remaining.length === 0) {
+      carriedRightTabs = [...(panel.rightPaneTabs || [])];
       removePanel(panel.id);
     } else {
       updatePanel(panel.id, {
@@ -533,11 +712,14 @@ export function popBackInToLeafWithSplit(sessionId: string, leafId: string, dire
   if (!openTabs.value.includes(sessionId)) {
     openTabs.value = [...openTabs.value, sessionId];
   }
+  for (const rpt of carriedRightTabs) {
+    if (!openTabs.value.includes(rpt)) openTabs.value = [...openTabs.value, rpt];
+  }
   activeTabId.value = sessionId;
   panelMinimized.value = false;
   if (isAutoJump) transferAutoJumpToGlobalPanel(sessionId);
 
-  splitLeaf(leafId, direction, 'second', [sessionId]);
+  splitLeaf(leafId, direction, 'second', [sessionId, ...carriedRightTabs]);
 
   persistTabs();
   persistPopoutState();
@@ -547,13 +729,22 @@ export function popBackInToLeafWithSplit(sessionId: string, leafId: string, dire
 
 export function popBackInAll() {
   const allIds: string[] = [];
+  const allRightTabs: string[] = [];
   for (const panel of popoutPanels.value) {
     allIds.push(...panel.sessionIds);
+    for (const rpt of panel.rightPaneTabs || []) {
+      if (!allRightTabs.includes(rpt)) allRightTabs.push(rpt);
+    }
   }
   popoutPanels.value = [];
   for (const sid of allIds) {
     if (!openTabs.value.includes(sid)) {
       openTabs.value = [...openTabs.value, sid];
+    }
+  }
+  for (const rpt of allRightTabs) {
+    if (!openTabs.value.includes(rpt)) {
+      openTabs.value = [...openTabs.value, rpt];
     }
   }
   if (allIds.length > 0) activeTabId.value = allIds[allIds.length - 1];
@@ -563,6 +754,9 @@ export function popBackInAll() {
     const leafId = ensureSessionsLeaf();
     for (const sid of allIds) {
       addTabToLeaf(leafId, sid, false);
+    }
+    for (const rpt of allRightTabs) {
+      addTabToLeaf(leafId, rpt, false);
     }
     if (allIds.length > 0) {
       addTabToLeaf(leafId, allIds[allIds.length - 1], true);
@@ -605,6 +799,24 @@ export function moveSessionToPanel(sessionId: string, targetPanelId: string) {
     });
   }
   persistTabs();
+  persistPopoutState();
+  nudgeResize();
+}
+
+export function removeSessionFromPanel(sessionId: string) {
+  const srcPanel = findPanelForSession(sessionId);
+  if (!srcPanel) return;
+  const remaining = srcPanel.sessionIds.filter((id) => id !== sessionId);
+  if (remaining.length === 0) {
+    removePanel(srcPanel.id);
+  } else {
+    updatePanel(srcPanel.id, {
+      sessionIds: remaining,
+      activeSessionId: srcPanel.activeSessionId === sessionId
+        ? remaining[remaining.length - 1]
+        : srcPanel.activeSessionId,
+    });
+  }
   persistPopoutState();
   nudgeResize();
 }

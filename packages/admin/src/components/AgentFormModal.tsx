@@ -20,7 +20,7 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
   const [formMode, setFormMode] = useState<'webhook' | 'headless' | 'interactive'>(editAgent?.mode || 'interactive');
   const [formRuntime, setFormRuntime] = useState<'claude' | 'codex'>(editAgent?.runtime || 'claude');
   const [formPromptTemplate, setFormPromptTemplate] = useState(editAgent?.promptTemplate || DEFAULT_PROMPT_TEMPLATE);
-  const [formPermissionProfile, setFormPermissionProfile] = useState<'interactive' | 'auto' | 'yolo'>(editAgent?.permissionProfile || 'interactive');
+  const [formPermissionProfile, setFormPermissionProfile] = useState<'interactive-require' | 'interactive-yolo' | 'headless-yolo' | 'headless-stream-yolo' | 'headless-stream-require'>(editAgent?.permissionProfile || 'interactive-require');
   const [formAllowedTools, setFormAllowedTools] = useState(editAgent?.allowedTools || '');
   const [formAutoPlan, setFormAutoPlan] = useState(editAgent?.autoPlan || false);
   const [formError, setFormError] = useState('');
@@ -117,7 +117,7 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
           <div class="form-group">
             <label>Permission Level</label>
             <div class="permission-grid">
-              {(['interactive', 'auto', 'yolo'] as const).map((p) => {
+              {(['interactive-require', 'interactive-yolo', 'headless-yolo', 'headless-stream-yolo', 'headless-stream-require'] as const).map((p) => {
                 const info = PROFILE_DESCRIPTIONS[p];
                 const selected = formPermissionProfile === p;
                 return (
@@ -137,15 +137,15 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
                 );
               })}
             </div>
-            {formPermissionProfile === 'yolo' && (
+            {(formPermissionProfile === 'interactive-yolo' || formPermissionProfile === 'headless-yolo' || formPermissionProfile === 'headless-stream-yolo') && (
               <div class="permission-warning">
-                Full Auto skips ALL permission checks. Only use in sandboxed/Docker environments.
+                This profile skips ALL permission checks. Only use in sandboxed/Docker environments.
               </div>
             )}
           </div>
         )}
 
-        {formMode !== 'webhook' && formPermissionProfile !== 'yolo' && (
+        {formMode !== 'webhook' && formPermissionProfile === 'interactive-require' && (
           <div class="form-group">
             <label style="display:flex;align-items:center;gap:8px">
               Allowed Tools
@@ -185,9 +185,7 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
               style="width:100%;min-height:60px;font-family:'SF Mono',Monaco,Menlo,monospace;font-size:12px"
             />
             <span class="form-hint">
-              {formPermissionProfile === 'interactive'
-                ? 'Pre-approved tools that won\'t require manual approval'
-                : 'Comma-separated list of tools for --allowedTools'}
+              Pre-approved tools that won't require manual approval
             </span>
           </div>
         )}
@@ -275,7 +273,7 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
                         setFormPromptTemplate(tmpl);
                         if (preset.label === 'Meta-Wiggum (Orchestrator)') {
                           setFormMode('headless');
-                          setFormPermissionProfile('auto');
+                          setFormPermissionProfile('headless-yolo');
                           const metaTools = 'Bash, Read, Write, Glob, Grep';
                           const current = formAllowedTools.trim();
                           if (!current) {

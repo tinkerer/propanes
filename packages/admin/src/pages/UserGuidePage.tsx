@@ -55,12 +55,12 @@ export function UserGuidePage() {
       icon: '\u{1F680}',
       content: () => (
         <div class="guide-section-body">
-          <p>ProPanes is your admin dashboard for managing user feedback, dispatching agent sessions, and monitoring live connections. Now you&apos;re cooking with gases.</p>
+          <p>ProPanes is your admin dashboard for managing user tickets, dispatching agent sessions, and monitoring live connections. Now you&apos;re cooking with gases.</p>
           <ul>
             <li><strong>Register an app</strong> &mdash; Click the + button in the sidebar under "Apps" to register your first application.</li>
-            <li><strong>Embed the widget</strong> &mdash; Add the feedback overlay to your site with a script tag or the bookmarklet (drag the bookmark icon from the sidebar header).</li>
-            <li><strong>Configure an agent</strong> &mdash; Go to Agents to set up an endpoint that processes feedback items.</li>
-            <li><strong>Submit feedback</strong> &mdash; Use the widget on your site or submit programmatically via the API.</li>
+            <li><strong>Embed the widget</strong> &mdash; Add the ticket overlay to your site with a script tag or the bookmarklet (drag the bookmark icon from the sidebar header).</li>
+            <li><strong>Configure an agent</strong> &mdash; Go to Agents to set up an endpoint that processes tickets.</li>
+            <li><strong>Submit a ticket</strong> &mdash; Use the widget on your site or submit programmatically via the API.</li>
           </ul>
           <TourButton guideId="welcome-tour" onStart={setActiveGuide} />
         </div>
@@ -74,7 +74,7 @@ export function UserGuidePage() {
         <div class="guide-section-body">
           <p>The sidebar lists your apps and their sub-pages. Settings are at the bottom.</p>
           <ul>
-            <li><strong>App sub-pages</strong> &mdash; Feedback, Aggregate, Sessions, Live, and per-app Settings.</li>
+            <li><strong>App sub-pages</strong> &mdash; Tickets, Aggregate, Sessions, Live, and per-app Settings.</li>
             <li><strong>Ctrl+Shift+Left/Right</strong> &mdash; Cycle between sub-pages within an app, or between settings pages.</li>
             <li><strong>Ctrl+\</strong> &mdash; Toggle the sidebar collapsed/expanded.</li>
             <li><strong>Session drawer</strong> &mdash; The bottom of the sidebar shows active agent sessions. Click to expand.</li>
@@ -112,16 +112,16 @@ export function UserGuidePage() {
     },
     {
       id: 'feedback-workflow',
-      title: 'Feedback Workflow',
+      title: 'Ticket Workflow',
       icon: '\u{1F4CB}',
       content: () => (
         <div class="guide-section-body">
-          <p>Feedback items flow through statuses: <strong>new</strong> &rarr; <strong>dispatched</strong> &rarr; <strong>resolved</strong> (or archived).</p>
+          <p>Tickets flow through statuses: <strong>new</strong> &rarr; <strong>dispatched</strong> &rarr; <strong>resolved</strong> (or archived).</p>
           <ul>
-            <li><strong>Quick dispatch</strong> &mdash; Click the play button on a feedback row to dispatch to the default agent.</li>
-            <li><strong>Batch actions</strong> &mdash; Select items with checkboxes and use the toolbar for bulk dispatch, status changes, or deletion.</li>
-            <li><strong>Filters</strong> &mdash; Filter by status, type, or tags using the bar at the top of the feedback list.</li>
-            <li><strong>Detail view</strong> &mdash; Click a feedback item to see its full content, screenshots, and associated sessions.</li>
+            <li><strong>Quick dispatch</strong> &mdash; Click the play button on a ticket row to dispatch to the default agent.</li>
+            <li><strong>Batch actions</strong> &mdash; Select tickets with checkboxes and use the toolbar for bulk dispatch, status changes, or deletion.</li>
+            <li><strong>Filters</strong> &mdash; Filter by status, type, or tags using the bar at the top of the ticket list.</li>
+            <li><strong>Detail view</strong> &mdash; Click a ticket to see its full content, screenshots, and associated sessions.</li>
             <li><strong>Dispatch dialog</strong> &mdash; Choose agent, model, and target machine when dispatching manually.</li>
           </ul>
           <TourButton guideId="feedback-workflow" onStart={setActiveGuide} />
@@ -134,7 +134,7 @@ export function UserGuidePage() {
       icon: '\u{1F4BB}',
       content: () => (
         <div class="guide-section-body">
-          <p>When feedback is dispatched, an agent session is created. Sessions appear in the terminal panel at the bottom.</p>
+          <p>When a ticket is dispatched, an agent session is created. Sessions appear in the terminal panel at the bottom.</p>
           <ul>
             <li><strong>Terminal panel</strong> &mdash; Toggle with Ctrl+Shift+Space. Resize by dragging the top edge.</li>
             <li><strong>Tab bar</strong> &mdash; Each session gets a numbered tab. Use Ctrl+Shift+1-9 to jump to tabs.</li>

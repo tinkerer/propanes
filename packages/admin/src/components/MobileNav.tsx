@@ -1,6 +1,6 @@
 import { currentRoute, navigate, selectedAppId } from '../lib/state.js';
 
-type TabKey = 'feedback' | 'sessions' | 'live' | 'settings';
+type TabKey = 'tickets' | 'sessions' | 'live' | 'settings';
 
 function pathFor(tab: TabKey, appId: string | null): string {
   if (!appId) {
@@ -11,8 +11,8 @@ function pathFor(tab: TabKey, appId: string | null): string {
 }
 
 function activeTab(route: string): TabKey | null {
-  const m = route.match(/^\/app\/[^/]+\/(feedback|sessions|live|settings)(\/|$)/);
-  if (m) return m[1] as TabKey;
+  const m = route.match(/^\/app\/[^/]+\/(tickets|feedback|sessions|live|settings)(\/|$)/);
+  if (m) return (m[1] === 'feedback' ? 'tickets' : m[1]) as TabKey;
   if (route.startsWith('/settings')) return 'settings';
   if (route.startsWith('/sessions')) return 'sessions';
   if (route.startsWith('/live')) return 'live';
@@ -20,7 +20,7 @@ function activeTab(route: string): TabKey | null {
 }
 
 const TABS: { key: TabKey; label: string; icon: string }[] = [
-  { key: 'feedback', label: 'Feedback', icon: '\u{1F4DD}' },
+  { key: 'tickets', label: 'Tickets', icon: '\u{1F4DD}' },
   { key: 'sessions', label: 'Sessions', icon: '\u{1F4E1}' },
   { key: 'live', label: 'Live', icon: '\u{1F7E2}' },
   { key: 'settings', label: 'Settings', icon: '\u{2699}\u{FE0F}' },

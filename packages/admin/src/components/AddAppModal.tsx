@@ -68,7 +68,7 @@ export function AddAppModal({ onClose }: { onClose: () => void }) {
 
   function handleDone() {
     if (success) {
-      navigate(`/app/${success.id}/feedback`);
+      navigate(`/app/${success.id}/tickets`);
     }
     onClose();
   }

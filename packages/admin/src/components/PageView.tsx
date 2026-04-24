@@ -28,7 +28,7 @@ export function PageView() {
   if (route === '/' || route === '') {
     const apps = applications.value;
     if (apps.length > 0) {
-      navigate(`/app/${apps[0].id}/feedback`);
+      navigate(`/app/${apps[0].id}/tickets`);
     } else {
       navigate('/settings/applications');
     }
@@ -40,9 +40,9 @@ export function PageView() {
 
   if (parsed) {
     selectedAppId.value = parsed.appId;
-    if (parsed.sub === 'feedback' && parsed.param) {
+    if ((parsed.sub === 'tickets' || parsed.sub === 'feedback') && parsed.param) {
       page = <FeedbackDetailPage id={parsed.param} appId={parsed.appId} />;
-    } else if (parsed.sub === 'feedback') {
+    } else if (parsed.sub === 'tickets' || parsed.sub === 'feedback') {
       page = <FeedbackListPage appId={parsed.appId} />;
     } else if (parsed.sub === 'agents') {
       openSettingsPanel('agents');
@@ -84,13 +84,15 @@ export function PageView() {
   } else if (route === '/settings/machines' || route === '/settings/harnesses' || route === '/settings/sprites') {
     navigate('/settings/infrastructure');
     return null;
-  } else if (route.startsWith('/feedback/')) {
-    const id = route.replace('/feedback/', '');
+  } else if (route.startsWith('/tickets/') || route.startsWith('/feedback/')) {
+    const id = route.startsWith('/tickets/')
+      ? route.replace('/tickets/', '')
+      : route.replace('/feedback/', '');
     page = <FeedbackDetailPage id={id} appId={null} />;
   } else {
     const apps = applications.value;
     if (apps.length > 0) {
-      navigate(`/app/${apps[0].id}/feedback`);
+      navigate(`/app/${apps[0].id}/tickets`);
     } else {
       navigate('/settings/applications');
     }

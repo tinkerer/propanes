@@ -39,7 +39,7 @@ export function AppSettingsPage({ appId }: { appId: string }) {
   const [serverUrl, setServerUrl] = useState('');
   const [hooks, setHooks] = useState('');
   const [description, setDescription] = useState('');
-  const [permissionProfile, setPermissionProfile] = useState('interactive');
+  const [permissionProfile, setPermissionProfile] = useState('interactive-require');
   const [allowedTools, setAllowedTools] = useState('');
   const [agentPath, setAgentPath] = useState('');
   const [showToolPresets, setShowToolPresets] = useState(false);
@@ -76,7 +76,7 @@ export function AppSettingsPage({ appId }: { appId: string }) {
     setServerUrl(app.serverUrl || '');
     setHooks((app.hooks || []).join(', '));
     setDescription(app.description || '');
-    setPermissionProfile(app.defaultPermissionProfile || 'interactive');
+    setPermissionProfile(app.defaultPermissionProfile || 'interactive-require');
     setAllowedTools(app.defaultAllowedTools || '');
     setAgentPath(app.agentPath || '');
 
@@ -164,7 +164,7 @@ export function AppSettingsPage({ appId }: { appId: string }) {
     await loadApplications();
     const apps = applications.value;
     if (apps.length > 0) {
-      navigate(`/app/${apps[0].id}/feedback`);
+      navigate(`/app/${apps[0].id}/tickets`);
     } else {
       navigate('/settings/getting-started');
     }
@@ -278,9 +278,11 @@ export function AppSettingsPage({ appId }: { appId: string }) {
               onChange={(e) => setPermissionProfile((e.target as HTMLSelectElement).value)}
               style="width:100%;padding:6px 10px;font-size:13px"
             >
-              <option value="interactive">Interactive</option>
-              <option value="auto">Auto</option>
-              <option value="yolo">Yolo (skip permissions)</option>
+              <option value="interactive-require">Interactive (TUI, ask)</option>
+              <option value="interactive-yolo">YOLO (TUI, skip permissions)</option>
+              <option value="headless-yolo">Headless (one-shot pipe, skip)</option>
+              <option value="headless-stream-yolo">Stream (bidirectional JSON, skip)</option>
+              <option value="headless-stream-require">Stream (bidirectional JSON, ask via UI)</option>
             </select>
           </div>
           <div class="form-group" style="margin-bottom:10px">

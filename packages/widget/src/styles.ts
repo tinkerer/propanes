@@ -271,6 +271,35 @@ export const WIDGET_CSS = `
   background: #b91c1c;
 }
 
+.pw-screenshot-copy-paths {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  padding: 0 10px;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #94a3b8;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pw-screenshot-copy-paths:hover {
+  border-color: #1d9bf0;
+  color: #e2e8f0;
+}
+.pw-screenshot-copy-paths:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.pw-screenshot-copy-paths svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
 .pw-input-area {
   padding: 10px;
   flex: 1;
@@ -914,6 +943,15 @@ export const WIDGET_CSS = `
 
 .pw-send-menu-item.pw-active {
   color: #93c5fd;
+}
+
+.pw-send-menu-item-yolo {
+  color: #fbbf24;
+  font-weight: 600;
+}
+
+.pw-send-menu-item-yolo:hover {
+  background: rgba(251, 191, 36, 0.18);
 }
 
 .pw-send-menu-checkbox input[type="checkbox"] {

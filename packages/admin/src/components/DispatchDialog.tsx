@@ -3,7 +3,9 @@ import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { api } from '../lib/api.js';
 import { openSession, loadAllSessions } from '../lib/sessions.js';
 import { cachedTargets, ensureTargetsLoaded, targetKey, findTargetByKey, parseTargetKey } from './DispatchTargetSelect.js';
-import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE } from '../lib/agent-constants.js';
+import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../lib/agent-constants.js';
+import { formatAgentOption, agentSortCmp, PROFILE_MATRIX } from '../lib/agent-matrix.js';
+import { openSetupAssistant } from './SetupAssistantDialog.js';
 
 export interface DispatchDialogRequest {
   feedbackIds: string[];
@@ -32,7 +34,7 @@ interface Agent {
   mode: string;
   url?: string | null;
   runtime?: 'claude' | 'codex';
-  permissionProfile: 'interactive' | 'auto' | 'yolo';
+  permissionProfile: 'interactive-require' | 'interactive-yolo' | 'headless-yolo' | 'headless-stream-yolo' | 'headless-stream-require';
   isDefault: boolean;
   appId?: string | null;
   harnessConfigId?: string | null;
@@ -67,6 +69,24 @@ function defaultAgent(agents: Agent[], appId?: string | null): Agent | undefined
   return usable.find(a => a.isDefault && a.appId === appId)
     || usable.find(a => a.isDefault && !a.appId)
     || usable[0];
+}
+
+function groupAgentsByRuntime(agents: Agent[]): Array<[string, Agent[]]> {
+  const sorted = [...agents].filter(isAgentUsable).sort(agentSortCmp);
+  const groups = new Map<string, Agent[]>();
+  for (const a of sorted) {
+    const key = a.runtime || 'claude';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(a);
+  }
+  return Array.from(groups.entries());
+}
+
+function agentMatrixSubtitle(agent: Agent | undefined, fallback: string): string {
+  if (!agent) return fallback;
+  const rt = RUNTIME_INFO[agent.runtime || 'claude'] || RUNTIME_INFO.claude;
+  const pd = PROFILE_MATRIX[agent.permissionProfile] || PROFILE_MATRIX['interactive-require'];
+  return `${rt.label} · ${pd.icon} ${pd.label}`;
 }
 
 function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onClose: () => void }) {
@@ -112,11 +132,11 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
   const selectedTarget = target ? findTargetByKey(targets, target) : null;
   const targetLabel = selectedTarget ? (selectedTarget.machineName || selectedTarget.name) : 'Local';
 
-  const interactiveAgent = useMemo(() => pickAgent(agents, 'interactive', req.appId), [agents, req.appId]);
-  const yoloAgent = useMemo(() => pickAgent(agents, 'yolo', req.appId, ['codex', 'claude']), [agents, req.appId]);
+  const interactiveAgent = useMemo(() => pickAgent(agents, 'interactive-require', req.appId), [agents, req.appId]);
+  const yoloAgent = useMemo(() => pickAgent(agents, 'interactive-yolo', req.appId, ['codex', 'claude']), [agents, req.appId]);
   const fallbackAgent = useMemo(() => defaultAgent(agents, req.appId), [agents, req.appId]);
   const structuredAgent = useMemo(
-    () => pickAgent(agents, 'auto', req.appId, ['codex', 'claude']) || interactiveAgent || fallbackAgent,
+    () => pickAgent(agents, 'headless-yolo', req.appId, ['codex', 'claude']) || interactiveAgent || fallbackAgent,
     [agents, req.appId, interactiveAgent, fallbackAgent],
   );
 
@@ -125,8 +145,13 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
     setRunning(kind);
     try {
       if (kind === 'assistant') {
-        // Phase 2 — not implemented yet
-        setError('Setup Assistant coming soon');
+        openSetupAssistant({
+          feedbackIds: req.feedbackIds,
+          appId: req.appId,
+          initialInstructions: instructions,
+          initialTarget: target,
+        });
+        onClose();
         return;
       }
 
@@ -234,7 +259,7 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
           >
             {'\u{1F4CD}'} {targetLabel} {'\u25BE'}
           </button>
-          <kbd class="spotlight-esc">esc</kbd>
+          <kbd class="spotlight-esc" onClick={onClose}>esc</kbd>
         </div>
 
         {targetOpen && (
@@ -292,7 +317,7 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
               kind="interactive"
               icon={'\u{25B6}'}
               label={`Cook It${batchSuffix}`}
-              subtitle={interactiveAgent ? interactiveAgent.name : 'Interactive'}
+              subtitle={agentMatrixSubtitle(interactiveAgent, 'Interactive (supervised)')}
               accent="primary"
               disabled={!fallbackAgent}
               running={running}
@@ -301,8 +326,8 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
             <ActionButton
               kind="yolo"
               icon={'\u{26A1}'}
-              label={`YOLO Modex${batchSuffix}`}
-              subtitle={yoloAgent ? yoloAgent.name : 'Autonomous'}
+              label={`YOLO${batchSuffix}`}
+              subtitle={agentMatrixSubtitle(yoloAgent, 'YOLO (skip permissions)')}
               accent="warning"
               disabled={!fallbackAgent}
               running={running}
@@ -332,7 +357,7 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
               kind="structured"
               icon={'\u{1F4CB}'}
               label="Structured Mode"
-              subtitle={structuredAgent ? structuredAgent.name : 'Structured output'}
+              subtitle={agentMatrixSubtitle(structuredAgent, 'Structured output')}
               accent="neutral"
               disabled={!fallbackAgent}
               running={running}
@@ -351,8 +376,8 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
             <ActionButton
               kind="assistant"
               icon={'\u{1F3AF}'}
-              label="Plan First"
-              subtitle="Guided setup"
+              label="Setup Assistant"
+              subtitle="Plan, tests, branch — answer Q/A then dispatch"
               accent="neutral"
               disabled={!fallbackAgent}
               running={running}
@@ -377,12 +402,19 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
                 onChange={(e) => setOverrideAgentId((e.target as HTMLSelectElement).value)}
               >
                 <option value="">Auto-pick for this mode</option>
-                {agents.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} [{a.runtime || 'claude'} / {a.permissionProfile}]{a.isDefault && a.appId ? ' (app default)' : a.isDefault ? ' (default)' : ''}
-                  </option>
+                {groupAgentsByRuntime(agents).map(([runtime, group]) => (
+                  <optgroup key={runtime} label={(RUNTIME_INFO[runtime] || RUNTIME_INFO.claude).label}>
+                    {group.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {formatAgentOption(a)}{a.appId ? ' (app)' : ''}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
+              <div style="font-size:11px;color:var(--pw-text-muted);line-height:1.5">
+                {'\u{1F441}'} Interactive (supervised) · {'\u{26A1}'} YOLO (skip permissions) · {'\u{1F916}'} Headless (JSONL)
+              </div>
             </div>
           )}
 

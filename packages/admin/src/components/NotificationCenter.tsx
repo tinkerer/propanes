@@ -243,8 +243,8 @@ function VoiceDispatchPane({ n, payload }: { n: Notification; payload: VoiceDisp
       const feedbackId = res.feedbackId || payload.feedbackId;
       if (feedbackId) {
         const hash = n.appId
-          ? `#/app/${n.appId}/feedback/${feedbackId}`
-          : `#/feedback/${feedbackId}`;
+          ? `#/app/${n.appId}/tickets/${feedbackId}`
+          : `#/tickets/${feedbackId}`;
         window.location.hash = hash;
         closeNotificationCenter();
       }

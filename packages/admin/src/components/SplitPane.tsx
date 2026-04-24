@@ -6,7 +6,7 @@ interface SplitPaneProps {
   direction: SplitDirection;
   ratio: number;
   splitId: string;
-  onRatioChange: (splitId: string, ratio: number) => void;
+  onRatioChange: (splitId: string, ratio: number, containerSizePx?: number) => void;
   first: ComponentChildren;
   second: ComponentChildren;
   hideSecond?: boolean;
@@ -38,13 +38,11 @@ export function SplitPane({ direction, ratio, splitId, onRatioChange, first, sec
           : ev.clientY - rect.top;
         onFixedResize(Math.max(100, Math.min(newSize, (direction === 'horizontal' ? rect.width : rect.height) - 100)));
       } else {
-        let newRatio: number;
-        if (direction === 'horizontal') {
-          newRatio = (ev.clientX - rect.left) / rect.width;
-        } else {
-          newRatio = (ev.clientY - rect.top) / rect.height;
-        }
-        onRatioChange(splitId, newRatio);
+        const containerSize = direction === 'horizontal' ? rect.width : rect.height;
+        const newRatio = direction === 'horizontal'
+          ? (ev.clientX - rect.left) / rect.width
+          : (ev.clientY - rect.top) / rect.height;
+        onRatioChange(splitId, newRatio, containerSize);
       }
     };
 
@@ -68,10 +66,10 @@ export function SplitPane({ direction, ratio, splitId, onRatioChange, first, sec
     ? collapsedStyle
     : fixedFirstSize != null
       ? { width: `${fixedFirstSize}px`, flexShrink: 0, minHeight: 0, overflow: 'hidden' as const }
-      : { flex: effectiveRatio, minWidth: 0, minHeight: 0, overflow: 'hidden' as const };
+      : { flex: secondCollapsed ? 1 : effectiveRatio, minWidth: 0, minHeight: 0, overflow: 'hidden' as const };
   const secondStyle = secondCollapsed
     ? collapsedStyle
-    : { flex: fixedFirstSize != null ? 1 : (1 - effectiveRatio), minWidth: 0, minHeight: 0, overflow: 'hidden' as const };
+    : { flex: firstCollapsed ? 1 : (fixedFirstSize != null ? 1 : (1 - effectiveRatio)), minWidth: 0, minHeight: 0, overflow: 'hidden' as const };
 
   return (
     <div

@@ -7,10 +7,15 @@ import {
   getSessionLabel,
   getTerminalCompanion,
   popBackIn,
+  popBackInPanel,
+  splitFromPanel,
+  removeSessionFromPanel,
+  removePanel,
   updatePanel,
   persistPopoutState,
   toggleAlwaysOnTop,
 } from '../lib/sessions.js';
+import { type PopoutMode } from '../lib/settings.js';
 import { cosArtifacts } from '../lib/cos-artifacts.js';
 
 export function PanelTabBadge({ tabNum }: { tabNum: number }) {
@@ -37,7 +42,7 @@ export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (sid === 'view:terminals') return 'Terminals';
   if (sid === 'view:files') return 'Files';
   if (sid === 'view:nav') return 'Nav';
-  if (sid === 'view:feedback') return 'Feedback';
+  if (sid === 'view:feedback') return 'Tickets';
   if (sid === 'view:sessions-page') return 'Sessions';
   if (sid === 'view:live') return 'Live';
   if (sid === 'view:app-settings') return 'Settings';
@@ -59,7 +64,7 @@ export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (custom) return custom;
   const s = (isIsolate || isUrl || isFile || isWiggumRuns || isArtifact) ? null : sessionMap.get(realSid);
   if (isJsonl) return `JSONL: ${s?.feedbackTitle || s?.agentName || realSid.slice(-6)}`;
-  if (isFeedback) return `FB: ${s?.feedbackTitle || realSid.slice(-6)}`;
+  if (isFeedback) return `Ticket: ${s?.feedbackTitle || realSid.slice(-6)}`;
   if (isIframe) return `Page: ${realSid.slice(-6)}`;
   if (isTerminal) { const ts = getTerminalCompanion(realSid); if (ts === '__loading__') return 'Term: loading...'; const tSess = ts ? sessionMap.get(ts) : null; return `Term: ${tSess?.paneTitle || ts?.slice(-6) || realSid.slice(-6)}`; }
   if (isIsolate) return `Isolate: ${realSid}`;
@@ -110,6 +115,69 @@ export function IdDropdownMenu({ activeId, panel, session, isExited, anchorRef, 
   );
 }
 
+function PanelPopOutSection({ label, onPopout, onClose, includePanel }: { label: string; onPopout: (mode: PopoutMode) => void; onClose: () => void; includePanel: boolean }) {
+  return (
+    <>
+      <div class="window-menu-section-header">{label}</div>
+      {includePanel && (
+        <button
+          class="popup-menu-item window-menu-submenu-child"
+          onClick={() => { onClose(); onPopout('panel'); }}
+          title="Move into a separate panel"
+        >
+          {'◻'} New Panel
+        </button>
+      )}
+      <button
+        class="popup-menu-item window-menu-submenu-child"
+        onClick={() => { onClose(); onPopout('window'); }}
+        title="Open in a new browser window"
+      >
+        {'⤢'} New Window
+      </button>
+      <button
+        class="popup-menu-item window-menu-submenu-child"
+        onClick={() => { onClose(); onPopout('tab'); }}
+        title="Open in a new browser tab"
+      >
+        {'⇗'} New Tab
+      </button>
+    </>
+  );
+}
+
+function executePanelPopOutTab(panel: PopoutPanelState, sessionId: string, mode: PopoutMode) {
+  switch (mode) {
+    case 'panel':
+      // Already in a panel — split this tab out into its own new panel.
+      splitFromPanel(sessionId);
+      break;
+    case 'window': {
+      const win = window.open(`#/session/${sessionId}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no');
+      if (win) removeSessionFromPanel(sessionId);
+      break;
+    }
+    case 'tab': {
+      const win = window.open(`#/session/${sessionId}`, '_blank');
+      if (win) removeSessionFromPanel(sessionId);
+      break;
+    }
+  }
+}
+
+function executePanelPopOutPanel(panel: PopoutPanelState, mode: PopoutMode) {
+  if (mode === 'panel') return;
+  const target = panel.activeSessionId || panel.sessionIds[0];
+  if (!target) return;
+  const win = mode === 'window'
+    ? window.open(`#/session/${target}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no')
+    : window.open(`#/session/${target}`, '_blank');
+  if (win) {
+    removePanel(panel.id);
+    persistPopoutState();
+  }
+}
+
 export function WindowMenu({ panel, activeId, docked, isLeftDocked, isMinimized, anchorRef, onClose }: {
   panel: PopoutPanelState;
   activeId: string | undefined;
@@ -119,12 +187,48 @@ export function WindowMenu({ panel, activeId, docked, isLeftDocked, isMinimized,
   anchorRef: RefObject<HTMLButtonElement>;
   onClose: () => void;
 }) {
+  const singleTab = panel.sessionIds.length <= 1;
   return (
     <PopupMenu anchorRef={anchorRef as any} onClose={onClose} className="window-menu" align="right">
-      {activeId && (
-        <button class="popup-menu-item" onClick={() => { onClose(); popBackIn(activeId); }}>
-          {'\u2B05'} Pop in <kbd>S</kbd>
+      {!singleTab && <div class="window-menu-section-header">Pop In</div>}
+      {singleTab && activeId && (
+        <button class="popup-menu-item" onClick={() => { onClose(); popBackIn(activeId); }} title="Move back to a main pane">
+          {'\u2B05'} Pop In <kbd>S</kbd>
         </button>
+      )}
+      {!singleTab && activeId && (
+        <button class="popup-menu-item window-menu-submenu-child" onClick={() => { onClose(); popBackIn(activeId); }} title="Move the active tab back to a main pane">
+          {'⬅'} Tab <kbd>S</kbd>
+        </button>
+      )}
+      {!singleTab && panel.sessionIds.length > 0 && (
+        <button class="popup-menu-item window-menu-submenu-child" onClick={() => { onClose(); popBackInPanel(panel.id); }} title="Move the whole panel back to a main pane">
+          {'\u2B05'} Panel
+        </button>
+      )}
+      {singleTab && activeId && (
+        <PanelPopOutSection
+          label="Pop Out"
+          includePanel={false}
+          onPopout={(mode) => executePanelPopOutTab(panel, activeId, mode)}
+          onClose={onClose}
+        />
+      )}
+      {!singleTab && activeId && (
+        <PanelPopOutSection
+          label="Pop Out Tab"
+          includePanel={true}
+          onPopout={(mode) => executePanelPopOutTab(panel, activeId, mode)}
+          onClose={onClose}
+        />
+      )}
+      {!singleTab && panel.sessionIds.length > 0 && (
+        <PanelPopOutSection
+          label="Pop Out Panel"
+          includePanel={false}
+          onPopout={(mode) => executePanelPopOutPanel(panel, mode)}
+          onClose={onClose}
+        />
       )}
       <button class="popup-menu-item" onClick={() => { onClose(); toggleAlwaysOnTop(panel.id); }}>
         {panel.alwaysOnTop ? '\u2713 ' : ''}{'\u{1F4CC}'} Pin on top <kbd>W</kbd>
