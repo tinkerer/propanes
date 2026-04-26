@@ -58,6 +58,15 @@ export function spawnInTmux(params: {
   const { sessionId, command, args, cwd, cols, rows, env } = params;
   const name = tmuxName(sessionId);
 
+  // Idempotent spawn: if a tmux session with this name is still alive (e.g. the
+  // previous turn's claude proc lingered after a session-service restart, or
+  // the agentSessions row was marked failed but tmux didn't tear down), kill
+  // it before creating the replacement. Otherwise `new-session` aborts with
+  // `duplicate session: pw-…` and the next turn fails to start.
+  if (tmuxSessionExists(sessionId)) {
+    spawnSync('tmux', [...TMUX_SOCKET, 'kill-session', '-t', name], { stdio: 'pipe' });
+  }
+
   const shellCmd = [command, ...args].map(a => {
     if (a.includes("'") || a.includes(' ') || a.includes('"') || a.includes('\\') || a.includes('$') || a.includes('\n') || a.includes('(') || a.includes(')') || a.includes('*')) {
       return `'${a.replace(/'/g, "'\\''")}'`;

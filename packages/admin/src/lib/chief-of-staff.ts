@@ -129,6 +129,10 @@ export type ChiefOfStaffMsg = {
   // maps 1:1 to a cosThread (= one Claude session). Reply-in-thread messages
   // inherit the threadId from the anchor user message.
   threadId?: string;
+  // Server-side cosMessages.id when known (history reload + live cos_message
+  // SSE events). Used to dedupe out-of-band agent posts (e.g. screenshots)
+  // that arrive both via the live stream and a subsequent history fetch.
+  serverId?: string;
   streaming?: boolean;
   // Set on the assistant placeholder until the first SSE event arrives, so the
   // UI can distinguish "request in flight, awaiting first byte" from "actively
@@ -663,11 +667,28 @@ function serverMessageToClient(m: any): ChiefOfStaffMsg {
     toolCalls,
     timestamp: Number(m?.createdAt) || Date.now(),
     threadId: typeof m?.threadId === 'string' ? m.threadId : undefined,
+    serverId: typeof m?.id === 'string' ? m.id : undefined,
     streaming: false,
     attachments,
     elementRefs,
     replyToTs,
   };
+}
+
+/**
+ * Insert a cos_message SSE event into the agent's message log. Used for
+ * out-of-band /messages POSTs (e.g. agent-posted screenshots) that arrive
+ * during an active chat stream. Dedupes by serverId so a reconnect or a
+ * subsequent history hydrate doesn't double-append the same row.
+ */
+function appendOutOfBandCosMessage(agentId: string, ev: any): void {
+  const serverId = typeof ev?.id === 'string' ? ev.id : undefined;
+  if (!serverId) return;
+  const msg = serverMessageToClient(ev);
+  updateAgent(agentId, (a) => {
+    if (a.messages.some((m) => m.serverId === serverId)) return a;
+    return { ...a, messages: [...a.messages, msg] };
+  });
 }
 
 /**
@@ -721,6 +742,35 @@ void (async () => {
     void loadChiefOfStaffHistory(agent.id);
   }
 })();
+
+/**
+ * Open a long-lived SSE that delivers every out-of-band /messages POST
+ * targeted at any thread of `agentId`. Used by the panel while it's visible
+ * so screenshots / replies posted by the agent itself appear inline without
+ * a manual refresh, even when no chat turn is currently streaming. The chat
+ * POST stream covers the in-turn case; this covers the rest. Dedup is
+ * handled by `appendOutOfBandCosMessage` (serverId).
+ *
+ * Returns an unsubscribe function that closes the EventSource. EventSource
+ * reconnects automatically on transient drops.
+ */
+export function subscribeAgentLiveMessages(agentId: string): () => void {
+  let closed = false;
+  const url = `/api/v1/admin/chief-of-staff/agents/${encodeURIComponent(agentId)}/stream`;
+  const es = new EventSource(url);
+  es.addEventListener('cos_message', (e: MessageEvent) => {
+    if (closed) return;
+    try {
+      const ev = JSON.parse(e.data);
+      appendOutOfBandCosMessage(agentId, ev);
+    } catch { /* ignore malformed frame */ }
+  });
+  return () => {
+    if (closed) return;
+    closed = true;
+    try { es.close(); } catch { /* ignore */ }
+  };
+}
 
 /**
  * Mint a fresh cosThread for this agent. Every top-level UI thread gets its
@@ -1047,9 +1097,11 @@ export function sendChiefOfStaffMessage(
   chiefOfStaffInFlight.value = chiefOfStaffInFlight.value + 1;
 
   void (async () => {
-    // Single accumulator spans the initial POST stream and any /attach
-    // re-attaches after a drop. Server replays from lastSeenSeq+1 so the
-    // accumulator stays idempotent across reconnects.
+    // POST /chat now returns 202 immediately with { turnId, startSeq } and
+    // the live content arrives over a long-lived per-thread EventSource on
+    // /threads/:id/events. The accumulator absorbs claude events as they
+    // come in (live or replayed from the per-turn ring buffer); processClaudeEvent
+    // is idempotent across redelivery because lastSeenSeq filters duplicates.
     const accum: StreamAccum = {
       text: '',
       toolCalls: [],
@@ -1059,83 +1111,9 @@ export function sendChiefOfStaffMessage(
     let cancelledByServer = false;
     let threadIdForResume: string | undefined;
 
-    // Process one SSE stream to exhaustion. Returns:
-    //   { kind: 'done' }         — server closed cleanly (turn finished)
-    //   { kind: 'cancelled' }    — server cancelled (interrupt / supersede)
-    //   { kind: 'error', error } — server sent an explicit `error` event
-    //   { kind: 'drop' }         — reader.read() aborted mid-stream
-    type StreamResult =
-      | { kind: 'done' | 'cancelled' | 'drop' }
-      | { kind: 'error'; error: string };
-    const drainStream = async (body: ReadableStream<Uint8Array>): Promise<StreamResult> => {
-      const reader = body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      try {
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) return { kind: 'done' };
-          buffer += decoder.decode(value, { stream: true });
-
-          let idx = buffer.indexOf('\n\n');
-          while (idx !== -1) {
-            const frame = buffer.slice(0, idx);
-            buffer = buffer.slice(idx + 2);
-            idx = buffer.indexOf('\n\n');
-
-            let event = 'message';
-            const dataLines: string[] = [];
-            for (const ln of frame.split('\n')) {
-              if (ln.startsWith(':')) continue;
-              if (ln.startsWith('event:')) event = ln.slice(6).trim();
-              else if (ln.startsWith('data:')) dataLines.push(ln.slice(5).replace(/^ /, ''));
-            }
-            if (dataLines.length === 0) continue;
-            const data = dataLines.join('\n');
-
-            if (event === 'claude') {
-              try {
-                const envelope = JSON.parse(data);
-                // New envelope: { seq, line: <claude-json> }. Fall back to
-                // the flat shape in case an older server is talking to us.
-                const obj = envelope && typeof envelope === 'object' && 'line' in envelope ? envelope.line : envelope;
-                if (typeof envelope?.seq === 'number' && envelope.seq > lastSeenSeq) {
-                  lastSeenSeq = envelope.seq;
-                }
-                if (processClaudeEvent(obj, accum)) commit(accum);
-              } catch { /* ignore malformed line */ }
-            } else if (event === 'cancelled') {
-              cancelledByServer = true;
-            } else if (event === 'done') {
-              try {
-                const obj = JSON.parse(data);
-                if (obj?.cancelled) cancelledByServer = true;
-              } catch { /* ignore */ }
-              return cancelledByServer ? { kind: 'cancelled' } : { kind: 'done' };
-            } else if (event === 'error') {
-              try {
-                const obj = JSON.parse(data);
-                return { kind: 'error', error: obj?.error || 'Claude error' };
-              } catch {
-                return { kind: 'error', error: 'Claude error' };
-              }
-            } else if (event === 'session') {
-              // No-op. Server also emits a `session` event on /attach so the
-              // client can confirm it reached the running turn.
-            }
-          }
-        }
-      } catch {
-        return { kind: 'drop' };
-      } finally {
-        try { reader.releaseLock(); } catch { /* ignore */ }
-      }
-    };
-
-    // If a re-attach fails because the server says the turn finished, try to
-    // pick up the assistant row the server persisted so the UI shows the
-    // completed reply instead of a dead streaming bubble.
+    // Hydrate the optimistic row from the persisted assistant row once the
+    // turn is done. Anchored to the user-message createdAt so client/server
+    // clock skew can't cause us to pick up an unrelated reply.
     const hydrateFromHistory = async (): Promise<boolean> => {
       try {
         const token = localStorage.getItem('pw-admin-token');
@@ -1147,61 +1125,33 @@ export function sendChiefOfStaffMessage(
         );
         if (!res.ok) return false;
         const data = await res.json();
-        const serverMessages: any[] = Array.isArray(data?.messages) ? data.messages : [];
-        // Find the most recent assistant message. If its createdAt is after
-        // the user message we just sent, the server-side turn completed and
-        // we can hydrate the streaming bubble from it.
+        const allMessages: any[] = Array.isArray(data?.messages) ? data.messages : [];
+        // Scope to the thread we're resuming. The history endpoint returns
+        // messages across every thread of the agent, so without this filter
+        // we could pick up an unrelated assistant reply from another thread.
+        const threadMessages = threadIdForResume
+          ? allMessages.filter((m) => m?.threadId === threadIdForResume)
+          : allMessages;
+        // Locate the user row this turn started from. It was persisted with
+        // createdAt === userTs, which is the same value we sent as clientTs.
+        const userIdx = threadMessages.findIndex(
+          (m) => m?.role === 'user' && Number(m?.createdAt) === userTs,
+        );
+        const startIdx = userIdx >= 0 ? userIdx + 1 : 0;
         let latestAssistant: any = null;
-        for (let i = serverMessages.length - 1; i >= 0; i--) {
-          if (serverMessages[i]?.role === 'assistant') {
-            latestAssistant = serverMessages[i];
+        for (let i = threadMessages.length - 1; i >= startIdx; i--) {
+          if (threadMessages[i]?.role === 'assistant') {
+            latestAssistant = threadMessages[i];
             break;
           }
         }
-        const createdAt = Number(latestAssistant?.createdAt || 0);
-        if (!latestAssistant || createdAt <= userTs) return false;
+        if (!latestAssistant) return false;
         const hydrated = serverMessageToClient(latestAssistant);
         patchAssistant(() => ({ ...hydrated, timestamp: assistantTs, streaming: false, sending: false }));
         return true;
       } catch {
         return false;
       }
-    };
-
-    // Poll /status until inFlight flips or we time out, returning the final
-    // status snapshot. Keeps waits short so we don't stall the UI.
-    const waitForTurnState = async (
-      threadId: string,
-      opts: { expectInFlight: boolean; timeoutMs: number; pollMs?: number },
-    ): Promise<{ inFlight: boolean; resumable: boolean; turnStartSeq: number | null } | null> => {
-      const deadline = Date.now() + opts.timeoutMs;
-      const pollMs = opts.pollMs ?? 500;
-      while (Date.now() < deadline) {
-        try {
-          const token = localStorage.getItem('pw-admin-token');
-          const headers: Record<string, string> = {};
-          if (token) headers['Authorization'] = `Bearer ${token}`;
-          const res = await fetch(
-            `/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(threadId)}/status`,
-            { headers },
-          );
-          if (res.ok) {
-            const data = await res.json();
-            const snapshot = {
-              inFlight: !!data?.inFlight,
-              resumable: !!data?.resumable,
-              turnStartSeq: typeof data?.turnStartSeq === 'number' ? data.turnStartSeq : null,
-            };
-            if (snapshot.inFlight === opts.expectInFlight) return snapshot;
-            // Opposite of expected — keep polling unless we've run out of time.
-            if (Date.now() >= deadline) return snapshot;
-          }
-        } catch {
-          /* ignore and retry */
-        }
-        await new Promise((r) => setTimeout(r, pollMs));
-      }
-      return null;
     };
 
     try {
@@ -1262,7 +1212,7 @@ export function sendChiefOfStaffMessage(
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok || !res.body) {
+      if (!res.ok) {
         let errMsg = `HTTP ${res.status}`;
         try {
           const err = await res.json();
@@ -1271,47 +1221,110 @@ export function sendChiefOfStaffMessage(
         throw new Error(errMsg);
       }
 
-      let result = await drainStream(res.body);
-
-      // Mid-stream drop: try to re-attach to the same turn via the session-
-      // service's replay buffer. We loop because an attached stream can also
-      // drop (e.g. a second server restart). Cap retries to avoid looping
-      // forever against a genuinely broken turn.
-      let reconnectAttempts = 0;
-      while (result.kind === 'drop' && threadIdForResume && reconnectAttempts < 5) {
-        reconnectAttempts += 1;
-        patchAssistant((m) => ({ ...m, sending: false, streaming: true, error: undefined }));
-        const statusSnap = await waitForTurnState(threadIdForResume, { expectInFlight: true, timeoutMs: 15_000 });
-        if (!statusSnap) break;
-        if (!statusSnap.inFlight) {
-          // Turn finished while the stream was dropped. Hydrate from the
-          // server's persisted history and exit cleanly.
-          const hydrated = await hydrateFromHistory();
-          if (hydrated) return;
-          break;
-        }
-        if (!statusSnap.resumable) break;
-
-        const fromSeq = Math.max(lastSeenSeq + 1, (statusSnap.turnStartSeq ?? 0) + 1);
-        const attachRes = await fetch(
-          `/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(threadIdForResume)}/attach?fromSeq=${fromSeq}`,
-          { headers: token ? { Authorization: `Bearer ${token}` } : {} },
-        ).catch(() => null);
-        if (!attachRes || !attachRes.ok || !attachRes.body) break;
-        result = await drainStream(attachRes.body);
+      let ack: { turnId?: string; threadId?: string; startSeq?: number; agentSessionId?: string };
+      try {
+        ack = await res.json();
+      } catch {
+        throw new Error('Server did not return a turn descriptor');
+      }
+      if (!ack.turnId || !ack.threadId) {
+        throw new Error('Server did not return a turnId');
       }
 
-      if (result.kind === 'error') throw new Error(result.error);
-      if (result.kind === 'drop') throw new Error('Stream dropped and could not be resumed');
+      const myTurnId = ack.turnId;
+      const ackThreadId = ack.threadId;
+      threadIdForResume = ackThreadId;
+      const initialFromSeq = typeof ack.startSeq === 'number' ? ack.startSeq : 0;
+      lastSeenSeq = initialFromSeq;
+
+      // Subscribe to the long-lived per-thread event stream. The browser's
+      // EventSource auto-reconnects on transient drops; on each (re)connect
+      // the server replays buffered claude_events for myTurnId from
+      // ?fromSeq=<lastSeen>, so the gap is closed without us having to retry
+      // the POST. The subscription closes once turn_status: completed |
+      // failed arrives for myTurnId.
+      const handleClaudeEvent = (raw: string) => {
+        try {
+          const ev = JSON.parse(raw);
+          if (ev?.turnId !== myTurnId) return;
+          if (typeof ev.seq === 'number') {
+            if (ev.seq <= lastSeenSeq) return; // already processed
+            lastSeenSeq = ev.seq;
+          }
+          const obj = typeof ev.line === 'string' ? JSON.parse(ev.line) : null;
+          if (obj && processClaudeEvent(obj, accum)) commit(accum);
+        } catch { /* ignore malformed frame */ }
+      };
+      const handleCosMessage = (raw: string) => {
+        try {
+          const ev = JSON.parse(raw);
+          appendOutOfBandCosMessage(agentId, ev);
+        } catch { /* ignore */ }
+      };
+
+      let es: EventSource | null = null;
+      const openSubscription = (fromSeq: number): EventSource => {
+        const params = new URLSearchParams({
+          fromSeq: String(fromSeq),
+          turnId: myTurnId,
+        });
+        return new EventSource(
+          `/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(ackThreadId)}/events?${params.toString()}`,
+        );
+      };
+      const closeSubscription = () => {
+        if (!es) return;
+        try { es.close(); } catch { /* ignore */ }
+        es = null;
+      };
+
+      const turnDone: { error?: string; cancelled?: boolean } = await new Promise((resolve) => {
+        let settled = false;
+        const settle = (result: { error?: string; cancelled?: boolean }) => {
+          if (settled) return;
+          settled = true;
+          closeSubscription();
+          resolve(result);
+        };
+
+        const wireListeners = (source: EventSource) => {
+          source.addEventListener('claude_event', (e) => handleClaudeEvent((e as MessageEvent).data));
+          source.addEventListener('cos_message', (e) => handleCosMessage((e as MessageEvent).data));
+          source.addEventListener('turn_status', (e) => {
+            try {
+              const status = JSON.parse((e as MessageEvent).data);
+              if (status?.turnId !== myTurnId) return;
+              if (status.kind === 'completed') {
+                if (status.cancelled) cancelledByServer = true;
+                settle({ cancelled: !!status.cancelled });
+              } else if (status.kind === 'failed') {
+                settle({ error: status.error || 'Turn failed' });
+              }
+            } catch { /* ignore */ }
+          });
+          // EventSource reconnects automatically on transient drops; the
+          // server replays from fromSeq so no events are lost. We only act
+          // here if the source itself is unrecoverable.
+          source.onerror = () => {
+            // browser is reconnecting; nothing to do
+          };
+        };
+
+        es = openSubscription(initialFromSeq);
+        wireListeners(es);
+      });
+
+      if (turnDone.error) throw new Error(turnDone.error);
+
+      // Confirm the persisted assistant row in case any events were missed
+      // beyond the replay buffer. Hydration is anchored on userTs so we
+      // can't pick up an unrelated thread's reply.
+      if (threadIdForResume) {
+        const hydrated = await hydrateFromHistory();
+        if (hydrated) return;
+      }
 
       if (!cancelledByServer && !accum.text && accum.toolCalls.length === 0) {
-        // Last-ditch hydrate: the turn may have finished before our reconnect
-        // window. If the server persisted an assistant row for this turn,
-        // show it instead of surfacing "No response from Claude".
-        if (threadIdForResume) {
-          const hydrated = await hydrateFromHistory();
-          if (hydrated) return;
-        }
         throw new Error('No response from Claude');
       }
 

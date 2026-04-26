@@ -4981,6 +4981,115 @@ input:focus, select:focus, textarea:focus {
   border-radius: 6px;
 }
 
+/* Compact tool chip — one-line summary for chat-mode rendering. Reuses the
+   same per-category accent palette as .sm-tool-use so chat-mode and full-
+   mode tool calls feel like the same vocabulary. */
+.sm-chat-tool-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  margin: 2px 0;
+  background: #1e293b;
+  border-radius: 6px;
+  border-left: 3px solid #475569;
+  font-size: 12px;
+  line-height: 1.4;
+  min-width: 0;
+}
+.sm-chat-tool-chip.tool-bash { border-left-color: #94a3b8; }
+.sm-chat-tool-chip.tool-edit { border-left-color: #f59e0b; }
+.sm-chat-tool-chip.tool-write { border-left-color: #eab308; }
+.sm-chat-tool-chip.tool-read { border-left-color: #60a5fa; }
+.sm-chat-tool-chip.tool-search { border-left-color: #cbd5e1; }
+.sm-chat-tool-chip.tool-todo { border-left-color: #fb923c; }
+.sm-chat-tool-chip.tool-task { border-left-color: #ef4444; }
+.sm-chat-tool-chip.tool-web { border-left-color: #38bdf8; }
+.sm-chat-tool-chip.tool-default { border-left-color: #475569; }
+.sm-chat-tool-chip.tool-ask { border-left-color: #facc15; }
+
+.sm-chat-tool-icon {
+  font-size: 12px;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  color: #94a3b8;
+}
+.sm-chat-tool-name {
+  font-weight: 600;
+  font-family: 'SF Mono', Monaco, monospace;
+  color: #cbd5e1;
+  flex-shrink: 0;
+}
+.sm-chat-tool-summary {
+  color: #94a3b8;
+  font-family: 'SF Mono', Monaco, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+.sm-chat-tool-chip-header {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  cursor: pointer;
+  min-width: 0;
+}
+.sm-chat-tool-chip-header:disabled {
+  cursor: default;
+}
+.sm-chat-tool-chip-header:hover:not(:disabled) {
+  opacity: 0.85;
+}
+.sm-chat-tool-toggle {
+  color: #64748b;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.sm-chat-tool-chip-error { border-left-color: #f87171 !important; }
+.sm-chat-tool-chip-error .sm-chat-tool-summary { color: #fca5a5; }
+
+.sm-chat-tool-chip-expanded {
+  display: block;
+  padding: 6px 10px 8px;
+}
+.sm-chat-tool-chip-expanded .sm-chat-tool-summary {
+  white-space: normal;
+}
+.sm-chat-tool-body {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sm-chat-tool-section {
+  background: #0f172a;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.sm-chat-tool-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  margin-bottom: 3px;
+}
+.sm-chat-tool-pre {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+}
+
 /* Tool use — per-category colors */
 .sm-tool-use {
   padding: 8px 12px;
@@ -12426,17 +12535,92 @@ body.pw-isolate {
   position: relative;
   flex: 1 1 auto;
   display: flex;
+  flex-direction: row;
+  min-height: 0;
+}
+.cos-scroll-col {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
 }
 .cos-scroll {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
   background: transparent;
+}
+
+.cos-thread-rail {
+  flex: 0 0 auto;
+  width: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 2px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-right: 1px solid var(--pw-border);
+  background: var(--pw-bg-surface);
+  scrollbar-width: thin;
+}
+.cos-thread-rail::-webkit-scrollbar { width: 4px; }
+.cos-thread-rail::-webkit-scrollbar-thumb { background: var(--pw-border); border-radius: 2px; }
+.cos-thread-rail-btn {
+  position: relative;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--pw-border);
+  border-radius: 50%;
+  background: var(--pw-bg-body);
+  color: var(--pw-secondary-text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.cos-thread-rail-btn:hover {
+  background: var(--pw-bg-hover);
+  color: var(--pw-primary-text);
+  border-color: var(--pw-primary);
+}
+.cos-thread-rail-btn-unread {
+  border-color: var(--pw-primary);
+  color: var(--pw-primary-text);
+  background: var(--pw-bg-body);
+}
+.cos-thread-rail-num {
+  display: inline-block;
+}
+.cos-thread-rail-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: #e5484d;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  box-shadow: 0 0 0 1.5px var(--pw-bg-surface);
+  pointer-events: none;
 }
 
 .cos-floating-actions {
@@ -12622,6 +12806,7 @@ body.pw-isolate {
 .cos-thread-header-count {
   font-weight: 600;
   color: var(--pw-text-secondary);
+  margin-right: auto;
 }
 .cos-thread-header-btn {
   background: transparent;
@@ -12631,7 +12816,6 @@ body.pw-isolate {
   font: inherit;
   font-size: 11px;
   cursor: pointer;
-  margin-left: auto;
 }
 .cos-thread-header-btn:hover {
   color: var(--pw-text-primary);
@@ -12754,14 +12938,25 @@ body.pw-isolate {
   flex: 0 0 auto;
   user-select: none;
   color: #fff;
+  overflow: hidden;
+  background: var(--pw-bg-surface);
+  border: 1px solid color-mix(in srgb, var(--pw-border) 84%, transparent);
 }
 .cos-avatar-user {
-  background: linear-gradient(135deg, #4c6fff, #2a46cc);
+  background: linear-gradient(135deg, var(--pw-primary), var(--pw-primary-hover));
+  border-color: color-mix(in srgb, var(--pw-primary) 40%, var(--pw-border));
 }
 .cos-avatar-assistant {
-  background: linear-gradient(135deg, #f5a623, #c77a0a);
+  background: linear-gradient(135deg, #ffb347, var(--pw-warning));
+  border-color: color-mix(in srgb, var(--pw-warning) 44%, var(--pw-border));
 }
 .cos-avatar-initial { line-height: 1; }
+.cos-avatar-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 .cos-avatar-sm {
   width: 20px;
   height: 20px;
@@ -13864,8 +14059,12 @@ button.cos-thinking-label-link:hover { color: var(--pw-text); text-decoration-st
 
    16px buffer (not 8px) keeps the bottom border of the popout clearly
    above the nav's top edge — at 8px the input row visually kisses the
-   nav on devices where the nav renders a hair taller than --pw-mobile-nav-h. */
-body.pw-mobile .cos-popout {
+   nav on devices where the nav renders a hair taller than --pw-mobile-nav-h.
+
+   Skip embed/pane mode — `.cos-pane` already fills its container, and
+   applying `left: 8px !important` to a position:relative element shifts
+   it off-screen and forces the document to scroll horizontally. */
+body.pw-mobile .cos-popout:not(.cos-pane) {
   left: 8px !important;
   right: 8px !important;
   top: calc(48px + var(--pw-safe-top, 0px)) !important;
@@ -13882,7 +14081,7 @@ body.pw-mobile .cos-popout {
   max-height: none !important;
   border-radius: 10px;
 }
-body.pw-mobile .cos-popout.minimized {
+body.pw-mobile .cos-popout.minimized:not(.cos-pane) {
   bottom: auto !important;
   height: auto !important;
 }
@@ -13895,6 +14094,33 @@ body.pw-mobile .cos-popout.minimized {
    functionality while the user is chatting. :has() is supported on iOS
    Safari 15.4+ / Chrome 105+, matching the admin's mobile baseline. */
 body.pw-mobile:has(.cos-popout) propanes-host { display: none !important; }
+
+/* Mobile: lock everything behind the CoS popout while it's open. The popout
+   doesn't cover the full viewport (8px strips left/right, ~48px above the
+   control-bar safe area, ~72px below for the nav + keyboard inset). Touches
+   on those exposed strips otherwise scroll .mobile-page-view, body
+   rubber-band on iOS, or visually drag the bottom nav with the page.
+   Locking overflow + touch-action on body / .layout / .mobile-page-view
+   stops all of those. The popout subtree opts back in to touch-action: auto
+   so its own scroll containers and form controls keep working. */
+body.pw-mobile:has(.cos-popout) {
+  overflow: hidden !important;
+  touch-action: none;
+  overscroll-behavior: none;
+}
+body.pw-mobile:has(.cos-popout) .layout-mobile,
+body.pw-mobile:has(.cos-popout) .mobile-page-view {
+  overflow: hidden !important;
+  touch-action: none;
+}
+body.pw-mobile:has(.cos-popout) .cos-popout,
+body.pw-mobile:has(.cos-popout) .cos-popout * {
+  touch-action: auto;
+}
+body.pw-mobile:has(.cos-popout) .cos-popout .cos-scroll,
+body.pw-mobile:has(.cos-popout) .cos-popout .cos-scroll-wrap {
+  overscroll-behavior: contain;
+}
 
 /* Mobile: the side-anchored learnings drawer can't fit beside the pinned CoS
    popout, so overlay it on top of the popout at full viewport width. */

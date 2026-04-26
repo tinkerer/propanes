@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
-import { MessageRenderer } from './MessageRenderer.js';
+import { MessageRenderer, type ChatRenderOpts } from './MessageRenderer.js';
 import { JsonOutputParser, CodexOutputParser, type ParsedMessage } from '../lib/output-parser.js';
 import { api } from '../lib/api.js';
 import { sessionInputStates } from '../lib/session-state.js';
@@ -20,6 +20,10 @@ interface Props {
   sessionId: string;
   isActive?: boolean;
   permissionProfile?: string;
+  /** When set, render in compact chat-mode (collapse tool pairs, hide
+   *  thinking/system, run assistant text through textFilter). Used by the
+   *  Chief-of-Staff bubble; full session log viewer omits this. */
+  chat?: ChatRenderOpts;
 }
 
 interface DetectedChoicePrompt {
@@ -252,6 +256,7 @@ function AssistantGroup({
   pendingTool,
   sessionId,
   subagentLookup,
+  chat,
 }: {
   group: MessageGroup;
   lastGroupMsg: ParsedMessage;
@@ -262,23 +267,27 @@ function AssistantGroup({
     subagents: Map<string, ParsedMessage[]>;
     toolUseIdToAgentId: Map<string, string>;
   };
+  chat?: ChatRenderOpts;
 }) {
   const toolCount = group.messages.filter(m => m.role === 'tool_use').length;
   const narrow = useNarrow();
   // In narrow containers, collapse tools by default above 2 — a 4-tool cutoff
-  // still wall-papers the viewport when the pane is 350px wide.
-  const toolCollapseCutoff = narrow ? 2 : 4;
+  // still wall-papers the viewport when the pane is 350px wide. Chat mode is
+  // always narrow visually, so use the narrow cutoff there too.
+  const toolCollapseCutoff = (chat || narrow) ? 2 : 4;
   const defaultCollapsed = toolCount > toolCollapseCutoff;
   const [toolsCollapsed, setToolsCollapsed] = useState(defaultCollapsed);
   const [groupCollapsed, setGroupCollapsed] = useState(false);
 
   return (
-    <div class={`sm-group sm-group-assistant_group${groupCollapsed ? ' sm-group-collapsed' : ''}`}>
-      <AssistantGroupHeader
-        messages={group.messages}
-        collapsed={groupCollapsed}
-        onToggle={() => setGroupCollapsed(c => !c)}
-      />
+    <div class={`sm-group sm-group-assistant_group${groupCollapsed ? ' sm-group-collapsed' : ''}${chat ? ' sm-group-chat' : ''}`}>
+      {!chat && (
+        <AssistantGroupHeader
+          messages={group.messages}
+          collapsed={groupCollapsed}
+          onToggle={() => setGroupCollapsed(c => !c)}
+        />
+      )}
       {!groupCollapsed && toolCount > toolCollapseCutoff && (
         <button
           class="sm-tools-toggle"
@@ -299,6 +308,7 @@ function AssistantGroup({
             index={idx}
             sessionId={sessionId}
             interactive={isInteractive}
+            chat={chat}
           />
         );
         // Inline subagent transcript right after the call that spawned it.
@@ -327,7 +337,7 @@ function AssistantGroup({
   );
 }
 
-export function StructuredView({ sessionId }: Props) {
+export function StructuredView({ sessionId, chat }: Props) {
   const [messages, setMessages] = useState<ParsedMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -536,11 +546,12 @@ export function StructuredView({ sessionId }: Props) {
               pendingTool={pendingTool}
               sessionId={sessionId}
               subagentLookup={partitioned}
+              chat={chat}
             />
           );
         }
         return (
-          <div key={group.id} class={`sm-group sm-group-${group.role}`}>
+          <div key={group.id} class={`sm-group sm-group-${group.role}${chat ? ' sm-group-chat' : ''}`}>
             {group.messages.map((msg, idx) => {
               const isInteractive = askingForInput && msg === lastGroupMsg && msg === pendingTool;
               return (
@@ -551,6 +562,7 @@ export function StructuredView({ sessionId }: Props) {
                   index={idx}
                   sessionId={sessionId}
                   interactive={isInteractive}
+                  chat={chat}
                 />
               );
             })}

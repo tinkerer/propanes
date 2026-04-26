@@ -94,6 +94,27 @@ function HighlightedCode({ content, lang, maxLines }: { content: string; lang?: 
 
 // --- Props ---
 
+/**
+ * Chat-mode rendering options. Pass when consuming the same JSONL pipeline
+ * inside a chat surface (e.g. the Chief-of-Staff bubble) instead of the
+ * full session log viewer. Activates a denser layout that:
+ *   • collapses tool_use+tool_result pairs into one compact chip
+ *   • drops `tool_result`, `thinking`, and `system` entries entirely
+ *   • runs assistant text through `textFilter` so the surface can apply
+ *     its own visibility rules (e.g. extracting `<cos-reply>` content).
+ *
+ * Omit to render in the default full-detail mode.
+ */
+export interface ChatRenderOpts {
+  /** Filter / transform assistant text. Return an empty string to suppress
+   *  the message entirely. Identity (`(t) => t`) is the no-op default. */
+  textFilter?: (rawText: string) => string;
+  /** Optional callback fired when a clickable artifact marker is activated
+   *  inside an assistant message. Reserved for the bubble's existing
+   *  artifact popout flow; ignored by default. */
+  onArtifactPopout?: (artifactId: string) => void;
+}
+
 interface Props {
   message: ParsedMessage;
   messages?: ParsedMessage[];
@@ -103,6 +124,8 @@ interface Props {
   // render buttons/inputs that send responses via send-keys.
   sessionId?: string;
   interactive?: boolean;
+  /** When set, render in compact chat-mode (see ChatRenderOpts). */
+  chat?: ChatRenderOpts;
 }
 
 function findPrecedingToolUse(messages: ParsedMessage[], index: number): ParsedMessage | undefined {
@@ -113,10 +136,31 @@ function findPrecedingToolUse(messages: ParsedMessage[], index: number): ParsedM
   return undefined;
 }
 
-export function MessageRenderer({ message, messages, index, sessionId, interactive }: Props) {
+export function MessageRenderer({ message, messages, index, sessionId, interactive, chat }: Props) {
   const prevToolUse = (message.role === 'tool_result' && messages && index !== undefined)
     ? findPrecedingToolUse(messages, index)
     : undefined;
+
+  if (chat) {
+    switch (message.role) {
+      case 'tool_use':
+        return <ChatToolChip message={message} />;
+      case 'tool_result':
+      case 'thinking':
+      case 'system':
+        return null;
+      case 'assistant': {
+        const raw = message.content || '';
+        const filtered = chat.textFilter ? chat.textFilter(raw) : raw;
+        if (!filtered) return null;
+        return <AssistantMessage message={{ ...message, content: filtered }} />;
+      }
+      case 'user_input':
+        return <UserInputMessage message={message} />;
+      default:
+        return null;
+    }
+  }
 
   switch (message.role) {
     case 'tool_use':
@@ -133,6 +177,122 @@ export function MessageRenderer({ message, messages, index, sessionId, interacti
       return <SystemMessage message={message} />;
     default:
       return null;
+  }
+}
+
+// Compact one-line tool chip used in chat-mode rendering. Picks a short
+// summary from the tool input (Bash command's first line, file name for
+// Edit/Write/Read, query for Grep/Glob, etc.) so a turn with many tool
+// calls reads as a list of bullets instead of a wall of expanded blocks.
+//
+// Click the chip to expand and reveal the full input + result/error JSON.
+// Result/error come from extras on the ParsedMessage's toolInput (the
+// CoS bubble's synthetic conversion stashes call.result/.error there
+// because tool_result entries are suppressed in chat mode).
+function ChatToolChip({ message }: { message: ParsedMessage }) {
+  const [expanded, setExpanded] = useState(false);
+  const name = message.toolName || 'tool';
+  const cat = toolCategory(name);
+  const icon = toolIcon(name);
+  const summary = chatToolSummary(name, message.toolInput);
+  const extras = (message.toolInput as Record<string, unknown> | undefined)?.__chatExtras as
+    | { result?: unknown; error?: string }
+    | undefined;
+  const cleanInput = useMemo(() => {
+    if (!message.toolInput) return null;
+    const { __chatExtras, ...rest } = message.toolInput as Record<string, unknown>;
+    return rest;
+  }, [message.toolInput]);
+  const hasInput = cleanInput && Object.keys(cleanInput).length > 0;
+  const hasResult = extras && extras.result !== undefined && extras.result !== null;
+  const hasError = !!extras?.error;
+  const expandable = !!(hasInput || hasResult || hasError);
+
+  return (
+    <div
+      class={`sm-chat-tool-chip ${cat}${expanded ? ' sm-chat-tool-chip-expanded' : ''}${hasError ? ' sm-chat-tool-chip-error' : ''}`}
+      title={name}
+    >
+      <button
+        type="button"
+        class="sm-chat-tool-chip-header"
+        onClick={expandable ? () => setExpanded((e) => !e) : undefined}
+        disabled={!expandable}
+      >
+        <span class="sm-chat-tool-icon">{icon}</span>
+        <span class="sm-chat-tool-name">{name}</span>
+        {summary && <span class="sm-chat-tool-summary">{summary}</span>}
+        {expandable && <span class="sm-chat-tool-toggle">{expanded ? '▾' : '▸'}</span>}
+      </button>
+      {expanded && (
+        <div class="sm-chat-tool-body">
+          {hasInput && (
+            <div class="sm-chat-tool-section">
+              <div class="sm-chat-tool-section-label">input</div>
+              <pre class="sm-chat-tool-pre">{JSON.stringify(cleanInput, null, 2)}</pre>
+            </div>
+          )}
+          {hasError && (
+            <div class="sm-chat-tool-section">
+              <div class="sm-chat-tool-section-label">error</div>
+              <pre class="sm-chat-tool-pre">{extras!.error}</pre>
+            </div>
+          )}
+          {!hasError && hasResult && (
+            <div class="sm-chat-tool-section">
+              <div class="sm-chat-tool-section-label">result</div>
+              <pre class="sm-chat-tool-pre">{
+                typeof extras!.result === 'string'
+                  ? extras!.result
+                  : JSON.stringify(extras!.result, null, 2)
+              }</pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function chatToolSummary(name: string, input?: Record<string, unknown>): string {
+  if (!input) return '';
+  switch (name) {
+    case 'Bash': {
+      const cmd = String(input.command || '').split('\n')[0].trim();
+      // Prefer the explicit description if the command is gnarly (curl,
+      // long pipelines, etc) — otherwise show the command itself.
+      const desc = String(input.description || '').trim();
+      const display = cmd.length > 80 && desc ? desc : cmd;
+      return display.length > 80 ? display.slice(0, 80) + '…' : display;
+    }
+    case 'Edit':
+    case 'Write':
+    case 'Read': {
+      const path = String(input.file_path || '');
+      return path ? shortenPath(path) : '';
+    }
+    case 'Glob':
+      return String(input.pattern || '');
+    case 'Grep':
+      return String(input.pattern || '');
+    case 'WebFetch':
+    case 'WebSearch':
+      return String(input.url || input.query || '');
+    case 'Task':
+    case 'TaskCreate':
+    case 'TaskUpdate':
+      return String(input.description || input.prompt || '').slice(0, 80);
+    case 'TodoWrite':
+      return Array.isArray(input.todos) ? `${input.todos.length} todo${input.todos.length === 1 ? '' : 's'}` : '';
+    case 'AskUserQuestion':
+      return String(input.question || '').slice(0, 80);
+    default: {
+      // Generic: show the first scalar input value (often a path/url/text).
+      // Skip the chip's private extras bag.
+      const firstVal = Object.entries(input)
+        .find(([k, v]) => k !== '__chatExtras' && typeof v === 'string')?.[1];
+      return typeof firstVal === 'string' ? firstVal.slice(0, 80) : '';
+    }
   }
 }
 

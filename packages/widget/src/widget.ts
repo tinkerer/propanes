@@ -1120,7 +1120,7 @@ export class ProPanesElement {
       { icon: '\u{1F4CB}', label: 'Feedback', onClick: () => this.overlayManager.openPanel('feedback') },
       { icon: '\u26A1', label: 'Sessions', onClick: () => this.overlayManager.openPanel('sessions') },
       { icon: '\u2B1A', label: 'ProPanes Overlay', onClick: () => this.overlayManager.openWorkbench() },
-      { icon: '\u2605', label: 'Ops (Chief of Staff)', onClick: () => this.overlayManager.openPanel('cos') },
+      { icon: '\u2605', label: 'Ops', onClick: () => this.overlayManager.openPanel('cos') },
       { icon: '\u{1F4BB}', label: 'Terminal', onClick: () => {
           const opts: { launcherId?: string } = {};
           const stored = localStorage.getItem('pw-dispatch-target');
@@ -1549,12 +1549,29 @@ export class ProPanesElement {
     }
   }
 
+  /**
+   * Build the mic-bridge popup URL on insecure (HTTP) origins. We swap the
+   * hostname to "localhost" but keep the port so the popup runs in a secure
+   * context where getUserMedia + SpeechRecognition work. Requires the user to
+   * be running propanes locally on the same port (same setup as the Open in
+   * Terminal.app bridge).
+   */
+  private computeMicBridgeUrl(): string {
+    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
+    const originUrl = new URL(endpointUrl.origin);
+    originUrl.hostname = 'localhost';
+    return `${originUrl.origin}/api/v1/local/mic-bridge`;
+  }
+
   private async toggleVoiceRecording() {
     const micBtn = this.shadow.querySelector('#pw-mic-btn') as HTMLButtonElement;
     if (this.voiceRecorder.recording) {
       // Stop recording
       micBtn.classList.remove('pw-mic-recording');
-      const result = await this.voiceRecorder.stop();
+      const insecureContext = typeof window !== 'undefined' && window.isSecureContext === false;
+      const result = insecureContext && this.voiceRecorder.usingMicBridge
+        ? await this.voiceRecorder.stopViaIframe()
+        : await this.voiceRecorder.stop();
       this.voiceResult = result;
 
       // Remove trigger recording indicator
@@ -1604,7 +1621,12 @@ export class ProPanesElement {
           this.appendTimelineEntry(item);
         };
 
-        await this.voiceRecorder.start({ screenCaptures: this.micScreenCaptures });
+        const insecureContext = typeof window !== 'undefined' && window.isSecureContext === false;
+        if (insecureContext) {
+          await this.voiceRecorder.startViaIframe(this.computeMicBridgeUrl());
+        } else {
+          await this.voiceRecorder.start({ screenCaptures: this.micScreenCaptures });
+        }
         micBtn.classList.add('pw-mic-recording');
 
         // Show timeline
@@ -1761,13 +1783,7 @@ export class ProPanesElement {
 
     try {
       if (insecureContext) {
-        // Use iframe bridge: load mic-bridge from localhost (secure context).
-        // Swap the hostname to localhost but keep the port so the iframe runs
-        // in a secure context where getUserMedia + SpeechRecognition work.
-        const originUrl = new URL(baseOrigin);
-        originUrl.hostname = 'localhost';
-        const bridgeUrl = `${originUrl.origin}/api/v1/local/mic-bridge`;
-        await this.voiceRecorder.startAmbientViaIframe(bridgeUrl, {
+        await this.voiceRecorder.startAmbientViaIframe(this.computeMicBridgeUrl(), {
           windowMs: 30_000,
           silenceMs: 10_000,
           maxLength: 500,
