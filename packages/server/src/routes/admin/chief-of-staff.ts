@@ -12,6 +12,7 @@ import { findRecentProjectJsonl } from '../../jsonl-scan.js';
 import {
   spawnSessionRemote,
   inputSessionRemote,
+  killSessionRemote,
   getSessionStatus,
   getSessionServiceWsUrl,
 } from '../../session-service-client.js';
@@ -43,7 +44,7 @@ Style: terse. Short bullet lists. Surface IDs. Flag anything stuck (sessions run
 
 ## Posting images / screenshots to the thread
 
-When you take a screenshot (e.g. via pw-vnc screenshot) and want to show it in the chat, DO NOT post it via the CoS chat endpoint — that would create a "You" bubble attributed to the operator. Instead, convert the image to a base64 data URL and POST it as an assistant message directly:
+When you take a screenshot (e.g. via pw-vnc screenshot) and want to show it in the chat, DO NOT post it via the Ops chat endpoint — that would create a "You" bubble attributed to the operator. Instead, convert the image to a base64 data URL and POST it as an assistant message directly:
 
 \`\`\`bash
 THREAD_ID="<threadId from your system prompt>"
@@ -53,7 +54,7 @@ curl -s -X POST "http://localhost:3001/api/v1/admin/chief-of-staff/threads/$THRE
   -d "{\"role\":\"assistant\",\"text\":\"Screenshot:\",\"attachmentsJson\":\"{\\\"images\\\":[{\\\"dataUrl\\\":\\\"data:image/png;base64,$IMG_B64\\\",\\\"name\\\":\\\"screenshot.png\\\"}]}\"}"
 \`\`\`
 
-This inserts the image as a Chief-of-Staff message so it appears in the "Ops" bubble, not "You".`;
+This inserts the image as an Ops message so it appears in the "Ops" bubble, not "You".`;
 
 type Verbosity = 'terse' | 'normal' | 'verbose';
 type ReplyStyle = 'dry' | 'neutral' | 'friendly';
@@ -95,9 +96,9 @@ Inside the final tag, style the reply as:
 Anything outside the tags is hidden scratch work and will not be shown to the user.`;
 }
 
-const COORDINATION_INSTRUCTIONS = `## Coordinating with concurrent Chief-of-Staff sessions
+const COORDINATION_INSTRUCTIONS = `## Coordinating with concurrent Ops sessions
 
-Multiple CoS sessions may run in parallel. Before doing work that could conflict with another active session (editing the same file, running the same long command, mutating the same DB row), claim an advisory lock:
+Multiple Ops sessions may run in parallel. Before doing work that could conflict with another active session (editing the same file, running the same long command, mutating the same DB row), claim an advisory lock:
 
 - POST /api/v1/admin/chief-of-staff/lock  body: {"requestId":"<yours>","key":"<namespace:resource>"}
   - {"granted":true} — you hold it; proceed.
@@ -275,179 +276,298 @@ function buildThreadSystemPrompt(threadId: string, appId: string | null, overrid
   return base + ctx;
 }
 
-// Proxy session-service WebSocket output as an SSE ReadableStream.
+// In-memory pubsub for messages posted to a cosThread via
+// POST /chief-of-staff/threads/:id/messages. Listeners are typically the
+// chat SSE stream for the same thread, which forwards each event to the
+// admin client so out-of-band assistant posts (e.g. screenshots) appear
+// live instead of waiting for a manual refresh.
+type CosThreadMessageEvent = {
+  id: string;
+  threadId: string;
+  role: 'assistant' | 'system' | 'user';
+  text: string;
+  toolCallsJson: string | null;
+  attachmentsJson: string | null;
+  createdAt: number;
+};
+
+// Live claude-cli stream-json events for an in-flight turn. Replaces the
+// old per-request SSE response body — these are now published through the
+// thread bus so the chat POST can return 202 immediately and the client
+// listens on the long-lived /threads/:id/events SSE instead.
+type CosClaudeEvent = {
+  threadId: string;
+  turnId: string;
+  seq: number;
+  /** raw claude-cli stream-json line, already ANSI-stripped & validated */
+  line: string;
+};
+
+type CosTurnStatus =
+  | { kind: 'started'; threadId: string; turnId: string; agentSessionId: string; startSeq: number; startedAt: number }
+  | { kind: 'completed'; threadId: string; turnId: string; exitCode: number; cancelled: boolean }
+  | { kind: 'failed'; threadId: string; turnId: string; error: string };
+
+type CosBusEvent =
+  | { kind: 'cos_message'; payload: CosThreadMessageEvent }
+  | { kind: 'claude_event'; payload: CosClaudeEvent }
+  | { kind: 'turn_status'; payload: CosTurnStatus };
+
+const threadEventBus = new Map<string, Set<(ev: CosBusEvent) => void>>();
+// Parallel agent-scoped bus so the panel can subscribe live to all of an
+// agent's threads even when no thread-specific stream is open (i.e. between
+// turns or for out-of-band posts that arrive while the operator is just
+// looking).
+const agentEventBus = new Map<string, Set<(ev: CosBusEvent) => void>>();
+
+// Per-turn ring buffer of claude_event lines so a late-joining /events
+// subscriber can replay the in-flight turn from any seq. Keyed by turnId
+// (= cosThreads.turnRequestId). Deleted when the turn completes / fails.
+const TURN_REPLAY_CAP = 5000;
+const turnReplayBuffers = new Map<string, CosClaudeEvent[]>();
+
+function appendTurnReplay(ev: CosClaudeEvent): void {
+  let buf = turnReplayBuffers.get(ev.turnId);
+  if (!buf) { buf = []; turnReplayBuffers.set(ev.turnId, buf); }
+  buf.push(ev);
+  if (buf.length > TURN_REPLAY_CAP) buf.splice(0, buf.length - TURN_REPLAY_CAP);
+}
+function clearTurnReplay(turnId: string): void {
+  turnReplayBuffers.delete(turnId);
+}
+function getTurnReplay(turnId: string, fromSeq: number): CosClaudeEvent[] {
+  const buf = turnReplayBuffers.get(turnId);
+  if (!buf || buf.length === 0) return [];
+  if (fromSeq <= 0) return buf.slice();
+  return buf.filter((e) => e.seq > fromSeq);
+}
+
+function subscribeThreadEvents(
+  threadId: string,
+  fn: (ev: CosBusEvent) => void,
+): () => void {
+  let set = threadEventBus.get(threadId);
+  if (!set) { set = new Set(); threadEventBus.set(threadId, set); }
+  set.add(fn);
+  return () => {
+    const s = threadEventBus.get(threadId);
+    if (!s) return;
+    s.delete(fn);
+    if (s.size === 0) threadEventBus.delete(threadId);
+  };
+}
+function subscribeAgentEvents(
+  agentId: string,
+  fn: (ev: CosBusEvent) => void,
+): () => void {
+  let set = agentEventBus.get(agentId);
+  if (!set) { set = new Set(); agentEventBus.set(agentId, set); }
+  set.add(fn);
+  return () => {
+    const s = agentEventBus.get(agentId);
+    if (!s) return;
+    s.delete(fn);
+    if (s.size === 0) agentEventBus.delete(agentId);
+  };
+}
+function publishBusEvent(threadId: string, ev: CosBusEvent, agentId?: string | null): void {
+  const set = threadEventBus.get(threadId);
+  if (set) {
+    for (const fn of Array.from(set)) {
+      try { fn(ev); } catch { /* ignore listener errors */ }
+    }
+  }
+  if (agentId) {
+    const aSet = agentEventBus.get(agentId);
+    if (aSet) {
+      for (const fn of Array.from(aSet)) {
+        try { fn(ev); } catch { /* ignore listener errors */ }
+      }
+    }
+  }
+}
+
+// Convenience wrappers for the existing cos_message publish path so we don't
+// have to rewrite every call site.
+function publishThreadMessage(ev: CosThreadMessageEvent, agentId?: string | null): void {
+  publishBusEvent(ev.threadId, { kind: 'cos_message', payload: ev }, agentId);
+}
+
+// Consume a session-service WebSocket and publish each parsed claude line
+// through the per-thread event bus. Runs detached from the originating HTTP
+// request: POST /chat returns 202 immediately and the consumer keeps going
+// until the turn completes, fails, or the agent session exits. Subscribers
+// (admin client) read events via /threads/:id/events SSE, which auto-replays
+// from a per-turn ring buffer so a dropped or late-joining subscriber never
+// loses content.
 //
-// Three callers:
+// Two callers:
 // 1. New turn: `userMessage` is the prompt; we capture the current outputSeq
 //    as the turn's start seq, call `onTurnStart(startSeq)`, then write stdin.
 // 2. Initial spawn: `userMessage === null` (first turn was passed as the
 //    initial prompt to spawnSessionRemote) — skip stdin write but still
 //    record the turn-start seq.
-// 3. Re-attach: `attach === true` and `fromSeq` is provided — tail an
-//    already-running turn from the given seq without writing stdin, without
-//    persisting a fresh assistant row on finish.
 //
-// Each forwarded claude line is wrapped as an envelope `{"seq":N,"line":...}`
-// so clients can remember the last seq they saw and resume exactly there.
-function streamCosSessionOutput(params: {
+// Returns a promise that resolves when the consumer finishes (clean done,
+// exit, or error). Errors are surfaced as `turn_status: { kind: 'failed' }`
+// events on the bus rather than thrown, so the caller can return 202 without
+// awaiting completion.
+function runCosTurnConsumer(params: {
   agentSessionId: string;
   userMessage: string | null;
-  requestId: string;
-  attach?: boolean;
-  fromSeq?: number;
-  onTurnStart?: (startSeq: number) => void;
+  /** turnId is the cosThreads.turnRequestId for this turn; used as the
+   *  replay-buffer key + the discriminator on the bus so a single-thread
+   *  subscriber can match events to the turn it just kicked off. */
+  turnId: string;
+  threadId: string;
+  agentId: string | null;
+  /** outputSeq snapshot captured by the caller before this consumer runs.
+   *  Used as the WS replay boundary (everything > startSeq is "this turn")
+   *  and as the seq emitted in `turn_status: started`. */
+  startSeq: number;
   onAssistantText: (text: string, toolCalls: Map<string, { id: string; name: string; input: unknown; result?: string; error?: string }>, toolOrder: string[]) => void;
   onCapturedSessionId: (id: string) => void;
   onDone?: () => void;
-}): ReadableStream {
+}): Promise<void> {
   const {
     agentSessionId,
     userMessage,
-    requestId,
-    attach = false,
-    fromSeq,
-    onTurnStart,
+    turnId,
+    threadId,
+    agentId,
+    startSeq,
     onAssistantText,
     onCapturedSessionId,
     onDone,
   } = params;
-  const encoder = new TextEncoder();
 
-  return new ReadableStream({
-    start(controller) {
-      let closed = false;
-      let startOutputSeq = 0;
-      let finalAssistantText = '';
-      const finalToolCallsById = new Map<string, { id: string; name: string; input: unknown; result?: string; error?: string }>();
-      const finalToolCallOrder: string[] = [];
-      let capturedSessionId: string | null = null;
-      let seqCursor = 0;
+  return new Promise<void>((resolve) => {
+    let finished = false;
+    let finalAssistantText = '';
+    const finalToolCallsById = new Map<string, { id: string; name: string; input: unknown; result?: string; error?: string }>();
+    const finalToolCallOrder: string[] = [];
+    let capturedSessionId: string | null = null;
+    let seqCursor = 0;
 
-      const enqueue = (event: string, data: unknown) => {
-        if (closed) return;
-        try { controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); } catch { closed = true; }
-      };
-      const enqueueClaudeFrame = (seq: number, raw: string) => {
-        if (closed) return;
-        // Wrap the raw claude JSON line so clients learn the session-service
-        // seq they're processing. Kept as one-line JSON for cheap parsing.
-        const envelope = `{"seq":${seq},"line":${raw}}`;
-        try { controller.enqueue(encoder.encode(`event: claude\ndata: ${envelope}\n\n`)); } catch { closed = true; }
-      };
-      const finish = (exitCode: number, cancelled = false) => {
-        if (closed) return;
-        // On re-attach the original turn already owns persistence; don't
-        // double-write the assistant row on every reconnect.
-        if (!attach) {
-          onAssistantText(finalAssistantText, finalToolCallsById, finalToolCallOrder);
-          if (capturedSessionId) onCapturedSessionId(capturedSessionId);
-        }
-        enqueue('done', { exitCode, cancelled, attach });
-        closed = true;
-        try { controller.close(); } catch { /* already closed */ }
-        onDone?.();
-      };
+    const publishClaude = (seq: number, line: string) => {
+      const ev: CosClaudeEvent = { threadId, turnId, seq, line };
+      appendTurnReplay(ev);
+      publishBusEvent(threadId, { kind: 'claude_event', payload: ev }, agentId);
+    };
+    const publishStatus = (status: CosTurnStatus) => {
+      publishBusEvent(threadId, { kind: 'turn_status', payload: status }, agentId);
+    };
+    const finish = (exitCode: number, cancelled = false) => {
+      if (finished) return;
+      finished = true;
+      onAssistantText(finalAssistantText, finalToolCallsById, finalToolCallOrder);
+      if (capturedSessionId) onCapturedSessionId(capturedSessionId);
+      publishStatus({ kind: 'completed', threadId, turnId, exitCode, cancelled });
+      // Hold the replay buffer briefly so a subscriber that connected just
+      // after `completed` fired can still backfill missed events.
+      setTimeout(() => clearTurnReplay(turnId), 30_000);
+      onDone?.();
+      resolve();
+    };
+    const fail = (error: string) => {
+      if (finished) return;
+      finished = true;
+      publishStatus({ kind: 'failed', threadId, turnId, error });
+      setTimeout(() => clearTurnReplay(turnId), 30_000);
+      onDone?.();
+      resolve();
+    };
 
-      // Parse a stream-json line and accumulate assistant content.
-      //
-      // Sessions run through a tmux-wrapped PTY (see session-service.ts), so
-      // claude's stream-json stdout arrives interleaved with CSI/OSC escape
-      // sequences + CR bytes. JSON.parse bails on that noise, which silently
-      // drops the assistant reply and surfaces as "No response from Claude"
-      // on the frontend even though the turn completed normally. Strip any
-      // ANSI sequences + CRs before parsing.
-      const ANSI_RE = /\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x20-\x2f]*[\x30-\x7e])/g;
-      const processJsonLine = (line: string, seq: number): boolean => {
-        const cleaned = line.replace(ANSI_RE, '').replace(/\r/g, '').trim();
-        if (!cleaned) return false;
-        // Fast-path: only try to parse lines that look like a JSON object.
-        // Keeps this resilient to tmux status/banner lines that survive the
-        // strip (e.g. `[exited]`).
-        if (cleaned.charCodeAt(0) !== 0x7b /* '{' */) return false;
-        let obj: any;
-        try { obj = JSON.parse(cleaned); } catch { return false; }
-        enqueueClaudeFrame(seq, cleaned);
-        if (!capturedSessionId && typeof obj.session_id === 'string' && obj.session_id) {
-          capturedSessionId = obj.session_id;
-        }
-        if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
-          for (const block of obj.message.content) {
-            if (block.type === 'text' && block.text) {
-              finalAssistantText += (finalAssistantText ? '\n\n' : '') + block.text;
-            } else if (block.type === 'tool_use') {
-              const id = String(block.id || `tu-${finalToolCallOrder.length}`);
-              if (!finalToolCallsById.has(id)) {
-                finalToolCallsById.set(id, { id, name: String(block.name || 'tool'), input: block.input });
-                finalToolCallOrder.push(id);
-              }
+    // Parse a stream-json line and accumulate assistant content.
+    //
+    // Sessions run through a tmux-wrapped PTY (see session-service.ts), so
+    // claude's stream-json stdout arrives interleaved with CSI/OSC escape
+    // sequences + CR bytes. JSON.parse bails on that noise, which silently
+    // drops the assistant reply and surfaces as "No response from Claude"
+    // on the frontend even though the turn completed normally. Strip any
+    // ANSI sequences + CRs before parsing.
+    const ANSI_RE = /\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x20-\x2f]*[\x30-\x7e])/g;
+    const processJsonLine = (line: string, seq: number): boolean => {
+      const cleaned = line.replace(ANSI_RE, '').replace(/\r/g, '').trim();
+      if (!cleaned) return false;
+      if (cleaned.charCodeAt(0) !== 0x7b /* '{' */) return false;
+      let obj: any;
+      try { obj = JSON.parse(cleaned); } catch { return false; }
+      publishClaude(seq, cleaned);
+      if (!capturedSessionId && typeof obj.session_id === 'string' && obj.session_id) {
+        capturedSessionId = obj.session_id;
+      }
+      if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
+        for (const block of obj.message.content) {
+          if (block.type === 'text' && block.text) {
+            finalAssistantText += (finalAssistantText ? '\n\n' : '') + block.text;
+          } else if (block.type === 'tool_use') {
+            const id = String(block.id || `tu-${finalToolCallOrder.length}`);
+            if (!finalToolCallsById.has(id)) {
+              finalToolCallsById.set(id, { id, name: String(block.name || 'tool'), input: block.input });
+              finalToolCallOrder.push(id);
             }
           }
-        } else if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
-          for (const block of obj.message.content) {
-            if (block.type !== 'tool_result') continue;
-            const call = finalToolCallsById.get(String(block.tool_use_id || ''));
-            if (!call) continue;
-            const raw = block.content;
-            let content = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.map((c: any) => c?.text || JSON.stringify(c)).join('\n') : JSON.stringify(raw);
-            if (content.length > 4000) content = `${content.slice(0, 4000)}…`;
-            if (block.is_error) call.error = content; else call.result = content;
-          }
-        } else if (obj.type === 'result') {
-          if (!finalAssistantText && obj.result) finalAssistantText = String(obj.result).trim();
-          return true; // signal end of turn
         }
-        return false;
-      };
-
-      (async () => {
-        if (attach) {
-          // Passive re-attach: use the given fromSeq without writing stdin.
-          startOutputSeq = Math.max(0, (fromSeq ?? 1) - 1);
-        } else {
-          // Get current output seq before writing — we only want output after our message.
-          const status = await getSessionStatus(agentSessionId).catch(() => null);
-          startOutputSeq = status?.outputSeq ?? 0;
-          onTurnStart?.(startOutputSeq);
+      } else if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
+        for (const block of obj.message.content) {
+          if (block.type !== 'tool_result') continue;
+          const call = finalToolCallsById.get(String(block.tool_use_id || ''));
+          if (!call) continue;
+          const raw = block.content;
+          let content = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.map((c: any) => c?.text || JSON.stringify(c)).join('\n') : JSON.stringify(raw);
+          if (content.length > 4000) content = `${content.slice(0, 4000)}…`;
+          if (block.is_error) call.error = content; else call.result = content;
         }
-        seqCursor = startOutputSeq;
+      } else if (obj.type === 'result') {
+        if (!finalAssistantText && obj.result) finalAssistantText = String(obj.result).trim();
+        return true; // signal end of turn
+      }
+      return false;
+    };
 
-        enqueue('session', { sessionId: agentSessionId, requestId, startSeq: startOutputSeq, attach });
+    (async () => {
+      try {
+        seqCursor = startSeq;
 
-        if (!attach && userMessage !== null) {
-          // Write user message as stream-json to stdin (first-turn message is
-          // passed as the initial prompt to spawnSessionRemote instead).
+        publishStatus({
+          kind: 'started',
+          threadId,
+          turnId,
+          agentSessionId,
+          startSeq,
+          startedAt: Date.now(),
+        });
+
+        if (userMessage !== null) {
           const stdinPayload = JSON.stringify({
             type: 'user',
             message: { role: 'user', content: [{ type: 'text', text: userMessage }] },
           }) + '\n';
           await inputSessionRemote(agentSessionId, stdinPayload).catch((err) => {
-            enqueue('error', { error: String(err) });
-            finish(1);
+            fail(`stdin write failed: ${String(err)}`);
           });
-          if (closed) return;
+          if (finished) return;
         }
 
-        // Open WebSocket to session-service and replay output from startOutputSeq.
         const wsUrl = getSessionServiceWsUrl(agentSessionId);
         const ws = new WebSocket(wsUrl);
         let outputBuf = '';
 
         ws.on('open', () => {
-          ws.send(JSON.stringify({ type: 'replay_request', fromSeq: startOutputSeq + 1 }));
+          ws.send(JSON.stringify({ type: 'replay_request', fromSeq: startSeq + 1 }));
         });
 
         ws.on('message', (raw) => {
-          if (closed) { ws.close(); return; }
+          if (finished) { ws.close(); return; }
           let msg: any;
           try { msg = JSON.parse(raw.toString()); } catch { return; }
-          // Session-service emits SequencedOutput envelopes:
-          //   { type: 'sequenced_output', seq, content: { kind, data } }
-          // Fall back to flat fields in case of legacy frames.
           const kind = msg?.content?.kind ?? msg?.kind;
           const data = typeof msg?.content?.data === 'string'
             ? msg.content.data
             : (typeof msg?.data === 'string' ? msg.data : null);
           const exitCode = msg?.content?.exitCode ?? msg?.exitCode;
+          const exitStatus = msg?.content?.status ?? msg?.status;
           if (typeof msg?.seq === 'number') seqCursor = msg.seq;
           if (kind === 'output' && data != null) {
             outputBuf += data;
@@ -459,20 +579,21 @@ function streamCosSessionOutput(params: {
             }
           } else if (kind === 'exit') {
             ws.close();
-            finish(exitCode ?? 0, false);
+            finish(exitCode ?? 0, exitStatus === 'killed');
           }
         });
 
         ws.on('error', (err) => {
-          enqueue('error', { error: String(err) });
-          finish(1);
+          fail(String(err));
         });
 
         ws.on('close', () => {
-          if (!closed) finish(0);
+          if (!finished) finish(0);
         });
-      })();
-    },
+      } catch (err) {
+        fail(err instanceof Error ? err.message : String(err));
+      }
+    })();
   });
 }
 
@@ -651,18 +772,33 @@ chiefOfStaffRoutes.post('/chief-of-staff/threads/:id/messages', async (c) => {
 
   const now = Date.now();
   const messageId = ulid();
+  const attachmentsJson = body.attachmentsJson || null;
   await db.insert(schema.cosMessages).values({
     id: messageId,
     threadId,
     role,
     text,
     toolCallsJson: null,
-    attachmentsJson: body.attachmentsJson || null,
+    attachmentsJson,
     createdAt: now,
   });
   await db.update(schema.cosThreads)
     .set({ updatedAt: now })
     .where(eq(schema.cosThreads.id, threadId));
+
+  // Notify any active chat SSE stream for this thread so the admin UI can
+  // render the new message live instead of waiting for a refresh. Also fans
+  // out to the agent-scoped bus so an idle panel (no turn streaming) still
+  // sees the post via /chief-of-staff/agents/:agentId/stream.
+  publishThreadMessage({
+    id: messageId,
+    threadId,
+    role,
+    text,
+    toolCallsJson: null,
+    attachmentsJson,
+    createdAt: now,
+  }, thread.agentId);
 
   return c.json({ ok: true, messageId });
 });
@@ -818,15 +954,36 @@ chiefOfStaffRoutes.get('/chief-of-staff/dispatches', async (c) => {
 // Interrupt route
 // ────────────────────────────────────────────────────────────────────────────
 
-chiefOfStaffRoutes.post('/chief-of-staff/threads/:id/interrupt', (c) => {
+chiefOfStaffRoutes.post('/chief-of-staff/threads/:id/interrupt', async (c) => {
   const threadId = c.req.param('id');
+  let interrupted = false;
+
+  // Legacy spawn path: a real claude proc tracked by threadId.
   const entry = inFlightByThread.get(threadId);
   if (entry) {
     killProc(entry);
     inFlightByThread.delete(threadId);
-    return c.json({ ok: true, interrupted: true });
+    interrupted = true;
   }
-  return c.json({ ok: true, interrupted: false });
+
+  // Persistent headless-stream path: the in-flight turn is owned by
+  // session-service. Killing the underlying agent session ends the current
+  // turn; the next user message respawns and resumes via claudeSessionId.
+  const thread = await db.query.cosThreads.findFirst({
+    where: eq(schema.cosThreads.id, threadId),
+  });
+  if (thread?.agentSessionId) {
+    const killed = await killSessionRemote(thread.agentSessionId).catch(() => false);
+    if (killed) {
+      db.update(schema.cosThreads)
+        .set({ turnStartedAt: null, turnStartSeq: null, turnUserText: null, turnRequestId: null })
+        .where(eq(schema.cosThreads.id, threadId))
+        .run();
+      interrupted = true;
+    }
+  }
+
+  return c.json({ ok: true, interrupted });
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -874,35 +1031,141 @@ chiefOfStaffRoutes.get('/chief-of-staff/threads/:id/status', async (c) => {
   });
 });
 
-// Re-attach SSE stream to an in-flight turn. Used by the frontend to resume
-// after the main-server restarts or after a transient network drop — the
-// session-service's output buffer lets us replay from the last-seen seq so
-// nothing is lost or duplicated.
-chiefOfStaffRoutes.get('/chief-of-staff/threads/:id/attach', async (c) => {
+// Per-thread live event stream. Replaces the old /attach endpoint and the
+// SSE response body of POST /chat. POST /chat now returns 202 immediately;
+// the client opens this stream to receive:
+//
+//   • cos_message  — out-of-band /messages POSTs for this thread (e.g. an
+//                    agent script posting a screenshot back).
+//   • claude_event — { turnId, seq, line } envelopes for the live in-flight
+//                    turn (matches the wire format the previous SSE used).
+//   • turn_status  — { kind: 'started'|'completed'|'failed', ...} events
+//                    so the client can finalize the turn without polling.
+//
+// Pass ?fromSeq=N to backfill any claude_event with seq>N from the per-turn
+// ring buffer before live events flow. The buffer is keyed by turnId and
+// retained for ~30s past completion so a slow subscriber still gets the
+// tail of the last turn. EventSource auto-reconnects on transient drops;
+// the client just bumps fromSeq to its lastSeenSeq and re-subscribes.
+chiefOfStaffRoutes.get('/chief-of-staff/threads/:id/events', async (c) => {
   const threadId = c.req.param('id');
   const fromSeqRaw = c.req.query('fromSeq');
-  const fromSeq = fromSeqRaw != null && !Number.isNaN(Number(fromSeqRaw)) ? Number(fromSeqRaw) : undefined;
+  const fromSeq = fromSeqRaw != null && !Number.isNaN(Number(fromSeqRaw)) ? Number(fromSeqRaw) : 0;
+  // Optional: replay from this specific turn's buffer instead of the
+  // thread's current in-flight turn. Used by the chat sender so a stop-path
+  // synthetic turn (which never sets thread.turnRequestId) is still
+  // replayable, and so a reconnecting subscriber pins to its own turn even
+  // if a later turn has already started on the same thread.
+  const replayTurnId = c.req.query('turnId') || null;
 
   const thread = await db.query.cosThreads.findFirst({
     where: eq(schema.cosThreads.id, threadId),
   });
   if (!thread) return c.json({ error: 'Thread not found' }, 404);
-  if (!thread.agentSessionId) return c.json({ error: 'Thread has no session to attach to' }, 404);
-  if (thread.turnStartedAt == null || thread.turnStartSeq == null) {
-    return c.json({ error: 'No in-flight turn to attach to' }, 409);
-  }
 
-  const requestId = thread.turnRequestId || randomUUID();
-  const stream = streamCosSessionOutput({
-    agentSessionId: thread.agentSessionId,
-    userMessage: null,
-    requestId,
-    attach: true,
-    fromSeq: fromSeq ?? (thread.turnStartSeq + 1),
-    onAssistantText: () => { /* primary turn owns persistence */ },
-    onCapturedSessionId: () => { /* primary turn owns session-id capture */ },
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      let closed = false;
+      const enqueue = (event: string, data: unknown) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          closed = true;
+        }
+      };
+      enqueue('hello', {
+        threadId,
+        at: Date.now(),
+        currentTurnId: thread.turnRequestId || null,
+        currentTurnStartSeq: thread.turnStartSeq ?? null,
+        replayTurnId,
+      });
+
+      // Replay buffered claude events so a late subscriber (or a reconnect)
+      // sees the gap between fromSeq and live. Prefer the explicit turnId
+      // from the query string; fall back to the thread's current in-flight
+      // turn for callers that didn't pin one (e.g. an idle dashboard).
+      const turnIdToReplay = replayTurnId || thread.turnRequestId || null;
+      if (turnIdToReplay) {
+        const replay = getTurnReplay(turnIdToReplay, fromSeq);
+        for (const ev of replay) enqueue('claude_event', ev);
+      }
+
+      const unsubscribe = subscribeThreadEvents(threadId, (ev) => {
+        if (closed) { try { unsubscribe(); } catch { /* ignore */ } return; }
+        if (ev.kind === 'cos_message') enqueue('cos_message', ev.payload);
+        else if (ev.kind === 'claude_event') {
+          // Already replayed; suppress events the client has already seen.
+          if (ev.payload.seq > fromSeq) enqueue('claude_event', ev.payload);
+        } else if (ev.kind === 'turn_status') enqueue('turn_status', ev.payload);
+      });
+
+      const heartbeat = setInterval(() => {
+        if (closed) return;
+        try { controller.enqueue(encoder.encode(`event: ping\ndata: ${Date.now()}\n\n`)); } catch { closed = true; }
+      }, 25_000);
+      const cleanup = () => {
+        if (closed) return;
+        closed = true;
+        try { unsubscribe(); } catch { /* ignore */ }
+        clearInterval(heartbeat);
+        try { controller.close(); } catch { /* already closed */ }
+      };
+      c.req.raw.signal.addEventListener('abort', cleanup);
+    },
   });
+  return c.body(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+});
 
+// Agent-scoped live SSE: forwards every event for any thread under this
+// agent. Used by the bubble while it's open as a low-cost listener for
+// out-of-band agent posts (screenshots, etc.). Per-turn replay is not
+// supported here — a chat send always opens its own /threads/:id/events
+// stream which covers the gap.
+chiefOfStaffRoutes.get('/chief-of-staff/agents/:agentId/stream', (c) => {
+  const agentId = c.req.param('agentId');
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      let closed = false;
+      const enqueue = (event: string, data: unknown) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          closed = true;
+        }
+      };
+      enqueue('hello', { agentId, at: Date.now() });
+      const unsubscribe = subscribeAgentEvents(agentId, (ev) => {
+        if (closed) { try { unsubscribe(); } catch { /* ignore */ } return; }
+        if (ev.kind === 'cos_message') enqueue('cos_message', ev.payload);
+        else if (ev.kind === 'claude_event') enqueue('claude_event', ev.payload);
+        else if (ev.kind === 'turn_status') enqueue('turn_status', ev.payload);
+      });
+      const heartbeat = setInterval(() => {
+        if (closed) return;
+        try { controller.enqueue(encoder.encode(`event: ping\ndata: ${Date.now()}\n\n`)); } catch { closed = true; }
+      }, 25_000);
+      const cleanup = () => {
+        if (closed) return;
+        closed = true;
+        try { unsubscribe(); } catch { /* ignore */ }
+        clearInterval(heartbeat);
+        try { controller.close(); } catch { /* already closed */ }
+      };
+      c.req.raw.signal.addEventListener('abort', cleanup);
+    },
+  });
   return c.body(stream, {
     headers: {
       'Content-Type': 'text/event-stream',
@@ -1110,29 +1373,40 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
       .where(eq(schema.cosThreads.id, thread.id))
       .catch(() => { /* non-fatal */ });
 
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode(
-          `event: claude\ndata: ${JSON.stringify({
-            type: 'assistant',
-            message: { content: [{ type: 'text', text: `<cos-reply>${ackText}</cos-reply>` }] },
-          })}\n\n`,
-        ));
-        controller.enqueue(encoder.encode(
-          `event: done\ndata: ${JSON.stringify({ exitCode: 0, stopped: wasRunning })}\n\n`,
-        ));
-        controller.close();
-      },
-    });
-    return c.body(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      },
-    });
+    // Synthetic "stop" turn: no agent run, but emit the same shape of events
+    // a normal turn would so the client can finalize its optimistic row via
+    // its /threads/:id/events subscription. Stage to the replay buffer
+    // immediately (so a subscriber that connects after the 202 will replay
+    // it), then publish live after a short delay so the EventSource has
+    // time to open + register listeners.
+    const stopTurnId = randomUUID();
+    const stopEvent: CosClaudeEvent = {
+      threadId: thread.id,
+      turnId: stopTurnId,
+      seq: 1,
+      line: JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: `<cos-reply>${ackText}</cos-reply>` }] },
+      }),
+    };
+    appendTurnReplay(stopEvent);
+    setTimeout(() => {
+      publishBusEvent(thread!.id, { kind: 'claude_event', payload: stopEvent }, thread!.agentId);
+      publishBusEvent(thread!.id, {
+        kind: 'turn_status',
+        payload: { kind: 'completed', threadId: thread!.id, turnId: stopTurnId, exitCode: 0, cancelled: false },
+      }, thread!.agentId);
+      setTimeout(() => clearTurnReplay(stopTurnId), 30_000);
+    }, 100);
+
+    return c.json({
+      turnId: stopTurnId,
+      threadId: thread.id,
+      agentSessionId: thread.agentSessionId,
+      startSeq: 0,
+      stopped: wasRunning,
+      ackText,
+    }, 202);
   }
 
   // Concurrent follow-up: the persistent session-service session accepts
@@ -1204,8 +1478,8 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
       ? `\n\nYour threadId is ${body.threadId}. To post content back to this thread as yourself (not labelled "You"), POST to:\n  http://localhost:3001/api/v1/admin/chief-of-staff/threads/${body.threadId}/messages\n\nTo share a screenshot, use this Python one-liner (handles escaping safely):\n  python3 -c "import base64,json,urllib.request; img=open('/tmp/pw_vnc_screen.png','rb').read(); b64='data:image/png;base64,'+base64.b64encode(img).decode(); body=json.dumps({'role':'assistant','text':'Screenshot:','attachmentsJson':json.dumps({'images':[{'dataUrl':b64,'name':'screenshot.png'}]})}); r=urllib.request.Request('http://localhost:3001/api/v1/admin/chief-of-staff/threads/${body.threadId}/messages',body.encode(),{'Content-Type':'application/json'},'POST'); print(urllib.request.urlopen(r).read())"`
       : '') +
     (otherSessions.length > 0
-      ? `\n\nOther active Chief-of-Staff sessions right now:\n${JSON.stringify(otherSessions, null, 2)}`
-      : `\n\nNo other Chief-of-Staff sessions are active right now.`) +
+      ? `\n\nOther active Ops sessions right now:\n${JSON.stringify(otherSessions, null, 2)}`
+      : `\n\nNo other Ops sessions are active right now.`) +
     `\n\n${COORDINATION_INSTRUCTIONS}`;
 
   // Build base system prompt from thread or body
@@ -1255,7 +1529,7 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
     // Prepend per-turn metadata so the model has requestId / lock context.
     const turnMeta = [
       `[TURN requestId=${requestId}]`,
-      otherSessions.length > 0 ? `Other active CoS sessions: ${JSON.stringify(otherSessions)}` : null,
+      otherSessions.length > 0 ? `Other active Ops sessions: ${JSON.stringify(otherSessions)}` : null,
     ].filter(Boolean).join('\n');
     const fullTurnText = turnMeta ? `${turnMeta}\n\n${promptText}` : promptText;
 
@@ -1343,65 +1617,82 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
     activeSessions.set(requestId, { requestId, sessionId: thread.agentSessionId, text, startedAt, lockKeys: new Set() });
     if (body.threadId) inFlightByThread.set(body.threadId, { proc: { pid: undefined } as any, cancelled: false });
 
-    const streamOut = streamCosSessionOutput({
-      agentSessionId: thread.agentSessionId,
+    // Snapshot the session-service outputSeq once, before kicking off the
+    // detached consumer, so the caller can return it in the 202 response and
+    // the consumer uses the same boundary for WS replay.
+    const statusForSeq = await getSessionStatus(thread.agentSessionId).catch(() => null);
+    const startSeq = statusForSeq?.outputSeq ?? 0;
+
+    // Mark the turn as in-flight so /threads/:id/status can answer "is the
+    // bot busy?" without invoking the LLM, and so /threads/:id/events knows
+    // which turnId to backfill from the replay buffer for late subscribers.
+    db.update(schema.cosThreads).set({
+      turnStartedAt: startedAt,
+      turnStartSeq: startSeq,
+      turnUserText: text.slice(0, 500),
+      turnRequestId: requestId,
+    }).where(eq(schema.cosThreads.id, thread.id)).run();
+
+    // Snapshot what the consumer's onDone needs from `thread`/`body` so the
+    // detached closure isn't tied to the response lifecycle.
+    const threadIdForCallbacks = thread.id;
+    const agentSessionIdForCallbacks = thread.agentSessionId;
+    const agentIdForCallbacks = thread.agentId;
+    const threadIdForBody = body.threadId;
+
+    // Fire the consumer detached — POST /chat returns 202 immediately and the
+    // client subscribes to /threads/:id/events to receive content. Errors are
+    // surfaced via `turn_status: failed` events, never thrown out.
+    void runCosTurnConsumer({
+      agentSessionId: agentSessionIdForCallbacks,
       userMessage: isLive ? fullTurnText : null,
-      requestId,
-      onTurnStart: (startSeq) => {
-        if (!thread) return;
-        // Mark the turn as in-flight so /threads/:id/status can answer
-        // "is the bot busy?" without invoking the LLM, and so the frontend
-        // can re-attach from startSeq if the SSE stream drops.
-        db.update(schema.cosThreads).set({
-          turnStartedAt: startedAt,
-          turnStartSeq: startSeq,
-          turnUserText: text.slice(0, 500),
-          turnRequestId: requestId,
-        }).where(eq(schema.cosThreads.id, thread.id)).run();
-      },
+      turnId: requestId,
+      threadId: threadIdForCallbacks,
+      agentId: agentIdForCallbacks,
+      startSeq,
       onAssistantText: (finalText, toolCallsById, toolOrder) => {
-        if (!finalText || !thread) return;
+        if (!finalText) return;
         const now2 = Date.now();
         const toolCallsArr = toolOrder.map((id) => toolCallsById.get(id)).filter(Boolean);
         db.insert(schema.cosMessages).values({
-          id: ulid(), threadId: thread.id, role: 'assistant', text: finalText,
+          id: ulid(), threadId: threadIdForCallbacks, role: 'assistant', text: finalText,
           toolCallsJson: toolCallsArr.length > 0 ? JSON.stringify(toolCallsArr) : null,
           attachmentsJson: null, createdAt: now2,
         }).run();
-        db.update(schema.cosThreads).set({ updatedAt: now2 }).where(eq(schema.cosThreads.id, thread.id)).run();
+        db.update(schema.cosThreads).set({ updatedAt: now2 }).where(eq(schema.cosThreads.id, threadIdForCallbacks)).run();
         db.update(schema.agentSessions).set({
           status: 'running', lastActivityAt: new Date().toISOString(),
-        }).where(eq(schema.agentSessions.id, thread.agentSessionId!)).run();
+        }).where(eq(schema.agentSessions.id, agentSessionIdForCallbacks)).run();
       },
       onCapturedSessionId: (sid) => {
-        if (!thread) return;
-        db.update(schema.cosThreads).set({ claudeSessionId: sid }).where(eq(schema.cosThreads.id, thread.id)).run();
-        db.update(schema.agentSessions).set({ claudeSessionId: sid }).where(eq(schema.agentSessions.id, thread.agentSessionId!)).run();
+        db.update(schema.cosThreads).set({ claudeSessionId: sid }).where(eq(schema.cosThreads.id, threadIdForCallbacks)).run();
+        db.update(schema.agentSessions).set({ claudeSessionId: sid }).where(eq(schema.agentSessions.id, agentSessionIdForCallbacks)).run();
       },
       onDone: () => {
         releaseAllLocks(requestId);
         activeSessions.delete(requestId);
-        if (body.threadId) inFlightByThread.delete(body.threadId);
-        if (thread) {
-          db.update(schema.cosThreads).set({
-            turnStartedAt: null,
-            turnStartSeq: null,
-            turnUserText: null,
-            turnRequestId: null,
-          }).where(eq(schema.cosThreads.id, thread.id)).run();
-        }
+        if (threadIdForBody) inFlightByThread.delete(threadIdForBody);
+        db.update(schema.cosThreads).set({
+          turnStartedAt: null,
+          turnStartSeq: null,
+          turnUserText: null,
+          turnRequestId: null,
+        }).where(eq(schema.cosThreads.id, threadIdForCallbacks)).run();
         for (const p of tmpImagePaths) { try { unlinkSync(p.absPath); } catch { /* ignore */ } }
       },
+    }).catch((err) => {
+      // runCosTurnConsumer always resolves (errors are surfaced as
+      // turn_status events). This catch is here only to satisfy the
+      // promise-rejection lint.
+      console.error('[cos] consumer crashed:', err);
     });
 
-    return c.body(streamOut, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      },
-    });
+    return c.json({
+      turnId: requestId,
+      threadId: thread.id,
+      agentSessionId: thread.agentSessionId,
+      startSeq,
+    }, 202);
   }
   // ── End persistent headless-stream path ───────────────────────────────────
 
@@ -1409,3 +1700,80 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
   // already returned.
   return c.json({ error: 'Internal routing error' }, 500);
 });
+
+// On server startup, recover any cosThreads marked in-flight (turnRequestId
+// not null). The session-service keeps the underlying claude process alive
+// across main-server restarts (tryRecoverSession), but the consumer that
+// owned the WebSocket-to-session-service connection died with the old
+// process. Without re-attaching, the assistant row would never land in DB.
+// Spin up a fresh consumer per orphan that replays from turnStartSeq so the
+// in-flight turn finishes cleanly and the per-thread /events SSE shows the
+// missing content.
+async function recoverInFlightTurns(): Promise<void> {
+  let orphans: typeof schema.cosThreads.$inferSelect[];
+  try {
+    orphans = await db.query.cosThreads.findMany({});
+  } catch (err) {
+    console.error('[cos] recoverInFlightTurns: failed to query threads:', err);
+    return;
+  }
+  for (const thread of orphans) {
+    if (!thread.turnRequestId || !thread.agentSessionId || thread.turnStartSeq == null) continue;
+    // Confirm the underlying session is actually still running. If the
+    // session-service couldn't recover it (e.g. tmux died), nuke the
+    // in-flight metadata so the thread isn't permanently stuck.
+    const live = await getSessionStatus(thread.agentSessionId).catch(() => null);
+    if (!live?.active || live.status !== 'running') {
+      db.update(schema.cosThreads).set({
+        turnStartedAt: null,
+        turnStartSeq: null,
+        turnUserText: null,
+        turnRequestId: null,
+      }).where(eq(schema.cosThreads.id, thread.id)).run();
+      console.log(`[cos] recoverInFlightTurns: cleared stale in-flight metadata for thread ${thread.id} (session not running)`);
+      continue;
+    }
+    console.log(`[cos] recoverInFlightTurns: re-attaching turn ${thread.turnRequestId} on thread ${thread.id} (startSeq=${thread.turnStartSeq})`);
+    const threadIdForCallbacks = thread.id;
+    const agentSessionIdForCallbacks = thread.agentSessionId;
+    const agentIdForCallbacks = thread.agentId;
+    void runCosTurnConsumer({
+      agentSessionId: agentSessionIdForCallbacks,
+      userMessage: null,
+      turnId: thread.turnRequestId,
+      threadId: threadIdForCallbacks,
+      agentId: agentIdForCallbacks,
+      startSeq: thread.turnStartSeq,
+      onAssistantText: (finalText, toolCallsById, toolOrder) => {
+        if (!finalText) return;
+        const now2 = Date.now();
+        const toolCallsArr = toolOrder.map((id) => toolCallsById.get(id)).filter(Boolean);
+        db.insert(schema.cosMessages).values({
+          id: ulid(), threadId: threadIdForCallbacks, role: 'assistant', text: finalText,
+          toolCallsJson: toolCallsArr.length > 0 ? JSON.stringify(toolCallsArr) : null,
+          attachmentsJson: null, createdAt: now2,
+        }).run();
+        db.update(schema.cosThreads).set({ updatedAt: now2 }).where(eq(schema.cosThreads.id, threadIdForCallbacks)).run();
+      },
+      onCapturedSessionId: (sid) => {
+        db.update(schema.cosThreads).set({ claudeSessionId: sid }).where(eq(schema.cosThreads.id, threadIdForCallbacks)).run();
+        db.update(schema.agentSessions).set({ claudeSessionId: sid }).where(eq(schema.agentSessions.id, agentSessionIdForCallbacks)).run();
+      },
+      onDone: () => {
+        db.update(schema.cosThreads).set({
+          turnStartedAt: null,
+          turnStartSeq: null,
+          turnUserText: null,
+          turnRequestId: null,
+        }).where(eq(schema.cosThreads.id, threadIdForCallbacks)).run();
+      },
+    }).catch((err) => {
+      console.error(`[cos] recoverInFlightTurns: consumer crashed for thread ${threadIdForCallbacks}:`, err);
+    });
+  }
+}
+
+// Run shortly after module load so the db + session-service have time to
+// settle. Best-effort: failures here only delay assistant-row persistence
+// for a single turn and never crash the server.
+setTimeout(() => { void recoverInFlightTurns(); }, 1500);

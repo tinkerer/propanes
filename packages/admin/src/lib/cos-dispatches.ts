@@ -64,7 +64,7 @@ export function cosGroupForSession(s: {
   if (s.cosThreadId) {
     return {
       threadId: s.cosThreadId,
-      name: s.cosThreadName || 'Chief of Staff',
+      name: s.cosThreadName || 'Ops',
       agentId: s.cosThreadAgentId || 'default',
       createdAt: 0,
     };

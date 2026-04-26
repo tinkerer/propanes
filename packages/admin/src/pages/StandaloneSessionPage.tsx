@@ -56,7 +56,7 @@ function standaloneTitle(sessionId: string, sess: any, isExited: boolean): strin
   }
   if (sessionId.startsWith('terminal:')) return `Terminal: ${sessionId.slice(9, 15)}`;
   if (sessionId.startsWith('url:')) return `Iframe: ${sessionId.slice(4, 40)}`;
-  if (sessionId.startsWith('cos:')) return 'Chief of Staff';
+  if (sessionId.startsWith('cos:')) return 'Ops';
   const fallback = sess?.feedbackTitle || sess?.agentName || sess?.paneCommand || sess?.label || `pw-${sessionId.slice(-6)}`;
   return isExited ? `${fallback} (exited)` : fallback;
 }
