@@ -134,8 +134,9 @@ export class VoiceRecorder {
   private ambientFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private ambientSilenceTimer: ReturnType<typeof setTimeout> | null = null;
   private ambientLastSpeechAt = 0;
-  private micBridgeIframe: HTMLIFrameElement | null = null;
+  private micBridgeWindow: Window | null = null;
   private micBridgeListener: ((e: MessageEvent) => void) | null = null;
+  private micBridgeCloseWatcher: ReturnType<typeof setInterval> | null = null;
   private _transcript: TranscriptSegment[] = [];
   private _interactions: InteractionEvent[] = [];
   private _consoleLogs: ConsoleEntry[] = [];
@@ -436,11 +437,43 @@ export class VoiceRecorder {
   }
 
   /**
-   * Start ambient listen mode via a hidden iframe on localhost. Used when the
-   * host page is on an insecure (HTTP) origin where getUserMedia / SpeechRecognition
-   * are blocked. The iframe loads from the PropPanes server on localhost which is
-   * a secure context, runs the mic + recognition there, and relays results back
-   * via postMessage.
+   * Open the mic-bridge popup window. Returns the opened window or throws if
+   * the browser blocked the popup. The popup runs on localhost (a secure
+   * context) so getUserMedia + SpeechRecognition work even when the opener is
+   * on an insecure HTTP origin.
+   */
+  private openMicBridgeWindow(bridgeUrl: string): Window {
+    const features = 'popup=yes,width=380,height=420,left=40,top=40';
+    const win = window.open(bridgeUrl, 'pw-mic-bridge', features);
+    if (!win) {
+      const err = new Error('Mic bridge popup was blocked — allow popups for this site');
+      (err as any).code = 'POPUP_BLOCKED';
+      throw err;
+    }
+    this.micBridgeWindow = win;
+    this.micBridgeCloseWatcher = setInterval(() => {
+      if (this.micBridgeWindow?.closed) this.cleanupMicBridge();
+    }, 500);
+    return win;
+  }
+
+  /**
+   * Mirror a log line from the bridge popup into the parent window's console.
+   * Keeps a `[mic-bridge]` prefix so the source is obvious when reading the
+   * unified output.
+   */
+  private handleBridgeLog(level: string, ts: string, message: string) {
+    const fn = (console as any)[level] || console.log;
+    try { fn.call(console, '[mic-bridge ' + ts + ']', message); }
+    catch { console.log('[mic-bridge ' + ts + '] ' + message); }
+  }
+
+  /**
+   * Start ambient listen mode via a popup window on localhost. Used when the
+   * host page is on an insecure (HTTP) origin where getUserMedia /
+   * SpeechRecognition are blocked. The popup loads from the PropPanes server
+   * on localhost (secure context), runs the mic + recognition there, and
+   * relays results back via postMessage to its opener.
    */
   async startAmbientViaIframe(bridgeUrl: string, opts?: AmbientChunkOpts): Promise<void> {
     if (this._ambient) return;
@@ -449,29 +482,34 @@ export class VoiceRecorder {
     this.ambientWindowIndex = 0;
     this.ambientLastSpeechAt = Date.now();
 
-    return new Promise<void>((resolve, reject) => {
-      const iframe = document.createElement('iframe');
-      iframe.src = bridgeUrl;
-      iframe.style.cssText = 'position:fixed;width:0;height:0;border:none;opacity:0;pointer-events:none;';
-      iframe.setAttribute('allow', 'microphone');
-      document.body.appendChild(iframe);
-      this.micBridgeIframe = iframe;
+    let popup: Window;
+    try {
+      popup = this.openMicBridgeWindow(bridgeUrl);
+    } catch (err) {
+      this._ambient = false;
+      throw err;
+    }
 
+    return new Promise<void>((resolve, reject) => {
       let resolved = false;
       const timeout = setTimeout(() => {
         if (!resolved) {
           resolved = true;
           this.cleanupMicBridge();
-          reject(new Error('Mic bridge iframe timed out'));
+          reject(new Error('Mic bridge popup timed out'));
         }
-      }, 10_000);
+      }, 15_000);
 
       const listener = (e: MessageEvent) => {
         const d = e.data;
         if (!d || d.source !== 'pw-mic-bridge') return;
 
+        if (d.type === 'log') {
+          this.handleBridgeLog(d.level, d.ts, d.message);
+          return;
+        }
         if (d.type === 'ready' && !resolved) {
-          iframe.contentWindow?.postMessage({
+          popup.postMessage({
             source: 'pw-mic-bridge-cmd',
             type: 'start',
             opts: {
@@ -488,7 +526,10 @@ export class VoiceRecorder {
         } else if (d.type === 'error' && !resolved) {
           resolved = true;
           clearTimeout(timeout);
-          this.cleanupMicBridge();
+          // Leave the popup open with the error visible so the user can
+          // inspect logs / copy them. The popup stays alive until manually
+          // closed; the close watcher will null the ref then.
+          this.cleanupMicBridge({ keepWindow: true });
           const err = new Error(d.message || 'Mic bridge error');
           (err as any).code = d.code;
           reject(err);
@@ -503,8 +544,6 @@ export class VoiceRecorder {
             text: d.text,
           };
           try { this.onAmbientWindow?.(win); } catch {}
-        } else if (d.type === 'stopped') {
-          // Bridge stopped itself (shouldn't happen normally)
         }
       };
 
@@ -517,40 +556,202 @@ export class VoiceRecorder {
     if (!this._ambient) return;
     this._ambient = false;
 
-    if (this.micBridgeIframe?.contentWindow) {
-      this.micBridgeIframe.contentWindow.postMessage({
+    if (this.micBridgeWindow && !this.micBridgeWindow.closed) {
+      this.micBridgeWindow.postMessage({
         source: 'pw-mic-bridge-cmd',
         type: 'stop',
       }, '*');
-      // Give it a moment to flush
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise(r => setTimeout(r, 200));
     }
     this.cleanupMicBridge();
   }
 
-  /** Manually flush the iframe bridge's current buffer. */
+  /**
+   * Start one-shot recording via the popup bridge — used by the regular mic
+   * button on insecure (HTTP) origins. Audio blob capture is skipped (the mic
+   * stream lives in the popup), but transcript + DOM interactions + console
+   * capture still work in the parent.
+   */
+  async startViaIframe(bridgeUrl: string, _opts?: { screenCaptures?: boolean }): Promise<void> {
+    if (this._recording) return;
+
+    this.t0 = Date.now();
+    this._recording = true;
+    this.audioChunks = [];
+    this._transcript = [];
+    this._interactions = [];
+    this._consoleLogs = [];
+    this._screenshots = [];
+    this.interactionCounter = 0;
+    this.screenshotCounter = 0;
+
+    this.installDomListeners();
+    this.installConsoleCapture();
+    // getDisplayMedia also requires a secure context, so screen captures are
+    // unavailable in this mode.
+
+    let popup: Window;
+    try {
+      popup = this.openMicBridgeWindow(bridgeUrl);
+    } catch (err) {
+      this._recording = false;
+      for (const fn of this.cleanupFns) fn();
+      this.cleanupFns = [];
+      throw err;
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      let resolved = false;
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          this.cleanupMicBridge();
+          this._recording = false;
+          for (const fn of this.cleanupFns) fn();
+          this.cleanupFns = [];
+          reject(new Error('Mic bridge popup timed out'));
+        }
+      }, 15_000);
+
+      const listener = (e: MessageEvent) => {
+        const d = e.data;
+        if (!d || d.source !== 'pw-mic-bridge') return;
+
+        if (d.type === 'log') {
+          this.handleBridgeLog(d.level, d.ts, d.message);
+          return;
+        }
+        if (d.type === 'ready' && !resolved) {
+          popup.postMessage({
+            source: 'pw-mic-bridge-cmd',
+            type: 'start',
+            opts: {
+              // Long window — we never flush during a one-shot recording.
+              windowMs: 24 * 60 * 60 * 1000,
+              silenceMs: 24 * 60 * 60 * 1000,
+              maxLength: Number.MAX_SAFE_INTEGER,
+              lang: document.documentElement.lang || 'en-US',
+            },
+          }, '*');
+        } else if (d.type === 'started' && !resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          resolve();
+        } else if (d.type === 'error' && !resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          // Leave the popup open with the error visible so the user can
+          // inspect logs / copy them.
+          this.cleanupMicBridge({ keepWindow: true });
+          this._recording = false;
+          for (const fn of this.cleanupFns) fn();
+          this.cleanupFns = [];
+          const err = new Error(d.message || 'Mic bridge error');
+          (err as any).code = d.code;
+          reject(err);
+        } else if (d.type === 'segment') {
+          const seg: TranscriptSegment = {
+            text: d.segment.text,
+            timestamp: Date.now() - this.t0,
+            isFinal: d.segment.isFinal,
+          };
+          if (seg.isFinal) this._transcript.push(seg);
+          this.onTranscript?.(seg);
+        }
+      };
+
+      window.addEventListener('message', listener);
+      this.micBridgeListener = listener;
+    });
+  }
+
+  /** Stop a recording started with startViaIframe; returns the same result shape as stop(). */
+  async stopViaIframe(): Promise<VoiceRecordingResult> {
+    if (!this._recording) {
+      return {
+        audioBlob: new Blob([], { type: 'audio/webm' }),
+        duration: 0,
+        transcript: [],
+        interactions: [],
+        consoleLogs: [],
+        screenshots: [],
+      };
+    }
+    this._recording = false;
+    const duration = Date.now() - this.t0;
+
+    if (this.micBridgeWindow && !this.micBridgeWindow.closed) {
+      this.micBridgeWindow.postMessage({
+        source: 'pw-mic-bridge-cmd',
+        type: 'stop',
+      }, '*');
+      await new Promise(r => setTimeout(r, 200));
+    }
+    this.cleanupMicBridge();
+
+    for (const fn of this.cleanupFns) fn();
+    this.cleanupFns = [];
+
+    return {
+      audioBlob: new Blob([], { type: 'audio/webm' }),
+      duration,
+      transcript: this._transcript,
+      interactions: this._interactions,
+      consoleLogs: this._consoleLogs,
+      screenshots: this._screenshots,
+    };
+  }
+
+  /** Manually flush the bridge's current buffer. */
   manualFlushViaIframe(): void {
-    if (this._ambient && this.micBridgeIframe?.contentWindow) {
-      this.micBridgeIframe.contentWindow.postMessage({
+    if (this._ambient && this.micBridgeWindow && !this.micBridgeWindow.closed) {
+      this.micBridgeWindow.postMessage({
         source: 'pw-mic-bridge-cmd',
         type: 'flush',
       }, '*');
     }
   }
 
-  /** Whether we're running in iframe-bridge mode. */
+  /** Whether we're running in popup-bridge mode. */
   get usingMicBridge(): boolean {
-    return this.micBridgeIframe !== null;
+    return this.micBridgeWindow !== null;
   }
 
-  private cleanupMicBridge() {
-    if (this.micBridgeListener) {
-      window.removeEventListener('message', this.micBridgeListener);
-      this.micBridgeListener = null;
+  private cleanupMicBridge(opts?: { keepWindow?: boolean }) {
+    const keepWindow = !!opts?.keepWindow;
+    if (this.micBridgeCloseWatcher) {
+      clearInterval(this.micBridgeCloseWatcher);
+      this.micBridgeCloseWatcher = null;
     }
-    if (this.micBridgeIframe) {
-      this.micBridgeIframe.remove();
-      this.micBridgeIframe = null;
+    if (this.micBridgeWindow && !keepWindow) {
+      if (this.micBridgeListener) {
+        window.removeEventListener('message', this.micBridgeListener);
+        this.micBridgeListener = null;
+      }
+      try { if (!this.micBridgeWindow.closed) this.micBridgeWindow.close(); } catch {}
+      this.micBridgeWindow = null;
+    } else if (this.micBridgeWindow && keepWindow) {
+      // Leave popup + message listener alive so trailing logs from the bridge
+      // continue to surface in the parent console while the user reads the
+      // error. Re-arm a close watcher that *only* nulls the ref when the user
+      // closes the popup manually — no further state cleanup needed.
+      const watch = setInterval(() => {
+        if (!this.micBridgeWindow || this.micBridgeWindow.closed) {
+          clearInterval(watch);
+          if (this.micBridgeListener) {
+            window.removeEventListener('message', this.micBridgeListener);
+            this.micBridgeListener = null;
+          }
+          this.micBridgeWindow = null;
+        }
+      }, 500);
+      this.micBridgeCloseWatcher = watch;
+    }
+    // If the user closed the popup mid-recording, also tear down DOM listeners.
+    if (this._recording) {
+      this._recording = false;
+      for (const fn of this.cleanupFns) fn();
+      this.cleanupFns = [];
     }
     this._ambient = false;
   }

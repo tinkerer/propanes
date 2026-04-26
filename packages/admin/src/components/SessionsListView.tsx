@@ -505,7 +505,7 @@ export function SessionsListView() {
           const cosAgents = chiefOfStaffAgents.value;
           const cosAgentLabel = (agentId: string) => {
             const found = cosAgents.find((a) => a.id === agentId);
-            return found?.name || 'Chief of Staff';
+            return found?.name || 'Ops';
           };
 
           for (const s of restAgents) {

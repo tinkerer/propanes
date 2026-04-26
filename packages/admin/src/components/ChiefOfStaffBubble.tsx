@@ -27,7 +27,6 @@ import {
   dismissFailedAssistantMessage,
   DEFAULT_VERBOSITY,
   DEFAULT_STYLE,
-  type ChiefOfStaffToolCall,
   type ChiefOfStaffMsg,
   type ChiefOfStaffVerbosity,
   type ChiefOfStaffStyle,
@@ -61,7 +60,9 @@ import {
   isCosInPane,
   closeCosPane,
   COS_PANE_TAB_ID,
+  subscribeAgentLiveMessages,
 } from '../lib/chief-of-staff.js';
+import { MessageRenderer } from './MessageRenderer.js';
 import { layoutTree as layoutTreeSignal, findLeafWithTab, setFocusedLeaf } from '../lib/pane-tree.js';
 import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-picker';
 import { captureScreenshot } from '@propanes/widget/screenshot';
@@ -385,47 +386,6 @@ function AssistantContent({ text, onArtifactPopout }: { text: string; onArtifact
   );
 }
 
-function bashDisplayName(cmd: string): string {
-  const postM = cmd.match(/curl[^|]*-X\s+POST[^|]*'[^']*?(\/api\/[^'?\s]+)/);
-  if (postM) {
-    const path = postM[1].replace('/api/v1/admin/', '').replace('/api/v1/', '');
-    return `POST /${path}`;
-  }
-  const getM = cmd.match(/curl[^|]*'[^']*?(\/api\/[^'?\s]+)/);
-  if (getM) {
-    const path = getM[1].replace('/api/v1/admin/', '').replace('/api/v1/', '');
-    return path;
-  }
-  return 'bash';
-}
-
-function toolSummary(call: ChiefOfStaffToolCall): string {
-  if (call.error) return call.error.split('\n')[0].slice(0, 60);
-  if (call.result === undefined || call.result === null) return '';
-  const res = call.result;
-  if (typeof res === 'string') {
-    const trimmed = res.trim();
-    if (!trimmed) return '✓';
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (parsed?.sessionId) return `launched ${String(parsed.sessionId).slice(0, 16)}`;
-      if (parsed?.id && parsed?.status) return `${parsed.status}`;
-      if (Array.isArray(parsed)) return `${parsed.length} item${parsed.length === 1 ? '' : 's'}`;
-      if (typeof parsed?.count === 'number') return `${parsed.count} items`;
-      if (parsed?.granted !== undefined) return parsed.granted ? 'lock granted' : 'lock denied';
-      if (parsed?.released !== undefined) return parsed.released ? 'lock released' : parsed.reason || 'not released';
-      if (parsed?.status) return String(parsed.status);
-      return '✓';
-    } catch { /* not JSON */ }
-    if (trimmed.length <= 40) return trimmed;
-    return '✓';
-  }
-  if (typeof res === 'object' && res && 'count' in (res as any)) {
-    return `${(res as any).count} items`;
-  }
-  return '✓';
-}
-
 function collectDispatches(replies: { idx: number; msg: ChiefOfStaffMsg }[]): DispatchInfo[] {
   const out: DispatchInfo[] = [];
   for (const r of replies) {
@@ -438,45 +398,6 @@ function collectDispatches(replies: { idx: number; msg: ChiefOfStaffMsg }[]): Di
   return out;
 }
 
-function ToolCallChip({ call }: { call: ChiefOfStaffToolCall }) {
-  const [expanded, setExpanded] = useState(false);
-  const displayName = call.name === 'Bash' && typeof call.input?.command === 'string'
-    ? bashDisplayName(call.input.command as string)
-    : call.name;
-  const summary = toolSummary(call);
-  const isDispatch = displayName.includes('dispatch') || summary.startsWith('launched');
-  return (
-    <div class={`cos-tool-chip${call.error ? ' cos-tool-error' : ''}${isDispatch ? ' cos-tool-dispatch' : ''}`}>
-      <button type="button" class="cos-tool-header" onClick={() => setExpanded(!expanded)}>
-        <span class="cos-tool-name">{displayName}</span>
-        <span class="cos-tool-summary">{summary}</span>
-        <span class="cos-tool-toggle">{expanded ? '▼' : '▶'}</span>
-      </button>
-      {expanded && (
-        <div class="cos-tool-body">
-          {Object.keys(call.input || {}).length > 0 && (
-            <div class="cos-tool-section">
-              <div class="cos-tool-label">input</div>
-              <pre>{JSON.stringify(call.input, null, 2)}</pre>
-            </div>
-          )}
-          {call.error && (
-            <div class="cos-tool-section">
-              <div class="cos-tool-label">error</div>
-              <pre>{call.error}</pre>
-            </div>
-          )}
-          {!call.error && call.result !== undefined && (
-            <div class="cos-tool-section">
-              <div class="cos-tool-label">result</div>
-              <pre>{typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2)}</pre>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function formatRelativeTime(ts: number, now: number): { rel: string; abs: string } {
   const d = new Date(ts);
@@ -535,7 +456,22 @@ function DayDivider({ ts }: { ts: number }) {
   );
 }
 
-function MessageAvatar({ role, label, size }: { role: 'user' | 'assistant' | string; label: string; size?: 'sm' }) {
+function getAgentAvatarSrc(agentId: string | null | undefined): string | null {
+  if (agentId === 'default') return `${import.meta.env.BASE_URL}chief-of-staff-avatar.svg`;
+  return null;
+}
+
+function MessageAvatar({
+  role,
+  label,
+  size,
+  imageSrc,
+}: {
+  role: 'user' | 'assistant' | string;
+  label: string;
+  size?: 'sm';
+  imageSrc?: string | null;
+}) {
   const cls = `cos-avatar cos-avatar-${role === 'user' ? 'user' : 'assistant'}${size ? ' cos-avatar-' + size : ''}`;
   if (role === 'user') {
     return (
@@ -544,6 +480,13 @@ function MessageAvatar({ role, label, size }: { role: 'user' | 'assistant' | str
           <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
           <circle cx="12" cy="7" r="4" />
         </svg>
+      </div>
+    );
+  }
+  if (imageSrc) {
+    return (
+      <div class={cls} title={label} aria-hidden="true">
+        <img class="cos-avatar-img" src={imageSrc} alt="" />
       </div>
     );
   }
@@ -735,6 +678,7 @@ function MessageBubble({
   highlighted,
   showTools,
   onArtifactPopout,
+  agentId,
   agentName,
   verbosity,
 }: {
@@ -743,22 +687,25 @@ function MessageBubble({
   highlighted: boolean;
   showTools: boolean;
   onArtifactPopout: (artifactId: string) => void;
+  agentId: string;
   agentName: string;
   verbosity: ChiefOfStaffVerbosity;
 }) {
   const hasTools = !!(msg.toolCalls && msg.toolCalls.length > 0);
-  // Verbose mode: bypass the <cos-reply> filter and show every text part the
-  // model emitted, including planning/scratch-work outside the tags. Terse
-  // and normal keep the default tag-scoped display.
-  const assistantDisplay = msg.role === 'assistant'
-    ? (verbosity === 'verbose' ? stripCosReplyMarkers(msg.text) : extractCosReply(msg.text).displayText)
-    : '';
+  // Always show every text part the model emitted (markers stripped) so
+  // nothing the JSONL captured is silently dropped from the Ops view. The
+  // verbosity setting is passed to the model server-side as a tone hint
+  // (terse = brief replies, verbose = with context) but is no longer a
+  // client-side filter — that filter was hiding intro / explanatory text
+  // the model emitted outside <cos-reply> tags.
+  const assistantDisplay = msg.role === 'assistant' ? stripCosReplyMarkers(msg.text) : '';
   const showAssistantText = msg.role === 'assistant' && assistantDisplay;
   const showUserText = msg.role === 'user' && msg.text;
   const showEarlyAck =
     msg.role === 'assistant' && msg.streaming && msg.sending && !showAssistantText && !hasTools;
   const showElapsed = msg.role === 'assistant' && msg.streaming && !msg.sending;
   const authorLabel = msg.role === 'user' ? 'You' : (agentName || 'Ops');
+  const avatarSrc = msg.role === 'assistant' ? getAgentAvatarSrc(agentId) : null;
   const showAttachments = !!(msg.attachments?.length || msg.elementRefs?.length);
 
   // Skip rendering empty assistant messages (no text, no tools, not streaming, no error)
@@ -777,7 +724,7 @@ function MessageBubble({
       data-cos-msg-idx={msgIdx}
     >
       <div class="cos-row-avatar">
-        <MessageAvatar role={msg.role} label={authorLabel} />
+        <MessageAvatar role={msg.role} label={authorLabel} imageSrc={avatarSrc} />
       </div>
       <div class="cos-row-main">
         <div class="cos-row-header">
@@ -786,7 +733,28 @@ function MessageBubble({
         </div>
         {hasTools && showTools && (
           <div class="cos-tools">
-            {msg.toolCalls!.map((c, i) => <ToolCallChip key={i} call={c} />)}
+            {msg.toolCalls!.map((c, i) => (
+              <MessageRenderer
+                key={i}
+                message={{
+                  id: `cos-${msg.timestamp}-tool-${i}`,
+                  role: 'tool_use',
+                  timestamp: msg.timestamp,
+                  toolName: c.name,
+                  // Stash result/error on a private key so the chat-mode
+                  // chip can show them when expanded. tool_result is
+                  // suppressed in chat mode, so we have to thread the data
+                  // in through the tool_use's input bag.
+                  toolInput: {
+                    ...c.input,
+                    __chatExtras: { result: c.result, error: c.error },
+                  },
+                  toolUseId: c.id,
+                  content: '',
+                }}
+                chat={{}}
+              />
+            ))}
           </div>
         )}
         {hasTools && !showTools && !msg.streaming && (
@@ -1879,6 +1847,7 @@ function ThreadBlock({
   onReply,
   onArtifactPopout,
   hasUnread,
+  agentId,
   agentName,
   verbosity,
 }: {
@@ -1891,6 +1860,7 @@ function ThreadBlock({
   onReply: (role: string, text: string, anchorTs?: number) => void;
   onArtifactPopout: (artifactId: string) => void;
   hasUnread: boolean;
+  agentId: string;
   agentName: string;
   verbosity: ChiefOfStaffVerbosity;
 }) {
@@ -1904,6 +1874,7 @@ function ThreadBlock({
   const showExpandedReplies = !userMsg || !collapsed;
   const threadContext = userMsg?.text || '';
   const anchorTs = userMsg?.timestamp;
+  const agentAvatarSrc = getAgentAvatarSrc(agentId);
   // Each UI thread maps to one server-side cosThread. Pull the id from any
   // tagged message so Stop targets just this thread's Claude session instead
   // of interrupting unrelated in-flight threads for the same agent.
@@ -1954,7 +1925,7 @@ function ThreadBlock({
               aria-label={`Expand ${replyCount} repl${replyCount === 1 ? 'y' : 'ies'}`}
             >
               <span class="cos-thread-summary-avatars" aria-hidden="true">
-                <MessageAvatar role="assistant" label={agentName} size="sm" />
+                <MessageAvatar role="assistant" label={agentName} size="sm" imageSrc={agentAvatarSrc} />
               </span>
               <span class="cos-thread-summary-count">
                 {replyCount} repl{replyCount === 1 ? 'y' : 'ies'}
@@ -1969,22 +1940,40 @@ function ThreadBlock({
           )}
           {showExpandedReplies && (
             <>
-              {userMsg && (
-                <div class="cos-thread-header-row">
-                  <span class="cos-thread-header-count">
-                    {replyCount} repl{replyCount === 1 ? 'y' : 'ies'}
-                  </span>
-                  <button
-                    type="button"
-                    class="cos-thread-header-btn"
-                    onClick={onToggle}
-                    aria-expanded="true"
-                    title="Collapse thread"
-                  >
-                    Collapse
-                  </button>
-                </div>
-              )}
+              {userMsg && (() => {
+                const linkSid = getSessionIdForThread(threadServerId);
+                const openSessionLog = () => {
+                  if (!linkSid) return;
+                  openSession(linkSid);
+                  toggleCompanion(linkSid, 'jsonl');
+                };
+                return (
+                  <div class="cos-thread-header-row">
+                    <span class="cos-thread-header-count">
+                      {replyCount} repl{replyCount === 1 ? 'y' : 'ies'}
+                    </span>
+                    {linkSid && (
+                      <button
+                        type="button"
+                        class="cos-thread-header-btn cos-thread-header-btn-log"
+                        onClick={openSessionLog}
+                        title="Open full session log"
+                      >
+                        Session log
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      class="cos-thread-header-btn"
+                      onClick={onToggle}
+                      aria-expanded="true"
+                      title="Collapse thread"
+                    >
+                      Collapse
+                    </button>
+                  </div>
+                );
+              })()}
               {replies.map((r) => (
                 <MessageBubble
                   key={r.idx}
@@ -1993,6 +1982,7 @@ function ThreadBlock({
                   highlighted={highlightMsgIdx === r.idx}
                   showTools={showTools}
                   onArtifactPopout={onArtifactPopout}
+                  agentId={agentId}
                   agentName={agentName}
                   verbosity={verbosity}
                 />
@@ -2105,6 +2095,7 @@ export function ChiefOfStaffBubble({
   const activeId = chiefOfStaffActiveId.value;
   const activeAgent = getActiveAgent();
   const error = chiefOfStaffError.value;
+  const mobile = isMobile.value;
 
   const allPanels = popoutPanels.value;
   const _zOrders = panelZOrders.value;
@@ -2214,6 +2205,22 @@ export function ChiefOfStaffBubble({
   const anyExpanded = collapsibleThreads.some((t) => !collapsedThreads.has(t.userIdx!));
   const isAgentStreaming = (activeAgent?.messages || []).some((m) => m.streaming);
 
+  function threadKey(t: Thread): string {
+    return t.userIdx !== null ? `t-${t.userIdx}` : 'pre';
+  }
+  function threadAnchorIdx(t: Thread): number | null {
+    if (t.userIdx !== null) return t.userIdx;
+    const first = t.replies[0];
+    return first ? first.idx : null;
+  }
+  function threadTitle(t: Thread): string {
+    const text = t.userMsg?.text?.trim();
+    if (text) return text;
+    const reply = t.replies[0]?.msg;
+    const rt = (reply && extractCosReply(reply.text).displayText) || reply?.text || '';
+    return (rt.trim() || 'Thread').slice(0, 80);
+  }
+
   function toggleThread(userIdx: number) {
     setCollapsedThreads((prev) => {
       const next = new Set(prev);
@@ -2293,6 +2300,17 @@ export function ChiefOfStaffBubble({
       setShowScrollDown(false);
     }
   }, [isVisible, activeId, activeAgent?.messages.length]);
+
+  // Subscribe to the agent-scoped idle SSE while the panel is visible. Picks
+  // up out-of-band /messages POSTs (e.g. an agent script posting a screenshot
+  // back to its thread) when no chat turn is currently streaming. The chat
+  // POST stream covers the in-turn case; this covers the rest. Dedup by
+  // serverId in appendOutOfBandCosMessage handles the overlap window.
+  useEffect(() => {
+    if (!isVisible || !activeId) return;
+    const unsub = subscribeAgentLiveMessages(activeId);
+    return () => { try { unsub(); } catch { /* ignore */ } };
+  }, [isVisible, activeId]);
 
   // Scroll listener: toggle the floating scroll-down button and remember the
   // user's "at bottom" state so new messages don't yank them around.
@@ -2432,6 +2450,69 @@ export function ChiefOfStaffBubble({
       });
     });
     dismissReplyNotif(notif.id);
+  }
+
+  // Per-thread unread state derived from the in-memory replyNotifs queue.
+  // Key is `t.userIdx` for normal threads, `null` for the orphan pre-thread.
+  const unreadByThread = useMemo(() => {
+    const map = new Map<number | null, { count: number; firstIdx: number; ids: string[] }>();
+    for (const n of replyNotifs) {
+      const cur = map.get(n.userIdx);
+      if (cur) {
+        cur.count += 1;
+        cur.ids.push(n.id);
+        if (n.messageIdx < cur.firstIdx) cur.firstIdx = n.messageIdx;
+      } else {
+        map.set(n.userIdx, { count: 1, firstIdx: n.messageIdx, ids: [n.id] });
+      }
+    }
+    return map;
+  }, [replyNotifs]);
+
+  function jumpToThread(t: Thread) {
+    const unread = unreadByThread.get(t.userIdx);
+    // If there are unread replies, jump to the first unread message (block:'start'
+    // puts the last-seen content just above the viewport edge). Otherwise jump to
+    // the top of the thread (the user-anchor message).
+    let targetIdx: number | null;
+    if (unread) {
+      targetIdx = unread.firstIdx;
+    } else {
+      targetIdx = threadAnchorIdx(t);
+    }
+    if (targetIdx === null) return;
+
+    if (t.userIdx !== null && collapsedThreads.has(t.userIdx)) {
+      setCollapsedThreads((prev) => {
+        const next = new Set(prev);
+        next.delete(t.userIdx!);
+        return next;
+      });
+    }
+
+    const idx = targetIdx;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const root = scrollRef.current;
+        if (!root) return;
+        const target = root.querySelector(`[data-cos-msg-idx="${idx}"]`) as HTMLElement | null;
+        if (!target) return;
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        setHighlightMsgIdx(idx);
+        window.setTimeout(() => {
+          setHighlightMsgIdx((cur) => (cur === idx ? null : cur));
+        }, 2000);
+      });
+    });
+
+    if (unread) {
+      for (const id of unread.ids) {
+        const handle = notifTimersRef.current.get(id);
+        if (handle) { clearTimeout(handle); notifTimersRef.current.delete(id); }
+      }
+      const dismissedIds = new Set(unread.ids);
+      setReplyNotifs((prev) => prev.filter((n) => !dismissedIds.has(n.id)));
+    }
   }
 
   useEffect(() => {
@@ -3274,6 +3355,36 @@ export function ChiefOfStaffBubble({
                     </div>
 
                     <div class="cos-scroll-wrap">
+                    {hasMultipleThreads && (
+                      <nav class="cos-thread-rail" aria-label="Threads">
+                        {threads.map((t, i) => {
+                          const unread = unreadByThread.get(t.userIdx);
+                          const anchor = threadAnchorIdx(t);
+                          if (anchor === null) return null;
+                          const title = threadTitle(t);
+                          const label = title.length > 64 ? title.slice(0, 64) + '…' : title;
+                          const num = i + 1;
+                          return (
+                            <button
+                              type="button"
+                              key={t.userIdx ?? `pre-${i}`}
+                              class={`cos-thread-rail-btn${unread ? ' cos-thread-rail-btn-unread' : ''}`}
+                              onClick={() => jumpToThread(t)}
+                              title={unread ? `${label} — ${unread.count} new` : label}
+                              aria-label={unread ? `Jump to thread ${num}, ${unread.count} new` : `Jump to thread ${num}`}
+                            >
+                              <span class="cos-thread-rail-num">{num}</span>
+                              {unread && (
+                                <span class="cos-thread-rail-badge" aria-hidden="true">
+                                  {unread.count > 9 ? '9+' : unread.count}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </nav>
+                    )}
+                    <div class="cos-scroll-col">
                     <div class="cos-scroll" ref={scrollRef}>
                       {activeAgent.messages.length === 0 && (
                         <div class="cos-empty">
@@ -3293,10 +3404,6 @@ export function ChiefOfStaffBubble({
                         </div>
                       )}
                       {(() => {
-                        const unreadThreadIdxs = new Set<number>();
-                        for (const n of replyNotifs) {
-                          if (n.userIdx !== null) unreadThreadIdxs.add(n.userIdx);
-                        }
                         const nodes: import('preact').VNode[] = [];
                         let lastDayKey: string | null = null;
                         threads.forEach((t, i) => {
@@ -3319,7 +3426,8 @@ export function ChiefOfStaffBubble({
                               highlightMsgIdx={highlightMsgIdx}
                               onReply={handleReply}
                               onArtifactPopout={handleArtifactPopout}
-                              hasUnread={t.userIdx !== null && unreadThreadIdxs.has(t.userIdx)}
+                              hasUnread={!!unreadByThread.get(t.userIdx)}
+                              agentId={activeAgent.id}
                               agentName={activeAgent.name}
                               verbosity={activeAgent.verbosity || DEFAULT_VERBOSITY}
                             />
@@ -3359,6 +3467,7 @@ export function ChiefOfStaffBubble({
                           )}
                         </button>
                       )}
+                    </div>
                     </div>
                     </div>
 
@@ -3439,7 +3548,7 @@ export function ChiefOfStaffBubble({
                         ref={inputRef}
                         class="cos-input"
                         value={input}
-                        placeholder={`Message ${activeAgent.name}… (paste images to attach)`}
+                        placeholder={mobile ? `Message ${activeAgent.name}…` : `Message ${activeAgent.name}… (paste images to attach)`}
                         onInput={(e) => setInput((e.target as HTMLTextAreaElement).value)}
                         onKeyDown={onKeyDown}
                         onPaste={onPaste}
@@ -3574,18 +3683,7 @@ export function ChiefOfStaffBubble({
                           )}
                         </div>
                         <div class="cos-input-toolbar-spacer" />
-                        {isAgentStreaming ? (
-                          <button
-                            class="cos-stop"
-                            onClick={() => void interruptActiveAgent()}
-                            title="Stop (interrupt response)"
-                            aria-label="Interrupt current response"
-                          >
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                              <rect x="5" y="5" width="14" height="14" rx="2" />
-                            </svg>
-                          </button>
-                        ) : (
+                        {(!isAgentStreaming || mobile) && (
                           <button
                             class="cos-send"
                             onClick={submit}
@@ -3594,6 +3692,18 @@ export function ChiefOfStaffBubble({
                           >
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                               <path d="M5 12l14-7-7 14-2-5z" />
+                            </svg>
+                          </button>
+                        )}
+                        {isAgentStreaming && !mobile && (
+                          <button
+                            class="cos-stop"
+                            onClick={() => void interruptActiveAgent()}
+                            title="Stop (interrupt response)"
+                            aria-label="Interrupt current response"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                              <rect x="5" y="5" width="14" height="14" rx="2" />
                             </svg>
                           </button>
                         )}

@@ -1,0 +1,34 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="cosBg" x1="10" y1="8" x2="86" y2="88" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#334155"/>
+    </linearGradient>
+    <linearGradient id="cosFlame" x1="19" y1="14" x2="76" y2="82" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFB347"/>
+      <stop offset="1" stop-color="#F59E0B"/>
+    </linearGradient>
+    <linearGradient id="cosCoat" x1="27" y1="46" x2="69" y2="86" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1D9BF0"/>
+      <stop offset="1" stop-color="#0F7AC7"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="88" height="88" rx="22" fill="url(#cosBg)"/>
+  <rect x="8" y="8" width="80" height="80" rx="18" stroke="url(#cosFlame)" stroke-width="2"/>
+  <path d="M48 18C58.3 18 66.8 24.6 69.7 33.8C63.6 29.1 56.1 26.2 48 26.2C39.9 26.2 32.4 29.1 26.3 33.8C29.2 24.6 37.7 18 48 18Z" fill="#FDE68A"/>
+  <circle cx="48" cy="37" r="17" fill="#F8FAFC"/>
+  <path d="M40.4 35.3C42.4 33.1 45 31.9 48 31.9C51 31.9 53.6 33.1 55.6 35.3" stroke="#334155" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="41.5" cy="39.5" r="2.2" fill="#0F172A"/>
+  <circle cx="54.5" cy="39.5" r="2.2" fill="#0F172A"/>
+  <path d="M43 46.5C45.1 48.4 46.9 49.2 48 49.2C49.1 49.2 50.9 48.4 53 46.5" stroke="#F59E0B" stroke-width="3" stroke-linecap="round"/>
+  <path d="M27 79C27 65.7 36.2 55 48 55C59.8 55 69 65.7 69 79V83H27V79Z" fill="url(#cosCoat)"/>
+  <path d="M48 55L57.2 64.3L52.8 83H43.2L38.8 64.3L48 55Z" fill="#E2E8F0"/>
+  <path d="M44.5 64H51.5L48 70.6L44.5 64Z" fill="#F59E0B"/>
+  <path d="M48 70.6L52.1 83H43.9L48 70.6Z" fill="#DC2626"/>
+  <rect x="63" y="16" width="15" height="20" rx="4" fill="#E0F2FE"/>
+  <path d="M67.5 21.5H73.5" stroke="#0F7AC7" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M67.5 27H73.5" stroke="#0F7AC7" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M67.5 32.5H71.5" stroke="#0F7AC7" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M18 67C18 62.6 21.6 59 26 59H28.5V83H26C21.6 83 18 79.4 18 75V67Z" fill="#F59E0B"/>
+  <path d="M24 64.5L26.8 67.3L31.5 62.5" stroke="#F8FAFC" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
