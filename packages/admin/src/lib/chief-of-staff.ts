@@ -163,9 +163,9 @@ export type ChiefOfStaffMsg = {
   // maps 1:1 to a cosThread (= one Claude session). Reply-in-thread messages
   // inherit the threadId from the anchor user message.
   threadId?: string;
-  // Server-side cosMessages.id when known (history reload + live cos_message
-  // SSE events). Used to dedupe out-of-band agent posts (e.g. screenshots)
-  // that arrive both via the live stream and a subsequent history fetch.
+  // Server-side cosMessages.id when known (set on history reload). Used to
+  // dedupe rows that arrive both via the live stream and a subsequent
+  // history fetch.
   serverId?: string;
   streaming?: boolean;
   // Set on the assistant placeholder until the first SSE event arrives, so the
@@ -923,22 +923,6 @@ function serverMessageToClient(m: any): ChiefOfStaffMsg {
 }
 
 /**
- * Insert a cos_message SSE event into the agent's message log. Used for
- * out-of-band /messages POSTs (e.g. agent-posted screenshots) that arrive
- * during an active chat stream. Dedupes by serverId so a reconnect or a
- * subsequent history hydrate doesn't double-append the same row.
- */
-function appendOutOfBandCosMessage(agentId: string, ev: any): void {
-  const serverId = typeof ev?.id === 'string' ? ev.id : undefined;
-  if (!serverId) return;
-  const msg = serverMessageToClient(ev);
-  updateAgent(agentId, (a) => {
-    if (a.messages.some((m) => m.serverId === serverId)) return a;
-    return { ...a, messages: [...a.messages, msg] };
-  });
-}
-
-/**
  * Fetch ALL server-side threads + messages for an agent and replace the
  * local in-memory message log. Messages are interleaved across threads and
  * each one carries its threadId, so the client can route replies back to the
@@ -990,35 +974,6 @@ void (async () => {
     void loadChiefOfStaffHistory(agent.id);
   }
 })();
-
-/**
- * Open a long-lived SSE that delivers every out-of-band /messages POST
- * targeted at any thread of `agentId`. Used by the panel while it's visible
- * so screenshots / replies posted by the agent itself appear inline without
- * a manual refresh, even when no chat turn is currently streaming. The chat
- * POST stream covers the in-turn case; this covers the rest. Dedup is
- * handled by `appendOutOfBandCosMessage` (serverId).
- *
- * Returns an unsubscribe function that closes the EventSource. EventSource
- * reconnects automatically on transient drops.
- */
-export function subscribeAgentLiveMessages(agentId: string): () => void {
-  let closed = false;
-  const url = `/api/v1/admin/chief-of-staff/agents/${encodeURIComponent(agentId)}/stream`;
-  const es = new EventSource(url);
-  es.addEventListener('cos_message', (e: MessageEvent) => {
-    if (closed) return;
-    try {
-      const ev = JSON.parse(e.data);
-      appendOutOfBandCosMessage(agentId, ev);
-    } catch { /* ignore malformed frame */ }
-  });
-  return () => {
-    if (closed) return;
-    closed = true;
-    try { es.close(); } catch { /* ignore */ }
-  };
-}
 
 /**
  * Mint a fresh cosThread for this agent. Every top-level UI thread gets its
@@ -1506,13 +1461,6 @@ export function sendChiefOfStaffMessage(
           if (obj && processClaudeEvent(obj, accum)) commit(accum);
         } catch { /* ignore malformed frame */ }
       };
-      const handleCosMessage = (raw: string) => {
-        try {
-          const ev = JSON.parse(raw);
-          appendOutOfBandCosMessage(agentId, ev);
-        } catch { /* ignore */ }
-      };
-
       let es: EventSource | null = null;
       const openSubscription = (fromSeq: number): EventSource => {
         const params = new URLSearchParams({
@@ -1540,7 +1488,6 @@ export function sendChiefOfStaffMessage(
 
         const wireListeners = (source: EventSource) => {
           source.addEventListener('claude_event', (e) => handleClaudeEvent((e as MessageEvent).data));
-          source.addEventListener('cos_message', (e) => handleCosMessage((e as MessageEvent).data));
           source.addEventListener('turn_status', (e) => {
             try {
               const status = JSON.parse((e as MessageEvent).data);

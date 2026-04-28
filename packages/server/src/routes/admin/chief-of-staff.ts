@@ -42,19 +42,18 @@ Fast acknowledgement: every turn, your FIRST output must be a short ack — one 
 
 Style: terse. Short bullet lists. Surface IDs. Flag anything stuck (sessions running hours without output, offline launchers, feedback queued but not dispatched, bailouts matching the heuristic above). Never invent IDs — always curl to look them up. Keep answers under 10 lines unless the operator asks for detail. Don't say "ok" or narrate tool calls — just report results. Don't cop out: if the operator told you to act, act — don't reply asking whether they meant it.
 
-## Posting images / screenshots to the thread
+## How replies and screenshots reach the bubble
 
-When you take a screenshot (e.g. via pw-vnc screenshot) and want to show it in the chat, DO NOT post it via the Ops chat endpoint — that would create a "You" bubble attributed to the operator. Instead, convert the image to a base64 data URL and POST it as an assistant message directly:
+Your \`<cos-reply>\` tags are extracted from your output stream and rendered in the bubble automatically — do NOT POST them to any endpoint. Curl-posting replies double-writes and corrupts the thread.
+
+To share a screenshot, embed it as a markdown image inside a cos-reply tag using a base64 data URL:
 
 \`\`\`bash
-THREAD_ID="<threadId from your system prompt>"
 IMG_B64=$(base64 -w0 /tmp/pw_vnc_screen.png)
-curl -s -X POST "http://localhost:3001/api/v1/admin/chief-of-staff/threads/$THREAD_ID/messages" \\
-  -H 'Content-Type: application/json' \\
-  -d "{\"role\":\"assistant\",\"text\":\"Screenshot:\",\"attachmentsJson\":\"{\\\"images\\\":[{\\\"dataUrl\\\":\\\"data:image/png;base64,$IMG_B64\\\",\\\"name\\\":\\\"screenshot.png\\\"}]}\"}"
+echo "<cos-reply>Screenshot: ![screenshot](data:image/png;base64,$IMG_B64)</cos-reply>"
 \`\`\`
 
-This inserts the image as an Ops message so it appears in the "Ops" bubble, not "You".`;
+The bubble renders markdown images inline; no separate upload step is needed.`;
 
 type Verbosity = 'terse' | 'normal' | 'verbose';
 type ReplyStyle = 'dry' | 'neutral' | 'friendly';
@@ -271,25 +270,10 @@ function buildThreadSystemPrompt(threadId: string, appId: string | null, overrid
   const base = (overridePrompt || '').trim() || DEFAULT_SYSTEM_PROMPT;
   let ctx = '';
   if (appId) ctx += `\n\nDefault appId context: ${appId}. Filter feedback/sessions by this appId unless asked otherwise.`;
-  ctx += `\n\nYour threadId is ${threadId}. Post replies back to this thread as yourself by calling:\n  POST http://localhost:3001/api/v1/admin/chief-of-staff/threads/${threadId}/messages\n  body: {"role":"assistant","text":"<cos-reply>...</cos-reply>"}\n\nTo share a screenshot:\n  python3 -c "import base64,json,urllib.request; img=open('/tmp/pw_vnc_screen.png','rb').read(); b64='data:image/png;base64,'+base64.b64encode(img).decode(); body=json.dumps({'role':'assistant','text':'Screenshot:','attachmentsJson':json.dumps({'images':[{'dataUrl':b64,'name':'screenshot.png'}]})}); r=urllib.request.Request('http://localhost:3001/api/v1/admin/chief-of-staff/threads/${threadId}/messages',body.encode(),{'Content-Type':'application/json'},'POST'); print(urllib.request.urlopen(r).read())"`;
+  ctx += `\n\nYour threadId is ${threadId}.`;
   ctx += '\n\n' + COORDINATION_INSTRUCTIONS;
   return base + ctx;
 }
-
-// In-memory pubsub for messages posted to a cosThread via
-// POST /chief-of-staff/threads/:id/messages. Listeners are typically the
-// chat SSE stream for the same thread, which forwards each event to the
-// admin client so out-of-band assistant posts (e.g. screenshots) appear
-// live instead of waiting for a manual refresh.
-type CosThreadMessageEvent = {
-  id: string;
-  threadId: string;
-  role: 'assistant' | 'system' | 'user';
-  text: string;
-  toolCallsJson: string | null;
-  attachmentsJson: string | null;
-  createdAt: number;
-};
 
 // Live claude-cli stream-json events for an in-flight turn. Replaces the
 // old per-request SSE response body — these are now published through the
@@ -309,7 +293,6 @@ type CosTurnStatus =
   | { kind: 'failed'; threadId: string; turnId: string; error: string };
 
 type CosBusEvent =
-  | { kind: 'cos_message'; payload: CosThreadMessageEvent }
   | { kind: 'claude_event'; payload: CosClaudeEvent }
   | { kind: 'turn_status'; payload: CosTurnStatus };
 
@@ -397,12 +380,6 @@ function publishBusEvent(threadId: string, ev: CosBusEvent, agentId?: string | n
       }
     }
   }
-}
-
-// Convenience wrappers for the existing cos_message publish path so we don't
-// have to rewrite every call site.
-function publishThreadMessage(ev: CosThreadMessageEvent, agentId?: string | null): void {
-  publishBusEvent(ev.threadId, { kind: 'cos_message', payload: ev }, agentId);
 }
 
 // Consume a session-service WebSocket and publish each parsed claude line
@@ -890,59 +867,6 @@ chiefOfStaffRoutes.post('/chief-of-staff/threads', async (c) => {
 });
 
 
-// Post a message directly into a thread as assistant/system role.
-// Used by the CoS itself to surface content (e.g. screenshots) without the
-// message being attributed to the operator ("You").
-chiefOfStaffRoutes.post('/chief-of-staff/threads/:id/messages', async (c) => {
-  const threadId = c.req.param('id');
-  let body: { role?: string; text?: string; attachmentsJson?: string };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: 'Invalid JSON body' }, 400);
-  }
-  const role = body.role === 'system' ? 'system' : 'assistant';
-  const text = (body.text || '').trim();
-  if (!text) return c.json({ error: 'text is required' }, 400);
-
-  const thread = await db.query.cosThreads.findFirst({
-    where: eq(schema.cosThreads.id, threadId),
-  });
-  if (!thread) return c.json({ error: 'Thread not found' }, 404);
-
-  const now = Date.now();
-  const messageId = ulid();
-  const attachmentsJson = body.attachmentsJson || null;
-  await db.insert(schema.cosMessages).values({
-    id: messageId,
-    threadId,
-    role,
-    text,
-    toolCallsJson: null,
-    attachmentsJson,
-    createdAt: now,
-  });
-  await db.update(schema.cosThreads)
-    .set({ updatedAt: now })
-    .where(eq(schema.cosThreads.id, threadId));
-
-  // Notify any active chat SSE stream for this thread so the admin UI can
-  // render the new message live instead of waiting for a refresh. Also fans
-  // out to the agent-scoped bus so an idle panel (no turn streaming) still
-  // sees the post via /chief-of-staff/agents/:agentId/stream.
-  publishThreadMessage({
-    id: messageId,
-    threadId,
-    role,
-    text,
-    toolCallsJson: null,
-    attachmentsJson,
-    createdAt: now,
-  }, thread.agentId);
-
-  return c.json({ ok: true, messageId });
-});
-
 chiefOfStaffRoutes.delete('/chief-of-staff/threads/:id', async (c) => {
   const id = c.req.param('id');
   // Cascade deletes messages due to FK
@@ -1219,8 +1143,6 @@ chiefOfStaffRoutes.get('/chief-of-staff/threads/:id/status', async (c) => {
 // SSE response body of POST /chat. POST /chat now returns 202 immediately;
 // the client opens this stream to receive:
 //
-//   • cos_message  — out-of-band /messages POSTs for this thread (e.g. an
-//                    agent script posting a screenshot back).
 //   • claude_event — { turnId, seq, line } envelopes for the live in-flight
 //                    turn (matches the wire format the previous SSE used).
 //   • turn_status  — { kind: 'started'|'completed'|'failed', ...} events
@@ -1305,8 +1227,7 @@ chiefOfStaffRoutes.get('/chief-of-staff/threads/:id/events', async (c) => {
 
       const unsubscribe = subscribeThreadEvents(threadId, (ev) => {
         if (closed) { try { unsubscribe(); } catch { /* ignore */ } return; }
-        if (ev.kind === 'cos_message') enqueue('cos_message', ev.payload);
-        else if (ev.kind === 'claude_event') {
+        if (ev.kind === 'claude_event') {
           // Already replayed; suppress events the client has already seen.
           if (ev.payload.seq > fromSeq) enqueue('claude_event', ev.payload);
         } else if (ev.kind === 'turn_status') enqueue('turn_status', ev.payload);
@@ -1337,10 +1258,10 @@ chiefOfStaffRoutes.get('/chief-of-staff/threads/:id/events', async (c) => {
 });
 
 // Agent-scoped live SSE: forwards every event for any thread under this
-// agent. Used by the bubble while it's open as a low-cost listener for
-// out-of-band agent posts (screenshots, etc.). Per-turn replay is not
-// supported here — a chat send always opens its own /threads/:id/events
-// stream which covers the gap.
+// agent. Used by the bubble while it's open as a low-cost listener so an
+// idle dashboard sees turn progress without opening a thread-specific
+// stream. Per-turn replay is not supported here — a chat send always opens
+// its own /threads/:id/events stream which covers the gap.
 chiefOfStaffRoutes.get('/chief-of-staff/agents/:agentId/stream', (c) => {
   const agentId = c.req.param('agentId');
   const encoder = new TextEncoder();
@@ -1358,8 +1279,7 @@ chiefOfStaffRoutes.get('/chief-of-staff/agents/:agentId/stream', (c) => {
       enqueue('hello', { agentId, at: Date.now() });
       const unsubscribe = subscribeAgentEvents(agentId, (ev) => {
         if (closed) { try { unsubscribe(); } catch { /* ignore */ } return; }
-        if (ev.kind === 'cos_message') enqueue('cos_message', ev.payload);
-        else if (ev.kind === 'claude_event') enqueue('claude_event', ev.payload);
+        if (ev.kind === 'claude_event') enqueue('claude_event', ev.payload);
         else if (ev.kind === 'turn_status') enqueue('turn_status', ev.payload);
       });
       const heartbeat = setInterval(() => {
@@ -1685,9 +1605,7 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
 
   const concurrencyContext =
     `\n\nYour requestId is ${requestId} (pass it to the lock API).` +
-    (body.threadId
-      ? `\n\nYour threadId is ${body.threadId}. To post content back to this thread as yourself (not labelled "You"), POST to:\n  http://localhost:3001/api/v1/admin/chief-of-staff/threads/${body.threadId}/messages\n\nTo share a screenshot, use this Python one-liner (handles escaping safely):\n  python3 -c "import base64,json,urllib.request; img=open('/tmp/pw_vnc_screen.png','rb').read(); b64='data:image/png;base64,'+base64.b64encode(img).decode(); body=json.dumps({'role':'assistant','text':'Screenshot:','attachmentsJson':json.dumps({'images':[{'dataUrl':b64,'name':'screenshot.png'}]})}); r=urllib.request.Request('http://localhost:3001/api/v1/admin/chief-of-staff/threads/${body.threadId}/messages',body.encode(),{'Content-Type':'application/json'},'POST'); print(urllib.request.urlopen(r).read())"`
-      : '') +
+    (body.threadId ? `\n\nYour threadId is ${body.threadId}.` : '') +
     (otherSessions.length > 0
       ? `\n\nOther active Ops sessions right now:\n${JSON.stringify(otherSessions, null, 2)}`
       : `\n\nNo other Ops sessions are active right now.`) +
