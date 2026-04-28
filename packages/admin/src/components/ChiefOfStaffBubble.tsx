@@ -36,7 +36,6 @@ import {
 import { MessageRenderer } from './MessageRenderer.js';
 import { layoutTree as layoutTreeSignal, findLeafWithTab, setFocusedLeaf } from '../lib/pane-tree.js';
 import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-picker';
-import { captureScreenshot } from '@propanes/widget/screenshot';
 import { ImageEditor } from '@propanes/widget/image-editor';
 import {
   popoutPanels,
@@ -98,6 +97,7 @@ import {
 import { extractCosReply, stripCosReplyMarkers } from '../lib/cos-reply-tags.js';
 import { useCosSearch } from '../lib/use-cos-search.js';
 import { useCosVoice } from '../lib/use-cos-voice.js';
+import { useCosScreenshot } from '../lib/use-cos-screenshot.js';
 import {
   fetchFeedbackTitle,
   getCachedFeedbackTitle,
@@ -214,7 +214,6 @@ export function ChiefOfStaffBubble({
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [pendingElementRefs, setPendingElementRefs] = useState<CosElementRef[]>([]);
   const [pickerActive, setPickerActive] = useState(false);
-  const [capturingScreenshot, setCapturingScreenshot] = useState(false);
   const pickerCleanupRef = useRef<(() => void) | null>(null);
   const [cameraMenuOpen, setCameraMenuOpen] = useState(false);
   const [pickerMenuOpen, setPickerMenuOpen] = useState(false);
@@ -222,22 +221,6 @@ export function ChiefOfStaffBubble({
   const [pickerMenuPos, setPickerMenuPos] = useState<{ top: number; left: number } | null>(null);
   const cameraGroupRef = useRef<HTMLDivElement | null>(null);
   const pickerGroupRef = useRef<HTMLDivElement | null>(null);
-  const [screenshotExcludeWidget, setScreenshotExcludeWidget] = useState<boolean>(() => {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-shot-excl-widget') : null;
-    return v === null ? true : v === '1';
-  });
-  const [screenshotExcludeCursor, setScreenshotExcludeCursor] = useState<boolean>(() => {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-shot-excl-cursor') : null;
-    return v === null ? true : v === '1';
-  });
-  const [screenshotMethod, setScreenshotMethod] = useState<'html-to-image' | 'display-media'>(() => {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-shot-method') : null;
-    return v === 'display-media' ? 'display-media' : 'html-to-image';
-  });
-  const [screenshotKeepStream, setScreenshotKeepStream] = useState<boolean>(() => {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-shot-keep') : null;
-    return v === '1';
-  });
   const [pickerMultiSelect, setPickerMultiSelect] = useState<boolean>(() => {
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-pick-multi') : null;
     return v === '1';
@@ -246,10 +229,6 @@ export function ChiefOfStaffBubble({
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-pick-children') : null;
     return v === '1';
   });
-  useEffect(() => { try { localStorage.setItem('pw-cos-shot-excl-widget', screenshotExcludeWidget ? '1' : '0'); } catch { /* ignore */ } }, [screenshotExcludeWidget]);
-  useEffect(() => { try { localStorage.setItem('pw-cos-shot-excl-cursor', screenshotExcludeCursor ? '1' : '0'); } catch { /* ignore */ } }, [screenshotExcludeCursor]);
-  useEffect(() => { try { localStorage.setItem('pw-cos-shot-method', screenshotMethod); } catch { /* ignore */ } }, [screenshotMethod]);
-  useEffect(() => { try { localStorage.setItem('pw-cos-shot-keep', screenshotKeepStream ? '1' : '0'); } catch { /* ignore */ } }, [screenshotKeepStream]);
   useEffect(() => { try { localStorage.setItem('pw-cos-pick-multi', pickerMultiSelect ? '1' : '0'); } catch { /* ignore */ } }, [pickerMultiSelect]);
   useEffect(() => { try { localStorage.setItem('pw-cos-pick-children', pickerIncludeChildren ? '1' : '0'); } catch { /* ignore */ } }, [pickerIncludeChildren]);
   const [replyTo, setReplyTo] = useState<{ role: string; text: string; anchorTs?: number; threadServerId?: string | null } | null>(null);
@@ -959,55 +938,22 @@ export function ChiefOfStaffBubble({
     if (handled) e.preventDefault();
   }
 
-  async function captureAndAttachScreenshot() {
-    if (capturingScreenshot) return;
-    setCapturingScreenshot(true);
-    try {
-      const blob = await captureScreenshot({
-        method: screenshotMethod,
-        excludeWidget: screenshotExcludeWidget,
-        excludeCursor: screenshotExcludeCursor,
-        keepStream: screenshotMethod === 'display-media' && screenshotKeepStream,
-      });
-      if (!blob) {
-        chiefOfStaffError.value = 'Screenshot capture failed';
-        return;
-      }
-      await addImageBlob(blob, `screenshot-${Date.now()}.png`);
-    } catch (err: any) {
-      chiefOfStaffError.value = `Screenshot failed: ${err?.message || err}`;
-    } finally {
-      setCapturingScreenshot(false);
-    }
-  }
-
-  async function startTimedScreenshot(seconds: number) {
-    if (capturingScreenshot) return;
-    setCameraMenuOpen(false);
-    setCapturingScreenshot(true);
-    try {
-      for (let i = seconds; i > 0; i--) {
-        chiefOfStaffError.value = `Screenshot in ${i}…`;
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-      chiefOfStaffError.value = '';
-      const blob = await captureScreenshot({
-        method: screenshotMethod,
-        excludeWidget: screenshotExcludeWidget,
-        excludeCursor: screenshotExcludeCursor,
-        keepStream: screenshotMethod === 'display-media' && screenshotKeepStream,
-      });
-      if (!blob) {
-        chiefOfStaffError.value = 'Screenshot capture failed';
-        return;
-      }
-      await addImageBlob(blob, `screenshot-${Date.now()}.png`);
-    } catch (err: any) {
-      chiefOfStaffError.value = `Screenshot failed: ${err?.message || err}`;
-    } finally {
-      setCapturingScreenshot(false);
-    }
-  }
+  const {
+    capturingScreenshot,
+    screenshotExcludeWidget,
+    setScreenshotExcludeWidget,
+    screenshotExcludeCursor,
+    setScreenshotExcludeCursor,
+    screenshotMethod,
+    setScreenshotMethod,
+    screenshotKeepStream,
+    setScreenshotKeepStream,
+    captureAndAttachScreenshot,
+    startTimedScreenshot,
+  } = useCosScreenshot({
+    onAttachBlob: (blob, name) => addImageBlob(blob, name),
+    closeCameraMenu: () => setCameraMenuOpen(false),
+  });
 
   const {
     recording: micRecording,
