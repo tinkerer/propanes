@@ -12513,6 +12513,21 @@ body.pw-isolate {
   flex: 0 0 auto;
 }
 
+/* JSONL transcript host — the StructuredView renders inside this and owns
+   its own scroll. The wrapper just provides flex/min-height so it fills the
+   panel between header and composer. */
+.cos-thread-panel-jsonl {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.cos-thread-panel-jsonl .structured-view {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 /* Inline composer at the bottom of the thread side panel — lets the operator
    reply directly without bouncing back to the main bubble textarea. */
 .cos-thread-panel-composer {
