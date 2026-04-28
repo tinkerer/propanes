@@ -13528,22 +13528,25 @@ body.pw-isolate {
 }
 .cos-example:hover { background: var(--pw-primary-soft); border-color: var(--pw-primary-muted); color: var(--pw-primary-text); }
 
-/* Slack-style message row: avatar column + main content column, full width. */
+/* Slack-style message row: avatar column + main content column, full width.
+   Sized to match Slack's reading rhythm: ~36px avatar, 14px bold author,
+   small muted timestamp, tight within-group spacing, generous between-group
+   breathing room when consecutive messages don't share an author. */
 .cos-msg {
   position: relative;
   max-width: 100%;
 }
 .cos-row {
   display: grid;
-  grid-template-columns: 28px 1fr;
-  column-gap: 10px;
+  grid-template-columns: 36px 1fr;
+  column-gap: 12px;
   row-gap: 0;
-  padding: 3px 10px 3px 4px;
+  padding: 6px 10px 6px 8px;
   border-radius: 4px;
   transition: background 0.08s ease;
 }
 .cos-row + .cos-row {
-  margin-top: 0;
+  margin-top: 2px;
 }
 .cos-row:hover {
   background: var(--pw-bg-surface);
@@ -13551,7 +13554,7 @@ body.pw-isolate {
 .cos-row-avatar {
   grid-column: 1;
   grid-row: 1 / span 20;
-  padding-top: 2px;
+  padding-top: 1px;
 }
 .cos-row-main {
   grid-column: 2;
@@ -13567,12 +13570,13 @@ body.pw-isolate {
   line-height: 1.2;
 }
 .cos-row-author {
-  font-weight: 600;
-  font-size: 13px;
+  font-weight: 700;
+  font-size: 14px;
   color: var(--pw-text-primary);
+  letter-spacing: -0.005em;
 }
 .cos-row-header .cos-msg-time {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--pw-text-muted);
   font-weight: 400;
 }
@@ -13611,14 +13615,14 @@ body.pw-isolate {
 
 /* Avatar styling. */
 .cos-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
   flex: 0 0 auto;
   user-select: none;
   color: #fff;
