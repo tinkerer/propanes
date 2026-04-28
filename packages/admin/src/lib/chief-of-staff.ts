@@ -1,81 +1,65 @@
 import { signal, effect } from '@preact/signals';
 import {
-  popoutPanels,
-  updatePanel,
-  bringToFront,
-  persistPopoutState,
-  COS_PANEL_ID,
-  type PopoutPanelState,
-} from './popout-state.js';
+  type ChiefOfStaffToolCall,
+  type DispatchInfo,
+  extractDispatchInfo,
+} from './cos-dispatch-info.js';
 import {
-  layoutTree,
-  findLeafWithTab,
-  findLeaf,
-  focusedLeafId,
-  addTabToLeaf,
-  setActiveTab,
-  setFocusedLeaf,
-  splitLeaf,
-  removeTabFromLeaf,
-  SIDEBAR_LEAF_ID,
-  getAllLeaves,
-} from './pane-tree.js';
-import { isMobile } from './viewport.js';
+  cosThreadSessions,
+  cosThreadMeta,
+  mergeThreadSessions,
+  mergeThreadMeta,
+  getSessionIdForThread,
+  getThreadMeta,
+  setThreadResolved,
+  setThreadArchived,
+  type CosThreadMeta,
+} from './cos-thread-meta.js';
+import {
+  ensureCosPanel,
+  setChiefOfStaffOpen,
+  toggleChiefOfStaff,
+  openCosInPane,
+  isCosInPane,
+  closeCosPane,
+  COS_PANE_TAB_ID,
+} from './cos-pane.js';
 
-export type ChiefOfStaffToolCall = {
-  id?: string;
-  name: string;
-  input: Record<string, unknown>;
-  result?: unknown;
-  error?: string;
+export { type ChiefOfStaffToolCall, type DispatchInfo, extractDispatchInfo };
+export {
+  cosThreadSessions,
+  cosThreadMeta,
+  getSessionIdForThread,
+  getThreadMeta,
+  setThreadResolved,
+  setThreadArchived,
+  type CosThreadMeta,
+};
+export {
+  ensureCosPanel,
+  setChiefOfStaffOpen,
+  toggleChiefOfStaff,
+  openCosInPane,
+  isCosInPane,
+  closeCosPane,
+  COS_PANE_TAB_ID,
 };
 
-export type DispatchInfo = {
-  feedbackId: string;
-  sessionId: string | null;
-};
-
-/**
- * Inspect a tool call and, if it was a feedback dispatch, return the feedbackId
- * (always, parsed from the Bash command) and sessionId (when the call's result
- * has been hydrated). Returns null if this call isn't a dispatch.
- *
- * Works for both `POST /api/v1/admin/feedback/<id>/dispatch` and
- * `POST /api/v1/admin/dispatch` with a `{"feedbackId":"..."}` body.
- */
-export function extractDispatchInfo(call: ChiefOfStaffToolCall): DispatchInfo | null {
-  if (call.error) return null;
-  if (call.name !== 'Bash') return null;
-  const cmd = typeof call.input?.command === 'string' ? (call.input.command as string) : '';
-  if (!cmd) return null;
-  if (!/-X\s+POST/i.test(cmd)) return null;
-
-  // Path-style: /api/v1/admin/feedback/<id>/dispatch
-  let feedbackId: string | null = null;
-  const pathMatch = cmd.match(/\/api\/v1\/admin\/feedback\/([A-Z0-9]{20,})\/dispatch/i);
-  if (pathMatch) {
-    feedbackId = pathMatch[1];
-  } else {
-    // Body-style: /api/v1/admin/dispatch with -d '{"feedbackId":"<id>",...}'
-    if (!/\/api\/v1\/admin\/dispatch\b/.test(cmd)) return null;
-    const bodyMatch = cmd.match(/["']feedbackId["']\s*:\s*["']([A-Z0-9]{20,})["']/i);
-    if (!bodyMatch) return null;
-    feedbackId = bodyMatch[1];
-  }
-
-  // Pull sessionId from the result when available (live stream or rehydrated).
-  let sessionId: string | null = null;
-  const res = call.result;
-  if (typeof res === 'string' && res.trim()) {
-    const m = res.match(/["']sessionId["']\s*:\s*["']([A-Za-z0-9-]+)["']/);
-    if (m) sessionId = m[1];
-  } else if (res && typeof res === 'object' && typeof (res as any).sessionId === 'string') {
-    sessionId = (res as any).sessionId;
-  }
-
-  return { feedbackId, sessionId };
-}
-
+// Agent CRUD lives in cos-agent-crud.ts but is re-exported here so existing
+// consumers (CosAgentSettings, CosTabList, ChiefOfStaffBubble, …) don't need
+// to update their import paths.
+export {
+  clearActiveAgentHistory,
+  interruptActiveAgent,
+  interruptThread,
+  renameActiveAgent,
+  updateActiveAgentSystemPrompt,
+  updateActiveAgentModel,
+  updateActiveAgentVerbosity,
+  updateActiveAgentStyle,
+  addAgent,
+  removeActiveAgent,
+} from './cos-agent-crud.js';
 
 export type ChiefOfStaffVerbosity = 'terse' | 'normal' | 'verbose';
 export type ChiefOfStaffStyle = 'dry' | 'neutral' | 'friendly';
@@ -141,12 +125,6 @@ export type SendCosOptions = {
   replyToTs?: number;
 };
 
-function adminHeaders(): Record<string, string> {
-  const token = localStorage.getItem('pw-admin-token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-
 export type ChiefOfStaffAgent = {
   id: string;
   name: string;
@@ -157,125 +135,6 @@ export type ChiefOfStaffAgent = {
   verbosity?: ChiefOfStaffVerbosity;
   style?: ChiefOfStaffStyle;
 };
-
-// threadId → backing agentSessionId. Each cosThread owns exactly one
-// persistent headless-stream agent session; this map lets the UI jump
-// straight to its jsonl log without round-tripping the server.
-export const cosThreadSessions = signal<Record<string, string>>({});
-
-function mergeThreadSessions(threads: Array<{ id?: unknown; agentSessionId?: unknown }>): void {
-  if (!Array.isArray(threads) || threads.length === 0) return;
-  const next = { ...cosThreadSessions.value };
-  let changed = false;
-  for (const t of threads) {
-    const tid = typeof t?.id === 'string' ? t.id : null;
-    const sid = typeof t?.agentSessionId === 'string' ? t.agentSessionId : null;
-    if (tid && sid && next[tid] !== sid) {
-      next[tid] = sid;
-      changed = true;
-    }
-  }
-  if (changed) cosThreadSessions.value = next;
-}
-
-export function getSessionIdForThread(threadId: string | undefined | null): string | null {
-  if (!threadId) return null;
-  return cosThreadSessions.value[threadId] ?? null;
-}
-
-// Per-thread health derived from the joined agentSessions row (server-side)
-// plus the operator-set resolved flag. Drives the rail status indicator and
-// the inline resolve toggle. sessionStatus = null when the underlying agent
-// session was garbage collected (gray "no session" state).
-export type CosThreadMeta = {
-  sessionStatus: string | null;
-  resolvedAt: number | null;
-  archivedAt: number | null;
-};
-export const cosThreadMeta = signal<Record<string, CosThreadMeta>>({});
-
-function mergeThreadMeta(
-  threads: Array<{
-    id?: unknown;
-    sessionStatus?: unknown;
-    resolvedAt?: unknown;
-    archivedAt?: unknown;
-  }>,
-): void {
-  if (!Array.isArray(threads) || threads.length === 0) return;
-  const next = { ...cosThreadMeta.value };
-  let changed = false;
-  for (const t of threads) {
-    const tid = typeof t?.id === 'string' ? t.id : null;
-    if (!tid) continue;
-    const sessionStatus = typeof t.sessionStatus === 'string' ? t.sessionStatus : null;
-    const resolvedAt = typeof t.resolvedAt === 'number' ? t.resolvedAt : null;
-    const archivedAt = typeof t.archivedAt === 'number' ? t.archivedAt : null;
-    const prev = next[tid];
-    if (!prev || prev.sessionStatus !== sessionStatus || prev.resolvedAt !== resolvedAt || prev.archivedAt !== archivedAt) {
-      next[tid] = { sessionStatus, resolvedAt, archivedAt };
-      changed = true;
-    }
-  }
-  if (changed) cosThreadMeta.value = next;
-}
-
-export function getThreadMeta(threadId: string | undefined | null): CosThreadMeta | null {
-  if (!threadId) return null;
-  return cosThreadMeta.value[threadId] ?? null;
-}
-
-const EMPTY_THREAD_META: CosThreadMeta = { sessionStatus: null, resolvedAt: null, archivedAt: null };
-
-async function patchThreadFlags(
-  threadId: string,
-  body: { resolved?: boolean; archived?: boolean },
-  optimistic: Partial<CosThreadMeta>,
-): Promise<void> {
-  const prev = cosThreadMeta.value[threadId] ?? EMPTY_THREAD_META;
-  cosThreadMeta.value = {
-    ...cosThreadMeta.value,
-    [threadId]: { ...prev, ...optimistic },
-  };
-  try {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', ...adminHeaders() };
-    const res = await fetch(`/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(threadId)}`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) throw new Error(`PATCH failed: ${res.status}`);
-    const data = await res.json().catch(() => null) as { resolvedAt?: unknown; archivedAt?: unknown } | null;
-    const serverResolvedAt = typeof data?.resolvedAt === 'number' ? data.resolvedAt : null;
-    const serverArchivedAt = typeof data?.archivedAt === 'number' ? data.archivedAt : null;
-    cosThreadMeta.value = {
-      ...cosThreadMeta.value,
-      [threadId]: { ...prev, resolvedAt: serverResolvedAt, archivedAt: serverArchivedAt },
-    };
-  } catch {
-    cosThreadMeta.value = { ...cosThreadMeta.value, [threadId]: prev };
-  }
-}
-
-/**
- * Toggle the resolved flag on a thread. Optimistically updates the local
- * signal so the rail re-renders immediately, then PATCHes the server.
- */
-export async function setThreadResolved(threadId: string, resolved: boolean): Promise<void> {
-  await patchThreadFlags(threadId, { resolved }, { resolvedAt: resolved ? Date.now() : null });
-}
-
-/**
- * Toggle the archived flag on a thread. Archiving a thread also implicitly
- * resolves it (server-side); unarchiving leaves the resolved state alone.
- */
-export async function setThreadArchived(threadId: string, archived: boolean): Promise<void> {
-  const optimistic: Partial<CosThreadMeta> = archived
-    ? { archivedAt: Date.now(), resolvedAt: cosThreadMeta.value[threadId]?.resolvedAt ?? Date.now() }
-    : { archivedAt: null };
-  await patchThreadFlags(threadId, { archived }, optimistic);
-}
-
 
 const STORAGE_KEY = 'pw-chief-of-staff-v1';
 
@@ -365,32 +224,8 @@ export const chiefOfStaffError = signal<string | null>(null);
 // Count of in-flight streams across all agents — informational only, never blocks input.
 export const chiefOfStaffInFlight = signal(0);
 
-
-export function ensureCosPanel(): PopoutPanelState {
-  const existing = popoutPanels.value.find((p) => p.id === COS_PANEL_ID);
-  if (existing) return existing;
-  const w = 420;
-  const h = 600;
-  const panel: PopoutPanelState = {
-    id: COS_PANEL_ID,
-    sessionIds: [],
-    activeSessionId: '',
-    docked: false,
-    visible: chiefOfStaffOpen.value,
-    floatingRect: {
-      x: Math.max(16, (typeof window !== 'undefined' ? window.innerWidth : 1024) - w - 16),
-      y: 72,
-      w,
-      h,
-    },
-    dockedHeight: h,
-    dockedWidth: w,
-    alwaysOnTop: true,
-  };
-  popoutPanels.value = [...popoutPanels.value, panel];
-  return panel;
-}
-
+// Provision the popout panel state row up-front so consumers can read its
+// floating rect without first calling ensureCosPanel themselves.
 ensureCosPanel();
 
 effect(() => {
@@ -423,7 +258,7 @@ export function getActiveAgent(): ChiefOfStaffAgent | null {
   return chiefOfStaffAgents.value.find((a) => a.id === chiefOfStaffActiveId.value) || null;
 }
 
-function updateAgent(id: string, mutate: (a: ChiefOfStaffAgent) => ChiefOfStaffAgent): void {
+export function updateAgent(id: string, mutate: (a: ChiefOfStaffAgent) => ChiefOfStaffAgent): void {
   chiefOfStaffAgents.value = chiefOfStaffAgents.value.map((a) => (a.id === id ? mutate(a) : a));
 }
 
@@ -571,152 +406,6 @@ async function createCosThread(
 function findAnchorMessage(agent: ChiefOfStaffAgent, anchorTs: number | undefined): ChiefOfStaffMsg | null {
   if (typeof anchorTs !== 'number') return null;
   return agent.messages.find((m) => m.role === 'user' && m.timestamp === anchorTs) || null;
-}
-
-async function listThreadIdsForAgent(agentId: string, appId: string | null): Promise<string[]> {
-  try {
-    const token = localStorage.getItem('pw-admin-token');
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    const qs = new URLSearchParams({ agentId });
-    if (appId) qs.set('appId', appId);
-    const res = await fetch(`/api/v1/admin/chief-of-staff/threads?${qs.toString()}`, { headers });
-    if (!res.ok) return [];
-    const data = await res.json();
-    const threads = Array.isArray(data?.threads) ? data.threads : [];
-    return threads.map((t: any) => t?.id).filter((id: any): id is string => typeof id === 'string');
-  } catch {
-    return [];
-  }
-}
-
-export async function clearActiveAgentHistory(): Promise<void> {
-  const agent = getActiveAgent();
-  if (!agent) return;
-
-  const token = localStorage.getItem('pw-admin-token');
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-
-  // Delete ALL server-side threads for this agent (across apps). Legacy rows
-  // only had one thread per agent; post-fix each top-level UI message has its
-  // own thread, so "Clear history" needs to sweep them all.
-  const threadIds = await listThreadIdsForAgent(agent.id, null);
-  // Include any legacy singleton threadId the UI remembered that might not be
-  // visible on the current app filter.
-  if (agent.threadId && !threadIds.includes(agent.threadId)) threadIds.push(agent.threadId);
-  await Promise.all(
-    threadIds.map(async (id) => {
-      try {
-        await fetch(`/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(id)}`, {
-          method: 'DELETE',
-          headers,
-        });
-      } catch {
-        /* non-fatal */
-      }
-    }),
-  );
-
-  updateAgent(agent.id, (a) => ({ ...a, messages: [], threadId: undefined }));
-}
-
-/**
- * Interrupt any in-flight turns for this agent. A turn is in-flight when at
- * least one local message is still streaming; we derive the targeted thread
- * ids from those messages. If nothing is streaming locally, fall back to the
- * agent's legacy singleton threadId (pre-multi-thread clients).
- */
-export async function interruptActiveAgent(): Promise<void> {
-  const agent = getActiveAgent();
-  if (!agent) return;
-
-  const targets = new Set<string>();
-  for (const m of agent.messages) {
-    if (m.streaming && m.threadId) targets.add(m.threadId);
-  }
-  if (targets.size === 0 && agent.threadId) targets.add(agent.threadId);
-  if (targets.size === 0) return;
-
-  const token = localStorage.getItem('pw-admin-token');
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-
-  await Promise.all(
-    Array.from(targets).map(async (id) => {
-      try {
-        await fetch(`/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(id)}/interrupt`, {
-          method: 'POST',
-          headers,
-        });
-      } catch {
-        /* non-fatal */
-      }
-    }),
-  );
-}
-
-/** Interrupt a single, known thread. Used by per-thread Stop buttons. */
-export async function interruptThread(threadId: string): Promise<void> {
-  if (!threadId) return;
-  try {
-    const token = localStorage.getItem('pw-admin-token');
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    await fetch(`/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(threadId)}/interrupt`, {
-      method: 'POST',
-      headers,
-    });
-  } catch {
-    /* non-fatal */
-  }
-}
-
-export function renameActiveAgent(name: string): void {
-  updateAgent(chiefOfStaffActiveId.value, (a) => ({ ...a, name: name.slice(0, 60) }));
-}
-
-export function updateActiveAgentSystemPrompt(systemPrompt: string): void {
-  updateAgent(chiefOfStaffActiveId.value, (a) => ({ ...a, systemPrompt }));
-}
-
-export function updateActiveAgentModel(model: string): void {
-  updateAgent(chiefOfStaffActiveId.value, (a) => ({ ...a, model }));
-}
-
-export function updateActiveAgentVerbosity(verbosity: ChiefOfStaffVerbosity): void {
-  updateAgent(chiefOfStaffActiveId.value, (a) => ({ ...a, verbosity }));
-}
-
-export function updateActiveAgentStyle(style: ChiefOfStaffStyle): void {
-  updateAgent(chiefOfStaffActiveId.value, (a) => ({ ...a, style }));
-}
-
-export function addAgent(name: string): string {
-  const id = `agent-${Date.now().toString(36)}`;
-  const agent: ChiefOfStaffAgent = {
-    id,
-    name: name.slice(0, 60) || 'New Agent',
-    systemPrompt: '',
-    model: '',
-    messages: [],
-    verbosity: DEFAULT_VERBOSITY,
-    style: DEFAULT_STYLE,
-  };
-  chiefOfStaffAgents.value = [...chiefOfStaffAgents.value, agent];
-  chiefOfStaffActiveId.value = id;
-  return id;
-}
-
-export function removeActiveAgent(): void {
-  const remaining = chiefOfStaffAgents.value.filter((a) => a.id !== chiefOfStaffActiveId.value);
-  if (remaining.length === 0) {
-    // Don't allow removing the last agent — reset it instead
-    void clearActiveAgentHistory();
-    return;
-  }
-  chiefOfStaffAgents.value = remaining;
-  chiefOfStaffActiveId.value = remaining[0].id;
 }
 
 type StreamAccum = {
@@ -1139,95 +828,3 @@ export function dismissFailedAssistantMessage(targetTimestamp: number): void {
   }));
 }
 
-export function setChiefOfStaffOpen(open: boolean): void {
-  ensureCosPanel();
-  chiefOfStaffOpen.value = open;
-  updatePanel(COS_PANEL_ID, { visible: open, minimized: false });
-  if (open) bringToFront(COS_PANEL_ID);
-  persistPopoutState();
-}
-
-export function toggleChiefOfStaff(): void {
-  setChiefOfStaffOpen(!chiefOfStaffOpen.value);
-}
-
-/** Single well-known tab id for the in-tree CoS pane. */
-export const COS_PANE_TAB_ID = 'cos:main';
-
-/**
- * Open the CoS as a first-class pane in the layout tree. If the cos tab
- * already exists, focus/activate it. Otherwise insert it into the focused
- * leaf (or split the main content leaf). Hides the floating popout.
- */
-export function openCosInPane(): void {
-  // Mobile: the layout renders MobilePageView instead of the pane tree, so a
-  // cos:main tab added to the tree would be invisible. Fall back to the
-  // floating popout (which has full-screen mobile CSS). Also strip any stale
-  // pane tab so the popout's !hasCosTabInTree guard doesn't suppress it.
-  if (isMobile.value) {
-    const stale = findLeafWithTab(COS_PANE_TAB_ID);
-    if (stale) removeTabFromLeaf(stale.id, COS_PANE_TAB_ID);
-    setChiefOfStaffOpen(true);
-    return;
-  }
-
-  // If already open, just activate.
-  const existing = findLeafWithTab(COS_PANE_TAB_ID);
-  if (existing) {
-    setActiveTab(existing.id, COS_PANE_TAB_ID);
-    setFocusedLeaf(existing.id);
-    // Also hide the floating popout so only one cos UI is visible.
-    chiefOfStaffOpen.value = false;
-    updatePanel(COS_PANEL_ID, { visible: false });
-    persistPopoutState();
-    return;
-  }
-
-  // Pick a target leaf: focused (non-sidebar) leaf, else first non-sidebar leaf.
-  const sidebarIds = new Set([SIDEBAR_LEAF_ID, 'sidebar-sessions', 'sidebar-terminals', 'sidebar-files']);
-  const tree = layoutTree.value;
-  const focused = focusedLeafId.value;
-  let targetLeaf = focused ? findLeaf(tree.root, focused) : null;
-  if (!targetLeaf || sidebarIds.has(targetLeaf.id)) {
-    const mainLeaf = getAllLeaves(tree.root).find((l) => !sidebarIds.has(l.id));
-    targetLeaf = mainLeaf ?? null;
-  }
-  if (!targetLeaf) return;
-
-  // If the target already has tabs, split right with the cos tab so it gets
-  // its own pane rather than becoming a sibling tab. This matches the
-  // first-class-pane intent.
-  if (targetLeaf.tabs.length > 0) {
-    const newLeaf = splitLeaf(targetLeaf.id, 'horizontal', 'second', [COS_PANE_TAB_ID], 0.6);
-    if (newLeaf) setFocusedLeaf(newLeaf.id);
-  } else {
-    addTabToLeaf(targetLeaf.id, COS_PANE_TAB_ID, true);
-    setFocusedLeaf(targetLeaf.id);
-  }
-
-  // Hide the popout so we show one CoS surface at a time.
-  chiefOfStaffOpen.value = false;
-  updatePanel(COS_PANEL_ID, { visible: false });
-  persistPopoutState();
-}
-
-/** True when the CoS tab is present somewhere in the layout tree. */
-export function isCosInPane(): boolean {
-  return !!findLeafWithTab(COS_PANE_TAB_ID);
-}
-
-export function closeCosPane(): void {
-  // On mobile the pane-mode surface is the popout (see openCosInPane), so the
-  // "close pane" toggle means "hide the popout." Still sweep any stale pane
-  // tab so a subsequent open isn't blocked by shouldRenderShell's
-  // !hasCosTabInTree guard.
-  if (isMobile.value) {
-    const stale = findLeafWithTab(COS_PANE_TAB_ID);
-    if (stale) removeTabFromLeaf(stale.id, COS_PANE_TAB_ID);
-    setChiefOfStaffOpen(false);
-    return;
-  }
-  const existing = findLeafWithTab(COS_PANE_TAB_ID);
-  if (!existing) return;
-  removeTabFromLeaf(existing.id, COS_PANE_TAB_ID);
-}

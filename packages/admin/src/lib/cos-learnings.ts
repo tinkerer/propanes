@@ -6,6 +6,7 @@
 // reads from these signals and dispatches the actions.
 
 import { signal } from '@preact/signals';
+import { adminHeaders } from './admin-headers.js';
 
 export type CosLearning = {
   id: string;
@@ -61,11 +62,6 @@ export const cosLearningGraphLoading = signal(false);
 
 export type WiggumAnnouncement = { summary: string; threadId: string | null; at: number };
 export const wiggumAnnouncement = signal<WiggumAnnouncement | null>(null);
-
-function adminHeaders(): Record<string, string> {
-  const token = localStorage.getItem('pw-admin-token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
 
 export async function loadWiggumAnnouncement(): Promise<void> {
   try {
