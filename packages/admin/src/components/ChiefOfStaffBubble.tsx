@@ -66,7 +66,6 @@ import {
 import { openArtifactCompanion, openUrlCompanion } from '../lib/companion-state.js';
 import { ArtifactCompanionView } from './ArtifactCompanionView.js';
 import { PopupMenu } from './PopupMenu.js';
-import { WindowMenu } from './PopoutPanelContent.js';
 import {
   cosPopoutTree,
   cosToggleLearningsTab,
@@ -124,6 +123,7 @@ import { CosInputToolbar } from './CosInputToolbar.js';
 import { CosTabList } from './CosTabList.js';
 import { CosResizeHandles } from './CosResizeHandles.js';
 import { CosLearningsDrawer, CosThreadDrawer, type CosDrawerStyle } from './CosBubbleDrawers.js';
+import { CosBubbleWindowControls } from './CosBubbleHeader.js';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -1323,61 +1323,16 @@ export function ChiefOfStaffBubble({
               />
             </div>
             {!inPane && panel && (
-              <div class="popout-window-controls">
-                <button
-                  ref={menuButtonRef}
-                  class="btn-close-panel cos-hamburger-draggable"
-                  onClick={() => setMenuOpen((v) => !v)}
-                  onMouseDown={(e) => {
-                    // Drag-to-popout: if the user drags the hamburger >40px, open
-                    // a standalone CoS window via ?embed=cos (chat-only, no admin
-                    // chrome) so the popped-out window matches what the
-                    // CosEmbedRoot renders. Click-only opens the menu instead.
-                    const startX = (e as MouseEvent).clientX;
-                    const startY = (e as MouseEvent).clientY;
-                    let dragged = false;
-                    const onMove = (ev: MouseEvent) => {
-                      const dx = ev.clientX - startX;
-                      const dy = ev.clientY - startY;
-                      if (!dragged && Math.hypot(dx, dy) > 40) {
-                        dragged = true;
-                        document.removeEventListener('mousemove', onMove);
-                        document.removeEventListener('mouseup', onUp);
-                        setMenuOpen(false);
-                        // Decide window vs tab based on drop position: near screen
-                        // edge → detached window, anywhere else → new tab.
-                        const nearEdge =
-                          ev.clientX < 20 ||
-                          ev.clientX > window.innerWidth - 20 ||
-                          ev.clientY < 20 ||
-                          ev.clientY > window.innerHeight - 20;
-                        openCosExternally(nearEdge ? 'new-window' : 'new-tab');
-                      }
-                    };
-                    const onUp = () => {
-                      document.removeEventListener('mousemove', onMove);
-                      document.removeEventListener('mouseup', onUp);
-                    };
-                    document.addEventListener('mousemove', onMove);
-                    document.addEventListener('mouseup', onUp);
-                  }}
-                  title="Panel options (drag to pop out to new window/tab)"
-                  aria-haspopup="true"
-                  aria-expanded={menuOpen}
-                >{'☰'}</button>
-                <button class="btn-close-panel" onClick={toggleChiefOfStaff} title="Hide panel">&times;</button>
-                {menuOpen && (
-                  <WindowMenu
-                    panel={panel}
-                    activeId={COS_PANE_TAB_ID}
-                    docked={isDocked}
-                    isLeftDocked={isLeftDocked}
-                    isMinimized={isMinimized}
-                    anchorRef={menuButtonRef}
-                    onClose={() => setMenuOpen(false)}
-                  />
-                )}
-              </div>
+              <CosBubbleWindowControls
+                panel={panel}
+                isDocked={isDocked}
+                isLeftDocked={isLeftDocked}
+                isMinimized={isMinimized}
+                menuOpen={menuOpen}
+                setMenuOpen={setMenuOpen}
+                menuButtonRef={menuButtonRef}
+                onClosePanel={toggleChiefOfStaff}
+              />
             )}
           </div>
 
