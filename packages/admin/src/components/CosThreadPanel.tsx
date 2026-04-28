@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef } from 'preact/hooks';
 import {
   chiefOfStaffAgents,
   sendChiefOfStaffMessage,
+  DEFAULT_VERBOSITY,
   type ChiefOfStaffVerbosity,
   type CosImageAttachment,
   type CosElementRef,
@@ -14,44 +15,27 @@ import {
   setThreadDraft,
   clearThreadDraft,
 } from '../lib/cos-popout-tree.js';
-import { useCosVoice } from '../lib/use-cos-voice.js';
-import { useCosScreenshot } from '../lib/use-cos-screenshot.js';
-import { useCosElementPicker } from '../lib/use-cos-element-picker.js';
+import { useTranscriptStream } from '../lib/transcript-stream.js';
+import { jsonlToCosMessages } from '../lib/jsonl-to-cos.js';
 import { groupIntoThreads, threadKeyOf } from './CosThread.js';
-import { StructuredView } from './StructuredView.js';
-import { CosInputToolbar } from './CosInputToolbar.js';
-
-let attachmentIdCounter = 0;
-function nextAttachmentId(): string {
-  attachmentIdCounter += 1;
-  return `cos-thread-att-${Date.now()}-${attachmentIdCounter}`;
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
-  });
-}
+import { MessageBubble } from './CosMessage.js';
+import { CosComposer } from './CosComposer.js';
 
 /**
  * Slack-mode side panel for one thread.
  *
- * The body is rendered from the **JSONL stream** of the thread's backing
- * agent session — not from cosMessages — because the cosMessages persistence
- * path drops assistant turns when the operator types fast and never sees
- * sub-agent (Task) transcripts at all. The JSONL has both. We delegate to
- * `StructuredView` (the same component that drives the JSONL companion tab)
- * with chat-mode opts so the rendering matches the bubble's compact style.
+ * Body renders the **JSONL stream** of the thread's backing agent session —
+ * the cosMessages persistence path drops assistant turns when the operator
+ * types fast and never sees Task subagent transcripts at all. The JSONL has
+ * both, and via `jsonlToCosMessages` we project it into the bubble's
+ * ChiefOfStaffMsg[] shape so MessageBubble (the same slack-style row the
+ * main bubble uses) can render it. Avatars, author headers, timestamps,
+ * tool-call chips — all match the main chat exactly.
  *
- * The composer at the bottom shares the **same input toolbar** (camera +
- * options dropdown, element picker + options dropdown, mic, send) as the
- * main bubble — wired through useCosVoice / useCosScreenshot /
- * useCosElementPicker hooks so the panel composer has feature parity.
- * Replies land in this thread's session via sendChiefOfStaffMessage with
- * `replyToTs` set to the anchor user-message timestamp.
+ * Composer is the shared `<CosComposer>`, identical to the bubble's main
+ * composer (camera + element picker + mic + paste-images), wired to dispatch
+ * via `sendChiefOfStaffMessage` with replyToTs set to the thread's anchor
+ * timestamp so the reply lands back in this thread's session.
  */
 export function ThreadPanel({
   agentId,
@@ -82,20 +66,6 @@ export function ThreadPanel({
     ? threads.find((t) => threadKeyOf(t) === active.threadKey) || null
     : null;
 
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const composerRef = useRef<HTMLTextAreaElement>(null);
-  const cameraGroupRef = useRef<HTMLDivElement>(null);
-  const pickerGroupRef = useRef<HTMLDivElement>(null);
-  const [composerText, setComposerText] = useState(() =>
-    active ? getThreadDraft(active.agentId, active.threadKey) : '',
-  );
-  const [pendingAttachments, setPendingAttachments] = useState<Array<CosImageAttachment & { id: string }>>([]);
-  const [pendingElementRefs, setPendingElementRefs] = useState<CosElementRef[]>([]);
-  const [cameraMenuOpen, setCameraMenuOpen] = useState(false);
-  const [cameraMenuPos, setCameraMenuPos] = useState<{ top: number; left: number } | null>(null);
-  const [pickerMenuOpen, setPickerMenuOpen] = useState(false);
-  const [pickerMenuPos, setPickerMenuPos] = useState<{ top: number; left: number } | null>(null);
-
   // No agent or no selected thread → close the pane instead of rendering an
   // empty placeholder. Effect avoids calling the parent setter during render.
   const isEmpty = !agent || !active || !found;
@@ -103,50 +73,19 @@ export function ThreadPanel({
     if (isEmpty) onClose();
   }, [isEmpty, onClose]);
 
-  // When the operator switches threads, swap in that thread's persisted draft
-  // so half-typed replies survive the switch (and reloads). Pending
-  // attachments / element refs are deliberately ephemeral — they don't
-  // persist across reloads or thread switches.
-  useEffect(() => {
-    setComposerText(active ? getThreadDraft(active.agentId, active.threadKey) : '');
-    setPendingAttachments([]);
-    setPendingElementRefs([]);
-  }, [active?.threadKey, active?.agentId]);
-
-  // Persist composer text on every keystroke — cheap because the store is
-  // just a localStorage write of a small map. Empty text removes the entry.
-  useEffect(() => {
-    if (active) setThreadDraft(active.agentId, active.threadKey, composerText);
-  }, [composerText, active?.agentId, active?.threadKey]);
-
-  async function addImageBlob(blob: Blob, name?: string): Promise<void> {
-    try {
-      const dataUrl = await blobToDataUrl(blob);
-      setPendingAttachments((prev) => [
-        ...prev,
-        { kind: 'image', dataUrl, name, id: nextAttachmentId() } as CosImageAttachment & { id: string },
-      ]);
-    } catch { /* non-fatal — operator can retry */ }
-  }
-
-  // Voice / screenshot / picker hooks share their state with CosInputToolbar
-  // through the prop bridge below.
-  const voice = useCosVoice({
-    getInputBase: () => composerText,
-    onAppendInput: (next: string) => setComposerText(next),
-    focusInput: () => composerRef.current?.focus(),
-  });
-  const screenshot = useCosScreenshot({
-    onAttachBlob: (blob, name) => addImageBlob(blob, name),
-    closeCameraMenu: () => setCameraMenuOpen(false),
-  });
-  const picker = useCosElementPicker({
-    wrapperRef,
-    appendElementRefs: (refs) =>
-      setPendingElementRefs((prev) => [...prev, ...refs]),
-    focusInput: () => composerRef.current?.focus(),
-    closePickerMenu: () => setPickerMenuOpen(false),
-  });
+  // Stable reference for the per-thread draft binding so CosComposer's
+  // `useEffect([draft])` re-fires when (and only when) the operator switches
+  // threads. Re-creating the object on every render would thrash the
+  // composer's internal state.
+  const draftBinding = useMemo(() => {
+    if (!active) return undefined;
+    const { agentId: aid, threadKey: tk } = active;
+    return {
+      read: () => getThreadDraft(aid, tk),
+      write: (text: string) => setThreadDraft(aid, tk, text),
+      clear: () => clearThreadDraft(aid, tk),
+    };
+  }, [active?.agentId, active?.threadKey]);
 
   if (isEmpty) return null;
 
@@ -165,41 +104,21 @@ export function ThreadPanel({
     return t.length > 60 ? t.slice(0, 58) + '…' : t;
   })();
 
-  const canSend =
-    !!composerText.trim() ||
-    pendingAttachments.length > 0 ||
-    pendingElementRefs.length > 0;
-
-  function submitReply() {
-    if (!canSend) return;
-    const trimmed = composerText.trim();
-    sendChiefOfStaffMessage(trimmed, selectedAppId.value, {
+  function handleSend(
+    text: string,
+    attachments: CosImageAttachment[],
+    elementRefs: CosElementRef[],
+  ) {
+    if (!text && attachments.length === 0 && elementRefs.length === 0) return;
+    sendChiefOfStaffMessage(text, selectedAppId.value, {
       replyToTs: anchorTs,
-      attachments: pendingAttachments.map(({ id: _id, ...att }) => att),
-      elementRefs: pendingElementRefs,
+      attachments,
+      elementRefs,
     });
-    setComposerText('');
-    setPendingAttachments([]);
-    setPendingElementRefs([]);
-    if (active) clearThreadDraft(active.agentId, active.threadKey);
-  }
-
-  function onComposerPaste(e: ClipboardEvent) {
-    const items = Array.from(e.clipboardData?.items || []);
-    const imageItems = items.filter((it) => it.kind === 'file' && it.type.startsWith('image/'));
-    if (imageItems.length === 0) return;
-    e.preventDefault();
-    for (const it of imageItems) {
-      const file = it.getAsFile();
-      if (file) void addImageBlob(file, file.name || 'pasted-image.png');
-    }
   }
 
   return (
-    <div
-      class={`cos-thread-panel${compact ? ' cos-thread-panel-compact' : ''}`}
-      ref={wrapperRef}
-    >
+    <div class={`cos-thread-panel${compact ? ' cos-thread-panel-compact' : ''}`}>
       <div class="cos-thread-panel-header">
         <span class="cos-thread-panel-title" title={userMsg?.text || ''}>{titlePreview}</span>
         <button
@@ -210,109 +129,103 @@ export function ThreadPanel({
           aria-label="Close panel"
         >×</button>
       </div>
-      <div class="cos-thread-panel-jsonl">
-        {sessionId ? (
-          <StructuredView sessionId={sessionId} chat={{}} />
-        ) : (
-          <div class="cos-thread-panel-empty-msg">
-            Session warming up — the agent's JSONL appears here once the first
-            turn writes a line.
-          </div>
-        )}
-      </div>
+      <ThreadPanelBody
+        sessionId={sessionId}
+        agentId={agentId}
+        agentName={agent.name}
+        verbosity={agent.verbosity || DEFAULT_VERBOSITY}
+      />
       <div class="cos-thread-panel-composer">
-        {(pendingAttachments.length > 0 || pendingElementRefs.length > 0) && (
-          <div class="cos-attach-strip">
-            {pendingAttachments.map((att) => (
-              <div class="cos-attach-thumb" key={att.id}>
-                <img src={att.dataUrl} alt={att.name || 'attachment'} />
-                <button
-                  type="button"
-                  class="cos-attach-remove"
-                  onClick={() => setPendingAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-                  title="Remove attachment"
-                  aria-label="Remove attachment"
-                >&times;</button>
-              </div>
-            ))}
-            {pendingElementRefs.map((ref, idx) => {
-              let display = ref.tagName || 'element';
-              if (ref.id) display += `#${ref.id}`;
-              const cls = (ref.classes || []).filter((c) => !c.startsWith('pw-')).slice(0, 2);
-              if (cls.length) display += '.' + cls.join('.');
-              return (
-                <div class="cos-element-chip" key={`ref-${idx}`} title={ref.selector}>
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
-                  </svg>
-                  <code>{display}</code>
-                  <button
-                    type="button"
-                    class="cos-attach-remove"
-                    onClick={() => setPendingElementRefs((prev) => prev.filter((_, i) => i !== idx))}
-                    title="Remove element reference"
-                    aria-label="Remove element reference"
-                  >&times;</button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <textarea
-          ref={composerRef}
-          class="cos-input cos-thread-panel-input"
-          value={composerText}
+        <CosComposer
           placeholder={isAgentStreaming ? 'Reply (agent is responding…)' : 'Reply in this thread… (paste images to attach)'}
-          onInput={(e) => setComposerText((e.target as HTMLTextAreaElement).value)}
-          onPaste={onComposerPaste}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              submitReply();
-            } else if (e.key === 'Escape') {
-              e.preventDefault();
-              if (composerText) setComposerText('');
-              else if (userMsg?.text) onReply('user', userMsg.text, anchorTs, threadServerId);
-            }
+          draft={draftBinding}
+          onSend={handleSend}
+          onEscapeWhenEmpty={() => {
+            if (userMsg?.text) onReply('user', userMsg.text, anchorTs, threadServerId);
           }}
-          rows={2}
-        />
-        <CosInputToolbar
-          cameraGroupRef={cameraGroupRef}
-          pickerGroupRef={pickerGroupRef}
-          capturingScreenshot={screenshot.capturingScreenshot}
-          captureAndAttachScreenshot={screenshot.captureAndAttachScreenshot}
-          startTimedScreenshot={screenshot.startTimedScreenshot}
-          cameraMenuOpen={cameraMenuOpen}
-          setCameraMenuOpen={setCameraMenuOpen}
-          cameraMenuPos={cameraMenuPos}
-          setCameraMenuPos={setCameraMenuPos}
-          screenshotExcludeWidget={screenshot.screenshotExcludeWidget}
-          setScreenshotExcludeWidget={screenshot.setScreenshotExcludeWidget}
-          screenshotExcludeCursor={screenshot.screenshotExcludeCursor}
-          setScreenshotExcludeCursor={screenshot.setScreenshotExcludeCursor}
-          screenshotMethod={screenshot.screenshotMethod}
-          setScreenshotMethod={screenshot.setScreenshotMethod}
-          screenshotKeepStream={screenshot.screenshotKeepStream}
-          setScreenshotKeepStream={screenshot.setScreenshotKeepStream}
-          pickerActive={picker.pickerActive}
-          startElementPick={picker.startElementPick}
-          pickerMenuOpen={pickerMenuOpen}
-          setPickerMenuOpen={setPickerMenuOpen}
-          pickerMenuPos={pickerMenuPos}
-          setPickerMenuPos={setPickerMenuPos}
-          pickerMultiSelect={picker.pickerMultiSelect}
-          setPickerMultiSelect={picker.setPickerMultiSelect}
-          pickerIncludeChildren={picker.pickerIncludeChildren}
-          setPickerIncludeChildren={picker.setPickerIncludeChildren}
-          micRecording={voice.recording}
-          micElapsed={voice.elapsed}
-          micInterim={voice.interim}
-          toggleMicRecord={voice.toggleRecord}
-          canSend={canSend}
-          onSubmit={submitReply}
         />
       </div>
+    </div>
+  );
+}
+
+/**
+ * Renders the thread's JSONL transcript as slack-style message rows. Polls
+ * the session's JSONL via useTranscriptStream, projects ParsedMessage[] into
+ * the bubble's ChiefOfStaffMsg[] shape via jsonlToCosMessages, and renders
+ * each turn with MessageBubble — the same component the bubble's main chat
+ * uses. So avatars, author headers, timestamps, and tool-call chips all
+ * match the main bubble.
+ */
+function ThreadPanelBody({
+  sessionId,
+  agentId,
+  agentName,
+  verbosity,
+}: {
+  sessionId: string | null;
+  agentId: string;
+  agentName: string;
+  verbosity: ChiefOfStaffVerbosity;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const wasAtBottomRef = useRef(true);
+  const { messages, loading, error } = useTranscriptStream(sessionId || '', {
+    pollMs: sessionId ? undefined : 0,
+  });
+  const projected = useMemo(() => jsonlToCosMessages(messages), [messages]);
+
+  // Stick to bottom when new messages arrive while pinned. Scroll listener
+  // updates the pinned flag so manual scroll-up disables auto-stick.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      wasAtBottomRef.current =
+        el.scrollHeight - el.scrollTop - el.clientHeight < 32;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [sessionId]);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && wasAtBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [projected.length]);
+
+  if (!sessionId) {
+    return (
+      <div class="cos-thread-panel-jsonl">
+        <div class="cos-thread-panel-empty-msg">
+          Session warming up — the agent's JSONL appears here once the first
+          turn writes a line.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div class="cos-thread-panel-jsonl" ref={scrollRef}>
+      {loading && projected.length === 0 && (
+        <div class="cos-thread-panel-empty-msg">Loading transcript…</div>
+      )}
+      {error && projected.length === 0 && (
+        <div class="cos-thread-panel-empty-msg" style="color:#f87171">{error}</div>
+      )}
+      {projected.map((msg, idx) => (
+        <MessageBubble
+          key={`${msg.timestamp}-${idx}`}
+          msg={msg}
+          msgIdx={idx}
+          highlighted={false}
+          showTools
+          onArtifactPopout={() => { /* artifact popout from panel TBD */ }}
+          agentId={agentId}
+          agentName={agentName}
+          verbosity={verbosity}
+          searchHighlight={null}
+        />
+      ))}
     </div>
   );
 }
