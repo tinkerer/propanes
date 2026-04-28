@@ -97,6 +97,7 @@ import {
   hasAnyCosDraftForAgent,
 } from '../lib/cos-drafts.js';
 import { extractCosReply, stripCosReplyMarkers } from '../lib/cos-reply-tags.js';
+import { useCosSearch } from '../lib/use-cos-search.js';
 import {
   fetchFeedbackTitle,
   getCachedFeedbackTitle,
@@ -456,15 +457,21 @@ export function ChiefOfStaffBubble({
   const [replyNotifs, setReplyNotifs] = useState<ReplyNotification[]>([]);
   const [highlightMsgIdx, setHighlightMsgIdx] = useState<number | null>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchMatchPos, setSearchMatchPos] = useState(0);
-  // 'all' | 'user' | 'assistant'
-  const [searchRole, setSearchRole] = useState<'all' | 'user' | 'assistant'>('all');
-  // 'text' (message body), 'tools' (tool call inputs incl. file paths/edits), 'both'
-  const [searchScope, setSearchScope] = useState<'text' | 'tools' | 'both'>('text');
+  const {
+    searchOpen,
+    setSearchOpen,
+    searchQuery,
+    setSearchQuery,
+    searchMatchPos,
+    setSearchMatchPos,
+    searchRole,
+    setSearchRole,
+    searchScope,
+    setSearchScope,
+    searchInputRef,
+    searchMatches,
+  } = useCosSearch(activeAgent?.messages);
   const [optionsMenuOpen, setOptionsMenuOpen] = useState(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const optionsMenuRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
   const seenMsgsRef = useRef<Map<number, boolean>>(new Map());
@@ -673,37 +680,6 @@ export function ChiefOfStaffBubble({
     }
     return map;
   }, [replyNotifs]);
-
-  // Indices in activeAgent.messages whose text contains the current search
-  // query. Recomputed on every keystroke or message-list change. Empty when
-  // search panel is closed or query is blank.
-  const searchMatches = useMemo(() => {
-    if (!searchOpen || !activeAgent) return [] as number[];
-    const q = searchQuery.trim().toLowerCase();
-    // Require ≥2 chars: single-character queries match almost every word and
-    // produce visual noise (a chunky highlight on every "e", "s", etc).
-    if (q.length < 2) return [] as number[];
-    const out: number[] = [];
-    activeAgent.messages.forEach((m, i) => {
-      if (searchRole !== 'all' && m.role !== searchRole) return;
-      const wantText = searchScope === 'text' || searchScope === 'both';
-      const wantTools = searchScope === 'tools' || searchScope === 'both';
-      if (wantText && (m.text || '').toLowerCase().includes(q)) { out.push(i); return; }
-      if (wantTools && m.toolCalls && m.toolCalls.length > 0) {
-        const hay = m.toolCalls
-          .map((c) => `${c.name} ${JSON.stringify(c.input || {})}`)
-          .join('\n')
-          .toLowerCase();
-        if (hay.includes(q)) out.push(i);
-      }
-    });
-    return out;
-  }, [searchOpen, searchQuery, searchRole, searchScope, activeAgent?.messages]);
-
-  // Clamp the cursor position whenever the match set shrinks (e.g. typing).
-  useEffect(() => {
-    if (searchMatchPos >= searchMatches.length) setSearchMatchPos(0);
-  }, [searchMatches.length]);
 
   function scrollToMessageIdx(idx: number) {
     const root = scrollRef.current;
