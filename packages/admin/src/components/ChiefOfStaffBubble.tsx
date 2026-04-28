@@ -60,7 +60,6 @@ import {
   isCosInPane,
   closeCosPane,
   COS_PANE_TAB_ID,
-  subscribeAgentLiveMessages,
   cosDrafts,
   getCosDraft,
   setCosDraft,
@@ -2830,17 +2829,6 @@ export function ChiefOfStaffBubble({
       el.scrollTop = lastScrollTopRef.current;
     }
   }, [isVisible, activeId, activeAgent?.messages.length, scrollEl]);
-
-  // Subscribe to the agent-scoped idle SSE while the panel is visible. Picks
-  // up out-of-band /messages POSTs (e.g. an agent script posting a screenshot
-  // back to its thread) when no chat turn is currently streaming. The chat
-  // POST stream covers the in-turn case; this covers the rest. Dedup by
-  // serverId in appendOutOfBandCosMessage handles the overlap window.
-  useEffect(() => {
-    if (!isVisible || !activeId) return;
-    const unsub = subscribeAgentLiveMessages(activeId);
-    return () => { try { unsub(); } catch { /* ignore */ } };
-  }, [isVisible, activeId]);
 
   // Scroll listener: toggle the floating scroll-down button and remember the
   // user's "at bottom" state so new messages don't yank them around.

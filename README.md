@@ -284,11 +284,12 @@ The JSONL companion renders Claude conversations as interactive message flows:
 A persistent assistant thread ("Ops") lives in the admin chrome (`ChiefOfStaffBubble`). It's a long-running Claude session with this repo's CLAUDE.md and tools — used to triage feedback, dispatch agents, query infra, and coordinate concurrent Ops sessions via an advisory lock API.
 
 ```
-POST /api/v1/admin/chief-of-staff/threads/:id/messages
 POST /api/v1/admin/chief-of-staff/lock      { requestId, key }
 DELETE /api/v1/admin/chief-of-staff/lock/:requestId/:key
 GET  /api/v1/admin/chief-of-staff/sessions  Inspect concurrent sessions
 ```
+
+Assistant replies and screenshots reach the bubble from the agent's output stream — `<cos-reply>` tags are extracted and rendered automatically. Embed images as markdown data URLs (`![](data:image/png;base64,...)`) inside a cos-reply tag; there is no separate POST endpoint for posting messages back into a thread.
 
 A voice bridge (`packages/server/src/routes/voice.ts` + `VoiceTracePanel`) ingests microphone audio from a popup window and streams transcribed user turns into the thread.
 
