@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
+import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { MessageRenderer, type ChatRenderOpts } from './MessageRenderer.js';
 import { type ParsedMessage } from '../lib/output-parser.js';
 import { useTranscriptStream } from '../lib/transcript-stream.js';
@@ -423,6 +423,12 @@ export function StructuredView({ sessionId, chat }: Props) {
 
   const initialWindow = isMobile.value ? MOBILE_INITIAL_WINDOW : DESKTOP_INITIAL_WINDOW;
   const [shownCount, setShownCount] = useState(initialWindow);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
+  // Captured just before shownCount expands so we can anchor the scroll
+  // position after re-render — without this, prepending earlier messages
+  // shoves the visible content downward by the prepended height.
+  const scrollAnchorRef = useRef<{ height: number; top: number } | null>(null);
 
   // Window by raw messages, then group. Some sessions pack 100+ tool calls
   // into one assistant group, so windowing by group leaves all of them on
@@ -437,6 +443,50 @@ export function StructuredView({ sessionId, chat }: Props) {
       return Math.min(initialWindow, total);
     });
   }, [messages, initialWindow]);
+
+  function loadMoreEarlier() {
+    const el = containerRef.current;
+    if (el) scrollAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
+    setLoadingEarlier(true);
+    // rAF so the spinner paints before the heavy expansion + grouping pass.
+    requestAnimationFrame(() => {
+      setShownCount((n) => n + initialWindow);
+      requestAnimationFrame(() => setLoadingEarlier(false));
+    });
+  }
+
+  // Restore the user's visual scroll position after earlier messages have
+  // been prepended. Runs synchronously after layout so the operator never
+  // sees the content jump downward.
+  useLayoutEffect(() => {
+    const anchor = scrollAnchorRef.current;
+    const el = containerRef.current;
+    if (!anchor || !el) return;
+    const delta = el.scrollHeight - anchor.height;
+    if (delta > 0) el.scrollTop = anchor.top + delta;
+    scrollAnchorRef.current = null;
+    // Auto-scroll-to-bottom must NOT fire after a load-earlier expansion.
+    autoScroll.current = false;
+  }, [shownCount]);
+
+  // IntersectionObserver: fire load-more when the sentinel near the top of
+  // the scroll container enters view. rootMargin lets us start loading a bit
+  // before the user actually hits the top, smoothing the experience.
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    const root = containerRef.current;
+    if (!sentinel || !root) return;
+    if (loadingEarlier) return;
+    if (shownCount >= messages.filter((m) => !m.subagentId).length) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting) && !loadingEarlier) loadMoreEarlier();
+      },
+      { root, rootMargin: '200px 0px 0px 0px' },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [shownCount, messages, loadingEarlier]);
 
   // Partition out subagent messages so they can be rendered inline at the
   // Task call that spawned them — without this, Claude dumps every subagent
@@ -484,12 +534,24 @@ export function StructuredView({ sessionId, chat }: Props) {
         <div class="sm-empty">No messages yet</div>
       )}
       {hiddenMsgCount > 0 && (
-        <button
-          class="sm-show-earlier"
-          onClick={() => setShownCount((n) => n + initialWindow)}
-        >
-          Show {Math.min(hiddenMsgCount, initialWindow)} earlier message{Math.min(hiddenMsgCount, initialWindow) === 1 ? '' : 's'} ({hiddenMsgCount} hidden)
-        </button>
+        <div class="sm-load-more" ref={loadMoreSentinelRef}>
+          {loadingEarlier ? (
+            <div class="sm-load-spinner" role="status" aria-label="Loading earlier messages">
+              <span class="sm-load-spinner-dot" />
+              <span class="sm-load-spinner-dot" />
+              <span class="sm-load-spinner-dot" />
+            </div>
+          ) : (
+            <button
+              type="button"
+              class="sm-show-earlier"
+              onClick={loadMoreEarlier}
+              title="Or scroll up to auto-load"
+            >
+              Pull / scroll for {Math.min(hiddenMsgCount, initialWindow)} more ({hiddenMsgCount} earlier)
+            </button>
+          )}
+        </div>
       )}
       {groups.map(group => {
         const lastGroupMsg = group.messages[group.messages.length - 1];
