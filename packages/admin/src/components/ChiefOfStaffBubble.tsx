@@ -11,12 +11,6 @@ import {
   sendChiefOfStaffMessage,
   getActiveAgent,
   addAgent,
-  removeActiveAgent,
-  renameActiveAgent,
-  updateActiveAgentSystemPrompt,
-  updateActiveAgentVerbosity,
-  updateActiveAgentStyle,
-  clearActiveAgentHistory,
   interruptActiveAgent,
   interruptThread,
   getSessionIdForThread,
@@ -24,10 +18,8 @@ import {
   retryFailedAssistantMessage,
   dismissFailedAssistantMessage,
   DEFAULT_VERBOSITY,
-  DEFAULT_STYLE,
   type ChiefOfStaffMsg,
   type ChiefOfStaffVerbosity,
-  type ChiefOfStaffStyle,
   type CosImageAttachment,
   type CosElementRef,
   extractDispatchInfo,
@@ -124,6 +116,7 @@ import {
 import { ThreadBlock, groupIntoThreads, threadKeyOf, type Thread } from './CosThread.js';
 import { ThreadPanel } from './CosThreadPanel.js';
 import { AttachmentEditorModal } from './CosAttachmentEditor.js';
+import { CosAgentSettings } from './CosAgentSettings.js';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -308,11 +301,7 @@ export function ChiefOfStaffBubble({
     return () => { if (raf !== null) cancelAnimationFrame(raf); };
   }, [showLearnings, showThreadPanel, inPane]);
 
-  const [nameEdit, setNameEdit] = useState<string | null>(null);
-  const [promptEdit, setPromptEdit] = useState<string | null>(null);
   const [newAgentName, setNewAgentName] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [confirmClear, setConfirmClear] = useState(false);
 
   // The active draft scope is (agent, app, threadId-or-empty). When the
   // operator is in "reply to thread" mode (replyTo set) this resolves to that
@@ -899,13 +888,8 @@ export function ChiefOfStaffBubble({
     window.addEventListener('mouseup', onUp);
   }
 
-  useEffect(() => {
-    setNameEdit(null);
-    setPromptEdit(null);
-    setConfirmDelete(false);
-    setConfirmClear(false);
-  }, [activeId, showSettings]);
-
+  // CosAgentSettings owns its own edit state and remounts on agent switch
+  // (key={activeId}), so the per-(agent,showSettings) reset is implicit.
   useEffect(() => {
     setCollapsedThreads(new Set());
   }, [activeId]);
@@ -1294,16 +1278,6 @@ export function ChiefOfStaffBubble({
     const name = (newAgentName || '').trim();
     if (name) addAgent(name);
     setNewAgentName(null);
-  }
-
-  function commitRename() {
-    if (nameEdit !== null && nameEdit.trim()) renameActiveAgent(nameEdit.trim());
-    setNameEdit(null);
-  }
-
-  function commitPrompt() {
-    if (promptEdit !== null) updateActiveAgentSystemPrompt(promptEdit);
-    setPromptEdit(null);
   }
 
   const onHeaderDragStart = useCallback((e: MouseEvent) => {
@@ -1734,132 +1708,12 @@ export function ChiefOfStaffBubble({
           {!isMinimized && (
             <div class="popout-body cos-popout-body">
               {showSettings ? (
-                <div class="cos-settings cos-settings-full">
-                  <div class="cos-settings-row">
-                    <label>Name</label>
-                    {nameEdit === null ? (
-                      <button class="cos-link-btn" onClick={() => setNameEdit(activeAgent.name)}>{activeAgent.name} — edit</button>
-                    ) : (
-                      <div class="cos-inline-edit">
-                        <input
-                          type="text"
-                          autoFocus
-                          value={nameEdit}
-                          onInput={(e) => setNameEdit((e.target as HTMLInputElement).value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
-                            if (e.key === 'Escape') { e.preventDefault(); setNameEdit(null); }
-                          }}
-                        />
-                        <button class="cos-link-btn" onClick={commitRename} disabled={!nameEdit.trim()}>save</button>
-                        <button class="cos-link-btn" onClick={() => setNameEdit(null)}>cancel</button>
-                      </div>
-                    )}
-                  </div>
-                  <div class="cos-settings-row cos-settings-row-stack">
-                    <label>
-                      System prompt
-                      {promptEdit === null && (
-                        <button
-                          class="cos-link-btn"
-                          onClick={() => setPromptEdit(activeAgent.systemPrompt || '')}
-                        >
-                          {activeAgent.systemPrompt ? 'edit custom' : 'override default'}
-                        </button>
-                      )}
-                    </label>
-                    {promptEdit === null ? (
-                      <div class="cos-prompt-preview">
-                        {activeAgent.systemPrompt || <em>Using default Ops prompt (direct, terse, operations-focused)</em>}
-                      </div>
-                    ) : (
-                      <>
-                        <textarea
-                          class="cos-prompt-textarea"
-                          autoFocus
-                          rows={5}
-                          value={promptEdit}
-                          onInput={(e) => setPromptEdit((e.target as HTMLTextAreaElement).value)}
-                          placeholder="Leave empty to use default"
-                        />
-                        <div class="cos-inline-actions">
-                          <button class="cos-link-btn" onClick={commitPrompt}>save</button>
-                          <button class="cos-link-btn" onClick={() => setPromptEdit(null)}>cancel</button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                  <div class="cos-settings-row">
-                    <label>Verbosity</label>
-                    <div class="cos-view-segmented" role="radiogroup" aria-label="Reply verbosity">
-                      {(['terse', 'normal', 'verbose'] as ChiefOfStaffVerbosity[]).map((v) => {
-                        const active = (activeAgent.verbosity || DEFAULT_VERBOSITY) === v;
-                        return (
-                          <button
-                            key={v}
-                            type="button"
-                            role="radio"
-                            aria-checked={active}
-                            class={`cos-view-seg${active ? ' cos-view-seg-active' : ''}`}
-                            onClick={() => updateActiveAgentVerbosity(v)}
-                          >
-                            {v}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div class="cos-settings-row">
-                    <label>Tone</label>
-                    <div class="cos-view-segmented" role="radiogroup" aria-label="Reply tone">
-                      {(['dry', 'neutral', 'friendly'] as ChiefOfStaffStyle[]).map((s) => {
-                        const active = (activeAgent.style || DEFAULT_STYLE) === s;
-                        return (
-                          <button
-                            key={s}
-                            type="button"
-                            role="radio"
-                            aria-checked={active}
-                            class={`cos-view-seg${active ? ' cos-view-seg-active' : ''}`}
-                            onClick={() => updateActiveAgentStyle(s)}
-                          >
-                            {s}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div class="cos-settings-row">
-                    <label>History</label>
-                    {activeAgent.messages.length === 0 ? (
-                      <span class="cos-muted">empty</span>
-                    ) : !confirmClear ? (
-                      <button class="cos-link-btn" onClick={() => setConfirmClear(true)}>
-                        {activeAgent.messages.length} messages — clear
-                      </button>
-                    ) : (
-                      <div class="cos-inline-edit">
-                        <span class="cos-muted">Clear all?</span>
-                        <button class="cos-link-btn cos-danger-text" onClick={() => { void clearActiveAgentHistory(); setConfirmClear(false); setCollapsedThreads(new Set()); }}>yes, clear</button>
-                        <button class="cos-link-btn" onClick={() => setConfirmClear(false)}>cancel</button>
-                      </div>
-                    )}
-                  </div>
-                  <div class="cos-settings-row">
-                    <label>Agent</label>
-                    {!confirmDelete ? (
-                      <button class="cos-link-btn cos-danger-text" onClick={() => setConfirmDelete(true)}>
-                        {agents.length <= 1 ? 'reset this agent' : 'delete this agent'}
-                      </button>
-                    ) : (
-                      <div class="cos-inline-edit">
-                        <span class="cos-muted">Sure?</span>
-                        <button class="cos-link-btn cos-danger-text" onClick={() => { removeActiveAgent(); setConfirmDelete(false); }}>yes</button>
-                        <button class="cos-link-btn" onClick={() => setConfirmDelete(false)}>cancel</button>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <CosAgentSettings
+                  key={activeId}
+                  activeAgent={activeAgent}
+                  agentCount={agents.length}
+                  onHistoryCleared={() => setCollapsedThreads(new Set())}
+                />
               ) : ((() => {
                 const mobileThreadActive = isMobile.value && showThreadPanel && !!cosActiveThread.value;
                 const chatPane = (
