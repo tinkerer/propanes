@@ -61,6 +61,7 @@ import { PanelTabBadge, tabLabel, companionCopyId, IdDropdownMenu, WindowMenu } 
 import { DockedPanelGrabHandle } from './PopoutGrabHandle.js';
 import { PopoutResizeHandles } from './PopoutResizeHandles.js';
 import { PopoutStatusMenu, PopoutHotkeyMenu } from './PopoutPanelMenus.js';
+import { PopoutSingletonBar } from './PopoutSingletonBar.js';
 
 import {
   popoutIdMenuOpen,
@@ -98,9 +99,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
   const splitDragging = useRef(false);
   const prevActiveRef = useRef<string | null>(null);
   const startPos = useRef({ mx: 0, my: 0, x: 0, y: 0, w: 0, h: 0, dockedHeight: 0, dockedTopOffset: 0, dockedBaseTop: 0 });
-  const idMenuBtnRef = useRef<HTMLSpanElement>(null);
   const idMenuBtnRef2 = useRef<HTMLSpanElement>(null);
-  const windowMenuBtnRef = useRef<HTMLButtonElement>(null);
   const windowMenuBtnRef2 = useRef<HTMLButtonElement>(null);
   const companionMenuBtnRef = useRef<HTMLButtonElement>(null);
 
@@ -380,91 +379,23 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
         <div class="move-mode-overlay" onMouseDown={(e) => { e.stopPropagation(); onHeaderDragStart(e as any, true); }} />
       )}
       {ids.length === 1 ? (
-      <div class="popout-tab-bar popout-singleton-bar" onMouseDown={onHeaderDragStart} onDblClick={() => {
-        if (!docked) { updatePanel(panel.id, { minimized: !panel.minimized }); persistPopoutState(); }
-      }}>
-        {activeId && !activeId.startsWith('view:') && (
-          <span
-            class={`status-dot${isExited ? ' exited' : ''}${isPlain ? ' plain' : ''}${!isExited ? ` ${sessionInputStates.value.get(activeId) || ''}` : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-              popoutStatusMenuOpen.value = { sessionId: activeId, panelId: panel.id, x: rect.left, y: rect.bottom + 4 };
-            }}
-          />
-        )}
-        {activeId && activeId.startsWith('view:') && (
-          <span class="singleton-label" style="font-weight:600;font-size:12px;margin:0 8px;white-space:nowrap">{tl(activeId)}</span>
-        )}
-        {activeId && !activeId.startsWith('view:') && (
-          <>
-            <span
-              ref={idMenuBtnRef}
-              class="session-id-label"
-              onClick={(e) => { e.stopPropagation(); popoutIdMenuOpen.value = showIdMenu ? null : activeId; }}
-            >
-              pw-{activeId.slice(-6)} <span class="id-dropdown-caret">{'\u25BE'}</span>
-            </span>
-            {showIdMenu && (
-              <IdDropdownMenu activeId={activeId} panel={panel} session={session} isExited={isExited} anchorRef={idMenuBtnRef} onClose={() => { popoutIdMenuOpen.value = null; }} />
-            )}
-          </>
-        )}
-        {feedbackPath && (
-          <a
-            href={`#${feedbackPath}`}
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!dragMoved.current && activeId && session?.feedbackId) togglePanelCompanion(panel.id, activeId, 'feedback'); }}
-            class="feedback-title-link"
-            title={session?.feedbackTitle || 'View feedback'}
-          >
-            {session?.feedbackTitle || 'View feedback'}
-          </a>
-        )}
-        <span style="flex:1" />
-        <div class="popout-header-actions">
-          {activeId && session?.jsonlPath && (
-            <select
-              class="view-mode-select"
-              value={viewMode}
-              onChange={(e) => setViewMode(activeId, (e.target as HTMLSelectElement).value as ViewMode)}
-            >
-              <option value="terminal">Term</option>
-              <option value="structured">Struct</option>
-              <option value="split">Split</option>
-            </select>
-          )}
-          {activeId && session?.feedbackId && (
-            <button class="btn-resolve" onClick={() => resolveSession(activeId, session.feedbackId)} title="Resolve">Resolve</button>
-          )}
-          {activeId && !activeId.startsWith('view:') && (isExited ? (
-            <button onClick={() => resumeSession(activeId)} title="Resume">Resume</button>
-          ) : (
-            <button class="btn-kill" onClick={() => killSession(activeId)} title="Kill">Kill</button>
-          ))}
-        </div>
-        <div class="popout-window-controls">
-          <button
-            ref={windowMenuBtnRef}
-            class="btn-window-menu"
-            title="Window options (drag to move this panel to another pane)"
-            onMouseDown={(e) => {
-              if (e.button !== 0) return;
-              e.stopPropagation();
-              startPanelDrag(e, {
-                panelId: panel.id,
-                label: `Panel: ${ids.length} tab${ids.length === 1 ? '' : 's'}`,
-                onClickFallback: () => { popoutWindowMenuOpen.value = popoutWindowMenuOpen.value === panel.id ? null : panel.id; },
-              });
-            }}
-          >
-            {'\u2261'}
-          </button>
-          {popoutWindowMenuOpen.value === panel.id && (
-            <WindowMenu panel={panel} activeId={activeId} docked={docked} isLeftDocked={isLeftDocked} isMinimized={isMinimized} anchorRef={windowMenuBtnRef} onClose={() => { popoutWindowMenuOpen.value = null; }} />
-          )}
-          <button class="btn-close-panel" onClick={() => { updatePanel(panel.id, { visible: false }); persistPopoutState(); }} title="Hide panel">&times;</button>
-        </div>
-      </div>
+        <PopoutSingletonBar
+          panel={panel}
+          activeId={activeId}
+          session={session}
+          feedbackPath={feedbackPath}
+          isExited={isExited}
+          isPlain={isPlain}
+          viewMode={viewMode}
+          showIdMenu={showIdMenu}
+          ids={ids}
+          docked={docked}
+          isLeftDocked={isLeftDocked}
+          isMinimized={isMinimized}
+          onHeaderDragStart={onHeaderDragStart}
+          dragMoved={dragMoved}
+          tl={tl}
+        />
       ) : (
       <>
       <div class="popout-tab-bar" onMouseDown={onHeaderDragStart} onDblClick={() => {
