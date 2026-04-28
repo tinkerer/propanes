@@ -5,9 +5,6 @@ import {
   type ChiefOfStaffVerbosity,
   type DispatchInfo,
   extractDispatchInfo,
-  getCachedFeedbackTitle,
-  fetchFeedbackTitle,
-  feedbackTitlesVersion,
   getSessionIdForThread,
   interruptThread,
   cosThreadMeta,
@@ -15,6 +12,11 @@ import {
   setThreadResolved,
   setThreadArchived,
 } from '../lib/chief-of-staff.js';
+import {
+  getCachedFeedbackTitle,
+  fetchFeedbackTitle,
+  feedbackTitlesVersion,
+} from '../lib/cos-feedback-titles.js';
 import { openSession, openFeedbackItem, toggleCompanion } from '../lib/sessions.js';
 import {
   MessageAvatar,

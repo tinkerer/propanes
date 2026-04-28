@@ -21,8 +21,6 @@ import {
   interruptThread,
   getSessionIdForThread,
   ensureCosPanel,
-  extractCosReply,
-  stripCosReplyMarkers,
   retryFailedAssistantMessage,
   dismissFailedAssistantMessage,
   DEFAULT_VERBOSITY,
@@ -33,9 +31,6 @@ import {
   type CosImageAttachment,
   type CosElementRef,
   extractDispatchInfo,
-  fetchFeedbackTitle,
-  getCachedFeedbackTitle,
-  feedbackTitlesVersion,
   type DispatchInfo,
   openCosInPane,
   isCosInPane,
@@ -109,6 +104,12 @@ import {
   loadCosDrafts,
   hasAnyCosDraftForAgent,
 } from '../lib/cos-drafts.js';
+import { extractCosReply, stripCosReplyMarkers } from '../lib/cos-reply-tags.js';
+import {
+  fetchFeedbackTitle,
+  getCachedFeedbackTitle,
+  feedbackTitlesVersion,
+} from '../lib/cos-feedback-titles.js';
 import { LearningsPanel } from './LearningsDrawer.js';
 import {
   MessageAvatar,
