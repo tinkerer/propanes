@@ -3,10 +3,10 @@ import { MessageRenderer } from './MessageRenderer.js';
 import { groupMessages, AssistantGroupHeader, partitionMergedMessages } from './StructuredView.js';
 import { SubagentBlock } from './SubagentBlock.js';
 import { InterruptBar } from './InterruptBar.js';
-import { JsonOutputParser, CodexOutputParser, type ParsedMessage } from '../lib/output-parser.js';
-import { api } from '../lib/api.js';
+import { type ParsedMessage } from '../lib/output-parser.js';
+import { useTranscriptStream } from '../lib/transcript-stream.js';
 import { getJsonlSelectedFile, jsonlSelectedFile } from '../lib/sessions.js';
-import { allSessions, exitedSessions } from '../lib/sessions.js';
+import { allSessions } from '../lib/sessions.js';
 import { isMobile, NarrowContext, useContainerNarrow } from '../lib/viewport.js';
 import { buildSummary, TaskItem, FileReadItem, FileEditItem } from './SessionSummaryView.js';
 
@@ -42,9 +42,6 @@ const DEFAULT_TOOL_FILTERS: Record<string, boolean> = Object.fromEntries(
 );
 
 export function JsonlView({ sessionId, hideInterruptBar }: Props) {
-  const [messages, setMessages] = useState<ParsedMessage[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [roleFilters, setRoleFilters] = useState<typeof DEFAULT_FILTERS>(DEFAULT_FILTERS);
   const [toolFilters, setToolFilters] = useState<Record<string, boolean>>(DEFAULT_TOOL_FILTERS);
   const [tasksDrawerOpen, setTasksDrawerOpen] = useState(false);
@@ -53,82 +50,18 @@ export function JsonlView({ sessionId, hideInterruptBar }: Props) {
   const containerNarrow = useContainerNarrow(containerRef);
   const narrow = isMobile.value || containerNarrow;
   const autoScroll = useRef(true);
-  const lastLength = useRef(0);
-  const lastFileFilter = useRef<string | null>(null);
 
   // Read the selected file from signal
   const selectedFile = getJsonlSelectedFile(sessionId);
   // Access the signal to trigger re-renders
   const _sel = jsonlSelectedFile.value;
 
-  // The JSONL file doesn't exist until the agent writes its first line. While
-  // a session is running, a 404 just means "not written yet" — keep polling
-  // and don't surface it as an error.
+  const { messages, loading, error, isSessionDone, isRunning } = useTranscriptStream(
+    sessionId,
+    { fileFilter: selectedFile }
+  );
+
   const sessionRecord = allSessions.value.find((s: any) => s.id === sessionId);
-  const terminalStatus = sessionRecord?.status && ['completed', 'exited', 'failed', 'deleted', 'archived'].includes(sessionRecord.status);
-  const isSessionDone = exitedSessions.value.has(sessionId) || !!terminalStatus;
-  const isRunning = sessionRecord?.status === 'running';
-
-  // Cap the initial fetch size on mobile — multi-MB JSONL parses freeze
-  // mobile Safari. See StructuredView for the same rationale.
-  const tailLines = isMobile.value ? 500 : 0;
-
-  const fetchJsonl = async () => {
-    const fileFilter = getJsonlSelectedFile(sessionId);
-    // If file filter changed, reset
-    if (fileFilter !== lastFileFilter.current) {
-      lastFileFilter.current = fileFilter;
-      lastLength.current = 0;
-    }
-
-    try {
-      const text = await api.getJsonl(sessionId, fileFilter || undefined, tailLines);
-      if (text.length === lastLength.current) {
-        setLoading(false);
-        return;
-      }
-      lastLength.current = text.length;
-
-      const parser = sessionRecord?.runtime === 'codex'
-        ? new CodexOutputParser()
-        : new JsonOutputParser();
-      parser.feed(text + '\n');
-      const parsed = parser.getMessages();
-      setMessages(parsed);
-      setError(null);
-      setLoading(false);
-    } catch (err: any) {
-      const status = err?.status;
-      // 404 = jsonl file not written yet; 400 = session has no resolvable
-      // project_dir (e.g. plain terminals). Neither is a real failure — for a
-      // running session we keep polling; for a done session we render an
-      // empty state instead of a red error wall.
-      const isMissing = status === 404 || status === 400;
-      if (isMissing && !isSessionDone && messages.length === 0) {
-        setLoading(true);
-        setError(null);
-      } else if (isMissing && messages.length === 0) {
-        setError(null);
-        setLoading(false);
-      } else if (messages.length === 0) {
-        setError(err.message);
-        setLoading(false);
-      } else {
-        setLoading(false);
-      }
-    }
-  };
-
-  useEffect(() => {
-    lastLength.current = 0;
-    lastFileFilter.current = selectedFile;
-    setMessages([]);
-    setLoading(true);
-    setError(null);
-    fetchJsonl();
-    const interval = setInterval(() => { if (!document.hidden) fetchJsonl(); }, 3000);
-    return () => clearInterval(interval);
-  }, [sessionId, selectedFile]);
 
   useEffect(() => {
     if (autoScroll.current && containerRef.current) {
