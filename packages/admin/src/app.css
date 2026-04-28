@@ -10720,9 +10720,13 @@ body.pw-isolate {
   .layout-mobile .control-bar .control-bar-sep {
     display: none;
   }
-  /* Hide any control-bar-btn that isn't the app switcher, search, notif bell, or CoS */
-  .layout-mobile .control-bar > .control-bar-btn:not(.control-bar-app-btn):not(.control-bar-notif-btn):not(.control-bar-search-btn):not(.control-bar-cos-btn) {
+  /* Hide any control-bar-btn that isn't the app switcher, more menu, search, notif bell, or CoS */
+  .layout-mobile .control-bar > .control-bar-btn:not(.control-bar-app-btn):not(.control-bar-more-btn):not(.control-bar-notif-btn):not(.control-bar-search-btn):not(.control-bar-cos-btn) {
     display: none;
+  }
+  .layout-mobile .control-bar .control-bar-more-btn {
+    padding: 6px 8px;
+    gap: 2px;
   }
   .layout-mobile .control-bar .control-bar-btn {
     min-height: 36px;
