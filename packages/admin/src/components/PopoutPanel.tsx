@@ -61,6 +61,7 @@ import {
 } from '../lib/popout-physics.js';
 import { PanelTabBadge, tabLabel, companionCopyId, IdDropdownMenu, WindowMenu } from './PopoutPanelContent.js';
 import { DockedPanelGrabHandle } from './PopoutGrabHandle.js';
+import { PopoutResizeHandles } from './PopoutResizeHandles.js';
 
 import {
   popoutIdMenuOpen,
@@ -828,36 +829,9 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
           </div>
         );
       })()}
-      {!isMinimized && (docked ? (
-        <>
-          <div class="popout-resize-n" onMouseDown={(e) => onResizeStart('n', e)} />
-          <div class="popout-resize-s" onMouseDown={(e) => onResizeStart('s', e)} />
-          {isLeftDocked ? (
-            <>
-              <div class="popout-resize-e" onMouseDown={(e) => onResizeStart('e', e)} />
-              <div class="popout-resize-ne" onMouseDown={(e) => onResizeStart('ne', e)} />
-              <div class="popout-resize-se" onMouseDown={(e) => onResizeStart('se', e)} />
-            </>
-          ) : (
-            <>
-              <div class="popout-resize-w" onMouseDown={(e) => onResizeStart('w', e)} />
-              <div class="popout-resize-nw" onMouseDown={(e) => onResizeStart('nw', e)} />
-              <div class="popout-resize-sw" onMouseDown={(e) => onResizeStart('sw', e)} />
-            </>
-          )}
-        </>
-      ) : (
-        <>
-          <div class="popout-resize-n" onMouseDown={(e) => onResizeStart('n', e)} />
-          <div class="popout-resize-s" onMouseDown={(e) => onResizeStart('s', e)} />
-          <div class="popout-resize-e" onMouseDown={(e) => onResizeStart('e', e)} />
-          <div class="popout-resize-w" onMouseDown={(e) => onResizeStart('w', e)} />
-          <div class="popout-resize-ne" onMouseDown={(e) => onResizeStart('ne', e)} />
-          <div class="popout-resize-nw" onMouseDown={(e) => onResizeStart('nw', e)} />
-          <div class="popout-resize-se" onMouseDown={(e) => onResizeStart('se', e)} />
-          <div class="popout-resize-sw" onMouseDown={(e) => onResizeStart('sw', e)} />
-        </>
-      ))}
+      {!isMinimized && (
+        <PopoutResizeHandles docked={docked} isLeftDocked={isLeftDocked} onResizeStart={onResizeStart} />
+      )}
     </div>
     </>
   );
