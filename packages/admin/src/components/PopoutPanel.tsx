@@ -62,6 +62,7 @@ import { DockedPanelGrabHandle } from './PopoutGrabHandle.js';
 import { PopoutResizeHandles } from './PopoutResizeHandles.js';
 import { PopoutStatusMenu, PopoutHotkeyMenu } from './PopoutPanelMenus.js';
 import { PopoutSingletonBar } from './PopoutSingletonBar.js';
+import { PopoutMultiTabBar } from './PopoutMultiTabBar.js';
 
 import {
   popoutIdMenuOpen,
@@ -99,8 +100,6 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
   const splitDragging = useRef(false);
   const prevActiveRef = useRef<string | null>(null);
   const startPos = useRef({ mx: 0, my: 0, x: 0, y: 0, w: 0, h: 0, dockedHeight: 0, dockedTopOffset: 0, dockedBaseTop: 0 });
-  const idMenuBtnRef2 = useRef<HTMLSpanElement>(null);
-  const windowMenuBtnRef2 = useRef<HTMLButtonElement>(null);
   const companionMenuBtnRef = useRef<HTMLButtonElement>(null);
 
   // Sync companions when active session changes
@@ -397,177 +396,25 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
           tl={tl}
         />
       ) : (
-      <>
-      <div class="popout-tab-bar" onMouseDown={onHeaderDragStart} onDblClick={() => {
-        if (!docked) {
-          updatePanel(panel.id, { minimized: !panel.minimized });
-          persistPopoutState();
-        }
-      }}>
-        <div ref={tabsRef} class="popout-tab-scroll" onWheel={(e: WheelEvent) => { const delta = (e as any).deltaX || (e as any).deltaY; if (delta) { e.preventDefault(); (e.currentTarget as HTMLElement).scrollLeft += delta; } }}>
-          {ids.map((sid) => {
-            const gn = globalNum(sid);
-            const tabSess = sessionMap.get(sid);
-            const tabExited = exitedSessions.value.has(sid);
-            const tabIsCompanion = sid.startsWith('jsonl:') || sid.startsWith('summary:') || sid.startsWith('feedback:') || sid.startsWith('iframe:') || sid.startsWith('terminal:') || sid.startsWith('artifact:');
-            const tabIsFb = sid.startsWith('fb:');
-            const tabInputState = !tabExited && !tabIsCompanion ? (sessionInputStates.value.get(sid) || null) : null;
-            const tabIsPlain = tabSess?.permissionProfile === 'plain';
-            const isActiveTab = sid === activeId;
-            return (
-              <button
-                key={sid}
-                class={`popout-tab ${isActiveTab ? 'active' : ''}`}
-                style={getSessionColor(sid) ? { boxShadow: `inset 0 -2px 0 ${getSessionColor(sid)}` } : undefined}
-                onMouseDown={(e) => {
-                  if (e.button !== 0) return;
-                  startTabDrag(e, {
-                    sessionId: sid,
-                    source: { panelId: panel.id },
-                    label: tl(sid),
-                    onClickFallback: () => {
-                      if (!switchAutoJumpActiveSession(panel.id, sid)) {
-                        updatePanel(panel.id, { activeSessionId: sid });
-                        persistPopoutState();
-                      }
-                    },
-                  });
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !renamingSessionId.value) {
-                    e.preventDefault();
-                    if (!switchAutoJumpActiveSession(panel.id, sid)) {
-                      updatePanel(panel.id, { activeSessionId: sid });
-                      persistPopoutState();
-                    }
-                  }
-                }}
-                title={tabSess?.feedbackTitle || sid}
-                onDblClick={(e) => {
-                  e.stopPropagation();
-                  renameValue.value = getSessionLabel(sid) || '';
-                  renamingSessionId.value = sid;
-                }}
-              >
-                {!tabIsCompanion && !tabIsFb && <span
-                  class={`status-dot${tabExited ? ' exited' : ''}${tabIsPlain ? ' plain' : ''}${tabInputState ? ` ${tabInputState}` : ''}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                    popoutStatusMenuOpen.value = { sessionId: sid, panelId: panel.id, x: rect.left, y: rect.bottom + 4 };
-                  }}
-                >
-                  {ctrlShiftHeld.value && gn !== null && <PanelTabBadge tabNum={gn} />}
-                </span>}
-                {(tabIsCompanion || tabIsFb) && <span class="companion-icon">{
-                  (sid.startsWith('feedback:') || sid.startsWith('fb:')) ? '\u{1F4AC}' :
-                  sid.startsWith('jsonl:') ? '\u{1F4DC}' :
-                  sid.startsWith('summary:') ? '\u{1F4CA}' :
-                  sid.startsWith('iframe:') ? '\u{1F310}' :
-                  sid.startsWith('terminal:') ? '\u{25B8}' :
-                  sid.startsWith('artifact:') ? '\u{1F4CB}' :
-                  '\u25C6'
-                }</span>}
-                {renamingSessionId.value === sid ? (
-                  <input
-                    type="text"
-                    value={renameValue.value}
-                    onInput={(e) => { renameValue.value = (e.target as HTMLInputElement).value; }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') { setSessionLabel(sid, renameValue.value); renamingSessionId.value = null; }
-                      if (e.key === 'Escape') { renamingSessionId.value = null; }
-                    }}
-                    onBlur={() => { setSessionLabel(sid, renameValue.value); renamingSessionId.value = null; }}
-                    onClick={(e) => e.stopPropagation()}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    style="font-size:11px;padding:1px 4px;border:1px solid var(--pw-accent);border-radius:3px;background:var(--pw-input-bg);color:var(--pw-primary-text);width:120px;outline:none"
-                    ref={(el) => el?.focus()}
-                  />
-                ) : (
-                  <span class="popout-tab-label">{tl(sid)}</span>
-                )}
-                <span class="popout-tab-close" onClick={(e) => { e.stopPropagation(); closeTab(sid); }}>&times;</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      <div class="popout-header" onMouseDown={onHeaderDragStart} onDblClick={() => {
-        if (!docked) {
-          updatePanel(panel.id, { minimized: !panel.minimized });
-          persistPopoutState();
-        }
-      }}>
-        {activeId && (
-          <>
-            <span
-              ref={idMenuBtnRef2}
-              class="session-id-label"
-              onClick={(e) => { e.stopPropagation(); popoutIdMenuOpen.value = showIdMenu ? null : activeId; }}
-            >
-              pw-{activeId.slice(-6)} <span class="id-dropdown-caret">{'\u25BE'}</span>
-            </span>
-            {showIdMenu && (
-              <IdDropdownMenu activeId={activeId} panel={panel} session={session} isExited={isExited} anchorRef={idMenuBtnRef2} onClose={() => { popoutIdMenuOpen.value = null; }} />
-            )}
-          </>
-        )}
-        {feedbackPath && (
-          <a
-            href={`#${feedbackPath}`}
-            onClick={(e) => { e.preventDefault(); e.stopPropagation(); if (!dragMoved.current && activeId && session?.feedbackId) togglePanelCompanion(panel.id, activeId, 'feedback'); }}
-            class="feedback-title-link"
-            title={session?.feedbackTitle || 'View feedback'}
-          >
-            {session?.feedbackTitle || 'View feedback'}
-          </a>
-        )}
-        <span style="flex:1" />
-        <div class="popout-header-actions">
-          {activeId && session?.jsonlPath && (
-            <select
-              class="view-mode-select"
-              value={viewMode}
-              onChange={(e) => setViewMode(activeId, (e.target as HTMLSelectElement).value as ViewMode)}
-            >
-              <option value="terminal">Term</option>
-              <option value="structured">Struct</option>
-              <option value="split">Split</option>
-            </select>
-          )}
-          {activeId && session?.feedbackId && (
-            <button class="btn-resolve" onClick={() => resolveSession(activeId, session.feedbackId)} title="Resolve">Resolve</button>
-          )}
-          {activeId && !activeId.startsWith('view:') && (isExited ? (
-            <button onClick={() => resumeSession(activeId)} title="Resume">Resume</button>
-          ) : (
-            <button class="btn-kill" onClick={() => killSession(activeId)} title="Kill">Kill</button>
-          ))}
-        </div>
-        <div class="popout-window-controls">
-          <button
-            ref={windowMenuBtnRef2}
-            class="btn-window-menu"
-            title="Window options (drag to move this panel to another pane)"
-            onMouseDown={(e) => {
-              if (e.button !== 0) return;
-              e.stopPropagation();
-              startPanelDrag(e, {
-                panelId: panel.id,
-                label: `Panel: ${ids.length} tab${ids.length === 1 ? '' : 's'}`,
-                onClickFallback: () => { popoutWindowMenuOpen.value = popoutWindowMenuOpen.value === panel.id ? null : panel.id; },
-              });
-            }}
-          >
-            {'\u2261'}
-          </button>
-          {popoutWindowMenuOpen.value === panel.id && (
-            <WindowMenu panel={panel} activeId={activeId} docked={docked} isLeftDocked={isLeftDocked} isMinimized={isMinimized} anchorRef={windowMenuBtnRef2} onClose={() => { popoutWindowMenuOpen.value = null; }} />
-          )}
-          <button class="btn-close-panel" onClick={() => { updatePanel(panel.id, { visible: false }); persistPopoutState(); }} title="Hide panel">&times;</button>
-        </div>
-      </div>
-      </>
+        <PopoutMultiTabBar
+          panel={panel}
+          ids={ids}
+          activeId={activeId}
+          session={session}
+          sessionMap={sessionMap}
+          isExited={isExited}
+          viewMode={viewMode}
+          feedbackPath={feedbackPath}
+          showIdMenu={showIdMenu}
+          docked={docked}
+          isLeftDocked={isLeftDocked}
+          isMinimized={isMinimized}
+          onHeaderDragStart={onHeaderDragStart}
+          dragMoved={dragMoved}
+          tabsRef={tabsRef}
+          tl={tl}
+          globalNum={globalNum}
+        />
       )}
       {!isMinimized && !isSplit && (
         <div class="popout-body">
