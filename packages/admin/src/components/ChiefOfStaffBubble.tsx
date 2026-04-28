@@ -121,6 +121,7 @@ import { CosScrollToolbar } from './CosScrollToolbar.js';
 import { CosThreadRail, type RailStatus } from './CosThreadRail.js';
 import { CosInputToolbar } from './CosInputToolbar.js';
 import { CosTabList } from './CosTabList.js';
+import { CosResizeHandles } from './CosResizeHandles.js';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -1982,36 +1983,13 @@ export function ChiefOfStaffBubble({
             </div>
           )}
 
-          {!inPane && !isMinimized && (isDocked ? (
-            <>
-              <div class="popout-resize-n" onMouseDown={(e) => onResizeStart('n', e)} />
-              <div class="popout-resize-s" onMouseDown={(e) => onResizeStart('s', e)} />
-              {isLeftDocked ? (
-                <>
-                  <div class="popout-resize-e" onMouseDown={(e) => onResizeStart('e', e)} />
-                  <div class="popout-resize-ne" onMouseDown={(e) => onResizeStart('ne', e)} />
-                  <div class="popout-resize-se" onMouseDown={(e) => onResizeStart('se', e)} />
-                </>
-              ) : (
-                <>
-                  <div class="popout-resize-w" onMouseDown={(e) => onResizeStart('w', e)} />
-                  <div class="popout-resize-nw" onMouseDown={(e) => onResizeStart('nw', e)} />
-                  <div class="popout-resize-sw" onMouseDown={(e) => onResizeStart('sw', e)} />
-                </>
-              )}
-            </>
-          ) : (
-            <>
-              <div class="popout-resize-n" onMouseDown={(e) => onResizeStart('n', e)} />
-              <div class="popout-resize-s" onMouseDown={(e) => onResizeStart('s', e)} />
-              <div class="popout-resize-e" onMouseDown={(e) => onResizeStart('e', e)} />
-              <div class="popout-resize-w" onMouseDown={(e) => onResizeStart('w', e)} />
-              <div class="popout-resize-ne" onMouseDown={(e) => onResizeStart('ne', e)} />
-              <div class="popout-resize-nw" onMouseDown={(e) => onResizeStart('nw', e)} />
-              <div class="popout-resize-se" onMouseDown={(e) => onResizeStart('se', e)} />
-              <div class="popout-resize-sw" onMouseDown={(e) => onResizeStart('sw', e)} />
-            </>
-          ))}
+          {!inPane && !isMinimized && (
+            <CosResizeHandles
+              isDocked={isDocked}
+              isLeftDocked={isLeftDocked}
+              onResizeStart={onResizeStart}
+            />
+          )}
         </div>
       )}
       {editingAttachment && (
