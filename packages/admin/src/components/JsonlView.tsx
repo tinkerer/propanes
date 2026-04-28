@@ -13,6 +13,11 @@ import { buildSummary, TaskItem, FileReadItem, FileEditItem } from './SessionSum
 interface Props {
   sessionId: string;
   hideInterruptBar?: boolean;
+  /** Compact embed mode (e.g. inside the CoS thread panel): drops the
+   *  Tasks/Files drawer toggles + drawers and tightens the filter bar so it
+   *  fits in a narrow side panel. Filter chips + structured group/reply edges
+   *  + tool clusters are kept — that's the whole point of embedding it. */
+  compact?: boolean;
 }
 
 // Filter chip identities. The 'role' chips toggle whole message kinds; the
@@ -41,7 +46,7 @@ const DEFAULT_TOOL_FILTERS: Record<string, boolean> = Object.fromEntries(
   [...TOOL_CHIPS.map(c => c.id), 'other'].map(id => [id, true])
 );
 
-export function JsonlView({ sessionId, hideInterruptBar }: Props) {
+export function JsonlView({ sessionId, hideInterruptBar, compact }: Props) {
   const [roleFilters, setRoleFilters] = useState<typeof DEFAULT_FILTERS>(DEFAULT_FILTERS);
   const [toolFilters, setToolFilters] = useState<Record<string, boolean>>(DEFAULT_TOOL_FILTERS);
   const [tasksDrawerOpen, setTasksDrawerOpen] = useState(false);
@@ -214,15 +219,17 @@ export function JsonlView({ sessionId, hideInterruptBar }: Props) {
   return (
     <NarrowContext.Provider value={narrow}>
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', flex: 1, minHeight: 0 }}>
-      <div class="jsonl-filter-bar">
-        <button
-          class={`jsonl-drawer-toggle${tasksDrawerOpen ? ' active' : ''}`}
-          onClick={() => setTasksDrawerOpen(o => !o)}
-          title="Toggle tasks drawer"
-        >
-          {tasksDrawerOpen ? '◀' : '▶'} Tasks
-          {summary.tasks.length > 0 && <span class="jsonl-drawer-count">{summary.tasks.length}</span>}
-        </button>
+      <div class={`jsonl-filter-bar${compact ? ' jsonl-filter-bar-compact' : ''}`}>
+        {!compact && (
+          <button
+            class={`jsonl-drawer-toggle${tasksDrawerOpen ? ' active' : ''}`}
+            onClick={() => setTasksDrawerOpen(o => !o)}
+            title="Toggle tasks drawer"
+          >
+            {tasksDrawerOpen ? '◀' : '▶'} Tasks
+            {summary.tasks.length > 0 && <span class="jsonl-drawer-count">{summary.tasks.length}</span>}
+          </button>
+        )}
         {ROLE_CHIPS.map(c => (
           <button
             key={c.id}
@@ -269,17 +276,19 @@ export function JsonlView({ sessionId, hideInterruptBar }: Props) {
             reset
           </button>
         )}
-        <button
-          class={`jsonl-drawer-toggle jsonl-drawer-toggle-right${filesDrawerOpen ? ' active' : ''}`}
-          onClick={() => setFilesDrawerOpen(o => !o)}
-          title="Toggle files / changes drawer"
-        >
-          Files {filesDrawerOpen ? '▶' : '◀'}
-          {filesSummaryCount > 0 && <span class="jsonl-drawer-count">{filesSummaryCount}</span>}
-        </button>
+        {!compact && (
+          <button
+            class={`jsonl-drawer-toggle jsonl-drawer-toggle-right${filesDrawerOpen ? ' active' : ''}`}
+            onClick={() => setFilesDrawerOpen(o => !o)}
+            title="Toggle files / changes drawer"
+          >
+            Files {filesDrawerOpen ? '▶' : '◀'}
+            {filesSummaryCount > 0 && <span class="jsonl-drawer-count">{filesSummaryCount}</span>}
+          </button>
+        )}
       </div>
       <div class="jsonl-body">
-        {tasksDrawerOpen && (
+        {!compact && tasksDrawerOpen && (
           <aside class="jsonl-drawer jsonl-drawer-left">
             <div class="jsonl-drawer-header">Tasks</div>
             <div class="jsonl-drawer-body">
@@ -336,7 +345,7 @@ export function JsonlView({ sessionId, hideInterruptBar }: Props) {
             </div>
           )}
         </div>
-        {filesDrawerOpen && (
+        {!compact && filesDrawerOpen && (
           <aside class="jsonl-drawer jsonl-drawer-right">
             <div class="jsonl-drawer-header">Files Edited</div>
             <div class="jsonl-drawer-body">

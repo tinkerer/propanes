@@ -60,8 +60,51 @@ export function ensureCosPanel(): PopoutPanelState {
   return panel;
 }
 
+/**
+ * Pull the CoS panel back into the current viewport if its persisted position
+ * is fully off-screen (e.g. saved from a wider/taller window). Without this
+ * the popout can render below or beyond the viewport and the toggle button
+ * looks broken — the panel "opens" but the user sees nothing.
+ */
+export function reclampCosPanelToViewport(): void {
+  if (typeof window === 'undefined') return;
+  const panel = popoutPanels.value.find((p) => p.id === COS_PANEL_ID);
+  if (!panel) return;
+  const winW = window.innerWidth;
+  const winH = window.innerHeight;
+  const minVisible = 100;
+  const updates: Partial<PopoutPanelState> = {};
+
+  // Docked panels are positioned via dockedTopOffset accumulated against
+  // window.innerHeight. If the resulting top is below the viewport, reset the
+  // offset so the panel header re-appears at the top of the dock stack.
+  if (panel.docked && (panel.dockedTopOffset || 0) > Math.max(0, winH - minVisible)) {
+    updates.dockedTopOffset = 0;
+  }
+  // Floating rect: ensure at least 100px of header is reachable.
+  const fr = panel.floatingRect;
+  const maxX = Math.max(0, winW - minVisible);
+  const maxY = Math.max(0, winH - 40);
+  if (fr.x > maxX || fr.x + fr.w < minVisible || fr.y > maxY || fr.y < 0) {
+    updates.floatingRect = {
+      ...fr,
+      x: Math.min(Math.max(0, fr.x), maxX),
+      y: Math.min(Math.max(0, fr.y), maxY),
+      // Also shrink width if the panel is wider than the window so floating
+      // mode stays usable on narrow displays.
+      w: Math.min(fr.w, Math.max(320, winW - 32)),
+      h: Math.min(fr.h, Math.max(300, winH - 80)),
+    };
+  }
+  if (Object.keys(updates).length > 0) {
+    updatePanel(COS_PANEL_ID, updates);
+    persistPopoutState();
+  }
+}
+
 export function setChiefOfStaffOpen(open: boolean): void {
   ensureCosPanel();
+  if (open) reclampCosPanelToViewport();
   chiefOfStaffOpen.value = open;
   updatePanel(COS_PANEL_ID, { visible: open, minimized: false });
   if (open) bringToFront(COS_PANEL_ID);

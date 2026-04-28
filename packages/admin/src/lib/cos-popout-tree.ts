@@ -1,4 +1,4 @@
-import { signal } from '@preact/signals';
+import { signal, effect } from '@preact/signals';
 import {
   type LayoutTree,
   type PaneNode,
@@ -8,18 +8,23 @@ import {
   type PanePosition,
   positionToSplit,
 } from './pane-tree.js';
-import { openArtifactDrawerTab } from './cos-artifact-drawer.js';
+import { openArtifactDrawerTab, closeArtifactDrawer } from './cos-artifact-drawer.js';
+import { setThreadDrawerVisible } from './cos-thread-drawer.js';
 
 // Well-known tab ids for leaves in the CoS popout tree.
 export const COS_POPOUT_CHAT_TAB = 'cos-chat:main';
 export const COS_POPOUT_LEARNINGS_TAB = 'cos-learnings:main';
-export const COS_POPOUT_THREAD_TAB = 'cos-thread:main';
 export const COS_POPOUT_ROOT_LEAF = 'cos-root-leaf';
+
+// Legacy tab id — kept only for migrating older persisted trees off it.
+const LEGACY_COS_POPOUT_THREAD_TAB = 'cos-thread:main';
 
 const STORAGE_KEY = 'pw-cos-popout-tree';
 const SLACK_MODE_STORAGE_KEY = 'pw-cos-slack-mode';
 const SHOW_RESOLVED_STORAGE_KEY = 'pw-cos-show-resolved';
 const SHOW_ARCHIVED_STORAGE_KEY = 'pw-cos-show-archived';
+const THREAD_FILTER_STORAGE_KEY = 'pw-cos-thread-filter';
+const ACTIVE_THREAD_STORAGE_KEY = 'pw-cos-active-thread';
 
 function buildDefault(): LayoutTree {
   return {
@@ -46,6 +51,8 @@ function loadTree(): LayoutTree {
     // Artifacts now render as a drawer overlay (not a tree split). Migrate any
     // legacy `artifact:*` tabs out of the tree and reopen them in the drawer.
     migrateArtifactTabsToDrawer(parsed);
+    // Thread is also a drawer overlay now — strip stale tree tabs.
+    migrateLegacyThreadTab(parsed);
     return parsed;
   } catch {
     return buildDefault();
@@ -78,6 +85,19 @@ function migrateArtifactTabsToDrawer(tree: LayoutTree) {
   } else {
     setTimeout(() => migrated.forEach(openArtifactDrawerTab), 0);
   }
+}
+
+function migrateLegacyThreadTab(tree: LayoutTree) {
+  let stripped = false;
+  for (const leaf of getAllLeavesLocal(tree.root)) {
+    if (!leaf.tabs.includes(LEGACY_COS_POPOUT_THREAD_TAB)) continue;
+    leaf.tabs = leaf.tabs.filter((t) => t !== LEGACY_COS_POPOUT_THREAD_TAB);
+    if (leaf.activeTabId === LEGACY_COS_POPOUT_THREAD_TAB) {
+      leaf.activeTabId = leaf.tabs[0] ?? null;
+    }
+    stripped = true;
+  }
+  if (stripped) cleanupEmptyLeaves(tree);
 }
 
 function persist() {
@@ -366,9 +386,12 @@ export function cosIsLearningsOpen(): boolean {
  */
 function loadSlackMode(): boolean {
   try {
-    if (typeof localStorage === 'undefined') return false;
-    return localStorage.getItem(SLACK_MODE_STORAGE_KEY) === '1';
-  } catch { return false; }
+    if (typeof localStorage === 'undefined') return true;
+    const v = localStorage.getItem(SLACK_MODE_STORAGE_KEY);
+    // Default ON so thread replies open in a companion pane instead of
+    // expanding inline. Only an explicit '0' opts out.
+    return v !== '0';
+  } catch { return true; }
 }
 
 export const cosSlackMode = signal<boolean>(loadSlackMode());
@@ -419,31 +442,148 @@ export function setCosShowArchived(next: boolean) {
   } catch { /* ignore */ }
 }
 
+/**
+ * Exclusive filter mode that overrides the show-resolved/show-archived
+ * include-toggles when set. `default` defers to those toggles. `drafts`
+ * shows only threads that have at least one saved draft (and the new-thread
+ * scope if it has any). `archived` shows only archived threads.
+ */
+export type CosThreadFilter = 'default' | 'drafts' | 'archived';
+
+function loadThreadFilter(): CosThreadFilter {
+  try {
+    if (typeof localStorage === 'undefined') return 'default';
+    const v = localStorage.getItem(THREAD_FILTER_STORAGE_KEY);
+    if (v === 'drafts' || v === 'archived') return v;
+    return 'default';
+  } catch { return 'default'; }
+}
+
+export const cosThreadFilter = signal<CosThreadFilter>(loadThreadFilter());
+
+export function setCosThreadFilter(next: CosThreadFilter) {
+  cosThreadFilter.value = next;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      if (next === 'default') localStorage.removeItem(THREAD_FILTER_STORAGE_KEY);
+      else localStorage.setItem(THREAD_FILTER_STORAGE_KEY, next);
+    }
+  } catch { /* ignore */ }
+}
+
 export type CosActiveThread = { agentId: string; threadKey: string };
 
-export const cosActiveThread = signal<CosActiveThread | null>(null);
+function loadActiveThread(): CosActiveThread | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(ACTIVE_THREAD_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.agentId !== 'string' || typeof parsed.threadKey !== 'string') {
+      return null;
+    }
+    return { agentId: parsed.agentId, threadKey: parsed.threadKey };
+  } catch { return null; }
+}
+
+export const cosActiveThread = signal<CosActiveThread | null>(loadActiveThread());
+
+// Persist the active thread so reload reopens the same thread instead of
+// landing on the empty "pick a thread" placeholder. ThreadPanel auto-closes
+// itself if the thread no longer exists, so a stale value is harmless.
+effect(() => {
+  const v = cosActiveThread.value;
+  try {
+    if (typeof localStorage === 'undefined') return;
+    if (v) localStorage.setItem(ACTIVE_THREAD_STORAGE_KEY, JSON.stringify(v));
+    else localStorage.removeItem(ACTIVE_THREAD_STORAGE_KEY);
+  } catch { /* ignore */ }
+});
+
+// Close any open artifact panes when the active thread changes. Artifacts are
+// scoped to a thread; carrying them across switches confuses the operator.
+// Skip the initial subscribe run so reload doesn't wipe a freshly-restored
+// drawer state.
+let prevActiveThreadKey: string | null | undefined = undefined;
+effect(() => {
+  const v = cosActiveThread.value;
+  const key = v ? `${v.agentId}::${v.threadKey}` : null;
+  if (prevActiveThreadKey !== undefined && prevActiveThreadKey !== key) {
+    closeArtifactDrawer();
+  }
+  prevActiveThreadKey = key;
+});
+
+// --- Per-thread composer drafts ---
+//
+// Drafts are keyed by `${agentId}::${threadKey}` and persisted across reloads
+// and thread switches so a half-typed reply isn't lost when the operator
+// flips between threads.
+
+const THREAD_DRAFTS_STORAGE_KEY = 'pw-cos-thread-drafts';
+
+function loadThreadDrafts(): Record<string, string> {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const raw = localStorage.getItem(THREAD_DRAFTS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === 'string' && v.length > 0) out[k] = v;
+    }
+    return out;
+  } catch { return {}; }
+}
+
+const cosThreadDrafts = signal<Record<string, string>>(loadThreadDrafts());
+
+effect(() => {
+  const v = cosThreadDrafts.value;
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(THREAD_DRAFTS_STORAGE_KEY, JSON.stringify(v));
+  } catch { /* ignore */ }
+});
+
+function draftKey(agentId: string, threadKey: string): string {
+  return `${agentId}::${threadKey}`;
+}
+
+export function getThreadDraft(agentId: string, threadKey: string): string {
+  return cosThreadDrafts.value[draftKey(agentId, threadKey)] || '';
+}
+
+export function setThreadDraft(agentId: string, threadKey: string, text: string) {
+  const k = draftKey(agentId, threadKey);
+  const cur = cosThreadDrafts.value;
+  if ((cur[k] || '') === text) return;
+  const next = { ...cur };
+  if (text) next[k] = text;
+  else delete next[k];
+  cosThreadDrafts.value = next;
+}
+
+export function clearThreadDraft(agentId: string, threadKey: string) {
+  setThreadDraft(agentId, threadKey, '');
+}
 
 /**
- * Open the thread companion as a side leaf in the popout tree. If already
- * open, just focus its tab. Width matches the learnings drawer default.
+ * Open the slack-mode thread companion. The thread renders as an overlay
+ * drawer over the chat (see `cos-thread-drawer`) — this just makes sure the
+ * drawer is visible. The actual thread to render is keyed off
+ * `cosActiveThread`, which the caller sets before invoking this.
+ *
+ * `_position` is accepted for back-compat with older callers but ignored.
  */
-export function cosOpenThreadTab(position: PanePosition = 'right') {
-  const existing = cosFindLeafWithTab(COS_POPOUT_THREAD_TAB);
-  if (existing) {
-    cosSetActiveTab(existing.id, COS_POPOUT_THREAD_TAB);
-    return;
-  }
-  const anchorLeafId = pickAnchorLeafId();
-  cosSplitLeafAtPosition(anchorLeafId, position, [COS_POPOUT_THREAD_TAB], 0.42);
+export function cosOpenThreadTab(_position: PanePosition = 'right') {
+  void _position;
+  setThreadDrawerVisible(true);
 }
 
 export function cosCloseThreadTab() {
-  const existing = cosFindLeafWithTab(COS_POPOUT_THREAD_TAB);
-  if (existing) cosRemoveTabFromLeaf(existing.id, COS_POPOUT_THREAD_TAB);
-}
-
-export function cosIsThreadTabOpen(): boolean {
-  return !!cosFindLeafWithTab(COS_POPOUT_THREAD_TAB);
+  setThreadDrawerVisible(false);
 }
 
 function pickAnchorLeafId(): string {

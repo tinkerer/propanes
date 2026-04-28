@@ -1,11 +1,28 @@
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { type Thread } from './CosThread.js';
-import { setThreadResolved, setThreadArchived } from '../lib/chief-of-staff.js';
+import {
+  setThreadResolved,
+  setThreadArchived,
+  leavingThreadIds,
+  isThreadLeaving,
+  markThreadLeaving,
+} from '../lib/chief-of-staff.js';
+import { cosShowResolved, cosShowArchived } from '../lib/cos-popout-tree.js';
 
-export type RailStatus = 'streaming' | 'unread' | 'failed' | 'idle' | 'gc' | 'resolved' | 'archived';
+export type RailStatus =
+  | 'streaming'
+  | 'unread'
+  | 'attention'
+  | 'failed'
+  | 'idle'
+  | 'gc'
+  | 'resolved'
+  | 'archived';
 
 const STATUS_LABEL: Record<RailStatus, string> = {
   streaming: 'thinking',
   unread: 'new reply',
+  attention: 'needs review',
   failed: 'failed',
   idle: 'idle',
   gc: 'no session',
@@ -13,13 +30,22 @@ const STATUS_LABEL: Record<RailStatus, string> = {
   archived: 'archived',
 };
 
+type PopupState = {
+  tid: string;
+  num: number;
+  status: RailStatus;
+  top: number;
+  left: number;
+};
+
 /**
  * Left-edge numbered nav rail surfacing every visible thread. Each item is
- * a status dot + thread number + (when relevant) unread badge, plus inline
- * resolve/archive buttons on the right of each row.
+ * a status dot + thread number + (when relevant) unread badge. Resolve /
+ * archive actions are surfaced via a popup that opens on double-click of
+ * the rail button or click on the bottom-right status pip.
  *
  * Pure presentational: status / anchor / title / server-id derivations stay
- * in the bubble and are passed in as callbacks. The rail just renders.
+ * in the bubble and are passed in as callbacks.
  */
 export function CosThreadRail({
   threads,
@@ -38,87 +64,156 @@ export function CosThreadRail({
   railStatusFor: (t: Thread) => RailStatus;
   onJumpToThread: (t: Thread) => void;
 }) {
+  const [popup, setPopup] = useState<PopupState | null>(null);
+  const popupRef = useRef<HTMLDivElement | null>(null);
+
+  function openPopup(tid: string, num: number, status: RailStatus, anchor: HTMLElement) {
+    const r = anchor.getBoundingClientRect();
+    setPopup({ tid, num, status, top: r.top + r.height / 2, left: r.right + 6 });
+  }
+  function closePopup() {
+    setPopup(null);
+  }
+
+  useEffect(() => {
+    if (!popup) return;
+    function onDocPointer(e: PointerEvent) {
+      const el = e.target as HTMLElement | null;
+      if (el?.closest('.cos-thread-rail-popup')) return;
+      if (el?.closest('.cos-thread-rail-status-trigger')) return;
+      closePopup();
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') closePopup();
+    }
+    function onScrollOrResize() {
+      closePopup();
+    }
+    document.addEventListener('pointerdown', onDocPointer, true);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onScrollOrResize);
+    window.addEventListener('scroll', onScrollOrResize, true);
+    return () => {
+      document.removeEventListener('pointerdown', onDocPointer, true);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onScrollOrResize);
+      window.removeEventListener('scroll', onScrollOrResize, true);
+    };
+  }, [popup]);
+
+  const isResolvedStatus = popup?.status === 'resolved';
+  const isArchivedStatus = popup?.status === 'archived';
+  // Subscribe to the leaving set so each rail item picks up the
+  // .cos-thread-rail-item-leaving modifier when its thread is animating out.
+  const _leavingVersion = leavingThreadIds.value;
+  void _leavingVersion;
+
   return (
-    <nav class="cos-thread-rail" aria-label="Threads">
-      {threads.map((t, i) => {
-        const unread = unreadByThread.get(t.userIdx);
-        const anchor = threadAnchorIdx(t);
-        if (anchor === null) return null;
-        const title = threadTitle(t);
-        const label = title.length > 64 ? title.slice(0, 64) + '…' : title;
-        const num = i + 1;
-        const status = railStatusFor(t);
-        const tid = threadServerIdFor(t);
-        const isResolved = status === 'resolved';
-        const isArchived = status === 'archived';
-        const fullTitle = unread
-          ? `${label} — ${unread.count} new (${STATUS_LABEL[status]})`
-          : `${label} (${STATUS_LABEL[status]})`;
-        return (
-          <div
-            class="cos-thread-rail-item"
-            key={t.userIdx ?? `pre-${i}`}
-          >
-            <button
-              type="button"
-              class={`cos-thread-rail-btn cos-thread-rail-btn-${status}${unread ? ' cos-thread-rail-btn-unread' : ''}`}
-              data-status={status}
-              onClick={() => onJumpToThread(t)}
-              title={fullTitle}
-              aria-label={`Jump to thread ${num}, ${STATUS_LABEL[status]}${unread ? `, ${unread.count} new` : ''}`}
+    <>
+      <nav class="cos-thread-rail" aria-label="Threads">
+        {threads.map((t, i) => {
+          const unread = unreadByThread.get(t.userIdx);
+          const anchor = threadAnchorIdx(t);
+          if (anchor === null) return null;
+          const title = threadTitle(t);
+          const label = title.length > 64 ? title.slice(0, 64) + '…' : title;
+          const num = i + 1;
+          const status = railStatusFor(t);
+          const tid = threadServerIdFor(t);
+          const leaving = isThreadLeaving(tid);
+          const fullTitle = unread
+            ? `${label} — ${unread.count} new (${STATUS_LABEL[status]})`
+            : `${label} (${STATUS_LABEL[status]})`;
+          return (
+            <div
+              class={`cos-thread-rail-item${leaving ? ' cos-thread-rail-item-leaving' : ''}`}
+              key={t.userIdx ?? `pre-${i}`}
             >
-              <span class="cos-thread-rail-status" aria-hidden="true" />
-              <span class="cos-thread-rail-num">{num}</span>
-              {unread && (
-                <span class="cos-thread-rail-badge" aria-hidden="true">
-                  {unread.count > 9 ? '9+' : unread.count}
-                </span>
-              )}
-            </button>
-            {tid && (
-              <>
+              <button
+                type="button"
+                class={`cos-thread-rail-btn cos-thread-rail-btn-${status}${unread ? ' cos-thread-rail-btn-unread' : ''}`}
+                data-status={status}
+                onClick={() => onJumpToThread(t)}
+                onDblClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (tid) openPopup(tid, num, status, e.currentTarget as HTMLElement);
+                }}
+                title={fullTitle}
+                aria-label={`Jump to thread ${num}, ${STATUS_LABEL[status]}${unread ? `, ${unread.count} new` : ''} (double-click for actions)`}
+              >
+                <span class="cos-thread-rail-status" aria-hidden="true" />
+                <span class="cos-thread-rail-num">{num}</span>
+                {unread && (
+                  <span class="cos-thread-rail-badge" aria-hidden="true">
+                    {unread.count > 9 ? '9+' : unread.count}
+                  </span>
+                )}
+              </button>
+              {tid && (
                 <button
                   type="button"
-                  class={`cos-thread-rail-resolve${isResolved || isArchived ? ' cos-thread-rail-resolve-active' : ''}`}
+                  class="cos-thread-rail-status-trigger"
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (isArchived) void setThreadArchived(tid, false);
-                    else void setThreadResolved(tid, !isResolved);
+                    const item = (e.currentTarget as HTMLElement).parentElement;
+                    const btn = item?.querySelector('.cos-thread-rail-btn') as HTMLElement | null;
+                    openPopup(tid, num, status, btn ?? (e.currentTarget as HTMLElement));
                   }}
-                  title={isArchived ? 'Reopen archived thread' : (isResolved ? 'Reopen thread' : 'Mark thread resolved')}
-                  aria-label={isArchived ? `Reopen archived thread ${num}` : (isResolved ? `Reopen thread ${num}` : `Resolve thread ${num}`)}
-                >
-                  {isResolved || isArchived ? (
-                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true">
-                      <path d="M3 12h18" />
-                    </svg>
-                  ) : (
-                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  )}
-                </button>
-                {!isArchived && (
-                  <button
-                    type="button"
-                    class="cos-thread-rail-archive"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void setThreadArchived(tid, true);
-                    }}
-                    title="Archive thread (hides from triage and from Resolved view)"
-                    aria-label={`Archive thread ${num}`}
-                  >
-                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <path d="M3 7h18M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7M9 11h6" />
-                    </svg>
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        );
-      })}
-    </nav>
+                  title={`Thread ${num} actions (${STATUS_LABEL[status]})`}
+                  aria-label={`Thread ${num} actions`}
+                />
+              )}
+            </div>
+          );
+        })}
+      </nav>
+      {popup && (
+        <div
+          ref={popupRef}
+          class="cos-thread-rail-popup"
+          role="menu"
+          style={{ top: popup.top + 'px', left: popup.left + 'px' }}
+        >
+          <div class="cos-thread-rail-popup-title">Thread {popup.num}</div>
+          <button
+            type="button"
+            role="menuitem"
+            class="cos-thread-rail-popup-btn"
+            onClick={() => {
+              if (isArchivedStatus) {
+                void setThreadArchived(popup.tid, false);
+              } else {
+                // Mark leaving only when the thread is *transitioning into*
+                // a hidden state (resolving while hide-resolved is on).
+                if (!isResolvedStatus && !cosShowResolved.value) markThreadLeaving(popup.tid);
+                void setThreadResolved(popup.tid, !isResolvedStatus);
+              }
+              closePopup();
+            }}
+          >
+            {isArchivedStatus
+              ? 'Reopen (unarchive)'
+              : isResolvedStatus
+                ? 'Reopen thread'
+                : 'Resolve thread'}
+          </button>
+          {!isArchivedStatus && (
+            <button
+              type="button"
+              role="menuitem"
+              class="cos-thread-rail-popup-btn"
+              onClick={() => {
+                if (!cosShowArchived.value) markThreadLeaving(popup.tid);
+                void setThreadArchived(popup.tid, true);
+                closePopup();
+              }}
+            >
+              Archive thread
+            </button>
+          )}
+        </div>
+      )}
+    </>
   );
 }

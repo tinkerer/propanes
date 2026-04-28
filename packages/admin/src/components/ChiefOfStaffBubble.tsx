@@ -27,11 +27,14 @@ import {
   openCosInPane,
   isCosInPane,
   closeCosPane,
+  reclampCosPanelToViewport,
   COS_PANE_TAB_ID,
   cosThreadMeta,
   getThreadMeta,
   setThreadResolved,
   setThreadArchived,
+  leavingThreadIds,
+  isThreadLeaving,
 } from '../lib/chief-of-staff.js';
 import { MessageRenderer } from './MessageRenderer.js';
 import { layoutTree as layoutTreeSignal, findLeafWithTab, setFocusedLeaf } from '../lib/pane-tree.js';
@@ -76,11 +79,23 @@ import {
   setCosShowResolved,
   cosShowArchived,
   setCosShowArchived,
+  cosThreadFilter,
   cosActiveThread,
   cosOpenThreadTab,
   cosCloseThreadTab,
-  cosIsThreadTabOpen,
 } from '../lib/cos-popout-tree.js';
+import {
+  cosSavedDrafts,
+  saveCosDraft,
+  deleteCosDraft,
+  getThreadSavedDrafts,
+  getRootSavedDrafts,
+  getThreadIdsWithDrafts,
+  type CosSavedDraft,
+} from '../lib/cos-saved-drafts.js';
+import { cosFollowups, enqueueCosFollowup } from '../lib/cos-followups.js';
+import { CosSavedDraftsList } from './CosSavedDraftsList.js';
+import { CosEnqueuedList } from './CosEnqueuedList.js';
 import { CosPopoutTreeView } from './CosPopoutTreeView.js';
 import { openArtifactDrawerTab, isArtifactDrawerOpen } from '../lib/cos-artifact-drawer.js';
 import { cosLearnings, loadCosLearnings } from '../lib/cos-learnings.js';
@@ -94,9 +109,6 @@ import {
 } from '../lib/cos-drafts.js';
 import { extractCosReply, stripCosReplyMarkers } from '../lib/cos-reply-tags.js';
 import { useCosSearch } from '../lib/use-cos-search.js';
-import { useCosVoice } from '../lib/use-cos-voice.js';
-import { useCosScreenshot } from '../lib/use-cos-screenshot.js';
-import { useCosElementPicker } from '../lib/use-cos-element-picker.js';
 import {
   fetchFeedbackTitle,
   getCachedFeedbackTitle,
@@ -119,7 +131,7 @@ import { AttachmentEditorModal } from './CosAttachmentEditor.js';
 import { CosAgentSettings } from './CosAgentSettings.js';
 import { CosScrollToolbar } from './CosScrollToolbar.js';
 import { CosThreadRail, type RailStatus } from './CosThreadRail.js';
-import { CosInputToolbar } from './CosInputToolbar.js';
+import { CosComposer, type CosComposerHandle } from './CosComposer.js';
 import { CosTabList } from './CosTabList.js';
 import { CosResizeHandles } from './CosResizeHandles.js';
 import { CosLearningsDrawer, CosThreadDrawer, type CosDrawerStyle } from './CosBubbleDrawers.js';
@@ -167,6 +179,28 @@ export function ChiefOfStaffToggle() {
       const el = document.activeElement as HTMLElement | null;
       if (el && typeof el.blur === 'function') el.blur();
     }
+    // If CoS is already open but another floating panel was raised over it,
+    // a click should raise CoS rather than hide it — otherwise the toggle
+    // looks broken ("the panel won't come to the front"). Use real z-order
+    // (not activePanelId, which can drift from the visual stack) so we only
+    // collapse when CoS is genuinely the topmost visible panel.
+    if (open && !paneOpen) {
+      const cosPanel = popoutPanels.value.find((p) => p.id === COS_PANEL_ID);
+      const cosZ = cosPanel ? getPanelZIndex(cosPanel) : 0;
+      const topZ = popoutPanels.value
+        .filter((p) => p.visible)
+        .reduce((max, p) => Math.max(max, getPanelZIndex(p)), 0);
+      if (cosZ < topZ) {
+        activePanelId.value = COS_PANEL_ID;
+        bringToFront(COS_PANEL_ID);
+        return;
+      }
+    }
+    // Toggling the panel from closed → open is also our chance to rescue
+    // persisted geometry that no longer fits the viewport (window shrank
+    // since the position was saved). Otherwise the panel renders fully
+    // off-screen and the click looks like a no-op.
+    if (!open && !paneOpen) reclampCosPanelToViewport();
     setChiefOfStaffOpen(!open);
   }
 
@@ -210,16 +244,12 @@ export function ChiefOfStaffBubble({
   const panel = allPanels.find((p) => p.id === COS_PANEL_ID);
   const inPane = mode === 'pane';
 
-  const [input, setInput] = useState(() => getCosDraft(chiefOfStaffActiveId.value, selectedAppId.value));
-  type PendingAttachment = { id: string; dataUrl: string; name?: string; mimeType: string };
-  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
-  const [pendingElementRefs, setPendingElementRefs] = useState<CosElementRef[]>([]);
-  const [cameraMenuOpen, setCameraMenuOpen] = useState(false);
-  const [pickerMenuOpen, setPickerMenuOpen] = useState(false);
-  const [cameraMenuPos, setCameraMenuPos] = useState<{ top: number; left: number } | null>(null);
-  const [pickerMenuPos, setPickerMenuPos] = useState<{ top: number; left: number } | null>(null);
-  const cameraGroupRef = useRef<HTMLDivElement | null>(null);
-  const pickerGroupRef = useRef<HTMLDivElement | null>(null);
+  // Live mirror of CosComposer's internal text state. The composer owns
+  // text state + draft persistence; the bubble only needs a read-only copy
+  // to drive the reply-pill "Save draft" affordance and the
+  // closeReplyKeepText / saveReplyDraftClearInput scope-swap helpers below.
+  const [composerText, setComposerText] = useState<string>('');
+  const composerRef = useRef<CosComposerHandle | null>(null);
   const [replyTo, setReplyTo] = useState<{ role: string; text: string; anchorTs?: number; threadServerId?: string | null } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -234,6 +264,15 @@ export function ChiefOfStaffBubble({
   const slackMode = cosSlackMode.value;
   const showResolved = cosShowResolved.value;
   const showArchived = cosShowArchived.value;
+  const threadFilter = cosThreadFilter.value;
+  // Subscribe to the saved-drafts signal so the list re-renders when drafts
+  // are saved/deleted/swapped from anywhere (including peer windows).
+  const _savedDraftsTick = cosSavedDrafts.value;
+  void _savedDraftsTick;
+  // Same for the enqueued-followups signal — the inline pending-message list
+  // needs to re-render on enqueue, edit, status flip, or auto-dispatch prune.
+  const _followupsTick = cosFollowups.value;
+  void _followupsTick;
   const [editingAttachment, setEditingAttachment] = useState<{ id: string; dataUrl: string } | null>(null);
   const [learningsSide, setLearningsSide] = useState<'left' | 'right'>(() => {
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-learnings-side') : null;
@@ -244,9 +283,10 @@ export function ChiefOfStaffBubble({
   useEffect(() => {
     try { localStorage.setItem('pw-cos-show-tools', showTools ? '1' : '0'); } catch { /* ignore */ }
   }, [showTools]);
-  useEffect(() => {
-    if (!slackMode && showThreadPanel) setShowThreadPanel(false);
-  }, [slackMode, showThreadPanel]);
+  // No auto-close when slackMode flips off — the thread companion is now
+  // reachable in both modes via the inline Reply button. setCosSlackMode(false)
+  // still explicitly clears cosActiveThread / closes the popout-tree tab when
+  // the operator opts out, which is the right place for that decision.
   useEffect(() => {
     try { localStorage.setItem('pw-cos-learnings-side', learningsSide); } catch { /* ignore */ }
   }, [learningsSide]);
@@ -272,29 +312,26 @@ export function ChiefOfStaffBubble({
   // The active draft scope is (agent, app, threadId-or-empty). When the
   // operator is in "reply to thread" mode (replyTo set) this resolves to that
   // thread's server id; otherwise '' meaning the new-thread compose draft.
-  // Putting it in a single derived const keeps the hydrate effect, applyInput,
-  // submit, and reply-pill actions all looking at the same key.
+  // CosComposer drives all read/write/clear traffic through `draftBinding`
+  // below, keyed off this scope.
   const draftScopeThreadId = replyTo?.threadServerId ?? '';
-  // Hydrate the textarea from the server-backed draft store whenever the
-  // active agent / app scope / reply-thread scope changes, OR when the draft
-  // store itself gets refreshed (e.g. initial load after page refresh). We
-  // only overwrite local input if it differs from the stored draft — this
-  // keeps in-flight typing from being clobbered when our own optimistic write
-  // makes the signal tick.
-  useEffect(() => {
-    const stored = getCosDraft(activeId, selectedAppId.value, draftScopeThreadId);
-    setInput((prev) => (prev === stored ? prev : stored));
+  // Subscribe to cosDrafts so binding identity bumps whenever the underlying
+  // store changes — covers example-chip clicks (which write directly to the
+  // store) and any peer-window updates. Keystrokes also bounce through this,
+  // which CosComposer's prev-binding ref handles without looping.
+  const cosDraftsTick = cosDrafts.value;
+  const draftBinding = useMemo(
+    () => ({
+      read: () => getCosDraft(activeId, selectedAppId.value, draftScopeThreadId),
+      write: (text: string) => setCosDraft(activeId, selectedAppId.value, draftScopeThreadId, text),
+      clear: () => clearCosDraft(activeId, selectedAppId.value, draftScopeThreadId),
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, selectedAppId.value, draftScopeThreadId, cosDrafts.value]);
-  // Mirror operator typing into the server-backed draft store so the input
-  // survives refresh and any peer tabs/windows pick it up.
-  function applyInput(next: string): void {
-    setInput(next);
-    setCosDraft(activeId, selectedAppId.value, draftScopeThreadId, next);
-  }
+    [activeId, selectedAppId.value, draftScopeThreadId, cosDraftsTick],
+  );
   // Pull all drafts for the current app on mount and whenever the operator
   // switches app scope. Per-(agent, thread) values land in the cosDrafts
-  // signal and the hydrate effect above replays them into the textarea.
+  // signal and CosComposer's draft binding picks them up via the tick above.
   useEffect(() => {
     void loadCosDrafts(selectedAppId.value);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -311,6 +348,11 @@ export function ChiefOfStaffBubble({
   // toggles `resolved` or the server pushes a new sessionStatus on hydrate.
   const _threadMetaVersion = cosThreadMeta.value;
   void _threadMetaVersion;
+  // Subscribe to leavingThreadIds so the visibility filter re-runs when a
+  // thread starts (or finishes) animating out. Without this read the Set
+  // change wouldn't trigger a re-render of the bubble.
+  const _leavingVersion = leavingThreadIds.value;
+  void _leavingVersion;
 
   function threadServerIdFor(t: Thread): string | null {
     return (
@@ -327,21 +369,46 @@ export function ChiefOfStaffBubble({
     // archived is "stash further away".
     if (meta?.archivedAt) return 'archived';
     if (meta?.resolvedAt) return 'resolved';
+    // Active streaming = a reply is being typed *right now*. The per-message
+    // streaming flag is authoritative; sessionStatus alone is misleading
+    // because headless-stream bridges stay status='running' for their entire
+    // lifetime, even between turns.
     if (t.replies.some((r) => r.msg.streaming)) return 'streaming';
     if (unreadByThread.get(t.userIdx)) return 'unread';
     const s = meta?.sessionStatus;
     if (s === 'failed' || s === 'killed') return 'failed';
     if (s === null || s === undefined) return 'gc';
-    if (s === 'running' || s === 'pending') return 'streaming';
-    // 'idle' | 'completed' (or any other clean terminal) → solid green.
+    // Agent finished a turn and the operator hasn't resolved it yet — the
+    // reply is sitting awaiting triage. Distinct from 'idle' (no reply yet
+    // / nothing to look at) and from 'unread' (louder, blinking).
+    const lastReply = t.replies[t.replies.length - 1];
+    if (lastReply && lastReply.msg.role === 'assistant') return 'attention';
     return 'idle';
   }
 
-  // Apply visibility filters to the thread list. Resolved/archived are hidden
-  // by default; toggling the toolbar checkboxes restores them. Threads without
-  // a server id (still pending hydration) always show — they can't have meta.
+  const draftThreadIds = useMemo(
+    () => getThreadIdsWithDrafts(activeId, selectedAppId.value),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeId, selectedAppId.value, _savedDraftsTick],
+  );
+  // Apply visibility filters to the thread list. The exclusive `threadFilter`
+  // mode (drafts-only / archived-only) overrides the include-toggles when set.
+  // Threads without a server id (still pending hydration) always show in the
+  // default mode — they can't have meta.
   function isThreadVisible(t: Thread): boolean {
     const tid = threadServerIdFor(t);
+    // Keep threads currently animating out mounted regardless of meta — the
+    // CSS collapse transition needs the row in the DOM until it finishes.
+    if (tid && isThreadLeaving(tid)) return true;
+    if (threadFilter === 'archived') {
+      if (!tid) return false;
+      const meta = getThreadMeta(tid);
+      return !!meta?.archivedAt;
+    }
+    if (threadFilter === 'drafts') {
+      if (!tid) return false;
+      return draftThreadIds.has(tid);
+    }
     if (!tid) return true;
     const meta = getThreadMeta(tid);
     if (meta?.archivedAt && !showArchived) return false;
@@ -785,13 +852,6 @@ export function ChiefOfStaffBubble({
     if (open && inputRef.current && !showSettings && !isMobile.value) inputRef.current.focus();
   }, [open, activeId, showSettings]);
 
-  useEffect(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    if (inputHeight !== null) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 240) + 'px';
-  }, [input, open, inputHeight]);
 
   function onInputResizeHandleMouseDown(e: MouseEvent) {
     e.preventDefault();
@@ -823,166 +883,115 @@ export function ChiefOfStaffBubble({
     setCollapsedThreads(new Set());
   }, [activeId]);
 
-  function submit() {
-    const hasAttach = pendingAttachments.length > 0 || pendingElementRefs.length > 0;
-    if (!input.trim() && !hasAttach) return;
-    const text = input;
-    const attachments: CosImageAttachment[] = pendingAttachments.map((a) => ({
-      kind: 'image',
-      dataUrl: a.dataUrl,
-      name: a.name,
-    }));
-    const elementRefs: CosElementRef[] = pendingElementRefs.map((e) => ({ ...e }));
+  // CosComposer's onSend callback. The composer has already trimmed text,
+  // packaged attachments + element refs, cleared its internal state, and
+  // cleared the active draft scope by the time this fires; the bubble only
+  // attaches replyToTs from its own pill state and dispatches.
+  function handleSend(
+    text: string,
+    attachments: CosImageAttachment[],
+    elementRefs: CosElementRef[],
+  ): Promise<void> {
+    if (!text.trim() && attachments.length === 0 && elementRefs.length === 0) return Promise.resolve();
     const replyToTs = replyTo?.anchorTs;
-    const submittedScopeThreadId = draftScopeThreadId;
-    setInput('');
-    // Clear whichever scope this submit consumed (the in-thread reply draft
-    // OR the new-thread compose draft) so it doesn't reappear on next hydrate.
-    clearCosDraft(activeId, selectedAppId.value, submittedScopeThreadId);
     setReplyTo(null);
-    setPendingAttachments([]);
-    setPendingElementRefs([]);
-    sendChiefOfStaffMessage(text, selectedAppId.value, { attachments, elementRefs, replyToTs });
+    return sendChiefOfStaffMessage(text, selectedAppId.value, { attachments, elementRefs, replyToTs });
+  }
+
+  // CosComposer's onSaveDraft callback. Stash the payload as a saved draft
+  // attached to the active scope (current reply-pill thread, or root). The
+  // composer has already cleared its internal state by the time this fires.
+  function handleSaveAsDraft(
+    text: string,
+    attachments: CosImageAttachment[],
+    elementRefs: CosElementRef[],
+  ) {
+    if (!text.trim() && attachments.length === 0 && elementRefs.length === 0) return;
+    saveCosDraft({
+      agentId: activeId,
+      appId: selectedAppId.value,
+      threadId: replyTo?.threadServerId ?? '',
+      replyToTs: replyTo?.anchorTs,
+      text,
+      attachments,
+      elementRefs,
+    });
+    // Drop the reply pill so the next compose starts a fresh top-level thread
+    // — matches the "I stashed this, moving on" mental model.
+    setReplyTo(null);
+  }
+
+  // Click handler for a saved-draft row: stash the composer's current state
+  // (if any) as a new draft pinned to the current scope, then load the clicked
+  // draft into the composer. This is the "swap" the operator expects.
+  function handleLoadSavedDraft(draft: CosSavedDraft) {
+    const snap = composerRef.current?.getSnapshot();
+    const hasText = !!snap?.text.trim();
+    const hasAtts = (snap?.attachments?.length ?? 0) > 0;
+    const hasRefs = (snap?.elementRefs?.length ?? 0) > 0;
+    if (snap && (hasText || hasAtts || hasRefs)) {
+      saveCosDraft({
+        agentId: activeId,
+        appId: selectedAppId.value,
+        threadId: replyTo?.threadServerId ?? '',
+        replyToTs: replyTo?.anchorTs,
+        text: snap.text,
+        attachments: snap.attachments,
+        elementRefs: snap.elementRefs,
+      });
+    }
+    deleteCosDraft(draft.id);
+    // Pull reply scope onto the loaded draft's thread so the next send routes
+    // back to the right anchor. If the draft was top-level, drop reply scope.
+    if (draft.threadId && typeof draft.replyToTs === 'number') {
+      const anchor = activeAgent?.messages.find(
+        (m) => m.role === 'user' && m.timestamp === draft.replyToTs,
+      );
+      const excerpt = anchor?.text
+        ? (anchor.text.length > 120 ? anchor.text.slice(0, 120) : anchor.text)
+        : '';
+      setReplyTo({
+        role: 'user',
+        text: excerpt,
+        anchorTs: draft.replyToTs,
+        threadServerId: draft.threadId,
+      });
+    } else {
+      setReplyTo(null);
+    }
+    composerRef.current?.loadSnapshot({
+      text: draft.text,
+      attachments: draft.attachments,
+      elementRefs: draft.elementRefs,
+    });
   }
 
   // Reply-pill "Close" button: drop the in-thread scope but keep the operator's
   // text — it now becomes the agent's new-thread compose draft. Implemented by
   // copying the current text into the new-thread scope before clearing the
-  // thread-scoped row, so refresh shows the same text in the right scope.
+  // thread-scoped row; the cosDrafts signal tick rebuilds CosComposer's
+  // binding identity and re-hydrates from the new scope so the textarea
+  // shows the same text under the new key.
   function closeReplyKeepText() {
-    const text = input;
+    const text = composerText;
     if (replyTo?.threadServerId && text.length > 0) {
-      // Stash under new-thread scope first so the hydrate effect (which fires
-      // on replyTo change) reads back the same text and doesn't blank the box.
       setCosDraft(activeId, selectedAppId.value, '', text);
       clearCosDraft(activeId, selectedAppId.value, replyTo.threadServerId);
     }
     setReplyTo(null);
   }
 
-  // Reply-pill "Save draft" button: persist the current text under the
-  // thread's scope (which is already the active scope while replyTo is set),
-  // then clear the input so the operator gets a clean canvas. Dropping the
-  // reply scope after save means they're back at the new-thread compose with
-  // an empty box, which matches Slack's "draft saved, fresh box" feel.
+  // Reply-pill "Save draft" button: thread scope already has the live text
+  // (composer's continuous draft.write keeps it current). Just drop reply
+  // scope; CosComposer's binding-identity bump re-hydrates from the new-
+  // thread scope, matching the original's setInput('') + scope-drop flow
+  // where the box reflected whatever new-thread draft existed.
   function saveReplyDraftClearInput() {
-    if (!replyTo?.threadServerId) {
-      setReplyTo(null);
-      return;
-    }
-    const text = input;
-    if (text.length > 0) {
-      // applyInput is debounced; force the write through synchronously so the
-      // draft is durable before we leave the scope.
-      setCosDraft(activeId, selectedAppId.value, replyTo.threadServerId, text);
-    } else {
+    if (replyTo?.threadServerId && composerText.length === 0) {
       clearCosDraft(activeId, selectedAppId.value, replyTo.threadServerId);
     }
-    setInput('');
     setReplyTo(null);
   }
-
-  function blobToDataUrl(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(reader.error || new Error('FileReader failed'));
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  async function addImageBlob(blob: Blob, name?: string) {
-    try {
-      const dataUrl = await blobToDataUrl(blob);
-      setPendingAttachments((prev) => [
-        ...prev,
-        {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          dataUrl,
-          name,
-          mimeType: blob.type || 'image/png',
-        },
-      ]);
-    } catch (err) {
-      console.error('[cos] failed to read image blob:', err);
-    }
-  }
-
-  async function onPaste(e: ClipboardEvent) {
-    const items = e.clipboardData?.items;
-    if (!items || items.length === 0) return;
-    let handled = false;
-    for (const item of items) {
-      if (item.kind === 'file' && item.type.startsWith('image/')) {
-        const file = item.getAsFile();
-        if (!file) continue;
-        handled = true;
-        const ext = file.type.split('/')[1] || 'png';
-        const name = (file as File).name && (file as File).name !== 'image.png'
-          ? (file as File).name
-          : `pasted-${Date.now()}.${ext}`;
-        await addImageBlob(file, name);
-      }
-    }
-    if (handled) e.preventDefault();
-  }
-
-  const {
-    capturingScreenshot,
-    screenshotExcludeWidget,
-    setScreenshotExcludeWidget,
-    screenshotExcludeCursor,
-    setScreenshotExcludeCursor,
-    screenshotMethod,
-    setScreenshotMethod,
-    screenshotKeepStream,
-    setScreenshotKeepStream,
-    captureAndAttachScreenshot,
-    startTimedScreenshot,
-  } = useCosScreenshot({
-    onAttachBlob: (blob, name) => addImageBlob(blob, name),
-    closeCameraMenu: () => setCameraMenuOpen(false),
-  });
-
-  const {
-    recording: micRecording,
-    elapsed: micElapsed,
-    interim: micInterim,
-    toggleRecord: toggleMicRecord,
-  } = useCosVoice({
-    getInputBase: () => input,
-    onAppendInput: (next) => applyInput(next),
-    focusInput: () => inputRef.current?.focus(),
-  });
-
-  const {
-    pickerActive,
-    pickerMultiSelect,
-    setPickerMultiSelect,
-    pickerIncludeChildren,
-    setPickerIncludeChildren,
-    startElementPick,
-  } = useCosElementPicker({
-    wrapperRef,
-    appendElementRefs: (mapped) => setPendingElementRefs((prev) => [...prev, ...mapped]),
-    focusInput: () => inputRef.current?.focus(),
-    closePickerMenu: () => setPickerMenuOpen(false),
-  });
-
-  useEffect(() => {
-    if (!cameraMenuOpen && !pickerMenuOpen) return;
-    function onDocClick(e: MouseEvent) {
-      const target = e.target as Node | null;
-      if (cameraMenuOpen && cameraGroupRef.current && target && !cameraGroupRef.current.contains(target)) {
-        setCameraMenuOpen(false);
-      }
-      if (pickerMenuOpen && pickerGroupRef.current && target && !pickerGroupRef.current.contains(target)) {
-        setPickerMenuOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [cameraMenuOpen, pickerMenuOpen]);
 
   function handleReply(role: string, text: string, anchorTs?: number, threadServerId?: string | null) {
     const excerpt = text.length > 120 ? text.slice(0, 120) : text;
@@ -1026,18 +1035,6 @@ export function ChiefOfStaffBubble({
         });
         persistPopoutState();
       }
-    }
-  }
-
-  function onKeyDown(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-      return;
-    }
-    if (e.key === 'Escape' && replyTo) {
-      e.preventDefault();
-      setReplyTo(null);
     }
   }
 
@@ -1397,6 +1394,7 @@ export function ChiefOfStaffBubble({
                       slackMode={slackMode}
                       showResolved={showResolved}
                       showArchived={showArchived}
+                      threadFilter={threadFilter}
                     />
 
                     <div class="cos-scroll-wrap">
@@ -1425,7 +1423,11 @@ export function ChiefOfStaffBubble({
                               'Any sessions stuck or running long?',
                               'Are all launchers online?',
                             ].map((q) => (
-                              <button key={q} class="cos-example" onClick={() => applyInput(q)}>{q}</button>
+                              <button
+                                key={q}
+                                class="cos-example"
+                                onClick={() => setCosDraft(activeId, selectedAppId.value, draftScopeThreadId, q)}
+                              >{q}</button>
                             ))}
                           </div>
                         </div>
@@ -1444,7 +1446,6 @@ export function ChiefOfStaffBubble({
                           }
                           const tKey = threadKeyOf(t);
                           const isActiveInPanel =
-                            slackMode &&
                             cosActiveThread.value?.agentId === activeAgent.id &&
                             cosActiveThread.value?.threadKey === tKey;
                           nodes.push(
@@ -1456,7 +1457,6 @@ export function ChiefOfStaffBubble({
                               onStop={() => void interruptActiveAgent()}
                               showTools={showTools}
                               highlightMsgIdx={highlightMsgIdx}
-                              onReply={handleReply}
                               onArtifactPopout={handleArtifactPopout}
                               hasUnread={!!unreadByThread.get(t.userIdx)}
                               agentId={activeAgent.id}
@@ -1479,7 +1479,53 @@ export function ChiefOfStaffBubble({
                               }}
                             />
                           );
+                          // Render any saved drafts attached to this thread
+                          // immediately after its block. In slack mode the
+                          // ThreadPanel hosts its own copy of this list, so
+                          // skip inline rendering for collapsed threads.
+                          const tid = threadServerIdFor(t);
+                          if (tid && !(slackMode && t.userMsg && t.replies.length > 0)) {
+                            const threadDrafts = getThreadSavedDrafts(activeAgent.id, selectedAppId.value, tid);
+                            if (threadDrafts.length > 0) {
+                              nodes.push(
+                                <CosSavedDraftsList
+                                  key={`drafts-${tid}`}
+                                  drafts={threadDrafts}
+                                  onLoad={handleLoadSavedDraft}
+                                  onDelete={(d) => { deleteCosDraft(d.id); }}
+                                  scope="thread"
+                                />,
+                              );
+                            }
+                            const threadFollowups = cosFollowups.value.filter(
+                              (f) => f.agentId === activeAgent.id && f.threadServerId === tid,
+                            );
+                            if (threadFollowups.length > 0) {
+                              nodes.push(
+                                <CosEnqueuedList
+                                  key={`followups-${tid}`}
+                                  followups={threadFollowups}
+                                  scope="thread"
+                                />,
+                              );
+                            }
+                          }
                         });
+                        // Top-level drafts (composed without a reply pill)
+                        // render at the bottom of the chat stream so the
+                        // operator sees their pending new-thread sends.
+                        const rootDrafts = getRootSavedDrafts(activeAgent.id, selectedAppId.value);
+                        if (rootDrafts.length > 0) {
+                          nodes.push(
+                            <CosSavedDraftsList
+                              key="drafts-root"
+                              drafts={rootDrafts}
+                              onLoad={handleLoadSavedDraft}
+                              onDelete={(d) => { deleteCosDraft(d.id); }}
+                              scope="root"
+                            />,
+                          );
+                        }
                         return nodes;
                       })()}
                       {error && (
@@ -1522,7 +1568,7 @@ export function ChiefOfStaffBubble({
                       <div class="cos-reply-pill" role="status">
                         <span class="cos-reply-pill-label">Replying to {replyTo.role}</span>
                         <span class="cos-reply-pill-text">{replyTo.text}</span>
-                        {replyTo.threadServerId && input.length > 0 && (
+                        {replyTo.threadServerId && composerText.length > 0 && (
                           <button
                             type="button"
                             class="cos-reply-pill-action"
@@ -1537,7 +1583,7 @@ export function ChiefOfStaffBubble({
                           type="button"
                           class="cos-reply-pill-close"
                           onClick={closeReplyKeepText}
-                          title={input.length > 0 ? 'Drop reply scope; text becomes a new-thread draft' : 'Clear reply'}
+                          title={composerText.length > 0 ? 'Drop reply scope; text becomes a new-thread draft' : 'Clear reply'}
                           aria-label="Clear reply"
                         >
                           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
@@ -1546,109 +1592,89 @@ export function ChiefOfStaffBubble({
                         </button>
                       </div>
                     )}
-                    <div class="cos-input-row">
-                      <div
-                        class="cos-resize-handle"
-                        onMouseDown={onInputResizeHandleMouseDown}
-                        role="separator"
-                        aria-orientation="horizontal"
-                        aria-label="Resize input"
-                        title="Drag to resize"
-                      />
-                      {(pendingAttachments.length > 0 || pendingElementRefs.length > 0) && (
-                        <div class="cos-attach-strip">
-                          {pendingAttachments.map((att) => (
-                            <div class="cos-attach-thumb" key={att.id}>
-                              <img
-                                src={att.dataUrl}
-                                alt={att.name || 'attachment'}
-                                style="cursor:pointer"
-                                title="Click to edit"
-                                onClick={() => setEditingAttachment({ id: att.id, dataUrl: att.dataUrl })}
-                              />
-                              <button
-                                type="button"
-                                class="cos-attach-remove"
-                                onClick={() => setPendingAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-                                title="Remove attachment"
-                                aria-label="Remove attachment"
-                              >
-                                &times;
-                              </button>
-                            </div>
-                          ))}
-                          {pendingElementRefs.map((ref, idx) => {
-                            let display = ref.tagName || 'element';
-                            if (ref.id) display += `#${ref.id}`;
-                            const cls = (ref.classes || []).filter((c) => !c.startsWith('pw-')).slice(0, 2);
-                            if (cls.length) display += '.' + cls.join('.');
-                            return (
-                              <div class="cos-element-chip" key={`ref-${idx}`} title={ref.selector}>
-                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                  <path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z" />
-                                </svg>
-                                <code>{display}</code>
-                                <button
-                                  type="button"
-                                  class="cos-attach-remove"
-                                  onClick={() => setPendingElementRefs((prev) => prev.filter((_, i) => i !== idx))}
-                                  title="Remove element reference"
-                                  aria-label="Remove element reference"
-                                >
-                                  &times;
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                      <textarea
-                        ref={inputRef}
-                        class="cos-input"
-                        value={input}
-                        placeholder={mobile ? `Message ${activeAgent.name}…` : `Message ${activeAgent.name}… (paste images to attach)`}
-                        onInput={(e) => applyInput((e.target as HTMLTextAreaElement).value)}
-                        onKeyDown={onKeyDown}
-                        onPaste={onPaste}
-                        rows={1}
-                        style={inputHeight !== null ? { height: inputHeight + 'px', maxHeight: 'none' } : undefined}
-                      />
-                      <CosInputToolbar
-                        cameraGroupRef={cameraGroupRef}
-                        pickerGroupRef={pickerGroupRef}
-                        capturingScreenshot={capturingScreenshot}
-                        captureAndAttachScreenshot={captureAndAttachScreenshot}
-                        startTimedScreenshot={startTimedScreenshot}
-                        cameraMenuOpen={cameraMenuOpen}
-                        setCameraMenuOpen={setCameraMenuOpen}
-                        cameraMenuPos={cameraMenuPos}
-                        setCameraMenuPos={setCameraMenuPos}
-                        screenshotExcludeWidget={screenshotExcludeWidget}
-                        setScreenshotExcludeWidget={setScreenshotExcludeWidget}
-                        screenshotExcludeCursor={screenshotExcludeCursor}
-                        setScreenshotExcludeCursor={setScreenshotExcludeCursor}
-                        screenshotMethod={screenshotMethod}
-                        setScreenshotMethod={setScreenshotMethod}
-                        screenshotKeepStream={screenshotKeepStream}
-                        setScreenshotKeepStream={setScreenshotKeepStream}
-                        pickerActive={pickerActive}
-                        startElementPick={startElementPick}
-                        pickerMenuOpen={pickerMenuOpen}
-                        setPickerMenuOpen={setPickerMenuOpen}
-                        pickerMenuPos={pickerMenuPos}
-                        setPickerMenuPos={setPickerMenuPos}
-                        pickerMultiSelect={pickerMultiSelect}
-                        setPickerMultiSelect={setPickerMultiSelect}
-                        pickerIncludeChildren={pickerIncludeChildren}
-                        setPickerIncludeChildren={setPickerIncludeChildren}
-                        micRecording={micRecording}
-                        micElapsed={micElapsed}
-                        micInterim={micInterim}
-                        toggleMicRecord={toggleMicRecord}
-                        canSend={!!input.trim() || pendingAttachments.length > 0 || pendingElementRefs.length > 0}
-                        onSubmit={submit}
-                      />
-                    </div>
+                    <CosComposer
+                      ref={composerRef}
+                      className="cos-input-row"
+                      placeholder={mobile ? `Message ${activeAgent.name}…` : `Message ${activeAgent.name}… (paste images to attach)`}
+                      draft={draftBinding}
+                      onSend={handleSend}
+                      onSaveDraft={handleSaveAsDraft}
+                      onTextChange={setComposerText}
+                      onEscape={() => {
+                        if (replyTo) { setReplyTo(null); return true; }
+                        return false;
+                      }}
+                      textareaRef={inputRef}
+                      autoGrow={inputHeight === null ? { maxPx: 240 } : undefined}
+                      inputStyle={inputHeight !== null ? { height: inputHeight + 'px', maxHeight: 'none' } : undefined}
+                      onAttachmentClick={(id, dataUrl) => setEditingAttachment({ id, dataUrl })}
+                      rows={1}
+                      streaming={(() => {
+                        const tid = replyTo?.threadServerId;
+                        if (!tid) return false;
+                        return activeAgent.messages.some((m) => m.threadId === tid && m.streaming);
+                      })()}
+                      onStop={() => {
+                        const tid = replyTo?.threadServerId;
+                        if (tid) void interruptThread(tid);
+                      }}
+                      onEnqueueAfterCurrent={replyTo?.threadServerId ? (text, attachments, elementRefs) => {
+                        const tid = replyTo!.threadServerId!;
+                        enqueueCosFollowup({
+                          agentId: activeId,
+                          appId: selectedAppId.value,
+                          threadServerId: tid,
+                          replyToTs: replyTo?.anchorTs,
+                          text,
+                          attachments,
+                          elementRefs,
+                        });
+                      } : undefined}
+                      onSendAndInterrupt={replyTo?.threadServerId ? async (text, attachments, elementRefs) => {
+                        const tid = replyTo!.threadServerId!;
+                        const replyToTs = replyTo?.anchorTs;
+                        setReplyTo(null);
+                        await interruptThread(tid);
+                        await sendChiefOfStaffMessage(text, selectedAppId.value, { attachments, elementRefs, replyToTs });
+                      } : undefined}
+                      fanOutAgents={chiefOfStaffAgents.value.map((a) => ({ id: a.id, name: a.name, current: a.id === activeId }))}
+                      onSaveDraftToAgents={(agentIds, text, attachments, elementRefs) => {
+                        for (const aid of agentIds) {
+                          saveCosDraft({
+                            agentId: aid,
+                            appId: selectedAppId.value,
+                            threadId: replyTo?.threadServerId ?? '',
+                            replyToTs: replyTo?.anchorTs,
+                            text,
+                            attachments,
+                            elementRefs,
+                          });
+                        }
+                        // Also save for the current agent (the main "Save draft"
+                        // path normally handles it, but the fan-out flow bypasses
+                        // saveDraft → so do it here for symmetry).
+                        saveCosDraft({
+                          agentId: activeId,
+                          appId: selectedAppId.value,
+                          threadId: replyTo?.threadServerId ?? '',
+                          replyToTs: replyTo?.anchorTs,
+                          text,
+                          attachments,
+                          elementRefs,
+                        });
+                        setReplyTo(null);
+                      }}
+                      prefix={
+                        <div
+                          class="cos-resize-handle"
+                          onMouseDown={onInputResizeHandleMouseDown}
+                          role="separator"
+                          aria-orientation="horizontal"
+                          aria-label="Resize input"
+                          title="Drag to resize"
+                        />
+                      }
+                    />
                   </div>
                 );
                 if (inPane) return chatPane;
@@ -1686,9 +1712,7 @@ export function ChiefOfStaffBubble({
         <AttachmentEditorModal
           dataUrl={editingAttachment.dataUrl}
           onSave={(newDataUrl) => {
-            setPendingAttachments((prev) =>
-              prev.map((a) => a.id === editingAttachment!.id ? { ...a, dataUrl: newDataUrl } : a)
-            );
+            composerRef.current?.updateAttachmentDataUrl(editingAttachment!.id, newDataUrl);
             setEditingAttachment(null);
           }}
           onClose={() => setEditingAttachment(null)}

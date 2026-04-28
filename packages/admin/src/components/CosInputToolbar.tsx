@@ -1,6 +1,18 @@
-import { type RefObject } from 'preact';
+import { type ComponentChildren, type RefObject } from 'preact';
+import {
+  cosSelectedCollectors,
+  setCollectorSelected,
+  type CosCollector,
+} from '../lib/console-buffer.js';
 
 export type ScreenshotMethod = 'display-media' | 'html-to-image';
+
+const COLLECTOR_LABELS: Array<{ value: CosCollector; label: string }> = [
+  { value: 'console', label: 'Console' },
+  { value: 'environment', label: 'Page info' },
+  { value: 'network', label: 'Network' },
+  { value: 'performance', label: 'Perf' },
+];
 
 /**
  * Bottom toolbar of the composer: camera (with screenshot options menu) +
@@ -15,6 +27,7 @@ export function CosInputToolbar({
   // refs
   cameraGroupRef,
   pickerGroupRef,
+  micGroupRef,
   // screenshot
   capturingScreenshot,
   captureAndAttachScreenshot,
@@ -42,17 +55,39 @@ export function CosInputToolbar({
   setPickerMultiSelect,
   pickerIncludeChildren,
   setPickerIncludeChildren,
+  // browser-context capture (console + page info + network + perf)
+  consoleGroupRef,
+  consoleCount,
+  captureConsole,
+  consoleMenuOpen,
+  setConsoleMenuOpen,
+  consoleMenuPos,
+  setConsoleMenuPos,
   // mic
   micRecording,
   micElapsed,
   micInterim,
   toggleMicRecord,
+  micBrainstorm,
+  setMicBrainstorm,
+  micMenuOpen,
+  setMicMenuOpen,
+  micMenuPos,
+  setMicMenuPos,
   // send
   canSend,
   onSubmit,
+  // stop (visible only when a turn is streaming in this thread)
+  streaming,
+  onStop,
+  // arbitrary content rendered immediately before the stop/send pair —
+  // CosComposer uses this to slot its Save-draft icon (+ split-button menu)
+  // into the same row as send, instead of a separate row above.
+  beforeSend,
 }: {
   cameraGroupRef: RefObject<HTMLDivElement>;
   pickerGroupRef: RefObject<HTMLDivElement>;
+  micGroupRef: RefObject<HTMLDivElement>;
   capturingScreenshot: boolean;
   captureAndAttachScreenshot: () => void | Promise<void>;
   startTimedScreenshot: (seconds: number) => void | Promise<void>;
@@ -78,13 +113,30 @@ export function CosInputToolbar({
   setPickerMultiSelect: (v: boolean) => void;
   pickerIncludeChildren: boolean;
   setPickerIncludeChildren: (v: boolean) => void;
+  consoleGroupRef: RefObject<HTMLDivElement>;
+  consoleCount: number;
+  captureConsole: () => void;
+  consoleMenuOpen: boolean;
+  setConsoleMenuOpen: (updater: boolean | ((v: boolean) => boolean)) => void;
+  consoleMenuPos: { top: number; left: number } | null;
+  setConsoleMenuPos: (v: { top: number; left: number } | null) => void;
   micRecording: boolean;
   micElapsed: number;
   micInterim: string;
   toggleMicRecord: () => void | Promise<void>;
+  micBrainstorm: boolean;
+  setMicBrainstorm: (v: boolean) => void;
+  micMenuOpen: boolean;
+  setMicMenuOpen: (updater: boolean | ((v: boolean) => boolean)) => void;
+  micMenuPos: { top: number; left: number } | null;
+  setMicMenuPos: (v: { top: number; left: number } | null) => void;
   canSend: boolean;
   onSubmit: () => void;
+  streaming?: boolean;
+  onStop?: () => void;
+  beforeSend?: ComponentChildren;
 }) {
+  const selected = cosSelectedCollectors.value;
   return (
     <div class="cos-input-toolbar">
       <div class="cos-tool-group" ref={cameraGroupRef}>
@@ -217,20 +269,105 @@ export function CosInputToolbar({
           </div>
         )}
       </div>
-      <button
-        type="button"
-        class={`cos-tool-btn${micRecording ? ' active' : ''}`}
-        onClick={() => { void toggleMicRecord(); }}
-        title={micRecording ? `Stop recording (${micElapsed}s)` : 'Record voice input'}
-        aria-label={micRecording ? 'Stop recording' : 'Record voice input'}
-        aria-pressed={micRecording}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="9" y="2" width="6" height="12" rx="3" />
-          <path d="M5 10v2a7 7 0 0 0 14 0v-2" />
-          <line x1="12" y1="19" x2="12" y2="22" />
-        </svg>
-      </button>
+      <div class="cos-tool-group" ref={consoleGroupRef}>
+        <button
+          type="button"
+          class="cos-tool-btn cos-tool-btn-main"
+          onClick={captureConsole}
+          title={(() => {
+            const names = COLLECTOR_LABELS.filter((c) => selected.has(c.value)).map((c) => c.label).join(', ') || 'nothing selected';
+            return consoleCount > 0
+              ? `Re-capture browser context (${names}) — currently attached: ${consoleCount}`
+              : `Capture browser context (${names})`;
+          })()}
+          aria-label="Capture browser context"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="4 17 10 11 4 5" />
+            <line x1="12" y1="19" x2="20" y2="19" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="cos-tool-dropdown-toggle"
+          onClick={(e) => {
+            e.stopPropagation();
+            setCameraMenuOpen(false);
+            setPickerMenuOpen(false);
+            setMicMenuOpen(false);
+            const r = consoleGroupRef.current?.getBoundingClientRect();
+            if (r) setConsoleMenuPos({ top: r.top - 4, left: r.left });
+            setConsoleMenuOpen((v) => !v);
+          }}
+          title="Browser context options"
+          aria-label="Browser context options"
+          aria-expanded={consoleMenuOpen}
+        >
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z" /></svg>
+        </button>
+        {consoleMenuOpen && (
+          <div class="cos-tool-menu" style={consoleMenuPos ? { top: `${consoleMenuPos.top}px`, left: `${consoleMenuPos.left}px`, transform: 'translateY(-100%)' } : undefined}>
+            {COLLECTOR_LABELS.map((c) => (
+              <label class="cos-tool-menu-item" key={c.value}>
+                <input
+                  type="checkbox"
+                  checked={selected.has(c.value)}
+                  onChange={(e) => setCollectorSelected(c.value, (e.target as HTMLInputElement).checked)}
+                />
+                {c.label}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+      <div class="cos-tool-group" ref={micGroupRef}>
+        <button
+          type="button"
+          class={`cos-tool-btn cos-tool-btn-main${micRecording ? ' active' : ''}${micBrainstorm ? ' brainstorm' : ''}`}
+          onClick={() => { void toggleMicRecord(); }}
+          title={micRecording
+            ? (micBrainstorm ? `Stop brainstorm (${micElapsed}s)` : `Stop recording (${micElapsed}s)`)
+            : (micBrainstorm ? 'Brainstorm: continuous transcription appended in chunks' : 'Record voice input')}
+          aria-label={micRecording ? 'Stop recording' : 'Record voice input'}
+          aria-pressed={micRecording}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="2" width="6" height="12" rx="3" />
+            <path d="M5 10v2a7 7 0 0 0 14 0v-2" />
+            <line x1="12" y1="19" x2="12" y2="22" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="cos-tool-dropdown-toggle"
+          onClick={(e) => {
+            e.stopPropagation();
+            setCameraMenuOpen(false);
+            setPickerMenuOpen(false);
+            const r = micGroupRef.current?.getBoundingClientRect();
+            if (r) setMicMenuPos({ top: r.top - 4, left: r.left });
+            setMicMenuOpen((v) => !v);
+          }}
+          title="Microphone options"
+          aria-label="Microphone options"
+          aria-expanded={micMenuOpen}
+        >
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M7 10l5 5 5-5z" /></svg>
+        </button>
+        {micMenuOpen && (
+          <div class="cos-tool-menu" style={micMenuPos ? { top: `${micMenuPos.top}px`, left: `${micMenuPos.left}px`, transform: 'translateY(-100%)' } : undefined}>
+            <label class="cos-tool-menu-item" title="Continuous transcription — finalized chunks (~30s windows) append to the input as they close">
+              <input
+                type="checkbox"
+                checked={micBrainstorm}
+                disabled={micRecording}
+                onChange={(e) => setMicBrainstorm((e.target as HTMLInputElement).checked)}
+              />
+              Brainstorm mode
+            </label>
+          </div>
+        )}
+      </div>
       {micRecording && (
         <span
           class="cos-mic-elapsed"
@@ -239,10 +376,24 @@ export function CosInputToolbar({
         >
           {micInterim
             ? (micInterim.length > 24 ? '…' + micInterim.slice(-24) : micInterim)
-            : `${micElapsed}s`}
+            : `${micElapsed}s${micBrainstorm ? ' · brainstorm' : ''}`}
         </span>
       )}
       <div class="cos-input-toolbar-spacer" />
+      {beforeSend}
+      {streaming && onStop && (
+        <button
+          type="button"
+          class="cos-send-stop"
+          onClick={onStop}
+          title="Stop running turn"
+          aria-label="Stop running turn"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <rect x="6" y="6" width="12" height="12" rx="1.5" />
+          </svg>
+        </button>
+      )}
       <button
         class="cos-send"
         onClick={onSubmit}

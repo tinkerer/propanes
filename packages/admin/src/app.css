@@ -1352,7 +1352,8 @@ tr:hover td {
 }
 
 /* Forms */
-input, select, textarea {
+input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="file"]):not([type="range"]):not([type="color"]),
+select, textarea {
   padding: 8px 12px;
   border: 1px solid var(--pw-border);
   border-radius: 6px;
@@ -1364,7 +1365,8 @@ input, select, textarea {
   color: var(--pw-text-primary);
 }
 
-input:focus, select:focus, textarea:focus {
+input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="file"]):not([type="range"]):not([type="color"]):focus,
+select:focus, textarea:focus {
   border-color: var(--pw-primary);
   box-shadow: 0 0 0 3px rgba(29, 155, 240, 0.1);
 }
@@ -7127,7 +7129,11 @@ kbd {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* No overflow:hidden — that clips the resize handles' outer 3px (they
+     extend past the wrapper at right:-3px etc., and overflow:hidden clips at
+     the padding box, not the border box). Inner children (tab-bar + body)
+     carry their own clipping via border-radius and overflow rules below so
+     content still respects the rounded corners. */
 }
 
 .popout-floating.panel-active {
@@ -7216,7 +7222,11 @@ kbd {
   overflow: hidden;
   display: flex;
   min-height: 0;
+  /* Match wrapper's rounded bottom corners — see .popout-tab-bar comment. */
+  border-bottom-left-radius: 6px;
+  border-bottom-right-radius: 6px;
 }
+.popout-docked > .popout-body { border-bottom-right-radius: 0; }
 
 /* Floating resize handles — edges */
 .popout-resize-n,
@@ -7255,7 +7265,9 @@ kbd {
   box-shadow: -4px 0 16px rgba(0, 0, 0, 0.3);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* See .popout-floating — no overflow:hidden so resize handles aren't
+     clipped. Children (tab-bar, body) carry their own border-radius +
+     overflow rules to preserve the rounded outer shape. */
   z-index: 950;
 }
 
@@ -7367,7 +7379,15 @@ kbd {
   min-height: 30px;
   cursor: grab;
   user-select: none;
+  /* Carry the wrapper's rounded top corners (8px outer − 2px border = 6px
+     inner) so the dark tab-bar doesn't paint past the rounded outline now
+     that the wrapper no longer clips. Docked panels are right-anchored —
+     only the left side rounds. */
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  overflow: hidden;
 }
+.popout-docked > .popout-tab-bar { border-top-right-radius: 0; }
 .popout-tab-bar:active { cursor: grabbing; }
 
 /* Scrollable tab container within the tab bar */
@@ -9710,6 +9730,83 @@ body.pw-isolate {
   cursor: row-resize;
 }
 
+/* Popout-style grab tab attached to a SplitPane divider. Clicking toggles
+   the secondary pane closed; dragging keeps the existing resize behavior.
+   The divider stays its 4px self — the tab is an absolute child overlay. */
+.pane-split-divider-with-grab {
+  overflow: visible;
+}
+.pane-split-divider-grab {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1e3a8a;
+  border: 2px solid #1d9bf0;
+  z-index: 12;
+  pointer-events: none;
+  color: #60a5fa;
+  font-size: 11px;
+  line-height: 1;
+}
+.pane-split-divider-grab-horizontal {
+  /* Horizontal split: divider is vertical (4px wide). Tab pokes left and
+     right of the divider. */
+  width: 18px;
+  height: 56px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 8px;
+  cursor: col-resize;
+}
+.pane-split-divider-grab-vertical {
+  width: 56px;
+  height: 18px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 8px;
+  cursor: row-resize;
+}
+.pane-split-divider-with-grab:hover .pane-split-divider-grab {
+  background: #1e40af;
+  border-color: #60a5fa;
+}
+.pane-split-divider-grab .grab-indicator {
+  color: #60a5fa;
+  opacity: 0.9;
+}
+
+/* Edge grab tab that floats at the right edge of cos-tree-root to summon a
+   closed thread companion. Mirrors the popout-grab-tab look. */
+.cos-tree-edge-grab {
+  position: absolute;
+  width: 18px;
+  height: 56px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #1e3a8a;
+  border: 2px solid #1d9bf0;
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 13;
+  color: #60a5fa;
+  font-size: 12px;
+}
+.cos-tree-edge-grab:hover {
+  background: #1e40af;
+  border-color: #60a5fa;
+}
+.cos-tree-edge-grab .grab-indicator {
+  color: #60a5fa;
+  opacity: 0.9;
+}
+
 .pane-leaf {
   background: var(--pw-terminal-bg, #1a1a2e);
   position: relative;
@@ -11892,6 +11989,50 @@ body.pw-isolate {
   background: var(--pw-primary, #4a90e2);
   opacity: 0.45;
 }
+
+/* Popout-style grab tab that replaces the plain resize handle on the artifact
+   drawer's left edge. Click toggles drawer visibility, drag resizes. */
+.cos-artifact-drawer-grab {
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 56px;
+  background: #1e3a8a;
+  border: 2px solid #1d9bf0;
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ew-resize;
+  z-index: 2;
+}
+.cos-artifact-drawer-grab:hover {
+  background: #1e40af;
+  border-color: #60a5fa;
+}
+.cos-artifact-drawer-grab .grab-indicator {
+  color: #60a5fa;
+  opacity: 0.9;
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: -1px;
+}
+/* When the drawer is collapsed the overlay is the grab tab itself — anchor
+   it to the right edge so it stays clickable. */
+.cos-artifact-drawer-overlay-collapsed {
+  width: 0 !important;
+  background: transparent;
+  border-left: none;
+  box-shadow: none;
+  pointer-events: none;
+}
+.cos-artifact-drawer-overlay-collapsed .cos-artifact-drawer-grab-collapsed {
+  pointer-events: auto;
+  left: -14px;
+}
 .cos-artifact-drawer-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -11950,6 +12091,70 @@ body.pw-isolate {
   overflow: hidden;
 }
 .cos-artifact-drawer-body > .artifact-companion { flex: 1 1 auto; min-width: 0; min-height: 0; }
+
+/* Thread drawer: mirrors the artifact drawer, anchored to the same right
+   edge. Artifact drawer has a higher z-index so it stacks OVER the thread
+   when both are open. The chat keeps full width underneath either way. */
+.cos-thread-drawer-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--pw-bg, var(--pw-terminal-bg));
+  border-left: 1px solid var(--pw-border);
+  box-shadow: -10px 0 24px rgba(0, 0, 0, 0.28);
+  z-index: 11;
+  min-width: 280px;
+  max-width: 95%;
+}
+.cos-thread-drawer-overlay-dragging { user-select: none; }
+.cos-thread-drawer-grab {
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 56px;
+  background: #14532d;
+  border: 2px solid #34d399;
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ew-resize;
+  z-index: 2;
+}
+.cos-thread-drawer-grab:hover {
+  background: #166534;
+  border-color: #6ee7b7;
+}
+.cos-thread-drawer-grab .grab-indicator {
+  color: #6ee7b7;
+  opacity: 0.95;
+  font-size: 11px;
+  line-height: 1;
+}
+.cos-thread-drawer-overlay-collapsed {
+  width: 0 !important;
+  background: transparent;
+  border-left: none;
+  box-shadow: none;
+  pointer-events: none;
+}
+.cos-thread-drawer-overlay-collapsed .cos-thread-drawer-grab-collapsed {
+  pointer-events: auto;
+  left: -14px;
+}
+.cos-thread-drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.cos-thread-drawer-body > .cos-thread-panel { flex: 1 1 auto; min-width: 0; min-height: 0; }
 
 /* Popout-local pane-tree: fills the popout body and houses chat + companion
    leaves as real pane splits (instead of fixed-position side drawers). The
@@ -12276,7 +12481,7 @@ body.pw-isolate {
 
 .cos-scroll-toolbar {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
@@ -12550,19 +12755,25 @@ body.pw-isolate {
   flex: 0 0 auto;
 }
 
-/* JSONL transcript host — the StructuredView renders inside this and owns
-   its own scroll. The wrapper just provides flex/min-height so it fills the
-   panel between header and composer. */
+/* JSONL transcript wrapper — ThreadPanelBody renders MessageBubble rows
+   directly into this element, so it has to be the scroll container itself
+   (no inner JsonlView managing scroll). Without overflow:auto the bubbles
+   would overflow the panel and bleed into the composer / chat below. */
 .cos-thread-panel-jsonl {
   flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  gap: 8px;
+  padding: 8px 10px;
 }
-.cos-thread-panel-jsonl .structured-view {
-  flex: 1 1 auto;
-  min-height: 0;
+.cos-thread-panel-jsonl .jsonl-empty-msg,
+.cos-thread-panel-jsonl .cos-thread-panel-empty-msg {
+  padding: 12px 14px;
+  color: var(--pw-text-muted);
+  font-size: 13px;
 }
 
 /* Inline composer at the bottom of the thread side panel — lets the operator
@@ -13123,7 +13334,22 @@ body.pw-isolate {
     0 0 6px rgba(46, 160, 67, 0.8);
 }
 .cos-thread-rail-btn-idle .cos-thread-rail-status {
-  background: #2ea043;
+  /* Truly settled — no agent reply pending review. Soft so the eye is
+     drawn instead to streaming/attention/unread rows. */
+  background: var(--pw-secondary-text, #888);
+  opacity: 0.7;
+}
+.cos-thread-rail-btn-attention .cos-thread-rail-status {
+  /* Agent finished a turn but operator hasn't resolved it — sits awaiting
+     review. Amber/solid: stands out from streaming (blue spinner) and idle
+     (gray) without the louder blink that 'unread' uses. */
+  background: #f5a623;
+  box-shadow:
+    0 0 0 1.5px var(--pw-bg-surface),
+    0 0 5px rgba(245, 166, 35, 0.55);
+}
+.cos-thread-rail-btn-attention {
+  border-color: rgba(245, 166, 35, 0.45);
 }
 .cos-thread-rail-btn-failed .cos-thread-rail-status {
   background: #e5484d;
@@ -13168,67 +13394,70 @@ body.pw-isolate {
   50% { opacity: 0.45; transform: scale(0.85); }
 }
 
-/* Tiny resolve toggle that sits under each rail button. Only shown when the
-   thread has a server-side id we can PATCH. Default = subtle outlined check
-   (mark as resolved). Active state = filled muted dash (already resolved,
-   click to reopen). Width matches the rail button for visual alignment. */
-.cos-thread-rail-resolve {
-  width: 18px;
+/* Invisible click target sitting on top of the bottom-right status pip.
+   Slightly larger than the visible pip so it's tappable on mobile. Opens
+   the resolve/archive popup. The visible pip (`.cos-thread-rail-status`)
+   remains pointer-events: none so its visual state isn't disturbed. */
+.cos-thread-rail-status-trigger {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  width: 14px;
   height: 14px;
   padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--pw-border);
-  border-radius: 3px;
+  border: 0;
+  border-radius: 50%;
   background: transparent;
-  color: var(--pw-secondary-text, #888);
   cursor: pointer;
-  opacity: 0.55;
-  transition: opacity 0.12s, color 0.12s, border-color 0.12s, background 0.12s;
+  touch-action: manipulation;
 }
-.cos-thread-rail-resolve:hover,
-.cos-thread-rail-resolve:focus-visible {
-  opacity: 1;
-  color: #2ea043;
-  border-color: #2ea043;
-  outline: none;
-}
-.cos-thread-rail-resolve-active {
-  opacity: 1;
-  color: var(--pw-secondary-text, #888);
-  background: var(--pw-bg-hover, rgba(255, 255, 255, 0.04));
-  border-color: var(--pw-border);
-}
-.cos-thread-rail-resolve-active:hover,
-.cos-thread-rail-resolve-active:focus-visible {
-  color: var(--pw-primary-text);
-  border-color: var(--pw-primary, #f5a623);
+.cos-thread-rail-status-trigger:focus-visible {
+  outline: 1.5px solid var(--pw-primary, #f5a623);
+  outline-offset: 1px;
 }
 
-/* Archive twin of the resolve toggle — sits below it. Same dimensions for
-   alignment; a slightly cooler accent on hover so the two are distinguishable
-   at a glance. */
-.cos-thread-rail-archive {
-  width: 18px;
-  height: 14px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--pw-border);
-  border-radius: 3px;
-  background: transparent;
-  color: var(--pw-secondary-text, #888);
-  cursor: pointer;
-  opacity: 0.45;
-  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
+/* Popup that opens beside a rail item with resolve / archive actions.
+   Position is computed from the rail button's bounding rect, so we use
+   position: fixed to escape the rail's overflow:auto clipping.
+   Background is hardcoded opaque (matching .pty-ctx-menu / .status-dot-menu)
+   because this popup renders inside .cos-popout, where --pw-bg-surface is
+   overridden to a translucent tint — fine for inline blocks but unreadable
+   for a floating overlay. See CLAUDE.md "Floating overlays must be opaque". */
+.cos-thread-rail-popup {
+  position: fixed;
+  z-index: 1200;
+  transform: translateY(-50%);
+  min-width: 160px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  background: #1e293b;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
-.cos-thread-rail-archive:hover,
-.cos-thread-rail-archive:focus-visible {
-  opacity: 1;
-  color: var(--pw-primary, #f5a623);
-  border-color: var(--pw-primary, #f5a623);
+.cos-thread-rail-popup-title {
+  padding: 4px 8px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--pw-secondary-text, #888);
+}
+.cos-thread-rail-popup-btn {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--pw-primary-text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.cos-thread-rail-popup-btn:hover,
+.cos-thread-rail-popup-btn:focus-visible {
+  background: var(--pw-bg-hover, rgba(255, 255, 255, 0.06));
   outline: none;
 }
 
@@ -13268,6 +13497,71 @@ body.pw-isolate {
 .cos-thread-archive-btn:focus-visible {
   color: var(--pw-primary, #f5a623);
   border-color: var(--pw-primary, #f5a623);
+}
+
+/* Exit animation when the operator resolves or archives a thread that the
+   current filter would hide. Collapses the block to zero height + zero
+   opacity over ~260ms so the rows below visibly close the gap. The matching
+   timer (LEAVING_ANIMATION_MS in cos-thread-meta.ts, 280ms) unmounts the
+   block right after the animation completes. */
+.cos-thread-block-leaving {
+  pointer-events: none;
+  animation: cos-thread-block-collapse 260ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  overflow: hidden;
+  opacity: 1;
+}
+.cos-thread-block-leaving:hover,
+.cos-thread-block-leaving:focus-within {
+  opacity: 1;
+}
+@keyframes cos-thread-block-collapse {
+  0% {
+    max-height: 1200px;
+    opacity: 1;
+    transform: translateX(0);
+  }
+  35% {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  100% {
+    max-height: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-top-width: 0;
+    border-bottom-width: 0;
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+}
+
+.cos-thread-rail-item-leaving {
+  pointer-events: none;
+  overflow: hidden;
+  animation: cos-thread-rail-item-collapse 260ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+@keyframes cos-thread-rail-item-collapse {
+  0% {
+    max-height: 60px;
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    max-height: 0;
+    margin: 0;
+    padding: 0;
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cos-thread-block-leaving,
+  .cos-thread-rail-item-leaving {
+    animation-duration: 1ms;
+  }
 }
 
 .cos-floating-actions {
@@ -13868,7 +14162,16 @@ body.pw-isolate {
   color: var(--pw-text-primary);
 }
 
-.cos-msg-time { cursor: help; }
+.cos-msg-time { cursor: default; }
+/* Tooltips floating over arbitrary content need an opaque background.
+   Inside .cos-popout / .cos-thread-side / .cos-learnings-side the
+   --pw-bg-surface token is overridden to a translucent tint, which would
+   leak content through the popup. Pin to the dark-theme surface color. */
+.cos-popout .tooltip-content,
+.cos-thread-side .tooltip-content,
+.cos-learnings-side .tooltip-content {
+  background: #1e293b;
+}
 
 .cos-tools-hidden-hint {
   align-self: flex-start;
@@ -14133,6 +14436,12 @@ body.pw-mobile .cos-thread-reply-btn {
   border-color: var(--pw-danger, #dc3545);
 }
 
+.cos-thread-reply-btn-active {
+  border-color: var(--pw-primary-muted);
+  background: var(--pw-primary-soft);
+  color: var(--pw-primary-text);
+}
+
 .cos-reply-pill {
   display: flex;
   align-items: center;
@@ -14259,6 +14568,12 @@ body.pw-mobile .cos-thread-reply-btn {
 .cos-panel-expanded .cos-input { max-height: 320px; }
 .cos-input:focus { outline: none; border-color: var(--pw-primary); }
 .cos-input:disabled { opacity: 0.6; }
+.cos-input.cos-input-submitting {
+  opacity: 0.85;
+  cursor: progress;
+  border-color: var(--pw-primary);
+  box-shadow: 0 0 0 1px var(--pw-primary) inset;
+}
 .cos-input-toolbar {
   display: flex;
   align-items: center;
@@ -14743,8 +15058,8 @@ body.pw-mobile .cos-thread-reply-btn {
 .cos-tool-menu-item input[type="checkbox"]:checked::after {
   content: '';
   position: absolute;
-  top: 1px;
-  left: 3px;
+  top: 0;
+  left: 2px;
   width: 4px;
   height: 7px;
   border: solid white;
@@ -14755,6 +15070,63 @@ body.pw-mobile .cos-thread-reply-btn {
   height: 1px;
   background: rgba(255, 255, 255, 0.08);
   margin: 2px 0;
+}
+.cos-tool-menu-section {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--pw-text-secondary);
+  padding: 4px 10px 2px;
+  pointer-events: none;
+}
+
+.cos-send-stop {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: none;
+  background: #dc3545;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  margin-right: 4px;
+  transition: background 0.15s;
+}
+.cos-send-stop:hover { background: #c12333; }
+
+.cos-send-mode-group {
+  display: inline-flex;
+  align-items: stretch;
+}
+.cos-send-mode-group .cos-save-draft-btn.cos-tool-btn-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right: none;
+}
+.cos-send-mode-group .cos-tool-dropdown-toggle {
+  height: 22px;
+  border: 1px dashed var(--pw-border);
+  border-left: none;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-top-right-radius: 10px;
+  border-bottom-right-radius: 10px;
+  padding: 0 4px;
+  color: var(--pw-text-secondary);
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+.cos-send-mode-group .cos-tool-dropdown-toggle:hover {
+  color: var(--pw-text);
+  border-color: var(--pw-text-secondary);
+}
+.cos-send-mode-menu {
+  min-width: 220px;
 }
 
 .control-bar-cos-btn {
@@ -14781,19 +15153,16 @@ body.pw-mobile .cos-thread-reply-btn {
   .cos-bubble { top: 8px; right: 8px; }
 }
 
-/* Mobile: pin the CoS popout to the viewport between control bar and mobile
-   nav, overriding any persisted floatingRect/dockedWidth so the panel can't
-   extend off-screen. Inline styles from panelStyle are non-!important, so
-   these rules win.
+/* Mobile: pin the CoS popout to the full viewport, covering the top control
+   bar AND the bottom mobile nav while it's open — both surfaces stay
+   reachable via the popout's own header X (btn-close-panel). Overrides any
+   persisted floatingRect/dockedWidth so the panel can't extend off-screen.
+   Inline styles from panelStyle are non-!important, so these rules win.
 
    --pw-keyboard-inset (set by viewport.ts from visualViewport) lifts the
    panel above the iOS software keyboard; it's 0 when the keyboard is
-   closed. When the keyboard is up we take max(keyboard, nav-bar) as the
-   bottom inset so the send button is always visible.
-
-   16px buffer (not 8px) keeps the bottom border of the popout clearly
-   above the nav's top edge — at 8px the input row visually kisses the
-   nav on devices where the nav renders a hair taller than --pw-mobile-nav-h.
+   closed. When the keyboard is up we take max(keyboard, safe-bottom) so
+   the send button is always visible.
 
    Skip embed/pane mode — `.cos-pane` already fills its container, and
    applying `left: 8px !important` to a position:relative element shifts
@@ -14801,8 +15170,8 @@ body.pw-mobile .cos-thread-reply-btn {
 body.pw-mobile .cos-popout:not(.cos-pane) {
   left: 8px !important;
   right: 8px !important;
-  top: calc(48px + var(--pw-safe-top, 0px)) !important;
-  bottom: calc(max(var(--pw-keyboard-inset, 0px), var(--pw-mobile-nav-h, 56px) + var(--pw-safe-bottom, 0px)) + 16px) !important;
+  top: var(--pw-safe-top, 0px) !important;
+  bottom: max(var(--pw-keyboard-inset, 0px), var(--pw-safe-bottom, 0px)) !important;
   width: auto !important;
   height: auto !important;
   /* Safety clamp: if the keyboard inset (or any bad value for it) would
@@ -14829,14 +15198,13 @@ body.pw-mobile .cos-popout.minimized:not(.cos-pane) {
    Safari 15.4+ / Chrome 105+, matching the admin's mobile baseline. */
 body.pw-mobile:has(.cos-popout) propanes-host { display: none !important; }
 
-/* Mobile: lock everything behind the CoS popout while it's open. The popout
-   doesn't cover the full viewport (8px strips left/right, ~48px above the
-   control-bar safe area, ~72px below for the nav + keyboard inset). Touches
-   on those exposed strips otherwise scroll .mobile-page-view, body
-   rubber-band on iOS, or visually drag the bottom nav with the page.
-   Locking overflow + touch-action on body / .layout / .mobile-page-view
-   stops all of those. The popout subtree opts back in to touch-action: auto
-   so its own scroll containers and form controls keep working. */
+/* Mobile: lock everything behind the CoS popout while it's open. Even
+   covering the top/bottom toolbars, 8px strips remain on the left/right
+   edges; touches there otherwise scroll .mobile-page-view or body
+   rubber-band on iOS. Locking overflow + touch-action on body / .layout /
+   .mobile-page-view stops that. The popout subtree opts back in to
+   touch-action: auto so its own scroll containers and form controls keep
+   working. */
 body.pw-mobile:has(.cos-popout) {
   overflow: hidden !important;
   touch-action: none;
@@ -14857,13 +15225,15 @@ body.pw-mobile:has(.cos-popout) .cos-popout .cos-scroll-wrap {
 }
 
 /* Mobile: the side-anchored learnings drawer can't fit beside the pinned CoS
-   popout, so overlay it on top of the popout at full viewport width. */
+   popout, so overlay it on top of the popout at full viewport width.
+   Tracks the popout's full-height envelope so it covers the top/bottom
+   toolbars too. */
 body.pw-mobile .cos-learnings-side {
   left: 8px !important;
   right: 8px !important;
-  top: calc(48px + var(--pw-safe-top, 0px)) !important;
+  top: var(--pw-safe-top, 0px) !important;
   width: auto !important;
-  height: calc(100dvh - 48px - var(--pw-safe-top, 0px) - var(--pw-mobile-nav-h, 56px) - var(--pw-safe-bottom, 0px) - 16px) !important;
+  height: calc(100dvh - var(--pw-safe-top, 0px) - var(--pw-safe-bottom, 0px)) !important;
   border-radius: 10px;
   border: 2px solid #475569;
 }
@@ -14884,10 +15254,15 @@ body.pw-mobile .cos-learnings-side {
   min-height: 0;
   background: transparent;
 }
-/* When the inline thread is present, hide the chat list toolbar/rail/scroll —
-   the ThreadPanel takes their place above the input row. */
+/* When the inline thread is present, hide the chat list toolbar/rail/scroll
+   AND the underlying CoS reply-pill + composer — the ThreadPanel hosts its
+   own reply textarea, and showing the parent composer below it makes the
+   thread look layered on top of the chat behind it. Hiding both lets the
+   .cos-thread-inline (flex: 1) expand to fill the chat-pane edge to edge. */
 .cos-chat-pane:has(> .cos-thread-inline) > .cos-scroll-toolbar,
-.cos-chat-pane:has(> .cos-thread-inline) > .cos-scroll-wrap {
+.cos-chat-pane:has(> .cos-thread-inline) > .cos-scroll-wrap,
+.cos-chat-pane:has(> .cos-thread-inline) > .cos-reply-pill,
+.cos-chat-pane:has(> .cos-thread-inline) > .cos-composer.cos-input-row {
   display: none;
 }
 body.pw-mobile .cos-thread-panel-header {
@@ -15128,6 +15503,21 @@ body.pw-mobile .cos-popout .cos-input {
   background: rgba(15, 23, 42, 0.6);
   border-bottom: 1px solid #1e293b;
   align-items: center;
+}
+/* Compact embed (CoS thread panel): tighter padding + slightly smaller chips
+   so the role + tool chips fit into the narrow side panel without wrapping
+   into 3+ rows. */
+.jsonl-filter-bar-compact {
+  padding: 4px 6px;
+  gap: 3px;
+}
+.jsonl-filter-bar-compact .jsonl-filter-chip {
+  padding: 1px 6px;
+  font-size: 10px;
+}
+.jsonl-filter-bar-compact .jsonl-filter-label-button {
+  font-size: 10px;
+  padding: 1px 3px;
 }
 .jsonl-filter-label {
   font-size: 10px;
@@ -15600,4 +15990,224 @@ body.pw-mobile .cos-popout .cos-input {
   background: var(--pw-border);
   color: var(--pw-text-secondary);
   border-radius: 3px;
+}
+
+/* --- Saved drafts (composer "Save as draft" + pending list) --- */
+
+.cos-search-filters-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--pw-border);
+  opacity: 0.6;
+}
+.cos-search-filters-item-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cos-composer-extras {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 6px 0;
+}
+.cos-save-draft-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--pw-text-secondary);
+  background: transparent;
+  border: 1px dashed var(--pw-border);
+  padding: 2px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  line-height: 1;
+}
+.cos-save-draft-btn:hover:not(:disabled) {
+  color: var(--pw-text);
+  border-color: var(--pw-text-secondary);
+}
+.cos-save-draft-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cos-saved-drafts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  margin: 4px 0 0;
+}
+.cos-saved-drafts-thread {
+  margin-left: 28px;
+  padding-left: 0;
+}
+.cos-saved-drafts-root {
+  border-top: 1px dashed var(--pw-border);
+  margin-top: 12px;
+  padding-top: 10px;
+}
+.cos-saved-drafts-header {
+  font-size: 10.5px;
+  font-style: italic;
+  color: var(--pw-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.cos-saved-draft-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px dashed var(--pw-border);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 12px;
+  font-style: italic;
+  color: var(--pw-text-secondary);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.cos-saved-draft-row:hover,
+.cos-saved-draft-row:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--pw-text-secondary);
+  color: var(--pw-text);
+  outline: none;
+}
+.cos-saved-draft-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--pw-text-secondary);
+  background: var(--pw-border);
+  padding: 1px 5px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.cos-saved-draft-text {
+  flex: 1 1 auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.cos-saved-draft-empty {
+  color: var(--pw-text-secondary);
+  opacity: 0.7;
+}
+.cos-saved-draft-meta {
+  display: inline-flex;
+  gap: 6px;
+  font-size: 11px;
+  font-style: normal;
+  color: var(--pw-text-secondary);
+  flex-shrink: 0;
+}
+.cos-saved-draft-delete {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--pw-text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+}
+.cos-saved-draft-delete:hover {
+  background: var(--pw-border);
+  color: var(--pw-text);
+}
+
+.cos-thread-panel-drafts {
+  border-top: 1px solid var(--pw-border);
+  padding: 4px 6px 0;
+}
+
+.cos-enqueued-row {
+  cursor: default;
+}
+.cos-enqueued-row .cos-saved-draft-text {
+  cursor: text;
+}
+.cos-enqueued-row-sending .cos-saved-draft-text {
+  cursor: default;
+}
+.cos-enqueued-badge {
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+}
+.cos-enqueued-badge-sending {
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+}
+.cos-enqueued-spinner {
+  animation: cos-enqueued-spin 0.9s linear infinite;
+}
+@keyframes cos-enqueued-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.cos-enqueued-row-sending {
+  opacity: 0.85;
+}
+.cos-enqueued-row-editing {
+  font-style: normal;
+  border-style: solid;
+  border-color: var(--pw-text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+}
+.cos-enqueued-edit-input {
+  flex: 1 1 auto;
+  min-height: 28px;
+  resize: none;
+  border: 1px solid var(--pw-border);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--pw-text);
+  font: inherit;
+  font-style: normal;
+  padding: 4px 6px;
+  outline: none;
+}
+.cos-enqueued-edit-input:focus {
+  border-color: var(--pw-accent, #60a5fa);
+}
+.cos-enqueued-edit-actions {
+  display: inline-flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.cos-enqueued-edit-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 5px;
+  border: 1px solid var(--pw-border);
+  background: var(--pw-accent, #2563eb);
+  color: #fff;
+  cursor: pointer;
+}
+.cos-enqueued-edit-btn:hover {
+  filter: brightness(1.1);
+}
+.cos-enqueued-edit-btn-secondary {
+  background: transparent;
+  color: var(--pw-text-secondary);
+}
+.cos-enqueued-edit-btn-secondary:hover {
+  background: var(--pw-border);
+  color: var(--pw-text);
+  filter: none;
 }

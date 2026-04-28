@@ -14,15 +14,24 @@ interface SplitPaneProps {
   onFixedResize?: (newSize: number) => void; // called when dragging divider with fixedFirstSize
   firstCollapsed?: boolean;
   secondCollapsed?: boolean;
+  /**
+   * If set, the divider sprouts a popout-grab-tab handle. Clicking it (without
+   * dragging) calls this callback — used to toggle the secondary pane closed.
+   */
+  onDividerClick?: () => void;
+  /** Optional icon shown inside the divider grab tab (defaults to "┃"). */
+  dividerGrabIcon?: string;
 }
 
-export function SplitPane({ direction, ratio, splitId, onRatioChange, first, second, hideSecond, fixedFirstSize, onFixedResize, firstCollapsed, secondCollapsed }: SplitPaneProps) {
+export function SplitPane({ direction, ratio, splitId, onRatioChange, first, second, hideSecond, fixedFirstSize, onFixedResize, firstCollapsed, secondCollapsed, onDividerClick, dividerGrabIcon }: SplitPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
+  const dragStart = useRef({ x: 0, y: 0, t: 0, moved: false });
 
   const onDividerMouseDown = useCallback((e: MouseEvent) => {
     e.preventDefault();
     dragging.current = true;
+    dragStart.current = { x: e.clientX, y: e.clientY, t: Date.now(), moved: false };
     const container = containerRef.current;
     if (!container) return;
 
@@ -30,9 +39,13 @@ export function SplitPane({ direction, ratio, splitId, onRatioChange, first, sec
 
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current || !container) return;
+      if (!dragStart.current.moved) {
+        const dx = Math.abs(ev.clientX - dragStart.current.x);
+        const dy = Math.abs(ev.clientY - dragStart.current.y);
+        if (dx > 3 || dy > 3) dragStart.current.moved = true;
+      }
       const rect = container.getBoundingClientRect();
       if (fixedFirstSize != null && onFixedResize) {
-        // Fixed-size mode: compute pixel size
         const newSize = direction === 'horizontal'
           ? ev.clientX - rect.left
           : ev.clientY - rect.top;
@@ -51,11 +64,15 @@ export function SplitPane({ direction, ratio, splitId, onRatioChange, first, sec
       container.classList.remove('pane-dragging');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      // Click without drag → toggle callback
+      if (onDividerClick && !dragStart.current.moved && Date.now() - dragStart.current.t < 350) {
+        onDividerClick();
+      }
     };
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, [direction, splitId, onRatioChange, fixedFirstSize, onFixedResize]);
+  }, [direction, splitId, onRatioChange, fixedFirstSize, onFixedResize, onDividerClick]);
 
   const isHorizontal = direction === 'horizontal';
   const effectiveRatio = hideSecond ? 1 : ratio;
@@ -70,6 +87,9 @@ export function SplitPane({ direction, ratio, splitId, onRatioChange, first, sec
   const secondStyle = secondCollapsed
     ? collapsedStyle
     : { flex: firstCollapsed ? 1 : (fixedFirstSize != null ? 1 : (1 - effectiveRatio)), minWidth: 0, minHeight: 0, overflow: 'hidden' as const };
+
+  const hasGrab = !!onDividerClick;
+  const dividerClass = `pane-split-divider pane-split-divider-${direction}${hasGrab ? ' pane-split-divider-with-grab' : ''}`;
 
   return (
     <div
@@ -89,10 +109,19 @@ export function SplitPane({ direction, ratio, splitId, onRatioChange, first, sec
       {!hideSecond && (
         <>
           <div
-            class={`pane-split-divider pane-split-divider-${direction}`}
+            class={dividerClass}
             onMouseDown={dividerEnabled ? onDividerMouseDown : undefined}
             style={!dividerEnabled ? { cursor: 'default' } : undefined}
-          />
+          >
+            {hasGrab && (
+              <div
+                class={`pane-split-divider-grab pane-split-divider-grab-${direction}`}
+                title="Click to toggle, drag to resize"
+              >
+                <span class="grab-indicator">{dividerGrabIcon || '┃'}</span>
+              </div>
+            )}
+          </div>
           <div class="pane-split-child" style={secondStyle}>
             {second}
           </div>

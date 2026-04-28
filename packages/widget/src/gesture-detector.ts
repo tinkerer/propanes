@@ -75,10 +75,15 @@ export function installShakeGesture(
       lastFireAt = now;
       samples.length = 0;
       const last = { x: e.clientX, y: e.clientY };
+      console.log('[pw-shake] fire', { reversals, total: Math.round(total), x: last.x, y: last.y });
       onShake(last);
     }
   }
 
+  console.log('[pw-shake] install', { windowMs, minLegPx, minTotalPx, minReversals, cooldownMs });
   document.addEventListener('mousemove', onMove, { passive: true });
-  return () => document.removeEventListener('mousemove', onMove);
+  return () => {
+    console.log('[pw-shake] cleanup');
+    document.removeEventListener('mousemove', onMove);
+  };
 }
