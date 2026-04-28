@@ -12566,14 +12566,14 @@ body.pw-isolate {
 }
 
 /* Inline composer at the bottom of the thread side panel — lets the operator
-   reply directly without bouncing back to the main bubble textarea. */
+   reply directly without bouncing back to the main bubble textarea. The
+   composer shares the same background as the panel body so it reads as a
+   continuous surface rather than a separated footer. */
 .cos-thread-panel-composer {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 6px 10px 8px;
-  border-top: 1px solid var(--pw-terminal-border);
-  background: var(--pw-bg-surface);
+  gap: 6px;
+  padding: 6px 10px 10px;
   flex: 0 0 auto;
 }
 .cos-thread-panel-input {
@@ -12582,16 +12582,6 @@ body.pw-isolate {
   min-height: 32px;
   max-height: 160px;
   font: inherit;
-}
-.cos-thread-panel-composer-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-.cos-thread-panel-handoff {
-  font-size: 11px;
-  color: var(--pw-text-muted);
 }
 
 /* InPane drawer wrapper — mirrors cos-learnings-side. */
