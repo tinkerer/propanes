@@ -123,6 +123,7 @@ import { CosThreadRail, type RailStatus } from './CosThreadRail.js';
 import { CosInputToolbar } from './CosInputToolbar.js';
 import { CosTabList } from './CosTabList.js';
 import { CosResizeHandles } from './CosResizeHandles.js';
+import { CosLearningsDrawer, CosThreadDrawer, type CosDrawerStyle } from './CosBubbleDrawers.js';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -1196,16 +1197,7 @@ export function ChiefOfStaffBubble({
     : !!(open && activeAgent && panel && panel.visible && !hasCosTabInTree);
 
   const learningsDrawerWidth = 340;
-  type DrawerStyle = {
-    position: 'fixed';
-    top: number;
-    height: number;
-    left: number;
-    width: number;
-    zIndex: number;
-    side: 'left' | 'right';
-  };
-  let learningsDrawerStyle: DrawerStyle | null = null;
+  let learningsDrawerStyle: CosDrawerStyle | null = null;
   if (showLearnings && shellRect) {
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
     let side: 'left' | 'right' = learningsSide;
@@ -1229,7 +1221,7 @@ export function ChiefOfStaffBubble({
   }
 
   const threadDrawerWidth = 380;
-  let threadDrawerStyle: DrawerStyle | null = null;
+  let threadDrawerStyle: CosDrawerStyle | null = null;
   if (showThreadPanel && shellRect) {
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
     // Default to right; if learnings is open on right, slide thread to left.
@@ -1276,53 +1268,23 @@ export function ChiefOfStaffBubble({
       )}
 
       {shouldRenderShell && activeAgent && inPane && showLearnings && learningsDrawerStyle && (
-        <div
-          class={`cos-learnings-side cos-learnings-side-${learningsDrawerStyle.side}`}
-          style={{
-            position: learningsDrawerStyle.position,
-            top: learningsDrawerStyle.top,
-            left: learningsDrawerStyle.left,
-            width: learningsDrawerStyle.width,
-            height: learningsDrawerStyle.height,
-            zIndex: learningsDrawerStyle.zIndex,
-          }}
-        >
-          <div class="cos-learnings-side-controls">
-            <button
-              type="button"
-              class="cos-link-btn"
-              onClick={() => setLearningsSide(learningsDrawerStyle.side === 'left' ? 'right' : 'left')}
-              title={`Move to ${learningsDrawerStyle.side === 'left' ? 'right' : 'left'}`}
-              aria-label="Flip drawer side"
-            >
-              {learningsDrawerStyle.side === 'left' ? '→' : '←'}
-            </button>
-          </div>
-          <LearningsPanel onClose={() => setShowLearnings(false)} />
-        </div>
+        <CosLearningsDrawer
+          style={learningsDrawerStyle}
+          setLearningsSide={setLearningsSide}
+          onClose={() => setShowLearnings(false)}
+        />
       )}
 
       {shouldRenderShell && activeAgent && inPane && showThreadPanel && threadDrawerStyle && (
-        <div
-          class={`cos-thread-side cos-thread-side-${threadDrawerStyle.side}`}
-          style={{
-            position: threadDrawerStyle.position,
-            top: threadDrawerStyle.top,
-            left: threadDrawerStyle.left,
-            width: threadDrawerStyle.width,
-            height: threadDrawerStyle.height,
-            zIndex: threadDrawerStyle.zIndex,
-          }}
-        >
-          <ThreadPanel
-            agentId={activeAgent.id}
-            showTools={showTools}
-            verbosity={activeAgent.verbosity || DEFAULT_VERBOSITY}
-            onArtifactPopout={handleArtifactPopout}
-            onReply={handleReply}
-            onClose={() => { setShowThreadPanel(false); cosActiveThread.value = null; }}
-          />
-        </div>
+        <CosThreadDrawer
+          style={threadDrawerStyle}
+          agentId={activeAgent.id}
+          showTools={showTools}
+          verbosity={activeAgent.verbosity || DEFAULT_VERBOSITY}
+          onArtifactPopout={handleArtifactPopout}
+          onReply={handleReply}
+          onClose={() => setShowThreadPanel(false)}
+        />
       )}
 
       {shouldRenderShell && activeAgent && (
