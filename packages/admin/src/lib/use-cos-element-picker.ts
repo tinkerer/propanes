@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type RefObject } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
+import type { RefObject } from 'preact';
 import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-picker';
 import type { CosElementRef } from './chief-of-staff.js';
 import { isMobile } from './viewport.js';

@@ -1,5 +1,4 @@
-import type { Ref } from 'preact';
-import type { JSX } from 'preact';
+import type { RefObject, JSX } from 'preact';
 import { WindowMenu } from './PopoutPanelContent.js';
 import { openCosExternally } from '../lib/tab-drag.js';
 import { COS_PANE_TAB_ID } from '../lib/chief-of-staff.js';
@@ -32,7 +31,7 @@ export function CosBubbleWindowControls({
   isMinimized: boolean;
   menuOpen: boolean;
   setMenuOpen: (v: boolean | ((prev: boolean) => boolean)) => void;
-  menuButtonRef: Ref<HTMLButtonElement>;
+  menuButtonRef: RefObject<HTMLButtonElement>;
   onClosePanel: () => void;
 }) {
   function onHamburgerMouseDown(e: JSX.TargetedMouseEvent<HTMLButtonElement>) {
