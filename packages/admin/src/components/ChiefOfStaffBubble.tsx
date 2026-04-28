@@ -38,7 +38,6 @@ import { layoutTree as layoutTreeSignal, findLeafWithTab, setFocusedLeaf } from 
 import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-picker';
 import { captureScreenshot } from '@propanes/widget/screenshot';
 import { ImageEditor } from '@propanes/widget/image-editor';
-import { VoiceRecorder } from '@propanes/widget/voice-recorder';
 import {
   popoutPanels,
   persistPopoutState,
@@ -98,6 +97,7 @@ import {
 } from '../lib/cos-drafts.js';
 import { extractCosReply, stripCosReplyMarkers } from '../lib/cos-reply-tags.js';
 import { useCosSearch } from '../lib/use-cos-search.js';
+import { useCosVoice } from '../lib/use-cos-voice.js';
 import {
   fetchFeedbackTitle,
   getCachedFeedbackTitle,
@@ -222,14 +222,6 @@ export function ChiefOfStaffBubble({
   const [pickerMenuPos, setPickerMenuPos] = useState<{ top: number; left: number } | null>(null);
   const cameraGroupRef = useRef<HTMLDivElement | null>(null);
   const pickerGroupRef = useRef<HTMLDivElement | null>(null);
-  const [micRecording, setMicRecording] = useState(false);
-  const [micElapsed, setMicElapsed] = useState(0);
-  const [micInterim, setMicInterim] = useState('');
-  const voiceRecorderRef = useRef<VoiceRecorder | null>(null);
-  const micTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const micStartRef = useRef<number>(0);
-  const micInputBaseRef = useRef<string>('');
-  const micFinalSegmentsRef = useRef<string[]>([]);
   const [screenshotExcludeWidget, setScreenshotExcludeWidget] = useState<boolean>(() => {
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-shot-excl-widget') : null;
     return v === null ? true : v === '1';
@@ -1017,100 +1009,16 @@ export function ChiefOfStaffBubble({
     }
   }
 
-  function computeMicBridgeUrl(): string {
-    const originUrl = new URL(window.location.origin);
-    originUrl.hostname = 'localhost';
-    return `${originUrl.origin}/api/v1/local/mic-bridge`;
-  }
-
-  function micErrorMessage(err: unknown): string {
-    const message = (err as any)?.message ? String((err as any).message) : '';
-    const code = (err as any)?.code ? String((err as any).code) : '';
-    const name = (err as any)?.name ? String((err as any).name) : '';
-    if (code === 'INSECURE_CONTEXT') return 'Microphone requires HTTPS (or localhost)';
-    if (code === 'POPUP_BLOCKED') return 'Mic bridge popup was blocked — allow popups for this site';
-    if (code === 'NOT_FOUND' || name === 'NotFoundError') return 'No microphone found';
-    if (name === 'NotAllowedError') return 'Microphone permission denied';
-    return message || 'Could not start microphone';
-  }
-
-  async function toggleMicRecord() {
-    if (micRecording) {
-      const rec = voiceRecorderRef.current;
-      if (micTimerRef.current) {
-        clearInterval(micTimerRef.current);
-        micTimerRef.current = null;
-      }
-      setMicRecording(false);
-      setMicInterim('');
-      if (!rec) return;
-      try {
-        const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
-        const result = insecure && rec.usingMicBridge
-          ? await rec.stopViaIframe()
-          : await rec.stop();
-        const finalText = result.transcript
-          .filter((t) => t.isFinal)
-          .map((t) => t.text.trim())
-          .filter(Boolean)
-          .join(' ')
-          .trim();
-        if (finalText) {
-          const base = micInputBaseRef.current;
-          const sep = base && !/\s$/.test(base) ? ' ' : '';
-          applyInput(base + sep + finalText);
-          inputRef.current?.focus();
-        }
-      } catch (err: any) {
-        chiefOfStaffError.value = micErrorMessage(err);
-      }
-      return;
-    }
-
-    chiefOfStaffError.value = '';
-    micInputBaseRef.current = input;
-    micFinalSegmentsRef.current = [];
-    const rec = voiceRecorderRef.current ?? (voiceRecorderRef.current = new VoiceRecorder());
-    rec.onTranscript = (seg) => {
-      if (seg.isFinal) {
-        micFinalSegmentsRef.current.push(seg.text.trim());
-        setMicInterim('');
-      } else {
-        setMicInterim(seg.text);
-      }
-    };
-    try {
-      const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
-      if (insecure) {
-        await rec.startViaIframe(computeMicBridgeUrl());
-      } else {
-        await rec.start();
-      }
-      micStartRef.current = Date.now();
-      setMicElapsed(0);
-      setMicRecording(true);
-      micTimerRef.current = setInterval(() => {
-        setMicElapsed(Math.floor((Date.now() - micStartRef.current) / 1000));
-      }, 500);
-    } catch (err: any) {
-      chiefOfStaffError.value = micErrorMessage(err);
-    }
-  }
-
-  useEffect(() => {
-    return () => {
-      if (micTimerRef.current) {
-        clearInterval(micTimerRef.current);
-        micTimerRef.current = null;
-      }
-      const rec = voiceRecorderRef.current;
-      if (rec?.recording) {
-        const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
-        if (insecure && rec.usingMicBridge) void rec.stopViaIframe().catch(() => {});
-        else void rec.stop().catch(() => {});
-      }
-    };
-  }, []);
+  const {
+    recording: micRecording,
+    elapsed: micElapsed,
+    interim: micInterim,
+    toggleRecord: toggleMicRecord,
+  } = useCosVoice({
+    getInputBase: () => input,
+    onAppendInput: (next) => applyInput(next),
+    focusInput: () => inputRef.current?.focus(),
+  });
 
   function stopElementPicker() {
     if (pickerCleanupRef.current) {
