@@ -118,6 +118,7 @@ import { ThreadPanel } from './CosThreadPanel.js';
 import { AttachmentEditorModal } from './CosAttachmentEditor.js';
 import { CosAgentSettings } from './CosAgentSettings.js';
 import { CosScrollToolbar } from './CosScrollToolbar.js';
+import { CosThreadRail, type RailStatus } from './CosThreadRail.js';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -355,7 +356,6 @@ export function ChiefOfStaffBubble({
     );
   }
 
-  type RailStatus = 'streaming' | 'unread' | 'failed' | 'idle' | 'gc' | 'resolved' | 'archived';
   function railStatusFor(t: Thread): RailStatus {
     const tid = threadServerIdFor(t);
     const meta = tid ? getThreadMeta(tid) : null;
@@ -1760,96 +1760,15 @@ export function ChiefOfStaffBubble({
 
                     <div class="cos-scroll-wrap">
                     {hasMultipleThreads && (
-                      <nav class="cos-thread-rail" aria-label="Threads">
-                        {visibleThreads.map((t, i) => {
-                          const unread = unreadByThread.get(t.userIdx);
-                          const anchor = threadAnchorIdx(t);
-                          if (anchor === null) return null;
-                          const title = threadTitle(t);
-                          const label = title.length > 64 ? title.slice(0, 64) + '…' : title;
-                          const num = i + 1;
-                          const status = railStatusFor(t);
-                          const tid = threadServerIdFor(t);
-                          const isResolved = status === 'resolved';
-                          const isArchived = status === 'archived';
-                          const statusLabel: Record<RailStatus, string> = {
-                            streaming: 'thinking',
-                            unread: 'new reply',
-                            failed: 'failed',
-                            idle: 'idle',
-                            gc: 'no session',
-                            resolved: 'resolved',
-                            archived: 'archived',
-                          };
-                          const fullTitle = unread
-                            ? `${label} — ${unread.count} new (${statusLabel[status]})`
-                            : `${label} (${statusLabel[status]})`;
-                          return (
-                            <div
-                              class="cos-thread-rail-item"
-                              key={t.userIdx ?? `pre-${i}`}
-                            >
-                              <button
-                                type="button"
-                                class={`cos-thread-rail-btn cos-thread-rail-btn-${status}${unread ? ' cos-thread-rail-btn-unread' : ''}`}
-                                data-status={status}
-                                onClick={() => jumpToThread(t)}
-                                title={fullTitle}
-                                aria-label={`Jump to thread ${num}, ${statusLabel[status]}${unread ? `, ${unread.count} new` : ''}`}
-                              >
-                                <span class="cos-thread-rail-status" aria-hidden="true" />
-                                <span class="cos-thread-rail-num">{num}</span>
-                                {unread && (
-                                  <span class="cos-thread-rail-badge" aria-hidden="true">
-                                    {unread.count > 9 ? '9+' : unread.count}
-                                  </span>
-                                )}
-                              </button>
-                              {tid && (
-                                <>
-                                  <button
-                                    type="button"
-                                    class={`cos-thread-rail-resolve${isResolved || isArchived ? ' cos-thread-rail-resolve-active' : ''}`}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      if (isArchived) void setThreadArchived(tid, false);
-                                      else void setThreadResolved(tid, !isResolved);
-                                    }}
-                                    title={isArchived ? 'Reopen archived thread' : (isResolved ? 'Reopen thread' : 'Mark thread resolved')}
-                                    aria-label={isArchived ? `Reopen archived thread ${num}` : (isResolved ? `Reopen thread ${num}` : `Resolve thread ${num}`)}
-                                  >
-                                    {isResolved || isArchived ? (
-                                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true">
-                                        <path d="M3 12h18" />
-                                      </svg>
-                                    ) : (
-                                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                        <polyline points="20 6 9 17 4 12" />
-                                      </svg>
-                                    )}
-                                  </button>
-                                  {!isArchived && (
-                                    <button
-                                      type="button"
-                                      class="cos-thread-rail-archive"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        void setThreadArchived(tid, true);
-                                      }}
-                                      title="Archive thread (hides from triage and from Resolved view)"
-                                      aria-label={`Archive thread ${num}`}
-                                    >
-                                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                        <path d="M3 7h18M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7M9 11h6" />
-                                      </svg>
-                                    </button>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </nav>
+                      <CosThreadRail
+                        threads={visibleThreads}
+                        unreadByThread={unreadByThread}
+                        threadAnchorIdx={threadAnchorIdx}
+                        threadTitle={threadTitle}
+                        threadServerIdFor={threadServerIdFor}
+                        railStatusFor={railStatusFor}
+                        onJumpToThread={jumpToThread}
+                      />
                     )}
                     <div class="cos-scroll-col">
                     <div class="cos-scroll" ref={setScrollEl}>
