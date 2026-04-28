@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import { eq, desc, and, inArray, like, or, sql } from 'drizzle-orm';
-import type { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { resolve as pathResolve, join as pathJoin } from 'node:path';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync, statSync } from 'node:fs';
@@ -36,8 +35,18 @@ import {
   subscribeAgentEvents,
   publishBusEvent,
 } from './cos-event-bus.js';
+import {
+  type ActiveSession,
+  activeSessions,
+  inFlightByThread,
+  killProc,
+  serializeSession,
+  releaseAllLocks,
+  cosLocksRoutes,
+} from './cos-locks.js';
 
 export const chiefOfStaffRoutes = new Hono();
+chiefOfStaffRoutes.route('/', cosLocksRoutes);
 
 
 function resolveRepoRoot(): string {
@@ -254,60 +263,6 @@ function runCosTurnConsumer(params: {
       }
     })();
   });
-}
-
-type ActiveSession = {
-  requestId: string;
-  sessionId: string;
-  text: string;
-  startedAt: number;
-  lockKeys: Set<string>;
-};
-
-const activeSessions = new Map<string, ActiveSession>();
-const locks = new Map<string, { owner: string; since: number }>();
-
-// Track in-flight processes by threadId so they can be interrupted.
-// `cancelled` records that we killed the proc on purpose (interrupt, supersede,
-// client abort) so the close handler can distinguish a clean cancel from a
-// real crash — SIGTERM surfaces as exit code 143 and should not surface as
-// "Send failed" in the UI.
-type InFlightEntry = { proc: ReturnType<typeof spawn>; cancelled: boolean };
-const inFlightByThread = new Map<string, InFlightEntry>();
-
-function killProc(entry: InFlightEntry): void {
-  entry.cancelled = true;
-  const pid = entry.proc.pid;
-  if (!pid) return;
-  // Kill the entire process group so subprocesses (tool calls) also die
-  try { process.kill(-pid, 'SIGTERM'); } catch { /* already dead */ }
-  // SIGKILL fallback after 3s in case SIGTERM is ignored
-  setTimeout(() => { try { process.kill(-pid, 'SIGKILL'); } catch { /* already dead */ } }, 3000);
-}
-
-function serializeSession(s: ActiveSession) {
-  return {
-    requestId: s.requestId,
-    sessionId: s.sessionId,
-    text: s.text,
-    startedAt: s.startedAt,
-    lockKeys: Array.from(s.lockKeys),
-  };
-}
-
-function releaseAllLocks(requestId: string): void {
-  const session = activeSessions.get(requestId);
-  if (session) {
-    for (const key of session.lockKeys) {
-      const held = locks.get(key);
-      if (held && held.owner === requestId) locks.delete(key);
-    }
-    session.lockKeys.clear();
-  }
-  // Also sweep in case of drift
-  for (const [key, held] of locks) {
-    if (held.owner === requestId) locks.delete(key);
-  }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -764,13 +719,8 @@ chiefOfStaffRoutes.post('/chief-of-staff/threads/:id/interrupt', async (c) => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// Session management routes (pre-existing)
+// Status / live event routes
 // ────────────────────────────────────────────────────────────────────────────
-
-chiefOfStaffRoutes.get('/chief-of-staff/sessions', (c) => {
-  const sessions = Array.from(activeSessions.values()).map(serializeSession);
-  return c.json({ sessions });
-});
 
 // Query thread status without invoking the LLM. Answers "is the bot working?"
 // and, when the turn is running through the session-service (persistent-
@@ -973,42 +923,6 @@ chiefOfStaffRoutes.get('/chief-of-staff/agents/:agentId/stream', (c) => {
       'X-Accel-Buffering': 'no',
     },
   });
-});
-
-chiefOfStaffRoutes.post('/chief-of-staff/lock', async (c) => {
-  let body: { requestId?: string; key?: string };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ error: 'Invalid JSON body' }, 400);
-  }
-  const requestId = (body.requestId || '').trim();
-  const key = (body.key || '').trim();
-  if (!requestId || !key) return c.json({ error: 'requestId and key are required' }, 400);
-
-  const existing = locks.get(key);
-  if (existing && existing.owner !== requestId) {
-    return c.json({ granted: false, heldBy: existing.owner, heldSince: existing.since });
-  }
-  const now = Date.now();
-  if (!existing) locks.set(key, { owner: requestId, since: now });
-  const session = activeSessions.get(requestId);
-  if (session) session.lockKeys.add(key);
-  return c.json({ granted: true, heldSince: (locks.get(key) || { since: now }).since });
-});
-
-chiefOfStaffRoutes.delete('/chief-of-staff/lock/:requestId/:key', (c) => {
-  const requestId = c.req.param('requestId');
-  const key = c.req.param('key');
-  const held = locks.get(key);
-  if (!held) return c.json({ released: false, reason: 'not held' });
-  if (held.owner !== requestId) {
-    return c.json({ released: false, reason: 'not owner', heldBy: held.owner }, 403);
-  }
-  locks.delete(key);
-  const session = activeSessions.get(requestId);
-  if (session) session.lockKeys.delete(key);
-  return c.json({ released: true });
 });
 
 // ────────────────────────────────────────────────────────────────────────────
