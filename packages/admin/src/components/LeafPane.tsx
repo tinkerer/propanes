@@ -507,6 +507,7 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   }
 
   const isJsonl = sid.startsWith('jsonl:');
+  const isSummary = sid.startsWith('summary:');
   const isFeedback = sid.startsWith('feedback:');
   const isIframe = sid.startsWith('iframe:');
   const isTerminal = sid.startsWith('terminal:');
@@ -515,7 +516,7 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   const isFile = sid.startsWith('file:');
   const isWiggumRuns = sid.startsWith('wiggum-runs:');
   const isArtifact = sid.startsWith('artifact:');
-  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact;
+  const isCompanion = isJsonl || isSummary || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact;
   const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
   const sess = (isIsolate || isUrl || isFile || isWiggumRuns || isArtifact) ? null : sessionMap.get(realSid);
 
@@ -523,6 +524,7 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (customLabel) return customLabel;
 
   if (isJsonl) return `JSONL: ${sess?.feedbackTitle || sess?.agentName || realSid.slice(-6)}`;
+  if (isSummary) return `Summary: ${sess?.feedbackTitle || sess?.agentName || realSid.slice(-6)}`;
   if (isFeedback) return `FB: ${sess?.feedbackTitle || realSid.slice(-6)}`;
   if (isIframe) return `Page: ${realSid.slice(-6)}`;
   if (isTerminal) {
@@ -865,6 +867,8 @@ export function LeafPane({ leaf }: LeafPaneProps) {
         if (sess?.feedbackId) navigator.clipboard.writeText(sess.feedbackId);
       } else if (key === 'l') {
         if (sess?.jsonlPath) toggleCompanion(menuSessionId, 'jsonl');
+      } else if (key === 'y') {
+        if (sess?.jsonlPath) toggleCompanion(menuSessionId, 'summary');
       } else if (key === 'f') {
         if (sess?.feedbackId) toggleCompanion(menuSessionId, 'feedback');
       } else if (key === 'i') {
@@ -1130,6 +1134,7 @@ export function LeafPane({ leaf }: LeafPaneProps) {
           {leaf.tabs.map((sid) => {
             const isView = sid.startsWith('view:');
             const isJsonl = sid.startsWith('jsonl:');
+            const isSummary = sid.startsWith('summary:');
             const isFeedback = sid.startsWith('feedback:');
             const isFb = sid.startsWith('fb:');
             const isIframe = sid.startsWith('iframe:');
@@ -1141,7 +1146,7 @@ export function LeafPane({ leaf }: LeafPaneProps) {
             const isWiggumRuns = sid.startsWith('wiggum-runs:');
             const isArtifact = sid.startsWith('artifact:');
             const isCos = sid.startsWith('cos:');
-            const isCompanion = isView || isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isSettings || isWiggumRuns || isArtifact || isCos;
+            const isCompanion = isView || isJsonl || isSummary || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isSettings || isWiggumRuns || isArtifact || isCos;
             const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
             const isActive = sid === leaf.activeTabId;
             const isExited = exited.has(realSid);
@@ -1206,6 +1211,7 @@ export function LeafPane({ leaf }: LeafPaneProps) {
                 {(isCompanion || isFb) && !isView && <span class="companion-icon">{
                   (isFeedback || isFb) ? '\u{1F4AC}' :
                   isJsonl ? '\u{1F4DC}' :
+                  isSummary ? '\u{1F4CA}' :
                   isIframe ? '\u{1F310}' :
                   isTerminal ? '\u{25B8}' :
                   isUrl ? '\u{1F517}' :

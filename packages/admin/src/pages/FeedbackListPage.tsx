@@ -28,6 +28,55 @@ function getItemSessionState(item: any): string | null {
   return sessionInputStates.value.get(item.latestSessionId) || 'active';
 }
 
+const EXPANDED_BRAINSTORMS_KEY = 'pw-feedback-expanded-brainstorms';
+
+function loadExpandedBrainstorms(): Set<string> {
+  try {
+    const raw = localStorage.getItem(EXPANDED_BRAINSTORMS_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? new Set(arr) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveExpandedBrainstorms(set: Set<string>) {
+  try { localStorage.setItem(EXPANDED_BRAINSTORMS_KEY, JSON.stringify([...set])); } catch { /* ignore */ }
+}
+
+type RowEntry =
+  | { kind: 'single'; item: any }
+  | { kind: 'brainstorm'; voiceSessionId: string; items: any[] };
+
+function buildRowEntries(items: any[]): RowEntry[] {
+  const groupIndex = new Map<string, number>();
+  const entries: RowEntry[] = [];
+  for (const item of items) {
+    const vsid = item?.data?.voiceSessionId;
+    if (vsid && typeof vsid === 'string') {
+      const idx = groupIndex.get(vsid);
+      if (idx !== undefined) {
+        (entries[idx] as { kind: 'brainstorm'; voiceSessionId: string; items: any[] }).items.push(item);
+      } else {
+        groupIndex.set(vsid, entries.length);
+        entries.push({ kind: 'brainstorm', voiceSessionId: vsid, items: [item] });
+      }
+    } else {
+      entries.push({ kind: 'single', item });
+    }
+  }
+  return entries;
+}
+
+function brainstormSummary(items: any[]): string {
+  for (const item of items) {
+    const s = item?.data?.conversationSummary;
+    if (typeof s === 'string' && s.trim()) return s.trim();
+  }
+  return '';
+}
+
 function StatusCell({ item }: { item: any }) {
   const isDispatched = item.status === 'dispatched';
   const dispatchStatus = item.dispatchStatus;
@@ -112,6 +161,15 @@ export function FeedbackListPage({ appId }: { appId: string }) {
   const sortMode = useSignal<string>('newest');
   const filterTag = useSignal('');
   const availableTags = useSignal<{ tag: string; count: number }[]>([]);
+  const expandedBrainstorms = useSignal<Set<string>>(loadExpandedBrainstorms());
+
+  function toggleBrainstorm(voiceSessionId: string) {
+    const next = new Set(expandedBrainstorms.value);
+    if (next.has(voiceSessionId)) next.delete(voiceSessionId);
+    else next.add(voiceSessionId);
+    expandedBrainstorms.value = next;
+    saveExpandedBrainstorms(next);
+  }
 
   function applySortMode(list: any[]): any[] {
     const mode = sortMode.value;
@@ -600,71 +658,128 @@ export function FeedbackListPage({ appId }: { appId: string }) {
             </tr>
           </thead>
           <tbody>
-            {items.value.map((item) => (
-              <tr key={item.id}>
-                <td>
-                  <input
-                    type="checkbox"
-                    class="checkbox"
-                    checked={selected.value.has(item.id)}
-                    onChange={() => toggleSelect(item.id)}
-                  />
-                </td>
-                <td>
-                  <code
-                    style="font-size:11px;color:var(--pw-text-faint);background:var(--pw-code-block-bg);padding:1px 5px;border-radius:3px;cursor:pointer"
-                    title={`Click to copy: ${item.id}`}
-                    onClick={(e) => { e.stopPropagation(); copyWithTooltip(item.id, e as any); }}
-                  >
-                    {item.id.slice(-6)}
-                  </code>
-                </td>
-                <td style="max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-                  <a
-                    href={`#${basePath}/${item.id}`}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      if (item.title) {
-                        feedbackTitleCache.value = { ...feedbackTitleCache.value, [item.id]: item.title };
-                      }
-                      if (isMobile.value) {
-                        navigate(`${basePath}/${item.id}`);
-                      } else {
-                        openFeedbackItem(item.id);
-                      }
-                    }}
-                    style="color:var(--pw-primary-text);text-decoration:none;font-weight:500"
-                    title={item.title}
-                  >
-                    {item.title}
-                  </a>
-                </td>
-                <td>
-                  <span class={`badge badge-${item.type}`}>{item.type.replace(/_/g, ' ')}</span>
-                </td>
-                <td>
-                  <StatusCell item={item} />
-                </td>
-                <td>
-                  <div class="tags">
-                    {(item.tags || []).map((t: string) => (
-                      <span
-                        class="tag"
-                        style="cursor:pointer"
-                        onClick={(e) => { e.stopPropagation(); filterTag.value = t; page.value = 1; }}
-                        title={`Filter by tag: ${t}`}
-                      >
-                        {t}
-                      </span>
-                    ))}
-                  </div>
-                </td>
-                <td style="white-space:nowrap;color:var(--pw-text-muted);font-size:13px">{formatDate(item.createdAt)}</td>
-                <td>
-                  <ActionCell item={item} />
-                </td>
-              </tr>
-            ))}
+            {(() => {
+              const renderItemRow = (item: any, opts: { indent?: boolean } = {}) => (
+                <tr key={item.id} class={opts.indent ? 'feedback-row-brainstorm-child' : undefined}>
+                  <td>
+                    <input
+                      type="checkbox"
+                      class="checkbox"
+                      checked={selected.value.has(item.id)}
+                      onChange={() => toggleSelect(item.id)}
+                    />
+                  </td>
+                  <td>
+                    <code
+                      style="font-size:11px;color:var(--pw-text-faint);background:var(--pw-code-block-bg);padding:1px 5px;border-radius:3px;cursor:pointer"
+                      title={`Click to copy: ${item.id}`}
+                      onClick={(e) => { e.stopPropagation(); copyWithTooltip(item.id, e as any); }}
+                    >
+                      {item.id.slice(-6)}
+                    </code>
+                  </td>
+                  <td style="max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                    {opts.indent && <span class="feedback-brainstorm-indent" aria-hidden="true" />}
+                    <a
+                      href={`#${basePath}/${item.id}`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (item.title) {
+                          feedbackTitleCache.value = { ...feedbackTitleCache.value, [item.id]: item.title };
+                        }
+                        if (isMobile.value) {
+                          navigate(`${basePath}/${item.id}`);
+                        } else {
+                          openFeedbackItem(item.id);
+                        }
+                      }}
+                      style="color:var(--pw-primary-text);text-decoration:none;font-weight:500"
+                      title={item.title}
+                    >
+                      {item.title}
+                    </a>
+                  </td>
+                  <td>
+                    <span class={`badge badge-${item.type}`}>{item.type.replace(/_/g, ' ')}</span>
+                  </td>
+                  <td>
+                    <StatusCell item={item} />
+                  </td>
+                  <td>
+                    <div class="tags">
+                      {(item.tags || []).map((t: string) => (
+                        <span
+                          class="tag"
+                          style="cursor:pointer"
+                          onClick={(e) => { e.stopPropagation(); filterTag.value = t; page.value = 1; }}
+                          title={`Filter by tag: ${t}`}
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                  <td style="white-space:nowrap;color:var(--pw-text-muted);font-size:13px">{formatDate(item.createdAt)}</td>
+                  <td>
+                    <ActionCell item={item} />
+                  </td>
+                </tr>
+              );
+
+              const renderBrainstormHeader = (vsid: string, group: any[]) => {
+                const expanded = expandedBrainstorms.value.has(vsid);
+                const summary = brainstormSummary(group);
+                const runningCount = group.filter((i) => i.latestSessionStatus === 'running').length;
+                const earliest = group.reduce<string | null>((acc, it) => {
+                  if (!acc) return it.createdAt;
+                  return new Date(it.createdAt) < new Date(acc) ? it.createdAt : acc;
+                }, null);
+                return (
+                  <tr key={`bs-${vsid}`} class="feedback-row-brainstorm-header" onClick={() => toggleBrainstorm(vsid)}>
+                    <td colSpan={8}>
+                      <div class="feedback-brainstorm-header-inner">
+                        <button
+                          class="session-swarm-toggle"
+                          onClick={(e) => { e.stopPropagation(); toggleBrainstorm(vsid); }}
+                          title={expanded ? 'Collapse' : 'Expand'}
+                        >
+                          {expanded ? '▾' : '▸'}
+                        </button>
+                        <span class="session-orchestrator-badge feedback-brainstorm-badge">Brainstorm</span>
+                        <span class="feedback-brainstorm-label" title={summary || undefined}>
+                          {summary || `Voice session ${vsid.slice(-8)}`}
+                        </span>
+                        <span class="feedback-brainstorm-count">
+                          {group.length} ticket{group.length === 1 ? '' : 's'}
+                          {runningCount > 0 ? ` · ${runningCount} running` : ''}
+                        </span>
+                        {earliest && (
+                          <span class="feedback-brainstorm-time" title={new Date(earliest).toLocaleString()}>
+                            {formatDate(earliest)}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              };
+
+              const entries = buildRowEntries(items.value);
+              const out: any[] = [];
+              for (const entry of entries) {
+                if (entry.kind === 'single') {
+                  out.push(renderItemRow(entry.item));
+                } else {
+                  out.push(renderBrainstormHeader(entry.voiceSessionId, entry.items));
+                  if (expandedBrainstorms.value.has(entry.voiceSessionId)) {
+                    for (const child of entry.items) {
+                      out.push(renderItemRow(child, { indent: true }));
+                    }
+                  }
+                }
+              }
+              return out;
+            })()}
             {items.value.length === 0 && !loading.value && (
               <tr>
                 <td colSpan={8} style="text-align:center;padding:32px;color:#94a3b8">

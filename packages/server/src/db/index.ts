@@ -192,6 +192,16 @@ export function runMigrations() {
     `ALTER TABLE cos_threads ADD COLUMN turn_start_seq INTEGER`,
     `ALTER TABLE cos_threads ADD COLUMN turn_user_text TEXT`,
     `ALTER TABLE cos_threads ADD COLUMN turn_request_id TEXT`,
+    // cos_drafts gained a thread_id column to support per-(agent, app, thread)
+    // scopes (reply-in-thread vs. new-thread). Existing rows default to ''
+    // (the new-thread scope) which preserves prior behavior.
+    `ALTER TABLE cos_drafts ADD COLUMN thread_id TEXT NOT NULL DEFAULT ''`,
+    `DROP INDEX IF EXISTS idx_cos_drafts_agent_app`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_cos_drafts_agent_app_thread ON cos_drafts(agent_id, app_id, thread_id)`,
+    `ALTER TABLE cos_threads ADD COLUMN resolved_at INTEGER`,
+    `CREATE INDEX IF NOT EXISTS idx_cos_threads_resolved ON cos_threads(resolved_at)`,
+    `ALTER TABLE cos_threads ADD COLUMN archived_at INTEGER`,
+    `CREATE INDEX IF NOT EXISTS idx_cos_threads_archived ON cos_threads(archived_at)`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after
@@ -629,6 +639,19 @@ export function runMigrations() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_cos_messages_thread ON cos_messages(thread_id);
+
+    CREATE TABLE IF NOT EXISTS cos_drafts (
+      id TEXT PRIMARY KEY,
+      agent_id TEXT NOT NULL,
+      app_id TEXT NOT NULL DEFAULT '',
+      thread_id TEXT NOT NULL DEFAULT '',
+      text TEXT NOT NULL DEFAULT '',
+      updated_at INTEGER NOT NULL
+    );
+    -- The unique index on (agent_id, app_id, thread_id) is created in the
+    -- alterStatements pass below, after the ADD COLUMN runs for legacy DBs
+    -- that pre-date thread_id (otherwise the index would reference a column
+    -- that doesn't exist yet on disk).
   `);
 
   // Seed default tmux config from tmux-pw.conf if table is empty or default has empty content

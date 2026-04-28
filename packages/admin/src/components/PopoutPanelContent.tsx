@@ -50,6 +50,7 @@ export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (sid.startsWith('view:git:')) return 'Git Changes';
   if (sid.startsWith('view:')) return sid.slice(5);
   const isJsonl = sid.startsWith('jsonl:');
+  const isSummary = sid.startsWith('summary:');
   const isFeedback = sid.startsWith('feedback:');
   const isIframe = sid.startsWith('iframe:');
   const isTerminal = sid.startsWith('terminal:');
@@ -58,12 +59,13 @@ export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
   const isFile = sid.startsWith('file:');
   const isWiggumRuns = sid.startsWith('wiggum-runs:');
   const isArtifact = sid.startsWith('artifact:');
-  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact;
+  const isCompanion = isJsonl || isSummary || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact;
   const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
   const custom = getSessionLabel(sid);
   if (custom) return custom;
   const s = (isIsolate || isUrl || isFile || isWiggumRuns || isArtifact) ? null : sessionMap.get(realSid);
   if (isJsonl) return `JSONL: ${s?.feedbackTitle || s?.agentName || realSid.slice(-6)}`;
+  if (isSummary) return `Summary: ${s?.feedbackTitle || s?.agentName || realSid.slice(-6)}`;
   if (isFeedback) return `Ticket: ${s?.feedbackTitle || realSid.slice(-6)}`;
   if (isIframe) return `Page: ${realSid.slice(-6)}`;
   if (isTerminal) { const ts = getTerminalCompanion(realSid); if (ts === '__loading__') return 'Term: loading...'; const tSess = ts ? sessionMap.get(ts) : null; return `Term: ${tSess?.paneTitle || ts?.slice(-6) || realSid.slice(-6)}`; }
@@ -89,7 +91,7 @@ export function companionCopyId(sid: string, sessionMap: Map<string, any>): stri
     const ts = getTerminalCompanion(realSid);
     return ts && ts !== '__loading__' ? ts : null;
   }
-  if (sid.startsWith('jsonl:') || sid.startsWith('feedback:') || sid.startsWith('iframe:')) {
+  if (sid.startsWith('jsonl:') || sid.startsWith('summary:') || sid.startsWith('feedback:') || sid.startsWith('iframe:')) {
     return sid.slice(sid.indexOf(':') + 1);
   }
   return null;

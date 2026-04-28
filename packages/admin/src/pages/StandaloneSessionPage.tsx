@@ -31,6 +31,7 @@ function isCompanionTab(sid: string): boolean {
     || sid.startsWith('settings:')
     || sid.startsWith('cos:')
     || sid.startsWith('wiggum-runs:')
+    || sid.startsWith('summary:')
     || sid.startsWith('artifact:');
 }
 

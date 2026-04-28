@@ -313,7 +313,7 @@ export function findCompanionSibling(sessionLeafId: string, _sessionId: string):
   if (!parent) return null;
   const sibling = parent.children[0].id === sessionLeafId ? parent.children[1] : parent.children[0];
   if (sibling.type !== 'leaf') return null;
-  const companionPrefixes = ['jsonl:', 'feedback:', 'iframe:', 'terminal:', 'isolate:', 'url:', 'file:', 'wiggum-runs:', 'artifact:'];
+  const companionPrefixes = ['jsonl:', 'summary:', 'feedback:', 'iframe:', 'terminal:', 'isolate:', 'url:', 'file:', 'wiggum-runs:', 'artifact:'];
   const allTabsAreCompanions = sibling.tabs.every(t =>
     companionPrefixes.some(prefix => t.startsWith(prefix))
   );

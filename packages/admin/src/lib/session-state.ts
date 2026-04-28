@@ -125,6 +125,16 @@ export function getViewMode(sessionId: string): ViewMode {
     }
     return explicit;
   }
+  // Dead sessions default to structured view: the raw xterm is mostly stale
+  // escape sequences, while the JSONL conversation is what an operator opens
+  // a finished session to read.
+  const sess = allSessions.value.find((s: any) => s.id === sessionId);
+  const status = sess?.status;
+  const isDead = exitedSessions.value.has(sessionId)
+    || status === 'completed'
+    || status === 'failed'
+    || status === 'killed';
+  if (isDead && sess?.jsonlPath) return 'structured';
   return 'terminal';
 }
 

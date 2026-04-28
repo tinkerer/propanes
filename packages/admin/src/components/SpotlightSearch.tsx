@@ -3,14 +3,25 @@ import { applications, navigate } from '../lib/state.js';
 import { allSessions, openSession, getSessionLabel, loadAllSessions } from '../lib/sessions.js';
 import { recentResults, type RecentResult } from '../lib/settings.js';
 import { api } from '../lib/api.js';
+import {
+  chiefOfStaffAgents,
+  chiefOfStaffActiveId,
+  chiefOfStaffOpen,
+} from '../lib/chief-of-staff.js';
 
 interface SearchResult {
-  type: 'application' | 'feedback' | 'session';
+  type: 'application' | 'feedback' | 'session' | 'cos-message';
   id: string;
   title: string;
   subtitle?: string;
+  snippet?: string;
   icon: string;
   route: string;
+  cos?: {
+    agentId: string;
+    threadId: string;
+    messageId: string;
+  };
 }
 
 interface SessionSearchResult {
@@ -125,10 +136,13 @@ export function SpotlightSearch({ onClose }: Props) {
     debounceRef.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const params: Record<string, string | number> = { search: q, limit: 10 };
-        const res = await api.getFeedback(params);
+        const [feedbackRes, cosRes] = await Promise.all([
+          api.getFeedback({ search: q, limit: 10 }).catch(() => ({ items: [] as any[] })),
+          api.searchCosMessages({ q, limit: 15 }).catch(() => ({ results: [] as any[] })),
+        ]);
+        const agentNameById = new Map(chiefOfStaffAgents.value.map((a) => [a.id, a.name]));
         setResults((prev) => {
-          const feedbackResults: SearchResult[] = res.items.map((item: any) => ({
+          const feedbackResults: SearchResult[] = feedbackRes.items.map((item: any) => ({
             type: 'feedback' as const,
             id: item.id,
             title: item.title || 'Untitled ticket',
@@ -136,8 +150,22 @@ export function SpotlightSearch({ onClose }: Props) {
             icon: '\u{1F4CB}',
             route: `/app/${item.appId || '__unlinked__'}/tickets/${item.id}`,
           }));
-          const nonFeedback = prev.filter((r) => r.type !== 'feedback');
-          return [...nonFeedback, ...feedbackResults];
+          const cosResults: SearchResult[] = cosRes.results.map((m) => {
+            const agentName = agentNameById.get(m.agentId) || m.agentId.slice(0, 8);
+            const roleLabel = m.role === 'user' ? 'You' : m.role === 'assistant' ? agentName : 'system';
+            return {
+              type: 'cos-message' as const,
+              id: m.messageId,
+              title: `${roleLabel} · ${m.threadName || 'Thread'}`,
+              subtitle: new Date(m.createdAt).toLocaleString(),
+              snippet: m.snippet,
+              icon: m.role === 'assistant' ? '\u{1F4AC}' : m.role === 'user' ? '\u{1F464}' : '⚙️',
+              route: '',
+              cos: { agentId: m.agentId, threadId: m.threadId, messageId: m.messageId },
+            };
+          });
+          const carryOver = prev.filter((r) => r.type !== 'feedback' && r.type !== 'cos-message');
+          return [...carryOver, ...feedbackResults, ...cosResults];
         });
       } catch {
         // ignore search errors
@@ -222,6 +250,11 @@ export function SpotlightSearch({ onClose }: Props) {
   }
 
   function selectResult(result: SearchResult) {
+    if (result.type === 'cos-message') {
+      openCosMessage(result);
+      onClose();
+      return;
+    }
     const entry: RecentResult = { type: result.type, id: result.id, title: result.title, subtitle: result.subtitle, icon: result.icon, route: result.route };
     recentResults.value = [entry, ...recentResults.value.filter((r) => r.id !== result.id)].slice(0, 10);
     if (result.type === 'session') {
@@ -230,6 +263,17 @@ export function SpotlightSearch({ onClose }: Props) {
       navigate(result.route);
     }
     onClose();
+  }
+
+  function openCosMessage(result: SearchResult) {
+    if (!result.cos) return;
+    const { agentId, messageId } = result.cos;
+    chiefOfStaffActiveId.value = agentId;
+    chiefOfStaffOpen.value = true;
+    // Hand off to ChiefOfStaffBubble — it picks up the request, scrolls + highlights.
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new CustomEvent('cos-jump-to-message', { detail: { agentId, messageId } }));
+    });
   }
 
   function handleKeyDown(e: KeyboardEvent) {
@@ -467,8 +511,9 @@ export function SpotlightSearch({ onClose }: Props) {
                           <div class="spotlight-result-text">
                             <span class="spotlight-result-title">{r.title}</span>
                             {r.subtitle && <span class="spotlight-result-subtitle">{r.subtitle}</span>}
+                            {r.snippet && <span class="spotlight-result-snippet">{r.snippet}</span>}
                           </div>
-                          <span class="spotlight-result-type">{r.type}</span>
+                          <span class="spotlight-result-type">{r.type === 'cos-message' ? 'ops' : r.type}</span>
                         </div>
                       );
                     })}
@@ -497,6 +542,7 @@ function groupResults(results: SearchResult[]): [string, SearchResult[]][] {
     ['application', 'Applications'],
     ['session', 'Sessions'],
     ['feedback', 'Tickets'],
+    ['cos-message', 'Ops Messages'],
   ];
   for (const [type, label] of order) {
     if (byType[type]?.length) groups.push([label, byType[type]]);

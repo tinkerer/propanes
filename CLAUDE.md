@@ -70,9 +70,14 @@ The admin dashboard is at `http://localhost:3001/admin/`. The widget is embedded
 
 ## Screenshots
 
-**Always use the widget's built-in screenshot capability. Never use browser MCP tools.**
+**Prefer Playwright captures (`pw screenshot` or `pw-vnc screenshot`) over the widget's html-to-image capture.** The widget's built-in screenshot uses html-to-image, which frequently misses canvas content, cross-origin iframes, transformed/animated layers, and arbitrary CSS — the resulting PNG often doesn't match what's actually on screen.
 
-The widget is embedded on the admin page and all widget-enabled pages. To take a screenshot, submit feedback programmatically with `screenshot: true` via the widget's JS API (from the browser console or session bridge), or use the `/screenshot` slash command. The screenshot will be captured via html-to-image and attached to the feedback item, which can then be retrieved via the admin API at `/api/v1/images/:screenshotId`.
+Order of preference:
+1. **`pw screenshot`** (headless shared browser) — fast, scriptable, drives the same Chromium the rest of the workflow uses. Result lands at `/tmp/pw_screen.png`; `Read` it directly.
+2. **`pw-vnc screenshot`** (visible Chromium on `DISPLAY=:1`, watchable via NoVNC at `:6080`) — when you need to see the page rendered with a real display, or when the user is watching live. Result lands at `/tmp/pw_vnc_screen.png`.
+3. **Ask the user to capture and attach a screenshot** — when neither headless nor VNC Playwright can reach the page (e.g. an external app, native UI, or auth state you can't reproduce).
+
+Only fall back to the widget's html-to-image (`/screenshot` slash command or programmatic feedback with `screenshot: true`) when you specifically need the screenshot attached to a feedback item via `/api/v1/images/:screenshotId` — and even then expect lossy capture.
 
 ## Virtual Mouse & Keyboard (Agent API)
 

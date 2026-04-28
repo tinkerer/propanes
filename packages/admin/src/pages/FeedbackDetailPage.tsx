@@ -12,6 +12,7 @@ import { formatDate } from '../lib/date-utils.js';
 import { ElementCard } from '../components/ElementCard.js';
 import { SpecView, SpecToolbar } from '../components/SpecView.js';
 import { fetchParent, fetchChildren, fetchSiblings, fetchComputedStyles } from '../lib/dom-traversal.js';
+import { VoiceTracePanel } from '../components/VoiceTracePanel.js';
 
 import type { Signal } from '@preact/signals';
 
@@ -832,6 +833,13 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
                 </div>
               </section>
             ))}
+
+            {fb.data?.voiceSessionId && (
+              <section class="detail-section">
+                <h4>Pipeline Trace</h4>
+                <VoiceTracePanel feedbackId={fb.id} />
+              </section>
+            )}
 
             <section class="detail-section">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">

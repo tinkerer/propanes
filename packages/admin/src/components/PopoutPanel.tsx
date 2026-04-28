@@ -638,7 +638,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
             const gn = globalNum(sid);
             const tabSess = sessionMap.get(sid);
             const tabExited = exitedSessions.value.has(sid);
-            const tabIsCompanion = sid.startsWith('jsonl:') || sid.startsWith('feedback:') || sid.startsWith('iframe:') || sid.startsWith('terminal:') || sid.startsWith('artifact:');
+            const tabIsCompanion = sid.startsWith('jsonl:') || sid.startsWith('summary:') || sid.startsWith('feedback:') || sid.startsWith('iframe:') || sid.startsWith('terminal:') || sid.startsWith('artifact:');
             const tabIsFb = sid.startsWith('fb:');
             const tabInputState = !tabExited && !tabIsCompanion ? (sessionInputStates.value.get(sid) || null) : null;
             const tabIsPlain = tabSess?.permissionProfile === 'plain';
@@ -691,6 +691,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
                 {(tabIsCompanion || tabIsFb) && <span class="companion-icon">{
                   (sid.startsWith('feedback:') || sid.startsWith('fb:')) ? '\u{1F4AC}' :
                   sid.startsWith('jsonl:') ? '\u{1F4DC}' :
+                  sid.startsWith('summary:') ? '\u{1F4CA}' :
                   sid.startsWith('iframe:') ? '\u{1F310}' :
                   sid.startsWith('terminal:') ? '\u{25B8}' :
                   sid.startsWith('artifact:') ? '\u{1F4CB}' :
@@ -871,7 +872,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
                 const activeSid = activeCompanionId;
                 if (!activeSid) return 'PANE';
                 const t = activeSid.split(':')[0];
-                return (t === 'jsonl' || t === 'feedback' || t === 'iframe' || t === 'terminal' || t === 'isolate' || t === 'url')
+                return (t === 'jsonl' || t === 'summary' || t === 'feedback' || t === 'iframe' || t === 'terminal' || t === 'isolate' || t === 'url')
                   ? t.toUpperCase()
                   : (panelRightTabs.length > 1 ? `${panelRightTabs.length} TABS` : 'PANE');
               })()}
@@ -1220,6 +1221,12 @@ export function PopoutPanel() {
         if (s?.jsonlPath) {
           const ownerPanel = panels.find((p) => p.sessionIds.includes(menuSessionId));
           if (ownerPanel) togglePanelCompanion(ownerPanel.id, menuSessionId, 'jsonl');
+        }
+      } else if (key === 'y') {
+        const s = sMap.get(menuSessionId);
+        if (s?.jsonlPath) {
+          const ownerPanel = panels.find((p) => p.sessionIds.includes(menuSessionId));
+          if (ownerPanel) togglePanelCompanion(ownerPanel.id, menuSessionId, 'summary');
         }
       } else if (key === 'f') {
         const s = sMap.get(menuSessionId);

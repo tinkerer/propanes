@@ -301,6 +301,63 @@ feedbackRoutes.get('/feedback/:id', async (c) => {
   return c.json(hydrateFeedback(item, tags, screenshots, audioFiles));
 });
 
+// Pipeline trace: returns the voice-session chunks (transcript windows + per-window
+// classification) that produced this feedback. Lets the admin UI show how raw
+// brainstorm chunks were transformed into the current AI suggestion.
+feedbackRoutes.get('/feedback/:id/voice-trace', async (c) => {
+  const id = c.req.param('id');
+  const item = await db.query.feedbackItems.findFirst({
+    where: eq(schema.feedbackItems.id, id),
+  });
+  if (!item) return c.json({ error: 'Not found' }, 404);
+
+  const data = item.data ? safeParseJson(item.data) : null;
+  const voiceSessionId: string | undefined = data?.voiceSessionId;
+  const voiceTranscriptId: string | undefined = data?.voiceTranscriptId;
+  if (!voiceSessionId) {
+    return c.json({ feedbackId: id, voiceSession: null, transcripts: [] });
+  }
+
+  const session = db
+    .select()
+    .from(schema.voiceSessions)
+    .where(eq(schema.voiceSessions.id, voiceSessionId))
+    .get();
+
+  const transcriptRows = db
+    .select()
+    .from(schema.voiceTranscripts)
+    .where(eq(schema.voiceTranscripts.voiceSessionId, voiceSessionId))
+    .all()
+    .sort((a, b) => a.windowIndex - b.windowIndex);
+
+  const transcripts = transcriptRows.map((t) => ({
+    id: t.id,
+    windowIndex: t.windowIndex,
+    text: t.text,
+    startedAt: t.startedAt,
+    endedAt: t.endedAt,
+    classification: t.classification ? safeParseJson(t.classification) : null,
+    feedbackId: t.feedbackId,
+    createdAt: t.createdAt,
+    isMatch: t.id === voiceTranscriptId,
+  }));
+
+  return c.json({
+    feedbackId: id,
+    voiceSession: session,
+    voiceTranscriptId: voiceTranscriptId ?? null,
+    conversationSummary: data?.conversationSummary ?? null,
+    classification: data?.classification ?? null,
+    transcripts,
+  });
+});
+
+function safeParseJson(s: string | null): any {
+  if (!s) return null;
+  try { return JSON.parse(s); } catch { return null; }
+}
+
 feedbackRoutes.get('/feedback/:id/context', async (c) => {
   const id = c.req.param('id');
   const item = await db.query.feedbackItems.findFirst({

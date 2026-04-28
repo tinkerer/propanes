@@ -17,7 +17,7 @@
  */
 
 import { Hono } from 'hono';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, and, sql, inArray } from 'drizzle-orm';
 import { ulid } from 'ulidx';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
@@ -81,6 +81,17 @@ const windowSchema = z.object({
   startedAt: z.string(),
   endedAt: z.string(),
   windowIndex: z.number().int().min(0),
+  screenshotIds: z.array(z.string()).optional(),
+  interactions: z
+    .array(
+      z.object({
+        selector: z.string(),
+        text: z.string(),
+        tag: z.string(),
+        t: z.number(),
+      }),
+    )
+    .optional(),
 });
 
 voiceRoutes.post('/sessions/:id/windows', async (c) => {
@@ -179,6 +190,12 @@ voiceRoutes.post('/sessions/:id/windows', async (c) => {
       voiceTranscriptId: transcriptId,
       classification,
       conversationSummary,
+      ...(win.interactions && win.interactions.length > 0
+        ? { domInteractions: win.interactions }
+        : {}),
+      ...(win.screenshotIds && win.screenshotIds.length > 0
+        ? { screenshotIds: win.screenshotIds }
+        : {}),
     }),
     context: null,
     sourceUrl: session.sourceUrl,
@@ -190,6 +207,29 @@ voiceRoutes.post('/sessions/:id/windows', async (c) => {
     createdAt: now,
     updatedAt: now,
   });
+  // Link any pasted screenshots to the new feedback so they show on the ticket
+  // detail and ride along when a session is dispatched. We mirror the rows
+  // into feedback_screenshots (the table the admin UI + dispatch pipeline
+  // reads), reusing the same filename so /api/v1/images/<id> resolves.
+  if (win.screenshotIds && win.screenshotIds.length > 0) {
+    const ssRows = db
+      .select()
+      .from(schema.screenshots)
+      .where(inArray(schema.screenshots.id, win.screenshotIds))
+      .all();
+    if (ssRows.length > 0) {
+      await db.insert(schema.feedbackScreenshots).values(
+        ssRows.map((s) => ({
+          id: s.id,
+          feedbackId,
+          filename: s.filename,
+          mimeType: s.mimeType,
+          size: s.size,
+          createdAt: now,
+        })),
+      );
+    }
+  }
   const tags = ['voice-captured', ...(classification.tags || [])];
   await db.insert(schema.feedbackTags).values(
     tags.map((tag) => ({ feedbackId, tag }))

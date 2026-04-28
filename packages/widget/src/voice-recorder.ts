@@ -116,6 +116,39 @@ function preflightMic(): void {
   }
 }
 
+/**
+ * Read the user's saved audio-input deviceId. Same storage key as the
+ * mic-bridge popup (`packages/server/src/routes/local.ts`) so any picker UI
+ * agrees on the source of truth. Empty string = let the browser pick the
+ * system default.
+ */
+const MIC_DEVICE_STORAGE_KEY = 'pw-mic-bridge:audioInputDeviceId';
+function getSavedAudioDeviceId(): string {
+  try { return localStorage.getItem(MIC_DEVICE_STORAGE_KEY) || ''; } catch { return ''; }
+}
+function clearSavedAudioDeviceId(): void {
+  try { localStorage.removeItem(MIC_DEVICE_STORAGE_KEY); } catch {}
+}
+
+/**
+ * Wrapper around getUserMedia that honors the saved deviceId. If the saved
+ * device no longer exists, falls back to the system default automatically and
+ * clears the stale pin.
+ */
+async function getAudioStream(): Promise<MediaStream> {
+  const deviceId = getSavedAudioDeviceId();
+  if (!deviceId) return navigator.mediaDevices.getUserMedia({ audio: true });
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: deviceId } } });
+  } catch (err: any) {
+    if (err?.name === 'OverconstrainedError' || err?.name === 'ConstraintNotSatisfiedError') {
+      clearSavedAudioDeviceId();
+      return navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    throw err;
+  }
+}
+
 export class VoiceRecorder {
   private mediaRecorder: MediaRecorder | null = null;
   private recognition: any = null;
@@ -174,7 +207,7 @@ export class VoiceRecorder {
     if (this._recording) return;
 
     preflightMic();
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await getAudioStream();
     this.t0 = Date.now();
     this._recording = true;
     this.audioChunks = [];
@@ -304,7 +337,7 @@ export class VoiceRecorder {
     }
 
     preflightMic();
-    this.ambientStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.ambientStream = await getAudioStream();
     this._ambient = true;
     this.ambientWindowMs = opts?.windowMs ?? 30_000;
     this.ambientSilenceMs = opts?.silenceMs ?? 10_000;
@@ -767,12 +800,14 @@ export class VoiceRecorder {
   }
 
   enableScreenCaptures() {
-    if (!this._recording || this.gestureCleanupFn) return;
+    if ((!this._recording && !this._ambient) || this.gestureCleanupFn) return;
+    console.log('[pw-gesture] enableScreenCaptures', { recording: this._recording, ambient: this._ambient });
     this.installGestureDetection();
   }
 
   disableScreenCaptures() {
     if (this.gestureCleanupFn) {
+      console.log('[pw-gesture] disableScreenCaptures');
       this.gestureCleanupFn();
       this.gestureCleanupFn = null;
     }
@@ -911,11 +946,62 @@ export class VoiceRecorder {
     let canvas: HTMLCanvasElement | null = null;
     let ctx: CanvasRenderingContext2D | null = null;
     let gestureCompleted = false;
+    let cleanupTimer: ReturnType<typeof setTimeout> | null = null;
     const ACTIVATE_DIST = 30;
+    console.log('[pw-gesture] install');
+
+    // Loops → smallest acceptable bbox side. More loops let you select smaller regions.
+    const requiredMinSideForLoops = (n: number): number => {
+      if (n <= 0) return Infinity;
+      if (n === 1) return 800;
+      if (n === 2) return 400;
+      if (n === 3) return 100;
+      return 50;
+    };
+
+    const cleanupCanvas = () => {
+      if (cleanupTimer) { clearTimeout(cleanupTimer); cleanupTimer = null; }
+      if (canvas) { canvas.remove(); canvas = null; }
+      ctx = null;
+    };
+
+    const scheduleCleanup = (ms: number) => {
+      if (cleanupTimer) clearTimeout(cleanupTimer);
+      cleanupTimer = setTimeout(cleanupCanvas, ms);
+    };
+
+    const drawLabel = (x: number, y: number, text: string, color: string) => {
+      if (!ctx || !canvas) return;
+      ctx.save();
+      ctx.font = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.setLineDash([]);
+      const padding = 8;
+      const metrics = ctx.measureText(text);
+      const labelW = metrics.width + padding * 2;
+      const labelH = 22;
+      const lx = Math.max(8, Math.min(canvas.width - labelW - 8, x - labelW / 2));
+      const ly = Math.max(8, Math.min(canvas.height - labelH - 8, y - labelH / 2));
+      ctx.fillStyle = 'rgba(0,0,0,0.85)';
+      ctx.fillRect(lx, ly, labelW, labelH);
+      ctx.fillStyle = color;
+      ctx.fillText(text, lx + padding, ly + 15);
+      ctx.restore();
+    };
+
+    const drawBox = (x: number, y: number, w: number, h: number, color: string) => {
+      if (!ctx) return;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([]);
+      ctx.strokeRect(x, y, w, h);
+      ctx.restore();
+    };
 
     const onMousedown = (e: MouseEvent) => {
       if (e.button !== 0) return;
       if ((e.target as Element)?.closest('propanes-host')) return;
+      cleanupCanvas(); // wipe any lingering flash from the prior gesture
       pending = true;
       tracking = false;
       gestureCompleted = false;
@@ -942,6 +1028,7 @@ export class VoiceRecorder {
         }
         ctx.stroke();
       }
+      console.log('[pw-gesture] activate', { startX, startY });
     };
 
     const onMousemove = (e: MouseEvent) => {
@@ -965,18 +1052,16 @@ export class VoiceRecorder {
       }
     };
 
-    const onMouseup = async (e: MouseEvent) => {
+    const onMouseup = async (_e: MouseEvent) => {
       if (!tracking && !pending) return;
       const wasTracking = tracking;
       pending = false;
       tracking = false;
-      if (canvas) {
-        canvas.remove();
-        canvas = null;
-      }
-      ctx = null;
 
-      if (!wasTracking || points.length < 5) return;
+      if (!wasTracking || points.length < 5) {
+        cleanupCanvas();
+        return;
+      }
 
       const start = points[0];
       const end = points[points.length - 1];
@@ -992,37 +1077,114 @@ export class VoiceRecorder {
       }
 
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      let cxSum = 0, cySum = 0;
       for (const p of points) {
         if (p.x < minX) minX = p.x;
         if (p.y < minY) minY = p.y;
         if (p.x > maxX) maxX = p.x;
         if (p.y > maxY) maxY = p.y;
+        cxSum += p.x; cySum += p.y;
       }
       const bboxW = maxX - minX;
       const bboxH = maxY - minY;
+      const cx = cxSum / points.length;
+      const cy = cySum / points.length;
+      const minSide = Math.min(bboxW, bboxH);
 
-      if (closeDist < 80 && totalDist > 300 && bboxW > 50 && bboxH > 50) {
-        gestureCompleted = true;
+      // Winding number around centroid: ∑dθ / 2π = number of loops.
+      let totalAngle = 0;
+      let prevA = Math.atan2(points[0].y - cy, points[0].x - cx);
+      for (let i = 1; i < points.length; i++) {
+        const a = Math.atan2(points[i].y - cy, points[i].x - cx);
+        let dA = a - prevA;
+        if (dA > Math.PI) dA -= 2 * Math.PI;
+        if (dA < -Math.PI) dA += 2 * Math.PI;
+        totalAngle += dA;
+        prevA = a;
+      }
+      const loopCount = Math.floor(Math.abs(totalAngle) / (2 * Math.PI));
+      const requiredMinSide = requiredMinSideForLoops(loopCount);
+      const closeThreshold = Math.max(80, minSide * 0.25); // larger loops can close less precisely
 
-        if (this._screenshots.length >= MAX_SCREENSHOTS) return;
+      const reject =
+        loopCount === 0 ? 'no-loop' :
+        closeDist >= closeThreshold ? 'not-closed' :
+        minSide < requiredMinSide ? `too-small-for-${loopCount}-loop` :
+        null;
 
-        try {
-          const fullBlob = await captureScreenshot({ excludeWidget: true, method: 'display-media', keepStream: true });
-          if (!fullBlob) return;
+      console.log('[pw-gesture] mouseup', {
+        points: points.length, loopCount, bboxW: Math.round(bboxW), bboxH: Math.round(bboxH),
+        minSide: Math.round(minSide), requiredMinSide, totalDist: Math.round(totalDist),
+        closeDist: Math.round(closeDist), closeThreshold: Math.round(closeThreshold), reject,
+      });
 
-          const rect = { x: Math.round(minX), y: Math.round(minY), width: Math.round(bboxW), height: Math.round(bboxH) };
-          const cropped = await cropBlob(fullBlob, rect);
-          if (!cropped) return;
+      if (reject) {
+        const msg =
+          reject === 'no-loop' ? 'No loop detected' :
+          reject === 'not-closed' ? `Loop didn't close (gap ${Math.round(closeDist)}px)` :
+          `Too small for ${loopCount} loop${loopCount > 1 ? 's' : ''} — circle ${loopCount + 1}× to allow ≥${requiredMinSideForLoops(loopCount + 1)}px`;
+        drawBox(minX, minY, bboxW, bboxH, '#ff6b6b');
+        drawLabel(cx, cy, msg, '#ff6b6b');
+        scheduleCleanup(900);
+        return;
+      }
 
-          const capture: ScreenshotCapture = {
-            id: `ss-${this.screenshotCounter++}`,
-            timestamp: Date.now() - this.t0,
-            blob: cropped,
-            boundingBox: rect,
-          };
-          this._screenshots.push(capture);
-          this.onScreenshotCapture?.(capture);
-        } catch {}
+      if (this._screenshots.length >= MAX_SCREENSHOTS) {
+        drawBox(minX, minY, bboxW, bboxH, '#ff6b6b');
+        drawLabel(cx, cy, `Screenshot limit reached (${MAX_SCREENSHOTS})`, '#ff6b6b');
+        scheduleCleanup(900);
+        return;
+      }
+
+      gestureCompleted = true;
+      drawBox(minX, minY, bboxW, bboxH, '#1d9bf0');
+      drawLabel(cx, cy, `Capturing ${Math.round(bboxW)}×${Math.round(bboxH)} (${loopCount} loop${loopCount > 1 ? 's' : ''})…`, '#1d9bf0');
+
+      try {
+        const fullBlob = await captureScreenshot({ excludeWidget: true, method: 'display-media', keepStream: true });
+        if (!fullBlob) {
+          drawLabel(cx, cy + 26, 'Capture failed', '#ff6b6b');
+          scheduleCleanup(900);
+          return;
+        }
+
+        const rect = { x: Math.round(minX), y: Math.round(minY), width: Math.round(bboxW), height: Math.round(bboxH) };
+        const cropped = await cropBlob(fullBlob, rect);
+        if (!cropped) {
+          drawLabel(cx, cy + 26, 'Crop failed', '#ff6b6b');
+          scheduleCleanup(900);
+          return;
+        }
+
+        const capture: ScreenshotCapture = {
+          id: `ss-${this.screenshotCounter++}`,
+          timestamp: Date.now() - this.t0,
+          blob: cropped,
+          boundingBox: rect,
+        };
+        this._screenshots.push(capture);
+        this.onScreenshotCapture?.(capture);
+        console.log('[pw-gesture] capture stored', { id: capture.id, rect, bytes: cropped.size });
+
+        // Re-paint the success label with final byte size so the user can confirm the shot landed.
+        if (ctx && canvas) {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          // re-stroke trail for context
+          ctx.strokeStyle = 'rgba(29,155,240,0.5)';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([6, 4]);
+          ctx.beginPath();
+          ctx.moveTo(points[0].x, points[0].y);
+          for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+          ctx.stroke();
+        }
+        drawBox(minX, minY, bboxW, bboxH, '#1d9bf0');
+        drawLabel(cx, cy, `Screenshot captured ${Math.round(bboxW)}×${Math.round(bboxH)} · ${(cropped.size / 1024).toFixed(0)}kb`, '#1d9bf0');
+        scheduleCleanup(1200);
+      } catch (err) {
+        console.log('[pw-gesture] capture exception', err);
+        drawLabel(cx, cy + 26, 'Capture error', '#ff6b6b');
+        scheduleCleanup(900);
       }
     };
 
@@ -1040,11 +1202,12 @@ export class VoiceRecorder {
     document.addEventListener('click', onClickCapture, true);
 
     this.gestureCleanupFn = () => {
+      console.log('[pw-gesture] cleanup');
       document.removeEventListener('mousedown', onMousedown, true);
       document.removeEventListener('mousemove', onMousemove, true);
       document.removeEventListener('mouseup', onMouseup, true);
       document.removeEventListener('click', onClickCapture, true);
-      if (canvas) canvas.remove();
+      cleanupCanvas();
       stopScreencastStream();
     };
   }

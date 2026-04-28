@@ -15,6 +15,7 @@ import { WIDGET_CSS } from './styles.js';
 import { ImageEditor } from './image-editor.js';
 import { installCollectors, collectContext } from './collectors.js';
 import { captureScreenshot, stopScreencastStream, type ScreenshotMethod } from './screenshot.js';
+import { installShakeGesture } from './gesture-detector.js';
 import { SessionBridge } from './session.js';
 import { startPicker, type SelectedElementInfo } from './element-picker.js';
 import { OverlayPanelManager, type PanelType } from './overlay-panels.js';
@@ -169,6 +170,8 @@ export class ProPanesElement {
   private keepStream = false;
   private screenshotMethod: ScreenshotMethod = 'html-to-image';
   private countdownTimer: ReturnType<typeof setInterval> | null = null;
+  private gestureCleanup: (() => void) | null = null;
+  private gestureToastTimer: ReturnType<typeof setTimeout> | null = null;
   private dispatchMode: 'off' | 'once' | 'auto' = 'off';
   private dispatchAgentOverride: string | null = null;
   private pendingPermissionProfile: 'interactive-yolo' | null = null;
@@ -187,16 +190,26 @@ export class ProPanesElement {
   private voiceListenBlurStart: number | null = null;
   private voiceListenVisibilityHandler: (() => void) | null = null;
   private voiceListenWindowSender: ((win: import('./voice-recorder.js').AmbientWindow) => void) | null = null;
-  private brainstormDisabled = false;
-  private brainstormGestureHandler: (() => void) | null = null;
+  private brainstormPill: HTMLElement | null = null;
   private ccOverlay: HTMLElement | null = null;
   private ccOpen = true;
   private ccSizeLarge = false;
   private ccTextEl: HTMLElement | null = null;
   private ccInterimSpan: HTMLElement | null = null;
   private ccTicketsEl: HTMLElement | null = null;
+  private ccThinkingEl: HTMLElement | null = null;
   private ccChunks: { text: string; windowIndex: number }[] = [];
   private ccPendingTickets: Map<string, { title: string; description: string; appName?: string; feedbackId: string }> = new Map();
+  private ccChunkDividers: Map<number, HTMLElement> = new Map();
+  private ccInflightChunks: Set<number> = new Set();
+  // Screenshots pasted into the brainstorm view, attached to the next window's
+  // resulting feedback item. Each entry has the server-side screenshot id and a
+  // thumbnail element for visual feedback.
+  private ccPastedScreenshots: { id: string; thumb: HTMLElement }[] = [];
+  private ccPastedEl: HTMLElement | null = null;
+  private ccPasteHandler: ((e: ClipboardEvent) => void) | null = null;
+  private ccDomInteractions: { selector: string; text: string; tag: string; t: number }[] = [];
+  private ccDomInteractionHandler: ((e: MouseEvent) => void) | null = null;
   private escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape' && this.isOpen) {
       // Let sub-overlays (annotator, element picker) handle Escape first
@@ -236,6 +249,7 @@ export class ProPanesElement {
         'environment',
       ],
       appKey: script?.dataset.appKey || undefined,
+      hideTrigger: script?.dataset.hideTrigger === 'true',
     };
 
     this.appId = this.extractAppId(this.config.appKey) || '__default__';
@@ -243,7 +257,6 @@ export class ProPanesElement {
     this.loadHistory();
     this.loadDispatchMode();
     this.loadAdminAlwaysShow();
-    this.loadBrainstormPref();
     installCollectors(this.config.collectors);
     this.render();
     this.bindShortcut();
@@ -251,6 +264,11 @@ export class ProPanesElement {
     this.sessionBridge = new SessionBridge(this.config.endpoint, this.getSessionId(), this.config.collectors, this.config.appKey);
     if (script?.dataset.screenshotIncludeWidget === 'true') {
       this.sessionBridge.screenshotIncludeWidget = true;
+    }
+    if (script?.dataset.gestureScreenshot === 'true') {
+      this.gestureCleanup = installShakeGesture((origin) => {
+        this.captureScreenViaGesture(origin);
+      });
     }
     // Bookmarklet iframe mode: report the host page URL instead of the iframe URL
     if (script?.hasAttribute('data-bookmarklet-host-url')) {
@@ -273,7 +291,6 @@ export class ProPanesElement {
       }
     };
 
-    this.autoStartBrainstorm();
   }
 
   private updateWorkbenchBadge(waitingCount: number) {
@@ -335,74 +352,6 @@ export class ProPanesElement {
         localStorage.removeItem('pw-admin-always-show');
       }
     } catch { /* ignore */ }
-  }
-
-  private loadBrainstormPref() {
-    try {
-      this.brainstormDisabled = localStorage.getItem('pw-brainstorm-disabled') === '1';
-    } catch { /* ignore */ }
-  }
-
-  private setBrainstormDisabled(disabled: boolean) {
-    this.brainstormDisabled = disabled;
-    try {
-      if (disabled) localStorage.setItem('pw-brainstorm-disabled', '1');
-      else localStorage.removeItem('pw-brainstorm-disabled');
-    } catch { /* ignore */ }
-  }
-
-  /**
-   * Brainstorm (always-on listen mode) is enabled by default. iOS Safari and
-   * many desktop browsers gate getUserMedia / SpeechRecognition behind a user
-   * gesture, so we attempt an immediate start and fall back to a one-shot
-   * gesture listener if the browser refuses.
-   */
-  private autoStartBrainstorm() {
-    if (this.brainstormDisabled) return;
-    if (this.voiceListenSessionId) return;
-
-    const attempt = async () => {
-      try {
-        await this.startListenMode({ silent: true });
-      } catch { /* swallow — gesture path will retry */ }
-    };
-
-    // Try immediately; if it fails, wait for the first user gesture.
-    attempt().then(() => {
-      if (this.voiceListenSessionId) return;
-      // Skip the gesture fallback if the browser has no SpeechRecognition
-      // at all — e.g. iOS Safari — unless we're on an insecure context where
-      // the iframe bridge provides SpeechRecognition from localhost.
-      const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
-      if (!insecure) {
-        const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        if (!SR) return;
-      }
-      this.installBrainstormGestureFallback();
-    });
-  }
-
-  private installBrainstormGestureFallback() {
-    if (this.brainstormGestureHandler) return;
-    const handler = () => {
-      if (this.brainstormDisabled || this.voiceListenSessionId) {
-        this.removeBrainstormGestureFallback();
-        return;
-      }
-      this.startListenMode({ silent: true }).then(() => {
-        if (this.voiceListenSessionId) this.removeBrainstormGestureFallback();
-      }).catch(() => { /* keep listener for next gesture */ });
-    };
-    this.brainstormGestureHandler = handler;
-    document.addEventListener('pointerdown', handler, { once: false, capture: true });
-    document.addEventListener('keydown', handler, { once: false, capture: true });
-  }
-
-  private removeBrainstormGestureFallback() {
-    if (!this.brainstormGestureHandler) return;
-    document.removeEventListener('pointerdown', this.brainstormGestureHandler, true);
-    document.removeEventListener('keydown', this.brainstormGestureHandler, true);
-    this.brainstormGestureHandler = null;
   }
 
   private setDispatchMode(mode: 'off' | 'once' | 'auto') {
@@ -913,7 +862,8 @@ export class ProPanesElement {
     this.shadow.appendChild(style);
 
     if (this.config.mode !== 'hidden') {
-      this.renderTrigger();
+      if (!this.config.hideTrigger) this.renderTrigger();
+      this.renderBrainstormPill();
     }
   }
 
@@ -1424,6 +1374,59 @@ export class ProPanesElement {
     btn.disabled = false;
   }
 
+  private async captureScreenViaGesture(origin: { x: number; y: number }) {
+    // Gesture screenshots always use html-to-image — getDisplayMedia would
+    // require a user-activation prompt that the shake gesture can't supply.
+    const excludeWidget = this.sessionBridge.screenshotIncludeWidget && this.excludeWidget;
+    const blob = await captureScreenshot({
+      excludeWidget,
+      excludeCursor: this.excludeCursor,
+      method: 'html-to-image',
+    });
+    if (!blob) {
+      this.showGestureToast(origin, 'Screenshot failed', false);
+      return;
+    }
+    this.addScreenshot(blob);
+    const copied = await this.copyImageToClipboard(blob);
+    this.showGestureToast(
+      origin,
+      copied ? 'Screenshot copied to clipboard' : 'Screenshot captured',
+      true,
+    );
+  }
+
+  private async copyImageToClipboard(blob: Blob): Promise<boolean> {
+    const Ctor = (globalThis as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
+    if (!Ctor || !navigator.clipboard?.write) return false;
+    try {
+      await navigator.clipboard.write([new Ctor({ [blob.type || 'image/png']: blob })]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private showGestureToast(origin: { x: number; y: number }, message: string, ok: boolean) {
+    let toast = this.shadow.querySelector('.pw-gesture-toast') as HTMLElement | null;
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.className = 'pw-gesture-toast';
+      this.shadow.appendChild(toast);
+    }
+    toast.textContent = (ok ? '📸  ' : '⚠️  ') + message;
+    toast.classList.toggle('pw-gesture-toast-error', !ok);
+    const x = Math.max(16, Math.min(window.innerWidth - 16, origin.x));
+    const y = Math.max(16, Math.min(window.innerHeight - 16, origin.y));
+    toast.style.left = x + 'px';
+    toast.style.top = y + 'px';
+    toast.classList.add('pw-gesture-toast-visible');
+    if (this.gestureToastTimer) clearTimeout(this.gestureToastTimer);
+    this.gestureToastTimer = setTimeout(() => {
+      toast?.classList.remove('pw-gesture-toast-visible');
+    }, 1800);
+  }
+
   private startTimedScreenshot(seconds: number) {
     if (this.countdownTimer) return;
 
@@ -1507,6 +1510,38 @@ export class ProPanesElement {
       this.copyScreenshotPaths(copyBtn);
     });
     container.appendChild(copyBtn);
+
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 'pw-screenshot-clear';
+    clearBtn.title = 'Clear all attachments, selected elements, and message text';
+    clearBtn.innerHTML = `<svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg><span>Clear</span>`;
+    clearBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.clearAll();
+    });
+    container.appendChild(clearBtn);
+  }
+
+  private clearAll() {
+    this.pendingScreenshots = [];
+    this.selectedElements = [];
+    this.voiceResult = null;
+    this.currentDraft = '';
+    this.savedDraft = '';
+    this.historyIndex = -1;
+    const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement | null;
+    if (input) {
+      input.value = '';
+      input.style.height = 'auto';
+    }
+    persistScreenshots([]);
+    persistSelections([]);
+    clearWidgetDraftStorage();
+    this.renderScreenshotThumbs();
+    this.renderSelectedElementChips();
+    this.renderVoiceIndicator();
+    this.exitTimeline();
+    this.updateSendButtonTitle();
   }
 
   private async copyScreenshotPaths(btn: HTMLButtonElement) {
@@ -1702,7 +1737,7 @@ export class ProPanesElement {
 
     menu.appendChild(makeItem('Screen captures', this.micScreenCaptures, (v) => {
       this.micScreenCaptures = v;
-      if (this.voiceRecorder.recording) {
+      if (this.voiceRecorder.recording || this.voiceRecorder.ambient) {
         if (v) this.voiceRecorder.enableScreenCaptures();
         else this.voiceRecorder.disableScreenCaptures();
       }
@@ -1712,13 +1747,8 @@ export class ProPanesElement {
 
     const isListening = !!this.voiceListenSessionId;
     menu.appendChild(makeItem('Brainstorm (always-on mic)', isListening, (v) => {
-      if (v) {
-        this.setBrainstormDisabled(false);
-        this.startListenMode();
-      } else {
-        this.setBrainstormDisabled(true);
-        this.stopListenMode('user');
-      }
+      if (v) this.startListenMode();
+      else this.stopListenMode('user');
     }));
 
     group.appendChild(menu);
@@ -1809,14 +1839,25 @@ export class ProPanesElement {
 
     this.voiceListenSessionId = sessionId;
 
-    // Show CC overlay and wire segment display
-    this.removeCCToggleBar();
-    this.showCCOverlay();
+    if (this.micScreenCaptures) {
+      this.voiceRecorder.enableScreenCaptures();
+    }
+
+    // Stay minimized — render the pill in active state. User can expand to
+    // the full CC overlay by clicking the "Brainstorm" label.
+    this.renderBrainstormPill();
     this.voiceRecorder.onAmbientSegment = (seg) => this.appendCCSegment(seg);
+    // Capture pastes (screenshots) and DOM interactions for the duration of
+    // the listen session so the next chunk's feedback gets richer context.
+    this.installCCPasteHandler();
+    this.installDomInteractionTracker();
 
     // Window sender with response handling for ticket display
     this.voiceListenWindowSender = (win) => {
       this.markCCChunk(win.text, win.windowIndex);
+      this.setCCInflight(win.windowIndex, true);
+      const screenshotIds = this.consumeCCPastedScreenshotIds();
+      const interactions = this.consumeDomInteractions();
       fetch(`${baseOrigin}/api/v1/voice/sessions/${sessionId}/windows`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
@@ -1825,6 +1866,8 @@ export class ProPanesElement {
           startedAt: win.startedAt,
           endedAt: win.endedAt,
           windowIndex: win.windowIndex,
+          screenshotIds: screenshotIds.length > 0 ? screenshotIds : undefined,
+          interactions: interactions.length > 0 ? interactions : undefined,
         }),
       })
         .then((r) => r.ok ? r.json() : null)
@@ -1836,9 +1879,21 @@ export class ProPanesElement {
               appName: data.classification.appName,
               feedbackId: data.feedbackId,
             });
+            this.updateCCChunkStatus(win.windowIndex, 'actionable', 'ticket created');
+          } else if (data?.classification?.reason === 'too-short') {
+            this.updateCCChunkStatus(win.windowIndex, 'not-actionable', 'too short');
+          } else if (data?.classification && !data.classification.actionable) {
+            this.updateCCChunkStatus(win.windowIndex, 'not-actionable', 'not actionable');
+          } else {
+            this.updateCCChunkStatus(win.windowIndex, 'error', 'no response');
           }
         })
-        .catch(() => {});
+        .catch(() => {
+          this.updateCCChunkStatus(win.windowIndex, 'error', 'failed');
+        })
+        .finally(() => {
+          this.setCCInflight(win.windowIndex, false);
+        });
     };
     this.voiceRecorder.onAmbientWindow = this.voiceListenWindowSender;
 
@@ -1888,6 +1943,11 @@ export class ProPanesElement {
     this.voiceRecorder.onAmbientWindow = null;
     this.voiceRecorder.onAmbientSegment = null;
     this.voiceListenWindowSender = null;
+    this.voiceRecorder.disableScreenCaptures();
+    this.uninstallCCPasteHandler();
+    this.uninstallDomInteractionTracker();
+    // Drop any pasted-but-not-yet-attached screenshots.
+    this.consumeCCPastedScreenshotIds();
 
     try {
       if (this.voiceRecorder.usingMicBridge) {
@@ -1912,6 +1972,139 @@ export class ProPanesElement {
     } catch { /* best-effort */ }
   }
 
+  // ===== Brainstorm paste & DOM-tracking helpers =====
+
+  private installCCPasteHandler() {
+    if (this.ccPasteHandler) return;
+    const handler = (e: ClipboardEvent) => {
+      if (!this.voiceListenSessionId) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of Array.from(items)) {
+        if (item.kind !== 'file' || !item.type.startsWith('image/')) continue;
+        const blob = item.getAsFile();
+        if (!blob) continue;
+        e.preventDefault();
+        this.uploadAndAttachBrainstormImage(blob).catch(() => {});
+      }
+    };
+    this.ccPasteHandler = handler;
+    // Capture phase on document so the paste lands even when focus is on the
+    // shadow-DOM widget (Chrome targets the shadow host).
+    document.addEventListener('paste', handler, true);
+  }
+
+  private uninstallCCPasteHandler() {
+    if (!this.ccPasteHandler) return;
+    document.removeEventListener('paste', this.ccPasteHandler, true);
+    this.ccPasteHandler = null;
+  }
+
+  private async uploadAndAttachBrainstormImage(blob: Blob) {
+    try {
+      const endpointUrl = new URL(this.config.endpoint, window.location.origin);
+      const url = `${endpointUrl.origin}/api/v1/screenshots`;
+      const formData = new FormData();
+      formData.append('meta', JSON.stringify({
+        sessionId: this.getSessionId(),
+        userId: this.identity?.id,
+        sourceUrl: location.href,
+        width: window.innerWidth,
+        height: window.innerHeight,
+      }));
+      formData.append('screenshots', blob, `brainstorm-${Date.now()}.png`);
+      const res = await this.fetchWithContext(url, {
+        method: 'POST',
+        headers: this.apiHeaders(),
+        body: formData,
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const ss = Array.isArray(data?.screenshots) ? data.screenshots[0] : null;
+      if (!ss?.id) return;
+      this.appendCCPastedThumb(ss.id, blob);
+    } catch { /* best-effort */ }
+  }
+
+  private appendCCPastedThumb(screenshotId: string, blob: Blob) {
+    const thumb = document.createElement('div');
+    thumb.className = 'pw-cc-pasted-thumb';
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(blob);
+    img.alt = 'Pasted screenshot';
+    img.addEventListener('load', () => URL.revokeObjectURL(img.src), { once: true });
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'pw-cc-pasted-remove';
+    removeBtn.textContent = '×';
+    removeBtn.title = 'Remove';
+    removeBtn.addEventListener('click', () => this.removeCCPastedScreenshot(screenshotId));
+    thumb.append(img, removeBtn);
+    this.ccPastedScreenshots.push({ id: screenshotId, thumb });
+    if (this.ccPastedEl) {
+      this.ccPastedEl.appendChild(thumb);
+      this.ccPastedEl.style.display = '';
+    }
+  }
+
+  private removeCCPastedScreenshot(id: string) {
+    const idx = this.ccPastedScreenshots.findIndex((s) => s.id === id);
+    if (idx === -1) return;
+    const [removed] = this.ccPastedScreenshots.splice(idx, 1);
+    removed.thumb.remove();
+    if (this.ccPastedEl && this.ccPastedScreenshots.length === 0) {
+      this.ccPastedEl.style.display = 'none';
+    }
+  }
+
+  private consumeCCPastedScreenshotIds(): string[] {
+    if (this.ccPastedScreenshots.length === 0) return [];
+    const ids = this.ccPastedScreenshots.map((s) => s.id);
+    for (const { thumb } of this.ccPastedScreenshots) thumb.remove();
+    this.ccPastedScreenshots = [];
+    if (this.ccPastedEl) this.ccPastedEl.style.display = 'none';
+    return ids;
+  }
+
+  private installDomInteractionTracker() {
+    if (this.ccDomInteractionHandler) return;
+    const handler = (e: MouseEvent) => {
+      if (!this.voiceListenSessionId) return;
+      const target = e.target as Element | null;
+      if (!target || target.nodeType !== 1) return;
+      // Skip events on the widget itself (its shadow host); composedPath() lets
+      // us see the real target even for shadow-DOM hosts.
+      const path = e.composedPath?.() || [];
+      if (path.some((n) => (n as HTMLElement)?.tagName?.toLowerCase?.() === 'propanes-host')) return;
+      const realTarget = (path[0] as Element) || target;
+      const tag = realTarget.tagName.toLowerCase();
+      const id = realTarget.id ? `#${realTarget.id}` : '';
+      const cls = (realTarget.className && typeof realTarget.className === 'string')
+        ? '.' + realTarget.className.trim().split(/\s+/).slice(0, 2).join('.')
+        : '';
+      const selector = `${tag}${id}${cls}`.slice(0, 120);
+      const text = (realTarget.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+      this.ccDomInteractions.push({ selector, text, tag, t: Date.now() });
+      // Cap buffer at 50 entries to avoid unbounded growth.
+      if (this.ccDomInteractions.length > 50) this.ccDomInteractions.shift();
+    };
+    this.ccDomInteractionHandler = handler;
+    document.addEventListener('click', handler, true);
+  }
+
+  private uninstallDomInteractionTracker() {
+    if (!this.ccDomInteractionHandler) return;
+    document.removeEventListener('click', this.ccDomInteractionHandler, true);
+    this.ccDomInteractionHandler = null;
+    this.ccDomInteractions = [];
+  }
+
+  private consumeDomInteractions(): { selector: string; text: string; tag: string; t: number }[] {
+    if (this.ccDomInteractions.length === 0) return [];
+    const out = this.ccDomInteractions.slice();
+    this.ccDomInteractions = [];
+    return out;
+  }
+
   // ===== Brainstorm Closed-Caption Overlay =====
 
   private showCCOverlay() {
@@ -1931,6 +2124,16 @@ export class ProPanesElement {
     title.className = 'pw-cc-header-title';
     title.textContent = 'Brainstorm';
 
+    const thinking = document.createElement('span');
+    thinking.className = 'pw-cc-thinking';
+    thinking.title = 'Brainstorm is processing transcript chunks';
+    const thinkingDot = document.createElement('span');
+    thinkingDot.className = 'pw-cc-thinking-dot';
+    const thinkingLabel = document.createElement('span');
+    thinkingLabel.className = 'pw-cc-thinking-label';
+    thinkingLabel.textContent = 'thinking…';
+    thinking.append(thinkingDot, thinkingLabel);
+
     const appLabel = document.createElement('span');
     appLabel.className = 'pw-cc-header-app';
     appLabel.textContent = '';
@@ -1944,8 +2147,9 @@ export class ProPanesElement {
     closeBtn.textContent = 'Minimize';
     closeBtn.addEventListener('click', () => this.toggleCCOpen());
 
-    header.append(title, appLabel, sizeBtn, closeBtn);
+    header.append(title, thinking, appLabel, sizeBtn, closeBtn);
     overlay.appendChild(header);
+    this.ccThinkingEl = thinking;
 
     // Body (transcript text)
     const body = document.createElement('div');
@@ -1961,6 +2165,12 @@ export class ProPanesElement {
     tickets.className = 'pw-cc-tickets';
     tickets.style.display = 'none';
     overlay.appendChild(tickets);
+
+    // Pasted-screenshot strip — thumbnails for images attached to the next chunk.
+    const pasted = document.createElement('div');
+    pasted.className = 'pw-cc-pasted';
+    pasted.style.display = 'none';
+    overlay.appendChild(pasted);
 
     // Footer
     const footer = document.createElement('div');
@@ -1978,48 +2188,97 @@ export class ProPanesElement {
       }
     });
 
+    const pasteHint = document.createElement('span');
+    pasteHint.className = 'pw-cc-paste-hint';
+    pasteHint.textContent = 'Paste image with ⌘V/Ctrl+V';
+
     const closeFooterBtn = document.createElement('button');
     closeFooterBtn.textContent = 'Close';
     closeFooterBtn.addEventListener('click', () => this.hideCCOverlay());
 
-    footer.append(flushBtn, closeFooterBtn);
+    footer.append(flushBtn, pasteHint, closeFooterBtn);
     overlay.appendChild(footer);
 
     this.ccOverlay = overlay;
     this.ccTextEl = text;
     this.ccInterimSpan = null;
     this.ccTicketsEl = tickets;
+    this.ccPastedEl = pasted;
     this.shadow.appendChild(overlay);
+    this.refreshCCThinking();
+    // Re-render any thumbs that were pasted before the overlay was opened.
+    this.ccPastedScreenshots.forEach(({ thumb }) => pasted.appendChild(thumb));
+    if (this.ccPastedScreenshots.length > 0) pasted.style.display = '';
   }
 
   private hideCCOverlay() {
     if (this.ccOverlay) {
       this.ccOverlay.remove();
       this.ccOverlay = null;
+      this.ccPastedEl = null;
       this.ccTextEl = null;
       this.ccInterimSpan = null;
       this.ccTicketsEl = null;
+      this.ccThinkingEl = null;
+      this.ccChunkDividers.clear();
     }
-    // Show a minimized toggle bar
-    this.showCCToggleBar();
+    this.renderBrainstormPill();
   }
 
-  private showCCToggleBar() {
-    const existing = this.shadow.querySelector('.pw-cc-toggle-bar');
-    if (existing) return;
+  /**
+   * Persistent brainstorm pill at the bottom-center. Two states:
+   *  - inactive: mic icon — clicking starts listen mode
+   *  - active: red blinking dot — clicking *only the dot* stops; clicking the
+   *    label expands the full CC overlay
+   */
+  private renderBrainstormPill() {
+    if (this.brainstormPill) {
+      this.brainstormPill.remove();
+      this.brainstormPill = null;
+    }
+    // Hide the pill while the full overlay is open — the overlay has its own
+    // controls (Close button + minimize) and the pill would visually duplicate.
+    if (this.ccOverlay) return;
+
+    const isActive = !!this.voiceListenSessionId;
     const bar = document.createElement('div');
-    bar.className = 'pw-cc-toggle-bar';
-    bar.innerHTML = '<div class="pw-cc-toggle-dot"></div><span>Brainstorm</span>';
-    bar.addEventListener('click', () => {
-      bar.remove();
-      this.showCCOverlay();
-    });
-    this.shadow.appendChild(bar);
-  }
+    bar.className = 'pw-cc-toggle-bar' + (isActive ? ' pw-cc-toggle-bar-active' : '');
 
-  private removeCCToggleBar() {
-    const bar = this.shadow.querySelector('.pw-cc-toggle-bar');
-    if (bar) bar.remove();
+    const icon = document.createElement('button');
+    icon.className = isActive ? 'pw-cc-toggle-dot' : 'pw-cc-toggle-mic';
+    icon.title = isActive ? 'Stop brainstorm' : 'Start brainstorm';
+    if (isActive) {
+      // active: red blinking dot stops listening
+      icon.innerHTML = '';
+    } else {
+      icon.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>';
+    }
+    icon.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (isActive) this.stopListenMode('user');
+      else this.startListenMode();
+    });
+
+    const label = document.createElement('span');
+    label.className = 'pw-cc-toggle-label';
+    label.textContent = 'Brainstorm';
+    label.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (isActive) {
+        this.showCCOverlay();
+        if (this.brainstormPill) {
+          this.brainstormPill.remove();
+          this.brainstormPill = null;
+        }
+      } else {
+        this.startListenMode();
+      }
+    });
+
+    bar.append(icon, label);
+    this.brainstormPill = bar;
+    this.shadow.appendChild(bar);
+    this.refreshCCThinking();
   }
 
   private toggleCCOpen() {
@@ -2074,11 +2333,55 @@ export class ProPanesElement {
     const finals = this.ccTextEl.querySelectorAll('.pw-cc-final:not(.pw-cc-chunk-highlight)');
     finals.forEach((el) => el.classList.add('pw-cc-chunk-highlight'));
 
-    // Add a divider
+    // Add a divider with a thinking indicator. The indicator stays until the
+    // classifier responds (see updateCCChunkStatus).
     const divider = document.createElement('div');
-    divider.className = 'pw-cc-chunk-divider';
-    divider.textContent = `chunk ${windowIndex + 1}`;
+    divider.className = 'pw-cc-chunk-divider pw-cc-chunk-processing';
+    const label = document.createElement('span');
+    label.className = 'pw-cc-chunk-label';
+    label.textContent = `chunk ${windowIndex + 1}`;
+    const status = document.createElement('span');
+    status.className = 'pw-cc-chunk-status';
+    const spinner = document.createElement('span');
+    spinner.className = 'pw-cc-spinner';
+    const statusText = document.createElement('span');
+    statusText.className = 'pw-cc-chunk-status-text';
+    statusText.textContent = 'developing into a plan…';
+    status.append(spinner, statusText);
+    divider.append(label, status);
     this.ccTextEl.appendChild(divider);
+    this.ccChunkDividers.set(windowIndex, divider);
+  }
+
+  private setCCInflight(windowIndex: number, inflight: boolean) {
+    if (inflight) this.ccInflightChunks.add(windowIndex);
+    else this.ccInflightChunks.delete(windowIndex);
+    this.refreshCCThinking();
+  }
+
+  private refreshCCThinking() {
+    const active = this.ccInflightChunks.size > 0;
+    if (this.ccThinkingEl) {
+      this.ccThinkingEl.classList.toggle('pw-cc-thinking-active', active);
+    }
+    if (this.brainstormPill) {
+      this.brainstormPill.classList.toggle('pw-cc-toggle-bar-thinking', active);
+    }
+  }
+
+  private updateCCChunkStatus(
+    windowIndex: number,
+    state: 'actionable' | 'not-actionable' | 'error',
+    message: string
+  ) {
+    const divider = this.ccChunkDividers.get(windowIndex);
+    if (!divider) return;
+    divider.classList.remove('pw-cc-chunk-processing');
+    divider.classList.add(`pw-cc-chunk-${state}`);
+    const text = divider.querySelector('.pw-cc-chunk-status-text');
+    if (text) text.textContent = message;
+    const spinner = divider.querySelector('.pw-cc-spinner');
+    if (spinner) spinner.remove();
   }
 
   private addCCTicket(ticket: { title: string; description: string; appName?: string; feedbackId: string }) {
@@ -2186,12 +2489,13 @@ export class ProPanesElement {
       this.ccOverlay.remove();
       this.ccOverlay = null;
     }
-    this.removeCCToggleBar();
     this.ccTextEl = null;
     this.ccInterimSpan = null;
     this.ccTicketsEl = null;
     this.ccChunks = [];
     this.ccPendingTickets.clear();
+    // Re-render pill in inactive state so user can re-start.
+    this.renderBrainstormPill();
   }
 
   private showTimeline() {
@@ -3010,6 +3314,12 @@ export class ProPanesElement {
   destroy() {
     this.close();
     stopScreencastStream();
+    this.gestureCleanup?.();
+    this.gestureCleanup = null;
+    if (this.gestureToastTimer) {
+      clearTimeout(this.gestureToastTimer);
+      this.gestureToastTimer = null;
+    }
     this.overlayManager.destroy();
     this.sessionBridge.disconnect();
     this.host.remove();
