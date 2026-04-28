@@ -79,7 +79,22 @@ export function extractDispatchInfo(call: ChiefOfStaffToolCall): DispatchInfo | 
 // Tiny in-memory cache of feedback titles for the dispatch status-line expansion.
 const feedbackTitleCache = new Map<string, string>();
 const feedbackTitleInFlight = new Map<string, Promise<string | null>>();
+// Tracks failed lookups (404 for deleted feedback, network errors, etc.) so we
+// don't refetch on every re-render. Value = { failedAt, attempts } drives an
+// exponential backoff capped at FEEDBACK_TITLE_MISS_MAX_DELAY_MS. The dispatch
+// status line in CoS rerenders frequently as messages stream in, so without
+// this we fired one GET per render for any feedback that no longer exists.
+const feedbackTitleMisses = new Map<string, { failedAt: number; attempts: number }>();
+const FEEDBACK_TITLE_MISS_BASE_DELAY_MS = 30_000;
+const FEEDBACK_TITLE_MISS_MAX_DELAY_MS = 30 * 60_000;
+const FEEDBACK_TITLE_MISS_MAX_ATTEMPTS = 5;
 export const feedbackTitlesVersion = signal(0);
+
+function feedbackTitleMissBackoffMs(attempts: number): number {
+  // 30s, 1m, 2m, 4m, 8m, ... capped.
+  const ms = FEEDBACK_TITLE_MISS_BASE_DELAY_MS * 2 ** Math.max(0, attempts - 1);
+  return Math.min(ms, FEEDBACK_TITLE_MISS_MAX_DELAY_MS);
+}
 
 export function getCachedFeedbackTitle(id: string): string | null {
   return feedbackTitleCache.get(id) ?? null;
@@ -88,23 +103,42 @@ export function getCachedFeedbackTitle(id: string): string | null {
 export async function fetchFeedbackTitle(id: string): Promise<string | null> {
   const cached = feedbackTitleCache.get(id);
   if (cached) return cached;
+  const miss = feedbackTitleMisses.get(id);
+  if (miss) {
+    if (miss.attempts >= FEEDBACK_TITLE_MISS_MAX_ATTEMPTS) return null;
+    if (Date.now() - miss.failedAt < feedbackTitleMissBackoffMs(miss.attempts)) return null;
+  }
   const inFlight = feedbackTitleInFlight.get(id);
   if (inFlight) return inFlight;
   const p = (async () => {
+    const recordMiss = () => {
+      const prev = feedbackTitleMisses.get(id);
+      feedbackTitleMisses.set(id, {
+        failedAt: Date.now(),
+        attempts: (prev?.attempts ?? 0) + 1,
+      });
+    };
     try {
       const token = localStorage.getItem('pw-admin-token');
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
       const res = await fetch(`/api/v1/admin/feedback/${encodeURIComponent(id)}`, { headers });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        recordMiss();
+        return null;
+      }
       const data = await res.json();
       const title = typeof data?.title === 'string' ? data.title : null;
       if (title) {
         feedbackTitleCache.set(id, title);
+        feedbackTitleMisses.delete(id);
         feedbackTitlesVersion.value = feedbackTitlesVersion.value + 1;
+      } else {
+        recordMiss();
       }
       return title;
     } catch {
+      recordMiss();
       return null;
     } finally {
       feedbackTitleInFlight.delete(id);
@@ -427,6 +461,99 @@ export function getSessionIdForThread(threadId: string | undefined | null): stri
   return cosThreadSessions.value[threadId] ?? null;
 }
 
+// Per-thread health derived from the joined agentSessions row (server-side)
+// plus the operator-set resolved flag. Drives the rail status indicator and
+// the inline resolve toggle. sessionStatus = null when the underlying agent
+// session was garbage collected (gray "no session" state).
+export type CosThreadMeta = {
+  sessionStatus: string | null;
+  resolvedAt: number | null;
+  archivedAt: number | null;
+};
+export const cosThreadMeta = signal<Record<string, CosThreadMeta>>({});
+
+function mergeThreadMeta(
+  threads: Array<{
+    id?: unknown;
+    sessionStatus?: unknown;
+    resolvedAt?: unknown;
+    archivedAt?: unknown;
+  }>,
+): void {
+  if (!Array.isArray(threads) || threads.length === 0) return;
+  const next = { ...cosThreadMeta.value };
+  let changed = false;
+  for (const t of threads) {
+    const tid = typeof t?.id === 'string' ? t.id : null;
+    if (!tid) continue;
+    const sessionStatus = typeof t.sessionStatus === 'string' ? t.sessionStatus : null;
+    const resolvedAt = typeof t.resolvedAt === 'number' ? t.resolvedAt : null;
+    const archivedAt = typeof t.archivedAt === 'number' ? t.archivedAt : null;
+    const prev = next[tid];
+    if (!prev || prev.sessionStatus !== sessionStatus || prev.resolvedAt !== resolvedAt || prev.archivedAt !== archivedAt) {
+      next[tid] = { sessionStatus, resolvedAt, archivedAt };
+      changed = true;
+    }
+  }
+  if (changed) cosThreadMeta.value = next;
+}
+
+export function getThreadMeta(threadId: string | undefined | null): CosThreadMeta | null {
+  if (!threadId) return null;
+  return cosThreadMeta.value[threadId] ?? null;
+}
+
+const EMPTY_THREAD_META: CosThreadMeta = { sessionStatus: null, resolvedAt: null, archivedAt: null };
+
+async function patchThreadFlags(
+  threadId: string,
+  body: { resolved?: boolean; archived?: boolean },
+  optimistic: Partial<CosThreadMeta>,
+): Promise<void> {
+  const prev = cosThreadMeta.value[threadId] ?? EMPTY_THREAD_META;
+  cosThreadMeta.value = {
+    ...cosThreadMeta.value,
+    [threadId]: { ...prev, ...optimistic },
+  };
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', ...adminHeaders() };
+    const res = await fetch(`/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(threadId)}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`PATCH failed: ${res.status}`);
+    const data = await res.json().catch(() => null) as { resolvedAt?: unknown; archivedAt?: unknown } | null;
+    const serverResolvedAt = typeof data?.resolvedAt === 'number' ? data.resolvedAt : null;
+    const serverArchivedAt = typeof data?.archivedAt === 'number' ? data.archivedAt : null;
+    cosThreadMeta.value = {
+      ...cosThreadMeta.value,
+      [threadId]: { ...prev, resolvedAt: serverResolvedAt, archivedAt: serverArchivedAt },
+    };
+  } catch {
+    cosThreadMeta.value = { ...cosThreadMeta.value, [threadId]: prev };
+  }
+}
+
+/**
+ * Toggle the resolved flag on a thread. Optimistically updates the local
+ * signal so the rail re-renders immediately, then PATCHes the server.
+ */
+export async function setThreadResolved(threadId: string, resolved: boolean): Promise<void> {
+  await patchThreadFlags(threadId, { resolved }, { resolvedAt: resolved ? Date.now() : null });
+}
+
+/**
+ * Toggle the archived flag on a thread. Archiving a thread also implicitly
+ * resolves it (server-side); unarchiving leaves the resolved state alone.
+ */
+export async function setThreadArchived(threadId: string, archived: boolean): Promise<void> {
+  const optimistic: Partial<CosThreadMeta> = archived
+    ? { archivedAt: Date.now(), resolvedAt: cosThreadMeta.value[threadId]?.resolvedAt ?? Date.now() }
+    : { archivedAt: null };
+  await patchThreadFlags(threadId, { archived }, optimistic);
+}
+
 /**
  * Extract the user-facing reply(s) from an assistant message. The model is
  * instructed to wrap its reply in <cos-reply>...</cos-reply>; anything outside
@@ -567,6 +694,126 @@ export const chiefOfStaffActiveId = signal<string>(initial.activeAgentId);
 export const chiefOfStaffError = signal<string | null>(null);
 // Count of in-flight streams across all agents — informational only, never blocks input.
 export const chiefOfStaffInFlight = signal(0);
+
+// Per-(appId, agentId, threadId) operator compose drafts. Keyed by
+// `${appId}|${agentId}|${threadId}` where appId is '' for "no app scope" and
+// threadId is '' for the "new top-level thread" compose draft. Authoritative
+// store is server-side (cos_drafts table) — this signal is a hot mirror that
+// drives the textarea hydrate, the per-tab "draft" indicator, and any
+// per-thread reply UI. Writes are pushed via a per-key debounce so we don't
+// spam PUTs on every keystroke. The `|` separator (vs `:`) keeps the key
+// unambiguous even though ULIDs never contain a pipe.
+export const cosDrafts = signal<Record<string, string>>({});
+
+function draftKey(agentId: string, appId: string | null, threadId: string | null): string {
+  return `${appId || ''}|${agentId}|${threadId || ''}`;
+}
+
+export function getCosDraft(agentId: string, appId: string | null, threadId: string | null = null): string {
+  return cosDrafts.value[draftKey(agentId, appId, threadId)] || '';
+}
+
+/** True iff the agent has *any* non-empty draft (across all thread scopes) for this app. */
+export function hasAnyCosDraftForAgent(agentId: string, appId: string | null): boolean {
+  const prefix = `${appId || ''}|${agentId}|`;
+  for (const k of Object.keys(cosDrafts.value)) {
+    if (k.startsWith(prefix) && cosDrafts.value[k].length > 0) return true;
+  }
+  return false;
+}
+
+const draftSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const DRAFT_SAVE_DEBOUNCE_MS = 400;
+
+async function pushDraftToServer(
+  agentId: string,
+  appId: string | null,
+  threadId: string | null,
+  text: string,
+): Promise<void> {
+  try {
+    const token = localStorage.getItem('pw-admin-token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    await fetch('/api/v1/admin/chief-of-staff/drafts', {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        agentId,
+        appId: appId ?? '',
+        threadId: threadId ?? '',
+        text,
+      }),
+    });
+  } catch { /* best-effort; signal already updated locally */ }
+}
+
+/**
+ * Update a draft optimistically (signal first, then debounced server PUT).
+ * Pass empty `text` to clear. Designed to run on every textarea keystroke.
+ */
+export function setCosDraft(
+  agentId: string,
+  appId: string | null,
+  threadId: string | null,
+  text: string,
+): void {
+  const key = draftKey(agentId, appId, threadId);
+  const next = { ...cosDrafts.value };
+  if (text.length === 0) delete next[key];
+  else next[key] = text;
+  cosDrafts.value = next;
+
+  const existing = draftSaveTimers.get(key);
+  if (existing) clearTimeout(existing);
+  draftSaveTimers.set(key, setTimeout(() => {
+    draftSaveTimers.delete(key);
+    void pushDraftToServer(agentId, appId, threadId, text);
+  }, DRAFT_SAVE_DEBOUNCE_MS));
+}
+
+/** Clear a draft synchronously — flushes any pending debounce and pushes immediately. */
+export function clearCosDraft(agentId: string, appId: string | null, threadId: string | null = null): void {
+  const key = draftKey(agentId, appId, threadId);
+  const existing = draftSaveTimers.get(key);
+  if (existing) { clearTimeout(existing); draftSaveTimers.delete(key); }
+  if (cosDrafts.value[key]) {
+    const next = { ...cosDrafts.value };
+    delete next[key];
+    cosDrafts.value = next;
+  }
+  void pushDraftToServer(agentId, appId, threadId, '');
+}
+
+/** Hydrate the in-memory draft cache for a given app scope from the server. */
+export async function loadCosDrafts(appId: string | null): Promise<void> {
+  try {
+    const token = localStorage.getItem('pw-admin-token');
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const qs = `?appId=${encodeURIComponent(appId ?? '')}`;
+    const res = await fetch(`/api/v1/admin/chief-of-staff/drafts${qs}`, { headers });
+    if (!res.ok) return;
+    const data = await res.json();
+    const rows: Array<{ agentId?: string; appId?: string; threadId?: string; text?: string }> =
+      Array.isArray(data?.drafts) ? data.drafts : [];
+    const next = { ...cosDrafts.value };
+    // Wipe any stale entries for this app scope before re-populating, so a
+    // server-side delete (clear) propagates to the in-memory cache.
+    const scope = appId || '';
+    for (const k of Object.keys(next)) {
+      if (k.startsWith(`${scope}|`)) delete next[k];
+    }
+    for (const r of rows) {
+      const aid = typeof r.agentId === 'string' ? r.agentId : '';
+      const ap = typeof r.appId === 'string' ? r.appId : '';
+      const tid = typeof r.threadId === 'string' ? r.threadId : '';
+      const t = typeof r.text === 'string' ? r.text : '';
+      if (aid && t.length > 0) next[`${ap}|${aid}|${tid}`] = t;
+    }
+    cosDrafts.value = next;
+  } catch { /* ignore */ }
+}
 
 export function ensureCosPanel(): PopoutPanelState {
   const existing = popoutPanels.value.find((p) => p.id === COS_PANEL_ID);
@@ -712,6 +959,7 @@ export async function loadChiefOfStaffHistory(agentId: string, appId: string | n
     const data = await res.json();
     const threads = Array.isArray(data?.threads) ? data.threads : (data?.thread ? [data.thread] : []);
     mergeThreadSessions(threads);
+    mergeThreadMeta(threads);
     // Server returns rows with `threadId` column — propagate it into each
     // ChiefOfStaffMsg via serverMessageToClient.
     const serverMessages: ChiefOfStaffMsg[] = Array.isArray(data?.messages)
@@ -802,7 +1050,10 @@ async function createCosThread(
     });
     if (!res.ok) return undefined;
     const data = await res.json();
-    if (data && typeof data === 'object') mergeThreadSessions([data]);
+    if (data && typeof data === 'object') {
+      mergeThreadSessions([data]);
+      mergeThreadMeta([data]);
+    }
     return typeof data?.id === 'string' ? data.id : undefined;
   } catch {
     return undefined;

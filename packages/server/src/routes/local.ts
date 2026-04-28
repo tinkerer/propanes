@@ -151,12 +151,23 @@ localRoutes.get('/mic-bridge', (c) => {
   .btn { background: #1f2937; color: #e0e0e0; border: 1px solid #334155;
          border-radius: 4px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
   .btn:hover { background: #2a3548; }
+  .picker { margin-top: 10px; display: flex; flex-direction: column; gap: 4px;
+            align-items: stretch; padding: 0 4px; }
+  .picker label { font-size: 10.5px; color: #8b8fa3; text-align: left; }
+  .picker select { background: #0f1626; color: #e0e0e0; border: 1px solid #334155;
+                   border-radius: 4px; padding: 4px 6px; font-size: 11.5px;
+                   font-family: inherit; }
+  .picker select:focus { outline: none; border-color: #4b5d80; }
 </style>
 </head>
 <body>
 <div class="card">
   <div><span class="dot" id="dot"></span><span style="font-size:14px;font-weight:600">Mic bridge</span></div>
   <div class="status" id="status">Booting…</div>
+  <div class="picker">
+    <label for="micSelect">Microphone</label>
+    <select id="micSelect"><option value="">System default</option></select>
+  </div>
   <div class="row">
     <button class="btn" id="copyBtn" type="button">Copy log</button>
     <button class="btn" id="closeBtn" type="button">Close</button>
@@ -178,6 +189,65 @@ const statusEl = document.getElementById('status');
 const dotEl = document.getElementById('dot');
 const closeBtn = document.getElementById('closeBtn');
 const copyBtn = document.getElementById('copyBtn');
+const micSelect = document.getElementById('micSelect');
+
+// ----- Device picker -----
+// Persist the user's chosen audio input across popup launches. The popup
+// always runs on localhost:3001, so this localStorage key is shared regardless
+// of which host page opened us. Empty string = "let the browser pick the
+// system default" (the original behavior).
+const DEVICE_STORAGE_KEY = 'pw-mic-bridge:audioInputDeviceId';
+function loadSavedDeviceId() {
+  try { return localStorage.getItem(DEVICE_STORAGE_KEY) || ''; } catch { return ''; }
+}
+function saveDeviceId(id) {
+  try {
+    if (id) localStorage.setItem(DEVICE_STORAGE_KEY, id);
+    else localStorage.removeItem(DEVICE_STORAGE_KEY);
+  } catch {}
+}
+
+async function refreshDeviceList() {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    log('warn', 'enumerateDevices not available');
+    return;
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter(d => d.kind === 'audioinput');
+    const saved = loadSavedDeviceId();
+    micSelect.innerHTML = '';
+    const defOpt = document.createElement('option');
+    defOpt.value = '';
+    defOpt.textContent = 'System default';
+    micSelect.appendChild(defOpt);
+    inputs.forEach((d, i) => {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      // Labels are blank until permission has been granted at least once;
+      // fall back to a generic placeholder so the count is still useful.
+      opt.textContent = d.label || ('Microphone ' + (i + 1));
+      micSelect.appendChild(opt);
+    });
+    const found = saved && inputs.some(d => d.deviceId === saved);
+    micSelect.value = found ? saved : '';
+    log('debug', 'devices refreshed:',
+      inputs.map(d => ({ idHead: d.deviceId.slice(0, 8), label: d.label || '(no label)' })));
+  } catch (e) {
+    log('warn', 'enumerateDevices failed:', e);
+  }
+}
+
+micSelect.addEventListener('change', () => {
+  const value = micSelect.value;
+  const label = micSelect.options[micSelect.selectedIndex].textContent;
+  saveDeviceId(value);
+  log('log', 'device selected:', label, value ? '(' + value.slice(0, 8) + '…)' : '(default)');
+  if (running) {
+    log('log', 'restarting recognition with new device');
+    restartWithCurrentDevice();
+  }
+});
 
 const logBuffer = [];
 const MAX_LOG_LINES = 500;
@@ -231,6 +301,7 @@ let windowStart = 0;
 let windowBuffer = [];
 let flushTimer = null;
 let silenceTimer = null;
+let lastLang = 'en-US';
 
 // Posts go to whichever bridge transport opened us — popup uses window.opener,
 // legacy iframe uses window.parent. Pick the one that's actually a separate window.
@@ -316,72 +387,106 @@ function startAmbient(opts) {
   windowIndex = 0;
   windowStart = Date.now();
   windowBuffer = [];
+  lastLang = opts.lang || 'en-US';
 
   setStatus('Requesting microphone…');
-  log('log', 'requesting getUserMedia({audio:true})');
-  navigator.mediaDevices.getUserMedia({ audio: true }).then(s => {
+  const desiredId = loadSavedDeviceId();
+  const audioConstraint = desiredId ? { deviceId: { exact: desiredId } } : true;
+  log('log', 'requesting getUserMedia', { deviceId: desiredId ? desiredId.slice(0, 8) + '…' : '(default)' });
+  navigator.mediaDevices.getUserMedia({ audio: audioConstraint }).then(s => {
     log('log', 'getUserMedia granted', { tracks: s.getAudioTracks().map(t => t.label) });
     stream = s;
     running = true;
     setStatus('Listening — keep this window open');
     dotEl.className = 'dot';
-
-    recognition = new SR();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = opts.lang || 'en-US';
-
-    recognition.onstart = () => log('debug', 'recognition.onstart');
-    recognition.onaudiostart = () => log('debug', 'recognition.onaudiostart');
-    recognition.onsoundstart = () => log('debug', 'recognition.onsoundstart');
-    recognition.onspeechstart = () => log('debug', 'recognition.onspeechstart');
-    recognition.onspeechend = () => log('debug', 'recognition.onspeechend');
-
-    recognition.onresult = (event) => {
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i];
-        const seg = { text: result[0].transcript, timestamp: Date.now() - windowStart, isFinal: result.isFinal };
-        if (result.isFinal) {
-          log('log', 'segment (final):', JSON.stringify(seg.text));
-          windowBuffer.push(seg.text);
-          resetSilenceTimer();
-          if (windowBuffer.join(' ').length >= maxLength) {
-            log('debug', 'maxLength reached, flushing');
-            flushWindow();
-          }
-        } else {
-          log('debug', 'segment (interim):', JSON.stringify(seg.text));
-        }
-        post('segment', { segment: seg });
-      }
-    };
-
-    recognition.onend = () => {
-      log('debug', 'recognition.onend (running=' + running + ')');
-      if (running) {
-        try { recognition.start(); log('debug', 'restarted recognition'); }
-        catch (e) { log('warn', 'restart failed:', e); }
-      }
-    };
-    recognition.onerror = (e) => {
-      log('warn', 'recognition.onerror', e.error, e.message || '');
-      if (e.error !== 'no-speech' && e.error !== 'aborted' && running) {
-        try { recognition.start(); log('debug', 'restarted recognition after error'); }
-        catch (err) { log('warn', 'restart-after-error failed:', err); }
-      }
-    };
-
-    try { recognition.start(); log('debug', 'recognition.start() called'); }
-    catch (e) { log('error', 'recognition.start() threw:', e); }
-    flushTimer = setTimeout(() => { if (running) flushWindow(); }, windowMs);
-    post('started', {});
-    log('log', 'started');
+    // Labels are now unlocked; refresh the list so the dropdown shows real names.
+    refreshDeviceList();
+    startRecognitionLoop(SR);
   }).catch(err => {
+    // If a previously-saved deviceId no longer exists (e.g. AirPods unpaired),
+    // OverconstrainedError is what getUserMedia raises. Clear the pin and
+    // fall back to system default automatically so the user isn't stuck.
+    if ((err.name === 'OverconstrainedError' || err.name === 'ConstraintNotSatisfiedError') && desiredId) {
+      log('warn', 'saved device unavailable, falling back to system default');
+      saveDeviceId('');
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(s => {
+        log('log', 'getUserMedia (fallback) granted', { tracks: s.getAudioTracks().map(t => t.label) });
+        stream = s;
+        running = true;
+        setStatus('Listening (default device)');
+        dotEl.className = 'dot';
+        refreshDeviceList();
+        startRecognitionLoop(SR);
+      }).catch(err2 => {
+        const code = err2.name === 'NotAllowedError' || err2.name === 'SecurityError' ? 'NOT_ALLOWED'
+          : err2.name === 'NotFoundError' ? 'NOT_FOUND'
+          : err2.name === 'NotReadableError' ? 'NOT_READABLE'
+          : 'UNKNOWN';
+        showError(code, err2.message || err2.name || 'getUserMedia failed');
+      });
+      return;
+    }
     const code = err.name === 'NotAllowedError' || err.name === 'SecurityError' ? 'NOT_ALLOWED'
       : err.name === 'NotFoundError' ? 'NOT_FOUND'
       : err.name === 'NotReadableError' ? 'NOT_READABLE'
+      : err.name === 'OverconstrainedError' ? 'OVERCONSTRAINED'
       : 'UNKNOWN';
     showError(code, err.message || err.name || 'getUserMedia failed');
+  });
+}
+
+function startRecognitionLoop(SR) {
+  recognition = new SR();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = lastLang;
+  recognition.onstart = () => log('debug', 'recognition.onstart');
+  recognition.onaudiostart = () => log('debug', 'recognition.onaudiostart');
+  recognition.onsoundstart = () => log('debug', 'recognition.onsoundstart');
+  recognition.onspeechstart = () => log('debug', 'recognition.onspeechstart');
+  recognition.onspeechend = () => log('debug', 'recognition.onspeechend');
+  recognition.onresult = (event) => {
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const result = event.results[i];
+      const seg = { text: result[0].transcript, timestamp: Date.now() - windowStart, isFinal: result.isFinal };
+      if (result.isFinal) {
+        log('log', 'segment (final):', JSON.stringify(seg.text));
+        windowBuffer.push(seg.text);
+        resetSilenceTimer();
+        if (windowBuffer.join(' ').length >= maxLength) flushWindow();
+      }
+      post('segment', { segment: seg });
+    }
+  };
+  recognition.onend = () => {
+    if (running) { try { recognition.start(); } catch (e) { log('warn', 'restart failed:', e); } }
+  };
+  recognition.onerror = (e) => {
+    log('warn', 'recognition.onerror', e.error, e.message || '');
+    if (e.error !== 'no-speech' && e.error !== 'aborted' && running) {
+      try { recognition.start(); } catch (err) { log('warn', 'restart-after-error failed:', err); }
+    }
+  };
+  try { recognition.start(); log('debug', 'recognition.start() called'); }
+  catch (e) { log('error', 'recognition.start() threw:', e); }
+  flushTimer = setTimeout(() => { if (running) flushWindow(); }, windowMs);
+  post('started', {});
+  log('log', 'started');
+}
+
+function restartWithCurrentDevice() {
+  if (!running) return;
+  // Stop the current stream + recognizer, then re-enter startAmbient with the
+  // existing window-mode params. Don't fire 'stopped' — the parent still
+  // thinks of us as running, and we want to keep window indices contiguous.
+  if (recognition) { try { recognition.stop(); } catch {} recognition = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  running = false;
+  startAmbient({
+    windowMs,
+    silenceMs,
+    maxLength,
+    lang: lastLang,
   });
 }
 
@@ -441,6 +546,18 @@ window.addEventListener('unhandledrejection', (e) => {
 
 setStatus('Connecting…', 'idle');
 log('log', 'boot', { keepOpen: KEEP_OPEN, hasOpener: !!getTarget(), secureContext: window.isSecureContext });
+
+// Populate the device picker on boot. Labels won't be available until
+// permission has been granted at least once (we re-enumerate after the first
+// successful getUserMedia), but this still surfaces the count + saved choice.
+refreshDeviceList();
+if (navigator.mediaDevices?.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    log('log', 'devicechange — refreshing device list');
+    refreshDeviceList();
+  });
+}
+
 post('ready', {});
 </script>
 </body></html>`);

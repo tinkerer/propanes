@@ -8,13 +8,18 @@ import {
   type PanePosition,
   positionToSplit,
 } from './pane-tree.js';
+import { openArtifactDrawerTab } from './cos-artifact-drawer.js';
 
 // Well-known tab ids for leaves in the CoS popout tree.
 export const COS_POPOUT_CHAT_TAB = 'cos-chat:main';
 export const COS_POPOUT_LEARNINGS_TAB = 'cos-learnings:main';
+export const COS_POPOUT_THREAD_TAB = 'cos-thread:main';
 export const COS_POPOUT_ROOT_LEAF = 'cos-root-leaf';
 
 const STORAGE_KEY = 'pw-cos-popout-tree';
+const SLACK_MODE_STORAGE_KEY = 'pw-cos-slack-mode';
+const SHOW_RESOLVED_STORAGE_KEY = 'pw-cos-show-resolved';
+const SHOW_ARCHIVED_STORAGE_KEY = 'pw-cos-show-archived';
 
 function buildDefault(): LayoutTree {
   return {
@@ -38,9 +43,40 @@ function loadTree(): LayoutTree {
     // Ensure the chat tab is always present in at least one leaf; if not, fall
     // back to the default layout so the user never gets stuck without chat.
     if (!findLeafWithTabLocal(parsed.root, COS_POPOUT_CHAT_TAB)) return buildDefault();
+    // Artifacts now render as a drawer overlay (not a tree split). Migrate any
+    // legacy `artifact:*` tabs out of the tree and reopen them in the drawer.
+    migrateArtifactTabsToDrawer(parsed);
     return parsed;
   } catch {
     return buildDefault();
+  }
+}
+
+function migrateArtifactTabsToDrawer(tree: LayoutTree) {
+  const migrated: string[] = [];
+  for (const leaf of getAllLeavesLocal(tree.root)) {
+    const keep: string[] = [];
+    for (const tab of leaf.tabs) {
+      if (tab.startsWith('artifact:')) {
+        migrated.push(tab.slice('artifact:'.length));
+      } else {
+        keep.push(tab);
+      }
+    }
+    if (keep.length !== leaf.tabs.length) {
+      leaf.tabs = keep;
+      if (leaf.activeTabId && !keep.includes(leaf.activeTabId)) {
+        leaf.activeTabId = keep[0] ?? null;
+      }
+    }
+  }
+  if (migrated.length === 0) return;
+  cleanupEmptyLeaves(tree);
+  // Defer drawer mutation to after the tree signal is constructed.
+  if (typeof queueMicrotask === 'function') {
+    queueMicrotask(() => migrated.forEach(openArtifactDrawerTab));
+  } else {
+    setTimeout(() => migrated.forEach(openArtifactDrawerTab), 0);
   }
 }
 
@@ -291,19 +327,16 @@ function cleanupEmptyLeaves(tree: LayoutTree) {
 }
 
 /**
- * Ensure an artifact tab is visible in the tree. If the artifact already has a
- * leaf somewhere, just activate it. Otherwise, split the focused (or root)
- * leaf and insert the artifact into the new sibling.
+ * Open an artifact in the popout drawer overlay. Artifacts no longer split
+ * the tree — splitting forced Preact to remount the chat under a new
+ * SplitPane parent, which lost scroll position and felt jarring. The
+ * drawer floats over the chat content and can be closed/resized in place.
+ *
+ * `position` is accepted for back-compat with older callers but is ignored.
  */
-export function cosOpenArtifactTab(artifactId: string, position: PanePosition = 'right') {
-  const tabId = `artifact:${artifactId}`;
-  const existingLeaf = cosFindLeafWithTab(tabId);
-  if (existingLeaf) {
-    cosSetActiveTab(existingLeaf.id, tabId);
-    return;
-  }
-  const anchorLeafId = pickAnchorLeafId();
-  cosSplitLeafAtPosition(anchorLeafId, position, [tabId], 0.5);
+export function cosOpenArtifactTab(artifactId: string, _position: PanePosition = 'right') {
+  void _position;
+  openArtifactDrawerTab(artifactId);
 }
 
 /**
@@ -324,6 +357,93 @@ export function cosToggleLearningsTab(position: PanePosition = 'left') {
 
 export function cosIsLearningsOpen(): boolean {
   return !!cosFindLeafWithTab(COS_POPOUT_LEARNINGS_TAB);
+}
+
+/**
+ * Slack-mode toggle: when on, ThreadBlock collapses replies inline and renders
+ * the active thread in a side companion panel (a popout tab in popout mode, a
+ * side drawer in pane mode). Persisted across sessions.
+ */
+function loadSlackMode(): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    return localStorage.getItem(SLACK_MODE_STORAGE_KEY) === '1';
+  } catch { return false; }
+}
+
+export const cosSlackMode = signal<boolean>(loadSlackMode());
+
+export function setCosSlackMode(next: boolean) {
+  cosSlackMode.value = next;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(SLACK_MODE_STORAGE_KEY, next ? '1' : '0');
+    }
+  } catch { /* ignore */ }
+  if (!next) {
+    cosActiveThread.value = null;
+    cosCloseThreadTab();
+  }
+}
+
+/**
+ * Per-bubble visibility filters for resolved / archived threads. Both default
+ * to false so the operator only sees the active triage queue. Persisted across
+ * sessions so the user's preferred filter state sticks.
+ */
+function loadFlag(key: string): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+    return localStorage.getItem(key) === '1';
+  } catch { return false; }
+}
+
+export const cosShowResolved = signal<boolean>(loadFlag(SHOW_RESOLVED_STORAGE_KEY));
+export const cosShowArchived = signal<boolean>(loadFlag(SHOW_ARCHIVED_STORAGE_KEY));
+
+export function setCosShowResolved(next: boolean) {
+  cosShowResolved.value = next;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(SHOW_RESOLVED_STORAGE_KEY, next ? '1' : '0');
+    }
+  } catch { /* ignore */ }
+}
+
+export function setCosShowArchived(next: boolean) {
+  cosShowArchived.value = next;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(SHOW_ARCHIVED_STORAGE_KEY, next ? '1' : '0');
+    }
+  } catch { /* ignore */ }
+}
+
+export type CosActiveThread = { agentId: string; threadKey: string };
+
+export const cosActiveThread = signal<CosActiveThread | null>(null);
+
+/**
+ * Open the thread companion as a side leaf in the popout tree. If already
+ * open, just focus its tab. Width matches the learnings drawer default.
+ */
+export function cosOpenThreadTab(position: PanePosition = 'right') {
+  const existing = cosFindLeafWithTab(COS_POPOUT_THREAD_TAB);
+  if (existing) {
+    cosSetActiveTab(existing.id, COS_POPOUT_THREAD_TAB);
+    return;
+  }
+  const anchorLeafId = pickAnchorLeafId();
+  cosSplitLeafAtPosition(anchorLeafId, position, [COS_POPOUT_THREAD_TAB], 0.42);
+}
+
+export function cosCloseThreadTab() {
+  const existing = cosFindLeafWithTab(COS_POPOUT_THREAD_TAB);
+  if (existing) cosRemoveTabFromLeaf(existing.id, COS_POPOUT_THREAD_TAB);
+}
+
+export function cosIsThreadTabOpen(): boolean {
+  return !!cosFindLeafWithTab(COS_POPOUT_THREAD_TAB);
 }
 
 function pickAnchorLeafId(): string {

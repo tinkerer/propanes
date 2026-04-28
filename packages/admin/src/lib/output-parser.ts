@@ -116,8 +116,14 @@ export class JsonOutputParser {
     // the merged stream; subagent JSONLs themselves carry `agentId` per line.
     const subagentId: string | undefined = obj._subagentId || obj.agentId || undefined;
     const msgs = this.parseJsonEventInner(obj);
-    if (subagentId) {
-      for (const m of msgs) m.subagentId = subagentId;
+    // Stamp every returned message with the line's actual ISO timestamp so the
+    // UI can show real event times instead of "now". Without this, every
+    // message would inherit Date.now() from parse time and historical/replay
+    // jsonl would all look like it happened a moment ago.
+    const lineTs = tsOf(obj);
+    for (const m of msgs) {
+      m.timestamp = lineTs;
+      if (subagentId) m.subagentId = subagentId;
     }
     return msgs;
   }

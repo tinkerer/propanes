@@ -300,6 +300,31 @@ export const WIDGET_CSS = `
   fill: currentColor;
 }
 
+.pw-screenshot-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  padding: 0 10px;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #94a3b8;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pw-screenshot-clear:hover {
+  border-color: #dc2626;
+  color: #fecaca;
+}
+.pw-screenshot-clear svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
 .pw-input-area {
   padding: 10px;
   flex: 1;
@@ -1815,12 +1840,111 @@ export const WIDGET_CSS = `
   color: #475569;
 }
 
-.pw-cc-chunk-divider::before,
+.pw-cc-chunk-divider::before {
+  content: '';
+  flex: 0 0 24px;
+  height: 1px;
+  background: rgba(71, 85, 105, 0.4);
+}
+
 .pw-cc-chunk-divider::after {
   content: '';
   flex: 1;
   height: 1px;
   background: rgba(71, 85, 105, 0.4);
+}
+
+.pw-cc-chunk-label {
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.pw-cc-chunk-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  font-size: 10px;
+  font-style: italic;
+  color: #94a3b8;
+}
+
+.pw-cc-chunk-processing .pw-cc-chunk-status {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.45);
+  color: #93c5fd;
+}
+
+.pw-cc-chunk-actionable .pw-cc-chunk-status {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.4);
+  color: #86efac;
+}
+
+.pw-cc-chunk-actionable .pw-cc-chunk-status::before {
+  content: '✓';
+  font-style: normal;
+  font-weight: 600;
+}
+
+.pw-cc-chunk-not-actionable .pw-cc-chunk-status {
+  background: rgba(100, 116, 139, 0.15);
+  border-color: rgba(100, 116, 139, 0.35);
+  color: #cbd5e1;
+}
+
+.pw-cc-chunk-error .pw-cc-chunk-status {
+  background: rgba(220, 38, 38, 0.15);
+  border-color: rgba(220, 38, 38, 0.45);
+  color: #fca5a5;
+}
+
+.pw-cc-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(147, 197, 253, 0.35);
+  border-top-color: #60a5fa;
+  animation: pw-cc-spin 0.7s linear infinite;
+}
+
+@keyframes pw-cc-spin {
+  to { transform: rotate(360deg); }
+}
+
+.pw-cc-thinking {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.18);
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  color: #bfdbfe;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.pw-cc-thinking.pw-cc-thinking-active {
+  display: inline-flex;
+}
+
+.pw-cc-thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #60a5fa;
+  animation: pw-cc-thinking-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pw-cc-thinking-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.6); }
+  50% { box-shadow: 0 0 0 6px rgba(96, 165, 250, 0); }
 }
 
 .pw-cc-footer {
@@ -1856,6 +1980,64 @@ export const WIDGET_CSS = `
 
 .pw-cc-flush-btn:hover {
   background: rgba(234, 179, 8, 0.25) !important;
+}
+
+.pw-cc-paste-hint {
+  flex: 1;
+  font-size: 10px;
+  color: #64748b;
+  text-align: center;
+}
+
+/* ===== Brainstorm pasted-screenshot strip ===== */
+
+.pw-cc-pasted {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.pw-cc-pasted-thumb {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.pw-cc-pasted-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.pw-cc-pasted-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(15, 23, 42, 0.85);
+  color: #e2e8f0;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.pw-cc-pasted-remove:hover {
+  background: rgba(220, 38, 38, 0.9);
 }
 
 /* ===== Brainstorm Ticket Cards ===== */
@@ -1967,8 +2149,7 @@ export const WIDGET_CSS = `
   backdrop-filter: blur(8px);
   border: 1px solid rgba(148, 163, 184, 0.2);
   border-radius: 20px;
-  padding: 4px 14px;
-  cursor: pointer;
+  padding: 2px 4px 2px 2px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1982,12 +2163,87 @@ export const WIDGET_CSS = `
   color: #e2e8f0;
 }
 
+.pw-cc-toggle-bar-thinking {
+  border-color: rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 0 rgba(96, 165, 250, 0.55);
+  animation: pw-cc-thinking-pulse 1.4s ease-in-out infinite;
+}
+
+.pw-cc-toggle-label {
+  cursor: pointer;
+  padding: 2px 10px 2px 4px;
+  user-select: none;
+}
+
+.pw-cc-toggle-dot,
+.pw-cc-toggle-mic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+}
+
 .pw-cc-toggle-dot {
-  width: 8px;
-  height: 8px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: #dc2626;
   animation: pw-listen-blink 2s ease-in-out infinite;
+}
+
+.pw-cc-toggle-dot:hover {
+  background: #b91c1c;
+  filter: brightness(1.1);
+}
+
+.pw-cc-toggle-mic {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(148, 163, 184, 0.15);
+}
+
+.pw-cc-toggle-mic:hover {
+  background: rgba(59, 130, 246, 0.4);
+  color: #e2e8f0;
+}
+
+.pw-cc-toggle-mic svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.pw-gesture-toast {
+  position: fixed;
+  z-index: 2147483647;
+  pointer-events: none;
+  transform: translate(-50%, -140%);
+  background: rgba(15, 23, 42, 0.92);
+  color: #e2e8f0;
+  border: 1px solid rgba(59, 130, 246, 0.5);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font: 500 12px/1.2 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  white-space: nowrap;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  opacity: 0;
+  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+}
+
+.pw-gesture-toast-visible {
+  opacity: 1;
+  transform: translate(-50%, -160%);
+}
+
+.pw-gesture-toast-error {
+  border-color: rgba(248, 113, 113, 0.6);
+  color: #fecaca;
 }
 
 `;

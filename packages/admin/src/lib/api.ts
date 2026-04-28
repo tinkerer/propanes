@@ -56,6 +56,51 @@ export const api = {
 
   getFeedbackById: (id: string) => request<any>(`/admin/feedback/${id}`),
 
+  getFeedbackVoiceTrace: (id: string) =>
+    request<{
+      feedbackId: string;
+      voiceSession: {
+        id: string;
+        appId: string | null;
+        startedAt: string;
+        lastActivityAt: string;
+        stoppedAt: string | null;
+        stopReason: string | null;
+        status: string;
+        sourceUrl: string | null;
+      } | null;
+      voiceTranscriptId: string | null;
+      conversationSummary: string | null;
+      classification: {
+        actionable: boolean;
+        title: string;
+        description: string;
+        reason: string;
+        tags?: string[];
+        routedAppId?: string;
+        appName?: string;
+      } | null;
+      transcripts: Array<{
+        id: string;
+        windowIndex: number;
+        text: string;
+        startedAt: string;
+        endedAt: string;
+        classification: {
+          actionable: boolean;
+          title: string;
+          description: string;
+          reason: string;
+          tags?: string[];
+          routedAppId?: string;
+          appName?: string;
+        } | null;
+        feedbackId: string | null;
+        createdAt: string;
+        isMatch: boolean;
+      }>;
+    }>(`/admin/feedback/${id}/voice-trace`),
+
   createFeedback: (data: { title: string; description?: string; type?: string; appId: string; tags?: string[] }) =>
     request<{ id: string; status: string; createdAt: string }>('/admin/feedback', {
       method: 'POST',
@@ -102,6 +147,28 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  searchCosMessages: (params: { q: string; agentId?: string; appId?: string; role?: 'user' | 'assistant' | 'system'; limit?: number }) => {
+    const qs = new URLSearchParams();
+    qs.set('q', params.q);
+    if (params.agentId) qs.set('agentId', params.agentId);
+    if (params.appId) qs.set('appId', params.appId);
+    if (params.role) qs.set('role', params.role);
+    if (params.limit) qs.set('limit', String(params.limit));
+    return request<{
+      results: Array<{
+        messageId: string;
+        threadId: string;
+        role: 'user' | 'assistant' | 'system';
+        text: string;
+        snippet: string;
+        createdAt: number;
+        agentId: string;
+        appId: string | null;
+        threadName: string;
+      }>;
+    }>(`/admin/chief-of-staff/search?${qs}`);
+  },
 
   getCosDispatches: () =>
     request<{

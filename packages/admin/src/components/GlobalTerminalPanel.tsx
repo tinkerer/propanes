@@ -623,6 +623,9 @@ export function GlobalTerminalPanel() {
       } else if (key === 'l') {
         const s = sessionMap.get(menuSessionId);
         if (s?.jsonlPath) toggleCompanion(menuSessionId, 'jsonl');
+      } else if (key === 'y') {
+        const s = sessionMap.get(menuSessionId);
+        if (s?.jsonlPath) toggleCompanion(menuSessionId, 'summary');
       } else if (key === 'f') {
         const s = sessionMap.get(menuSessionId);
         if (s?.feedbackId) toggleCompanion(menuSessionId, 'feedback');
@@ -1007,6 +1010,7 @@ export function GlobalTerminalPanel() {
                 {(() => {
                   const t = rightActive ? extractCompanionType(rightActive) : null;
                   if (t === 'jsonl') return 'JSONL';
+                  if (t === 'summary') return 'SUMMARY';
                   if (t === 'feedback') return 'TICKET';
                   if (t === 'iframe') return 'IFRAME';
                   if (t === 'terminal') return 'TERMINAL';

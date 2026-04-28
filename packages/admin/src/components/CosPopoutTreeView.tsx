@@ -1,4 +1,5 @@
 import { type ComponentChildren, type VNode } from 'preact';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { SplitPane } from './SplitPane.js';
 import {
   type PaneNode,
@@ -11,7 +12,15 @@ import {
   cosRemoveTabFromLeaf,
   COS_POPOUT_CHAT_TAB,
   COS_POPOUT_LEARNINGS_TAB,
+  COS_POPOUT_THREAD_TAB,
 } from '../lib/cos-popout-tree.js';
+import {
+  cosArtifactDrawer,
+  closeArtifactDrawerTab,
+  setActiveArtifactDrawerTab,
+  setArtifactDrawerWidth,
+  ARTIFACT_DRAWER_MIN_WIDTH,
+} from '../lib/cos-artifact-drawer.js';
 import { cosArtifacts } from '../lib/cos-artifacts.js';
 import { ArtifactCompanionView } from './ArtifactCompanionView.js';
 
@@ -26,6 +35,7 @@ export function CosPopoutTreeView({
   tree,
   chatContent,
   learningsContent,
+  threadContent,
 }: {
   /** Tree snapshot. Passed by the parent (which subscribes to the signal) so
    *  Preact re-renders on mutation even inside an IIFE-shaped JSX expression. */
@@ -33,6 +43,8 @@ export function CosPopoutTreeView({
   chatContent: ComponentChildren;
   /** Render-prop for the learnings panel so the caller controls data loading. */
   learningsContent: ComponentChildren;
+  /** Slack-mode thread side-panel. */
+  threadContent: ComponentChildren;
 }) {
   function resolve(tabId: string): ResolvedTab {
     if (tabId === COS_POPOUT_CHAT_TAB) {
@@ -41,16 +53,8 @@ export function CosPopoutTreeView({
     if (tabId === COS_POPOUT_LEARNINGS_TAB) {
       return { label: 'Learnings', icon: '★', content: learningsContent, closable: true };
     }
-    if (tabId.startsWith('artifact:')) {
-      const id = tabId.slice('artifact:'.length);
-      const art = cosArtifacts.value[id];
-      const icon = art?.kind === 'code' ? '❮❯' : art?.kind === 'table' ? '▦' : '☰';
-      return {
-        label: art?.label || id,
-        icon,
-        content: <ArtifactCompanionView artifactId={id} />,
-        closable: true,
-      };
+    if (tabId === COS_POPOUT_THREAD_TAB) {
+      return { label: 'Thread', icon: '↳', content: threadContent, closable: true };
     }
     return { label: tabId, content: <div />, closable: false };
   }
@@ -58,6 +62,7 @@ export function CosPopoutTreeView({
   return (
     <div class="cos-tree-root">
       {renderNode(tree.root, resolve)}
+      <ArtifactDrawerOverlay />
     </div>
   );
 }
@@ -145,6 +150,110 @@ function CosLeafView({
       )}
       <div class="cos-tree-leaf-body">
         {active.content}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Floating drawer that overlays the popout chat tree from the right edge.
+ * Tabs across the top let the user switch between multiple open artifacts;
+ * the left edge is a resize handle. Dragging the handle past the close
+ * threshold (right of the right edge) closes the drawer entirely.
+ */
+function ArtifactDrawerOverlay() {
+  const state = cosArtifactDrawer.value;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState(false);
+
+  useEffect(() => {
+    if (!dragging) return;
+    function onMove(ev: MouseEvent) {
+      const root = containerRef.current?.parentElement;
+      if (!root) return;
+      const rect = root.getBoundingClientRect();
+      // Drawer is anchored to the right edge of the tree root. New width =
+      // distance from cursor to right edge.
+      const next = Math.max(0, rect.right - ev.clientX);
+      // If the user drags the handle past the right edge (negative width
+      // intent), close the drawer outright.
+      if (rect.right - ev.clientX < ARTIFACT_DRAWER_MIN_WIDTH / 2) {
+        // Don't auto-close mid-drag; just clamp to min. Closing happens on
+        // mouseup if we ended below the threshold.
+        setArtifactDrawerWidth(ARTIFACT_DRAWER_MIN_WIDTH);
+        return;
+      }
+      // Cap at 95% of tree-root width so the chat stays peekable.
+      const maxWidth = rect.width * 0.95;
+      setArtifactDrawerWidth(Math.min(maxWidth, next));
+    }
+    function onUp() {
+      setDragging(false);
+    }
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [dragging]);
+
+  if (state.tabs.length === 0) return null;
+
+  const activeId = state.activeTabId && state.tabs.includes(state.activeTabId)
+    ? state.activeTabId
+    : state.tabs[0];
+
+  return (
+    <div
+      ref={containerRef}
+      class={`cos-artifact-drawer-overlay${dragging ? ' cos-artifact-drawer-overlay-dragging' : ''}`}
+      style={{ width: `${state.width}px` }}
+    >
+      <div
+        class="cos-artifact-drawer-resize"
+        onMouseDown={(e) => { e.preventDefault(); setDragging(true); }}
+        title="Drag to resize, drag right to close"
+      />
+      <div class="cos-artifact-drawer-tabs" role="tablist">
+        {state.tabs.map((id) => {
+          const art = cosArtifacts.value[id];
+          const icon = art?.kind === 'code' ? '❮❯' : art?.kind === 'table' ? '▦' : '☰';
+          const label = art?.label || id;
+          const isActive = id === activeId;
+          return (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              class={`cos-artifact-drawer-tab${isActive ? ' cos-artifact-drawer-tab-active' : ''}`}
+              onClick={() => setActiveArtifactDrawerTab(id)}
+              title={label}
+            >
+              <span class="cos-artifact-drawer-tab-icon" aria-hidden="true">{icon}</span>
+              <span class="cos-artifact-drawer-tab-label">{label}</span>
+              <span
+                class="cos-artifact-drawer-tab-close"
+                role="button"
+                tabIndex={0}
+                aria-label={`Close ${label}`}
+                onClick={(e) => { e.stopPropagation(); closeArtifactDrawerTab(id); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.stopPropagation();
+                    closeArtifactDrawerTab(id);
+                  }
+                }}
+              >
+                &times;
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div class="cos-artifact-drawer-body">
+        {activeId && <ArtifactCompanionView artifactId={activeId} />}
       </div>
     </div>
   );
