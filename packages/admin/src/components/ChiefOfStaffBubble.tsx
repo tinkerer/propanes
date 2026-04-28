@@ -41,12 +41,6 @@ import {
   isCosInPane,
   closeCosPane,
   COS_PANE_TAB_ID,
-  cosDrafts,
-  getCosDraft,
-  setCosDraft,
-  clearCosDraft,
-  loadCosDrafts,
-  hasAnyCosDraftForAgent,
   cosThreadMeta,
   getThreadMeta,
   setThreadResolved,
@@ -107,6 +101,14 @@ import {
 import { CosPopoutTreeView } from './CosPopoutTreeView.js';
 import { openArtifactDrawerTab, isArtifactDrawerOpen } from '../lib/cos-artifact-drawer.js';
 import { cosLearnings, loadCosLearnings } from '../lib/cos-learnings.js';
+import {
+  cosDrafts,
+  getCosDraft,
+  setCosDraft,
+  clearCosDraft,
+  loadCosDrafts,
+  hasAnyCosDraftForAgent,
+} from '../lib/cos-drafts.js';
 import { LearningsPanel } from './LearningsDrawer.js';
 import {
   MessageAvatar,
