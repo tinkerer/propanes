@@ -68,6 +68,20 @@ test.describe('Mobile structural assertions', () => {
     }
   });
 
+  test('ticket detail deep link renders on mobile and the Ops toggle opens', async ({ loggedInPage, env }) => {
+    const page = loggedInPage;
+    const fbId = env.feedbackIds[0];
+    await page.goto(`/admin/#/app/${env.appId}/tickets/${fbId}`);
+    await page.waitForTimeout(800);
+
+    await expect(page.locator('.detail-card').first()).toBeVisible({ timeout: 10_000 });
+
+    const opsToggle = page.getByRole('button', { name: 'Open Ops chat' }).first();
+    await expect(opsToggle).toBeVisible();
+    await opsToggle.click();
+    await expect(page.locator('.cos-popout').first()).toBeVisible({ timeout: 10_000 });
+  });
+
   test(`primary buttons are at least ${MIN_TAP_TARGET}px tall (annotation only on mobile)`, async ({ loggedInPage, env }) => {
     const page = loggedInPage;
     await page.goto(`/admin/#/app/${env.appId}/feedback`);

@@ -537,12 +537,12 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
   // message as the initial prompt. Per-turn context (requestId, other active
   // sessions) is prepended so the persistent session sees it.
   {
-    // Prepend per-turn metadata so the model has requestId / lock context.
-    const turnMeta = [
-      `[TURN requestId=${requestId}]`,
-      otherSessions.length > 0 ? `Other active Ops sessions: ${JSON.stringify(otherSessions)}` : null,
-    ].filter(Boolean).join('\n');
-    const fullTurnText = turnMeta ? `${turnMeta}\n\n${promptText}` : promptText;
+    // Prepend a minimal per-turn header so the model knows its requestId for
+    // the lock API. The full list of concurrent sessions is no longer injected
+    // every turn — the model can fetch it on demand via
+    // GET /api/v1/admin/chief-of-staff/sessions when it actually needs to
+    // coordinate. Avoids re-shipping a verbose JSON blob each turn.
+    const fullTurnText = `[TURN requestId=${requestId}]\n\n${promptText}`;
 
     const liveStatus = await getSessionStatus(thread.agentSessionId).catch(() => null);
     const isLive = liveStatus?.active && liveStatus.status === 'running';

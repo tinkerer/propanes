@@ -11,7 +11,11 @@ import {
   getThreadMeta,
   setThreadResolved,
   setThreadArchived,
+  leavingThreadIds,
+  isThreadLeaving,
+  markThreadLeaving,
 } from '../lib/chief-of-staff.js';
+import { cosShowResolved, cosShowArchived } from '../lib/cos-popout-tree.js';
 import {
   getCachedFeedbackTitle,
   fetchFeedbackTitle,
@@ -198,7 +202,6 @@ export function ThreadBlock({
   onStop,
   showTools,
   highlightMsgIdx,
-  onReply,
   onArtifactPopout,
   hasUnread,
   agentId,
@@ -215,7 +218,6 @@ export function ThreadBlock({
   onStop: () => void;
   showTools: boolean;
   highlightMsgIdx: number | null;
-  onReply: (role: string, text: string, anchorTs?: number, threadServerId?: string | null) => void;
   onArtifactPopout: (artifactId: string) => void;
   hasUnread: boolean;
   agentId: string;
@@ -239,8 +241,6 @@ export function ThreadBlock({
   const effectiveCollapsed = slackCollapse ? true : collapsed;
   const showSummaryCollapsed = !!userMsg && effectiveCollapsed && hasReplies;
   const showExpandedReplies = !userMsg || !effectiveCollapsed;
-  const threadContext = userMsg?.text || '';
-  const anchorTs = userMsg?.timestamp;
   const agentAvatarSrc = getAgentAvatarSrc(agentId);
   // Each UI thread maps to one server-side cosThread. Pull the id from any
   // tagged message so Stop targets just this thread's Claude session instead
@@ -252,26 +252,31 @@ export function ThreadBlock({
   // tab). getThreadMeta resolves to null when no meta has loaded yet.
   const _metaVersion = cosThreadMeta.value;
   void _metaVersion;
+  // Subscribe to the leaving set so .cos-thread-block-leaving picks up the
+  // moment the resolve/archive action fires.
+  const _leavingVersion = leavingThreadIds.value;
+  void _leavingVersion;
   const threadMeta = threadServerId ? getThreadMeta(threadServerId) : null;
   const isResolved = !!threadMeta?.resolvedAt;
   const isArchived = !!threadMeta?.archivedAt;
+  const isLeaving = isThreadLeaving(threadServerId);
   const handleThreadStop = () => {
     if (threadServerId) void interruptThread(threadServerId);
     else onStop();
   };
-  const handleThreadReply = () => {
-    if (threadContext) onReply('user', threadContext, anchorTs, threadServerId);
-  };
   const handleToggleResolved = () => {
     if (!threadServerId) return;
+    // Animate out only when the post-action filter would hide the thread.
+    if (!isResolved && !cosShowResolved.value) markThreadLeaving(threadServerId);
     void setThreadResolved(threadServerId, !isResolved);
   };
   const handleToggleArchived = () => {
     if (!threadServerId) return;
+    if (!isArchived && !cosShowArchived.value) markThreadLeaving(threadServerId);
     void setThreadArchived(threadServerId, !isArchived);
   };
   return (
-    <div class={`cos-thread-block${hasUnread ? ' cos-thread-block-unread' : ''}${userMsg ? '' : ' cos-thread-block-orphan'}${isResolved ? ' cos-thread-block-resolved' : ''}${isArchived ? ' cos-thread-block-archived' : ''}`}>
+    <div class={`cos-thread-block${hasUnread ? ' cos-thread-block-unread' : ''}${userMsg ? '' : ' cos-thread-block-orphan'}${isResolved ? ' cos-thread-block-resolved' : ''}${isArchived ? ' cos-thread-block-archived' : ''}${isLeaving ? ' cos-thread-block-leaving' : ''}`}>
       {userMsg && (
         <div
           class={`cos-msg cos-row cos-row-user cos-row-post${highlightMsgIdx === userIdx ? ' cos-msg-highlight' : ''}${hasUnread ? ' cos-row-unread' : ''}`}
@@ -298,13 +303,13 @@ export function ThreadBlock({
       )}
       {(hasReplies || dispatches.length > 0) && (
         <div class="cos-thread-children">
-          {showExpandedReplies && userMsg && hasReplies && (
+          {userMsg && hasReplies && (
             <button
               type="button"
               class="cos-thread-collapse-rail"
-              onClick={onToggle}
-              aria-label="Collapse thread"
-              title="Collapse thread"
+              onClick={!showExpandedReplies && slackCollapse ? onOpenInPanel : onToggle}
+              aria-label={showExpandedReplies ? 'Collapse thread' : 'Expand thread'}
+              title={showExpandedReplies ? 'Collapse thread' : 'Expand thread'}
             />
           )}
           {dispatches.length > 0 && <DispatchStatusLine dispatches={dispatches} />}
@@ -413,17 +418,16 @@ export function ThreadBlock({
             )}
             <button
               type="button"
-              class="cos-thread-reply-btn"
-              onClick={handleThreadReply}
-              title="Reply in thread"
+              class={`cos-thread-reply-btn${isActiveInPanel ? ' cos-thread-reply-btn-active' : ''}`}
+              onClick={onOpenInPanel}
+              title="Reply in this thread (opens thread companion)"
               aria-label="Reply in thread"
-              disabled={!threadContext}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <polyline points="9 17 4 12 9 7" />
                 <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
               </svg>
-              <span>Reply in thread</span>
+              <span>Reply</span>
             </button>
             {actionsLinkSid && (
               <button

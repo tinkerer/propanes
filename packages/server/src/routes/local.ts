@@ -123,6 +123,13 @@ localRoutes.post('/open-terminal', async (c) => {
 // windows are sent back the same way. The popup stays open on error so the
 // failure is inspectable; on a clean stop it self-closes after a short delay
 // (extended via ?keepOpen=1 for debugging).
+//
+// The same popup also bridges getDisplayMedia for screen capture (same
+// secure-context constraint as getUserMedia). Commands: `screen-capture-once`,
+// `screen-stream-start`, `screen-stream-capture`, `screen-stream-stop`. PNG
+// frames are returned as Uint8Array via postMessage with the same
+// `pw-mic-bridge` source. Opening the popup with ?screen=1 surfaces the
+// share-screen UI immediately for callers that only want screen capture.
 localRoutes.get('/mic-bridge', (c) => {
   return c.html(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Mic Bridge</title>
@@ -158,6 +165,15 @@ localRoutes.get('/mic-bridge', (c) => {
                    border-radius: 4px; padding: 4px 6px; font-size: 11.5px;
                    font-family: inherit; }
   .picker select:focus { outline: none; border-color: #4b5d80; }
+  .screen { margin-top: 10px; padding: 8px 10px; border: 1px solid #2a2f4a;
+            border-radius: 6px; background: #0f1626; }
+  .screen .row { margin-top: 6px; }
+  .screen .dot2 { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                  background: #6b7280; margin-right: 6px; vertical-align: middle; }
+  .screen .dot2.active { background: #22c55e; animation: pulse 1.6s ease-in-out infinite; }
+  .screen .dot2.error { background: #f87171; }
+  .screen .label { font-size: 11.5px; font-weight: 600; }
+  .screen .sub { font-size: 10.5px; color: #8b8fa3; margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -171,6 +187,14 @@ localRoutes.get('/mic-bridge', (c) => {
   <div class="row">
     <button class="btn" id="copyBtn" type="button">Copy log</button>
     <button class="btn" id="closeBtn" type="button">Close</button>
+  </div>
+  <div class="screen" id="screenSection" style="display:none">
+    <div><span class="dot2" id="screenDot"></span><span class="label">Screen capture</span></div>
+    <div class="sub" id="screenStatus">Not sharing</div>
+    <div class="row">
+      <button class="btn" id="screenShareBtn" type="button">Share screen</button>
+      <button class="btn" id="screenStopBtn" type="button" style="display:none">Stop sharing</button>
+    </div>
   </div>
 </div>
 <div class="log" id="log"></div>
@@ -302,6 +326,162 @@ let windowBuffer = [];
 let flushTimer = null;
 let silenceTimer = null;
 let lastLang = 'en-US';
+
+// ----- Screen capture state -----
+// Mirrors the mic side: secure-context-only APIs (getDisplayMedia) are run
+// here in the popup and frames are postMessage'd back to the opener as PNG
+// bytes. Two modes: one-shot (open + grab one frame + close stream) and
+// persistent stream (Chrome share-this-tab indicator stays up; capture frames
+// on demand without re-prompting).
+let screenStream = null;
+let screenVideo = null;
+let screenSharing = false;
+
+const screenSection = document.getElementById('screenSection');
+const screenDot = document.getElementById('screenDot');
+const screenStatus = document.getElementById('screenStatus');
+const screenShareBtn = document.getElementById('screenShareBtn');
+const screenStopBtn = document.getElementById('screenStopBtn');
+
+function setScreenStatus(text, kind) {
+  screenStatus.textContent = text;
+  screenDot.className = 'dot2' + (kind ? (' ' + kind) : '');
+  screenShareBtn.style.display = screenSharing ? 'none' : '';
+  screenStopBtn.style.display = screenSharing ? '' : 'none';
+}
+function showScreenSection() { screenSection.style.display = ''; }
+
+async function startScreenStream(reqId) {
+  if (screenSharing) {
+    log('warn', 'screen already sharing, ignoring start');
+    post('screenStreamStarted', { reqId, alreadyActive: true });
+    return;
+  }
+  showScreenSection();
+  log('log', 'requesting getDisplayMedia (persistent stream)');
+  setScreenStatus('Requesting…');
+  try {
+    screenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { displaySurface: 'browser' },
+    });
+    const v = document.createElement('video');
+    v.srcObject = screenStream;
+    v.autoplay = true;
+    v.muted = true;
+    await new Promise((r) => { v.onloadeddata = () => r(); });
+    screenVideo = v;
+    screenSharing = true;
+    const track = screenStream.getVideoTracks()[0];
+    track.addEventListener('ended', () => {
+      log('log', 'screen track ended (user stopped sharing)');
+      cleanupScreenStream();
+      post('screenStreamStopped', { reason: 'track-ended' });
+    });
+    setScreenStatus('Sharing — ' + screenVideo.videoWidth + '×' + screenVideo.videoHeight, 'active');
+    log('log', 'screen stream started', { w: screenVideo.videoWidth, h: screenVideo.videoHeight });
+    post('screenStreamStarted', { reqId, width: screenVideo.videoWidth, height: screenVideo.videoHeight });
+  } catch (err) {
+    log('error', 'getDisplayMedia failed:', err);
+    setScreenStatus(err.message || err.name || 'Failed', 'error');
+    const code = err.name === 'NotAllowedError' ? 'NOT_ALLOWED'
+      : err.name === 'NotFoundError' ? 'NOT_FOUND'
+      : err.name === 'NotReadableError' ? 'NOT_READABLE'
+      : 'UNKNOWN';
+    post('screenError', { reqId, code, message: err.message || err.name || 'getDisplayMedia failed' });
+  }
+}
+
+async function captureScreenFrame(reqId) {
+  if (!screenSharing || !screenVideo) {
+    post('screenFrame', { reqId, ok: false, code: 'NOT_SHARING', message: 'Screen is not being shared — call screen-stream-start first' });
+    return;
+  }
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = screenVideo.videoWidth;
+    canvas.height = screenVideo.videoHeight;
+    canvas.getContext('2d').drawImage(screenVideo, 0, 0);
+    const blob = await new Promise((r) => canvas.toBlob((b) => r(b), 'image/png'));
+    if (!blob) {
+      post('screenFrame', { reqId, ok: false, code: 'ENCODE_FAILED', message: 'canvas.toBlob returned null' });
+      return;
+    }
+    const buf = await blob.arrayBuffer();
+    log('debug', 'captured frame', { reqId, bytes: buf.byteLength, w: canvas.width, h: canvas.height });
+    post('screenFrame', { reqId, ok: true, bytes: new Uint8Array(buf), width: canvas.width, height: canvas.height });
+  } catch (err) {
+    log('error', 'captureScreenFrame failed:', err);
+    post('screenFrame', { reqId, ok: false, code: 'CAPTURE_FAILED', message: err.message || String(err) });
+  }
+}
+
+async function captureScreenOnce(reqId) {
+  if (screenSharing) {
+    return captureScreenFrame(reqId);
+  }
+  showScreenSection();
+  log('log', 'requesting getDisplayMedia (one-shot)');
+  setScreenStatus('Requesting…');
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { displaySurface: 'browser' },
+    });
+    const v = document.createElement('video');
+    v.srcObject = stream;
+    v.autoplay = true;
+    v.muted = true;
+    await new Promise((r) => { v.onloadeddata = () => r(); });
+    const canvas = document.createElement('canvas');
+    canvas.width = v.videoWidth;
+    canvas.height = v.videoHeight;
+    canvas.getContext('2d').drawImage(v, 0, 0);
+    const blob = await new Promise((r) => canvas.toBlob((b) => r(b), 'image/png'));
+    stream.getTracks().forEach((t) => t.stop());
+    setScreenStatus('Captured ' + canvas.width + '×' + canvas.height);
+    if (!blob) {
+      post('screenFrame', { reqId, ok: false, code: 'ENCODE_FAILED', message: 'canvas.toBlob returned null' });
+      return;
+    }
+    const buf = await blob.arrayBuffer();
+    log('log', 'one-shot capture done', { reqId, bytes: buf.byteLength, w: canvas.width, h: canvas.height });
+    post('screenFrame', { reqId, ok: true, bytes: new Uint8Array(buf), width: canvas.width, height: canvas.height });
+  } catch (err) {
+    log('error', 'one-shot getDisplayMedia failed:', err);
+    setScreenStatus(err.message || err.name || 'Failed', 'error');
+    const code = err.name === 'NotAllowedError' ? 'NOT_ALLOWED'
+      : err.name === 'NotFoundError' ? 'NOT_FOUND'
+      : err.name === 'NotReadableError' ? 'NOT_READABLE'
+      : 'UNKNOWN';
+    post('screenFrame', { reqId, ok: false, code, message: err.message || err.name || 'getDisplayMedia failed' });
+  }
+}
+
+function cleanupScreenStream() {
+  if (screenStream) {
+    try { screenStream.getTracks().forEach((t) => t.stop()); } catch {}
+    screenStream = null;
+  }
+  screenVideo = null;
+  screenSharing = false;
+  setScreenStatus('Not sharing');
+}
+
+function stopScreenStream() {
+  if (!screenSharing) {
+    log('warn', 'screen not sharing, stop is a no-op');
+    post('screenStreamStopped', { reason: 'not-active' });
+    return;
+  }
+  log('log', 'stopping screen stream (parent-cmd)');
+  cleanupScreenStream();
+  post('screenStreamStopped', { reason: 'parent-cmd' });
+}
+
+screenShareBtn.addEventListener('click', () => startScreenStream(null));
+screenStopBtn.addEventListener('click', () => stopScreenStream());
+
+// ?screen=1 — surface the share-screen UI immediately (no command needed).
+if (params.get('screen') === '1') showScreenSection();
 
 // Posts go to whichever bridge transport opened us — popup uses window.opener,
 // legacy iframe uses window.parent. Pick the one that's actually a separate window.
@@ -526,7 +706,10 @@ copyBtn.addEventListener('click', async () => {
 });
 
 // If the opener navigates away or closes, stop ourselves.
-window.addEventListener('beforeunload', () => { if (running) stopAmbient('beforeunload'); });
+window.addEventListener('beforeunload', () => {
+  if (running) stopAmbient('beforeunload');
+  if (screenSharing) cleanupScreenStream();
+});
 
 window.addEventListener('message', (e) => {
   const d = e.data;
@@ -535,6 +718,10 @@ window.addEventListener('message', (e) => {
   else if (d.type === 'stop') stopAmbient('parent-cmd');
   else if (d.type === 'flush') { if (running) { log('log', 'manual flush'); flushWindow(); } }
   else if (d.type === 'ping') post('pong', {});
+  else if (d.type === 'screen-capture-once') captureScreenOnce(d.reqId);
+  else if (d.type === 'screen-stream-start') startScreenStream(d.reqId);
+  else if (d.type === 'screen-stream-capture') captureScreenFrame(d.reqId);
+  else if (d.type === 'screen-stream-stop') stopScreenStream();
 });
 
 window.addEventListener('error', (e) => {

@@ -91,6 +91,14 @@ export interface CaptureOptions {
   keepStream?: boolean;
   onStatus?: (msg: string) => void;
   method?: ScreenshotMethod;
+  /**
+   * Optional fallback used when `method: 'display-media'` is requested from an
+   * insecure context (where getDisplayMedia is unavailable). The widget wires
+   * this to the mic-bridge popup so the same secure-context unlock used by
+   * `getUserMedia` covers screen capture too. When set, we invoke this instead
+   * of getDisplayMedia and let the bridge handle the prompt + frame encode.
+   */
+  bridgeCapture?: () => Promise<Blob | null>;
 }
 
 /* ── html-to-image capture ── */
@@ -328,12 +336,40 @@ async function capturePersistent(opts?: CaptureOptions): Promise<Blob | null> {
   }
 }
 
+/* ── bridge fallback (insecure-context callers) ── */
+async function captureViaBridge(opts: CaptureOptions): Promise<Blob | null> {
+  // Hide widget + virtual cursor in the same way as the native paths so the
+  // captured frame matches what those paths would have produced. The bridge
+  // popup runs in a separate window so DOM mutation here is safe.
+  const host = opts.excludeWidget ? document.querySelector('propanes-host') as HTMLElement | null : null;
+  if (host) host.style.display = 'none';
+  const cursor = opts.excludeCursor ? document.getElementById('__pw-virtual-cursor') : null;
+  const prevCursorDisplay = cursor?.style.display;
+  if (cursor) cursor.style.display = 'none';
+  try {
+    return await opts.bridgeCapture!();
+  } catch (err) {
+    console.error('[pw] screenshot: bridgeCapture failed:', err);
+    return null;
+  } finally {
+    if (host) host.style.display = '';
+    if (cursor) cursor.style.display = prevCursorDisplay ?? '';
+  }
+}
+
 /* ── public API ── */
 export async function captureScreenshot(opts?: CaptureOptions): Promise<Blob | null> {
   const method = opts?.method ?? 'html-to-image';
 
   if (method === 'html-to-image') {
     return captureHtmlToImage(opts);
+  }
+
+  // Insecure context: getDisplayMedia is unavailable. Route through the
+  // mic-bridge popup if the caller wired one up; otherwise fall through to the
+  // native call so the existing error path runs.
+  if (opts?.bridgeCapture && typeof window !== 'undefined' && window.isSecureContext === false) {
+    return captureViaBridge(opts);
   }
 
   if (opts?.keepStream) {

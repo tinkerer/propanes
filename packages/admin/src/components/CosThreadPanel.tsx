@@ -2,11 +2,17 @@ import { useEffect, useMemo, useRef } from 'preact/hooks';
 import {
   chiefOfStaffAgents,
   sendChiefOfStaffMessage,
+  interruptThread,
   DEFAULT_VERBOSITY,
   type ChiefOfStaffVerbosity,
   type CosImageAttachment,
   type CosElementRef,
 } from '../lib/chief-of-staff.js';
+import {
+  cosFollowups,
+  enqueueCosFollowup,
+} from '../lib/cos-followups.js';
+import { CosEnqueuedList } from './CosEnqueuedList.js';
 import { selectedAppId } from '../lib/state.js';
 import { getSessionIdForThread } from '../lib/cos-thread-meta.js';
 import {
@@ -19,7 +25,15 @@ import { useTranscriptStream } from '../lib/transcript-stream.js';
 import { jsonlToCosMessages } from '../lib/jsonl-to-cos.js';
 import { groupIntoThreads, threadKeyOf } from './CosThread.js';
 import { MessageBubble } from './CosMessage.js';
-import { CosComposer } from './CosComposer.js';
+import { CosComposer, type CosComposerHandle } from './CosComposer.js';
+import {
+  cosSavedDrafts,
+  saveCosDraft,
+  deleteCosDraft,
+  getThreadSavedDrafts,
+  type CosSavedDraft,
+} from '../lib/cos-saved-drafts.js';
+import { CosSavedDraftsList } from './CosSavedDraftsList.js';
 
 /**
  * Slack-mode side panel for one thread.
@@ -39,7 +53,7 @@ import { CosComposer } from './CosComposer.js';
  */
 export function ThreadPanel({
   agentId,
-  showTools: _showTools,
+  showTools,
   verbosity: _verbosity,
   onArtifactPopout,
   onReply,
@@ -54,7 +68,6 @@ export function ThreadPanel({
   onClose: () => void;
   compact?: boolean;
 }) {
-  void onArtifactPopout; // routed through the structured-view chat opts below if needed later
   const active = cosActiveThread.value;
   const agents = chiefOfStaffAgents.value;
   const agent = agents.find((a) => a.id === agentId) || null;
@@ -87,6 +100,15 @@ export function ThreadPanel({
     };
   }, [active?.agentId, active?.threadKey]);
 
+  // Hooks must run on every render — declare composerRef and the
+  // saved-drafts subscription before the early-return below so the hook order
+  // stays stable across `isEmpty` flips.
+  const composerRef = useRef<CosComposerHandle | null>(null);
+  const _savedDraftsTick = cosSavedDrafts.value;
+  void _savedDraftsTick;
+  const _followupsTick = cosFollowups.value;
+  void _followupsTick;
+
   if (isEmpty) return null;
 
   const { userMsg, replies } = found;
@@ -108,12 +130,61 @@ export function ThreadPanel({
     text: string,
     attachments: CosImageAttachment[],
     elementRefs: CosElementRef[],
-  ) {
-    if (!text && attachments.length === 0 && elementRefs.length === 0) return;
-    sendChiefOfStaffMessage(text, selectedAppId.value, {
+  ): Promise<void> {
+    if (!text && attachments.length === 0 && elementRefs.length === 0) return Promise.resolve();
+    return sendChiefOfStaffMessage(text, selectedAppId.value, {
       replyToTs: anchorTs,
       attachments,
       elementRefs,
+    });
+  }
+
+  const threadDrafts = threadServerId
+    ? getThreadSavedDrafts(agentId, selectedAppId.value, threadServerId)
+    : [];
+  const threadFollowups = threadServerId
+    ? cosFollowups.value.filter((f) => f.agentId === agentId && f.threadServerId === threadServerId)
+    : [];
+
+  function handleSaveAsDraft(
+    text: string,
+    attachments: CosImageAttachment[],
+    elementRefs: CosElementRef[],
+  ) {
+    if (!text.trim() && attachments.length === 0 && elementRefs.length === 0) return;
+    if (!threadServerId) return;
+    saveCosDraft({
+      agentId,
+      appId: selectedAppId.value,
+      threadId: threadServerId,
+      replyToTs: anchorTs,
+      text,
+      attachments,
+      elementRefs,
+    });
+  }
+
+  function handleLoadSavedDraft(draft: CosSavedDraft) {
+    const snap = composerRef.current?.getSnapshot();
+    const hasText = !!snap?.text.trim();
+    const hasAtts = (snap?.attachments?.length ?? 0) > 0;
+    const hasRefs = (snap?.elementRefs?.length ?? 0) > 0;
+    if (snap && (hasText || hasAtts || hasRefs) && threadServerId) {
+      saveCosDraft({
+        agentId,
+        appId: selectedAppId.value,
+        threadId: threadServerId,
+        replyToTs: anchorTs,
+        text: snap.text,
+        attachments: snap.attachments,
+        elementRefs: snap.elementRefs,
+      });
+    }
+    deleteCosDraft(draft.id);
+    composerRef.current?.loadSnapshot({
+      text: draft.text,
+      attachments: draft.attachments,
+      elementRefs: draft.elementRefs,
     });
   }
 
@@ -134,12 +205,52 @@ export function ThreadPanel({
         agentId={agentId}
         agentName={agent.name}
         verbosity={agent.verbosity || DEFAULT_VERBOSITY}
+        showTools={showTools}
+        onArtifactPopout={onArtifactPopout}
       />
+      {threadDrafts.length > 0 && (
+        <div class="cos-thread-panel-drafts">
+          <CosSavedDraftsList
+            drafts={threadDrafts}
+            onLoad={handleLoadSavedDraft}
+            onDelete={(d) => { deleteCosDraft(d.id); }}
+            scope="thread"
+          />
+        </div>
+      )}
+      {threadFollowups.length > 0 && (
+        <div class="cos-thread-panel-drafts">
+          <CosEnqueuedList followups={threadFollowups} scope="thread" />
+        </div>
+      )}
       <div class="cos-thread-panel-composer">
         <CosComposer
+          ref={composerRef}
           placeholder={isAgentStreaming ? 'Reply (agent is responding…)' : 'Reply in this thread… (paste images to attach)'}
           draft={draftBinding}
           onSend={handleSend}
+          onSaveDraft={threadServerId ? handleSaveAsDraft : undefined}
+          streaming={isAgentStreaming}
+          onStop={threadServerId ? () => { void interruptThread(threadServerId); } : undefined}
+          onEnqueueAfterCurrent={threadServerId ? (text, attachments, elementRefs) => {
+            enqueueCosFollowup({
+              agentId,
+              appId: selectedAppId.value,
+              threadServerId,
+              replyToTs: anchorTs,
+              text,
+              attachments,
+              elementRefs,
+            });
+          } : undefined}
+          onSendAndInterrupt={threadServerId ? async (text, attachments, elementRefs) => {
+            await interruptThread(threadServerId);
+            await sendChiefOfStaffMessage(text, selectedAppId.value, {
+              replyToTs: anchorTs,
+              attachments,
+              elementRefs,
+            });
+          } : undefined}
           onEscapeWhenEmpty={() => {
             if (userMsg?.text) onReply('user', userMsg.text, anchorTs, threadServerId);
           }}
@@ -162,11 +273,15 @@ function ThreadPanelBody({
   agentId,
   agentName,
   verbosity,
+  showTools,
+  onArtifactPopout,
 }: {
   sessionId: string | null;
   agentId: string;
   agentName: string;
   verbosity: ChiefOfStaffVerbosity;
+  showTools: boolean;
+  onArtifactPopout: (artifactId: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
@@ -218,8 +333,8 @@ function ThreadPanelBody({
           msg={msg}
           msgIdx={idx}
           highlighted={false}
-          showTools
-          onArtifactPopout={() => { /* artifact popout from panel TBD */ }}
+          showTools={showTools}
+          onArtifactPopout={onArtifactPopout}
           agentId={agentId}
           agentName={agentName}
           verbosity={verbosity}

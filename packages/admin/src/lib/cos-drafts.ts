@@ -17,6 +17,38 @@ function draftKey(agentId: string, appId: string | null, threadId: string | null
   return `${appId || ''}|${agentId}|${threadId || ''}`;
 }
 
+// Cross-window sync. Server is still source of truth on cold load, but this
+// keeps live typing in window A reflected in window B without waiting for the
+// debounced PUT + a peer-side reload. BroadcastChannel doesn't echo to the
+// sender per spec, so no own-write guard is needed.
+const BROADCAST_NAME = 'pw-cos-drafts';
+type DraftBroadcast =
+  | { type: 'set'; agentId: string; appId: string; threadId: string; text: string }
+  | { type: 'clear'; agentId: string; appId: string; threadId: string };
+const draftChannel: BroadcastChannel | null =
+  typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(BROADCAST_NAME) : null;
+
+function applyRemoteDraft(msg: DraftBroadcast): void {
+  const key = `${msg.appId}|${msg.agentId}|${msg.threadId}`;
+  const next = { ...cosDrafts.value };
+  if (msg.type === 'clear' || msg.text.length === 0) {
+    if (!(key in next)) return;
+    delete next[key];
+  } else {
+    if (next[key] === msg.text) return;
+    next[key] = msg.text;
+  }
+  cosDrafts.value = next;
+}
+
+if (draftChannel) {
+  draftChannel.onmessage = (e) => {
+    const m = e.data as DraftBroadcast | undefined;
+    if (!m || (m.type !== 'set' && m.type !== 'clear')) return;
+    applyRemoteDraft(m);
+  };
+}
+
 export function getCosDraft(
   agentId: string,
   appId: string | null,
@@ -71,10 +103,20 @@ export function setCosDraft(
   text: string,
 ): void {
   const key = draftKey(agentId, appId, threadId);
+  const prev = cosDrafts.value[key] ?? '';
+  if (prev === text) return;
   const next = { ...cosDrafts.value };
   if (text.length === 0) delete next[key];
   else next[key] = text;
   cosDrafts.value = next;
+
+  draftChannel?.postMessage({
+    type: 'set',
+    agentId,
+    appId: appId ?? '',
+    threadId: threadId ?? '',
+    text,
+  } satisfies DraftBroadcast);
 
   const existing = draftSaveTimers.get(key);
   if (existing) clearTimeout(existing);
@@ -98,6 +140,12 @@ export function clearCosDraft(
     delete next[key];
     cosDrafts.value = next;
   }
+  draftChannel?.postMessage({
+    type: 'clear',
+    agentId,
+    appId: appId ?? '',
+    threadId: threadId ?? '',
+  } satisfies DraftBroadcast);
   void pushDraftToServer(agentId, appId, threadId, '');
 }
 

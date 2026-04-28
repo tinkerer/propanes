@@ -170,6 +170,8 @@ export class VoiceRecorder {
   private micBridgeWindow: Window | null = null;
   private micBridgeListener: ((e: MessageEvent) => void) | null = null;
   private micBridgeCloseWatcher: ReturnType<typeof setInterval> | null = null;
+  private screenBridgeStateListener: ((e: MessageEvent) => void) | null = null;
+  private _screenBridgeStreamActive = false;
   private _transcript: TranscriptSegment[] = [];
   private _interactions: InteractionEvent[] = [];
   private _consoleLogs: ConsoleEntry[] = [];
@@ -487,7 +489,28 @@ export class VoiceRecorder {
     this.micBridgeCloseWatcher = setInterval(() => {
       if (this.micBridgeWindow?.closed) this.cleanupMicBridge();
     }, 500);
+    this.installScreenBridgeStateListener();
     return win;
+  }
+
+  /**
+   * Watch every `screenStreamStarted` / `screenStreamStopped` event from the
+   * bridge popup so callers can ask `hasActiveScreenBridgeStream` at any time
+   * without round-tripping. Per-call listeners attached by the screen-capture
+   * methods are scoped to a single response and don't track ongoing state.
+   * Removed when the popup closes (via `cleanupMicBridge`).
+   */
+  private installScreenBridgeStateListener() {
+    if (this.screenBridgeStateListener) return;
+    const listener = (e: MessageEvent) => {
+      const d = e.data;
+      if (!d || d.source !== 'pw-mic-bridge') return;
+      if (d.type === 'screenStreamStarted') this._screenBridgeStreamActive = true;
+      else if (d.type === 'screenStreamStopped') this._screenBridgeStreamActive = false;
+      else if (d.type === 'screenError') this._screenBridgeStreamActive = false;
+    };
+    window.addEventListener('message', listener);
+    this.screenBridgeStateListener = listener;
   }
 
   /**
@@ -780,6 +803,16 @@ export class VoiceRecorder {
       }, 500);
       this.micBridgeCloseWatcher = watch;
     }
+    // Popup is gone (or about to be) — the screen stream goes with it. Drop
+    // the persistent stream-state listener so we don't leak window listeners
+    // across popup lifecycles.
+    if (!keepWindow) {
+      if (this.screenBridgeStateListener) {
+        window.removeEventListener('message', this.screenBridgeStateListener);
+        this.screenBridgeStateListener = null;
+      }
+      this._screenBridgeStreamActive = false;
+    }
     // If the user closed the popup mid-recording, also tear down DOM listeners.
     if (this._recording) {
       this._recording = false;
@@ -787,6 +820,166 @@ export class VoiceRecorder {
       this.cleanupFns = [];
     }
     this._ambient = false;
+  }
+
+  /**
+   * True when the bridge popup currently owns an active getDisplayMedia
+   * stream — frames can be captured from it without a fresh permission prompt
+   * (and without user activation). Drives the gesture screenshot path.
+   */
+  get hasActiveScreenBridgeStream(): boolean {
+    return this._screenBridgeStreamActive && !!this.micBridgeWindow && !this.micBridgeWindow.closed;
+  }
+
+  /**
+   * Capture a single screen frame via the mic-bridge popup. Same problem the
+   * mic bridge solves: getDisplayMedia requires a secure context, so on
+   * insecure HTTP origins we route the call through the localhost popup.
+   *
+   * If the popup is already open (mic recording in progress) it's reused;
+   * otherwise this opens a popup, runs the one-shot capture, and closes it
+   * after a short delay so the user sees the captured-resolution status.
+   *
+   * Throws on permission denial / capture failure with a `.code` property
+   * matching the bridge's error codes (NOT_ALLOWED / NOT_FOUND / NOT_READABLE
+   * / UNKNOWN / POPUP_BLOCKED / TIMEOUT).
+   */
+  async captureScreenViaBridge(bridgeUrl: string, opts?: { timeoutMs?: number }): Promise<Blob> {
+    const timeoutMs = opts?.timeoutMs ?? 120_000;
+    // If a persistent stream is already running in the popup, grab a frame from
+    // it — no fresh getDisplayMedia prompt, no user activation needed. This is
+    // what lets the gesture path produce real captures on insecure origins.
+    if (this.hasActiveScreenBridgeStream) {
+      return this.captureScreenStreamFrameViaBridge(bridgeUrl, { timeoutMs });
+    }
+    const popup = this.ensureBridgePopup(bridgeUrl, '?screen=1');
+    const reqId = 'sc-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
+    const ownsPopup = !this._recording && !this._ambient;
+    try {
+      const blob = await this.awaitScreenFrame(popup, reqId, 'screen-capture-once', timeoutMs);
+      return blob;
+    } finally {
+      if (ownsPopup && !this._screenBridgeStreamActive) {
+        // Close the popup we opened just for this capture, after a short delay
+        // so the user can see the captured-resolution status line. Skip this
+        // when a persistent stream is alive — closing the popup would tear it
+        // down and the user would have to re-share next time.
+        setTimeout(() => {
+          if (this.micBridgeWindow && !this._recording && !this._ambient && !this._screenBridgeStreamActive) {
+            try { this.micBridgeWindow.close(); } catch {}
+            this.cleanupMicBridge();
+          }
+        }, 800);
+      }
+    }
+  }
+
+  /**
+   * Start a persistent screen-share stream in the bridge popup. While the
+   * stream is active, callers can grab frames cheaply via
+   * `captureScreenStreamFrameViaBridge` without re-prompting. Pair with
+   * `stopScreenStreamViaBridge` when done.
+   */
+  async startScreenStreamViaBridge(bridgeUrl: string, opts?: { timeoutMs?: number }): Promise<{ width: number; height: number }> {
+    const timeoutMs = opts?.timeoutMs ?? 120_000;
+    const popup = this.ensureBridgePopup(bridgeUrl, '?screen=1');
+    const reqId = 'ss-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
+    return new Promise<{ width: number; height: number }>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', listener);
+        const err = new Error('Screen stream start timed out');
+        (err as any).code = 'TIMEOUT';
+        reject(err);
+      }, timeoutMs);
+      const listener = (e: MessageEvent) => {
+        const d = e.data;
+        if (!d || d.source !== 'pw-mic-bridge') return;
+        if (d.type === 'log') { this.handleBridgeLog(d.level, d.ts, d.message); return; }
+        if (d.type === 'screenStreamStarted' && (!d.reqId || d.reqId === reqId)) {
+          clearTimeout(timer);
+          window.removeEventListener('message', listener);
+          resolve({ width: d.width || 0, height: d.height || 0 });
+        } else if (d.type === 'screenError' && (!d.reqId || d.reqId === reqId)) {
+          clearTimeout(timer);
+          window.removeEventListener('message', listener);
+          const err = new Error(d.message || 'Screen stream error');
+          (err as any).code = d.code;
+          reject(err);
+        }
+      };
+      window.addEventListener('message', listener);
+      popup.postMessage({ source: 'pw-mic-bridge-cmd', type: 'screen-stream-start', reqId }, '*');
+    });
+  }
+
+  /** Capture a frame from the persistent screen-share stream. */
+  async captureScreenStreamFrameViaBridge(bridgeUrl: string, opts?: { timeoutMs?: number }): Promise<Blob> {
+    const timeoutMs = opts?.timeoutMs ?? 10_000;
+    const popup = this.ensureBridgePopup(bridgeUrl, '?screen=1');
+    const reqId = 'sf-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
+    return this.awaitScreenFrame(popup, reqId, 'screen-stream-capture', timeoutMs);
+  }
+
+  /** Stop the persistent screen-share stream. */
+  stopScreenStreamViaBridge(): void {
+    if (!this.micBridgeWindow || this.micBridgeWindow.closed) return;
+    this.micBridgeWindow.postMessage({ source: 'pw-mic-bridge-cmd', type: 'screen-stream-stop' }, '*');
+  }
+
+  /**
+   * Open the bridge popup if not already open, or reuse the existing one.
+   * Returns the popup window. The hashFragment is appended so callers can
+   * surface the screen-capture UI immediately when opening the popup just for
+   * screen capture (e.g. ?screen=1).
+   */
+  private ensureBridgePopup(bridgeUrl: string, querySuffix: string = ''): Window {
+    if (this.micBridgeWindow && !this.micBridgeWindow.closed) return this.micBridgeWindow;
+    let finalUrl = bridgeUrl;
+    if (querySuffix) {
+      const cleaned = querySuffix.replace(/^[?&]/, '');
+      finalUrl = bridgeUrl + (bridgeUrl.includes('?') ? '&' : '?') + cleaned;
+    }
+    return this.openMicBridgeWindow(finalUrl);
+  }
+
+  /**
+   * Send a screen-capture command and wait for the matching `screenFrame`
+   * response. Decodes the bridge's Uint8Array payload back into a PNG Blob.
+   */
+  private awaitScreenFrame(popup: Window, reqId: string, cmdType: 'screen-capture-once' | 'screen-stream-capture', timeoutMs: number): Promise<Blob> {
+    return new Promise<Blob>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', listener);
+        const err = new Error('Screen capture timed out');
+        (err as any).code = 'TIMEOUT';
+        reject(err);
+      }, timeoutMs);
+      const listener = (e: MessageEvent) => {
+        const d = e.data;
+        if (!d || d.source !== 'pw-mic-bridge') return;
+        if (d.type === 'log') { this.handleBridgeLog(d.level, d.ts, d.message); return; }
+        if (d.type !== 'screenFrame' || d.reqId !== reqId) return;
+        clearTimeout(timer);
+        window.removeEventListener('message', listener);
+        if (!d.ok) {
+          const err = new Error(d.message || 'Screen capture failed');
+          (err as any).code = d.code || 'UNKNOWN';
+          reject(err);
+          return;
+        }
+        const bytes = d.bytes instanceof Uint8Array ? d.bytes : new Uint8Array(d.bytes);
+        resolve(new Blob([bytes], { type: 'image/png' }));
+      };
+      window.addEventListener('message', listener);
+      const sendWhenReady = () => {
+        popup.postMessage({ source: 'pw-mic-bridge-cmd', type: cmdType, reqId }, '*');
+      };
+      // If the popup hasn't sent 'ready' yet, the command will still queue —
+      // postMessage is delivered as soon as the receiver is listening. The
+      // bridge installs its message listener synchronously during boot, before
+      // it posts 'ready', so this is safe.
+      sendWhenReady();
+    });
   }
 
   removeInteraction(id: string) {
