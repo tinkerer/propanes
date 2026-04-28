@@ -45,6 +45,22 @@ export {
   COS_PANE_TAB_ID,
 };
 
+// Agent CRUD lives in cos-agent-crud.ts but is re-exported here so existing
+// consumers (CosAgentSettings, CosTabList, ChiefOfStaffBubble, …) don't need
+// to update their import paths.
+export {
+  clearActiveAgentHistory,
+  interruptActiveAgent,
+  interruptThread,
+  renameActiveAgent,
+  updateActiveAgentSystemPrompt,
+  updateActiveAgentModel,
+  updateActiveAgentVerbosity,
+  updateActiveAgentStyle,
+  addAgent,
+  removeActiveAgent,
+} from './cos-agent-crud.js';
+
 export type ChiefOfStaffVerbosity = 'terse' | 'normal' | 'verbose';
 export type ChiefOfStaffStyle = 'dry' | 'neutral' | 'friendly';
 
@@ -242,7 +258,7 @@ export function getActiveAgent(): ChiefOfStaffAgent | null {
   return chiefOfStaffAgents.value.find((a) => a.id === chiefOfStaffActiveId.value) || null;
 }
 
-function updateAgent(id: string, mutate: (a: ChiefOfStaffAgent) => ChiefOfStaffAgent): void {
+export function updateAgent(id: string, mutate: (a: ChiefOfStaffAgent) => ChiefOfStaffAgent): void {
   chiefOfStaffAgents.value = chiefOfStaffAgents.value.map((a) => (a.id === id ? mutate(a) : a));
 }
 
@@ -390,152 +406,6 @@ async function createCosThread(
 function findAnchorMessage(agent: ChiefOfStaffAgent, anchorTs: number | undefined): ChiefOfStaffMsg | null {
   if (typeof anchorTs !== 'number') return null;
   return agent.messages.find((m) => m.role === 'user' && m.timestamp === anchorTs) || null;
-}
-
-async function listThreadIdsForAgent(agentId: string, appId: string | null): Promise<string[]> {
-  try {
-    const token = localStorage.getItem('pw-admin-token');
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    const qs = new URLSearchParams({ agentId });
-    if (appId) qs.set('appId', appId);
-    const res = await fetch(`/api/v1/admin/chief-of-staff/threads?${qs.toString()}`, { headers });
-    if (!res.ok) return [];
-    const data = await res.json();
-    const threads = Array.isArray(data?.threads) ? data.threads : [];
-    return threads.map((t: any) => t?.id).filter((id: any): id is string => typeof id === 'string');
-  } catch {
-    return [];
-  }
-}
-
-export async function clearActiveAgentHistory(): Promise<void> {
-  const agent = getActiveAgent();
-  if (!agent) return;
-
-  const token = localStorage.getItem('pw-admin-token');
-  const headers: Record<string, string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-
-  // Delete ALL server-side threads for this agent (across apps). Legacy rows
-  // only had one thread per agent; post-fix each top-level UI message has its
-  // own thread, so "Clear history" needs to sweep them all.
-  const threadIds = await listThreadIdsForAgent(agent.id, null);
-  // Include any legacy singleton threadId the UI remembered that might not be
-  // visible on the current app filter.
-  if (agent.threadId && !threadIds.includes(agent.threadId)) threadIds.push(agent.threadId);
-  await Promise.all(
-    threadIds.map(async (id) => {
-      try {
-        await fetch(`/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(id)}`, {
-          method: 'DELETE',
-          headers,
-        });
-      } catch {
-        /* non-fatal */
-      }
-    }),
-  );
-
-  updateAgent(agent.id, (a) => ({ ...a, messages: [], threadId: undefined }));
-}
-
-/**
- * Interrupt any in-flight turns for this agent. A turn is in-flight when at
- * least one local message is still streaming; we derive the targeted thread
- * ids from those messages. If nothing is streaming locally, fall back to the
- * agent's legacy singleton threadId (pre-multi-thread clients).
- */
-export async function interruptActiveAgent(): Promise<void> {
-  const agent = getActiveAgent();
-  if (!agent) return;
-
-  const targets = new Set<string>();
-  for (const m of agent.messages) {
-    if (m.streaming && m.threadId) targets.add(m.threadId);
-  }
-  if (targets.size === 0 && agent.threadId) targets.add(agent.threadId);
-  if (targets.size === 0) return;
-
-  const token = localStorage.getItem('pw-admin-token');
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-
-  await Promise.all(
-    Array.from(targets).map(async (id) => {
-      try {
-        await fetch(`/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(id)}/interrupt`, {
-          method: 'POST',
-          headers,
-        });
-      } catch {
-        /* non-fatal */
-      }
-    }),
-  );
-}
-
-/** Interrupt a single, known thread. Used by per-thread Stop buttons. */
-export async function interruptThread(threadId: string): Promise<void> {
-  if (!threadId) return;
-  try {
-    const token = localStorage.getItem('pw-admin-token');
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    await fetch(`/api/v1/admin/chief-of-staff/threads/${encodeURIComponent(threadId)}/interrupt`, {
-      method: 'POST',
-      headers,
-    });
-  } catch {
-    /* non-fatal */
-  }
-}
-
-export function renameActiveAgent(name: string): void {
-  updateAgent(chiefOfStaffActiveId.value, (a) => ({ ...a, name: name.slice(0, 60) }));
-}
-
-export function updateActiveAgentSystemPrompt(systemPrompt: string): void {
-  updateAgent(chiefOfStaffActiveId.value, (a) => ({ ...a, systemPrompt }));
-}
-
-export function updateActiveAgentModel(model: string): void {
-  updateAgent(chiefOfStaffActiveId.value, (a) => ({ ...a, model }));
-}
-
-export function updateActiveAgentVerbosity(verbosity: ChiefOfStaffVerbosity): void {
-  updateAgent(chiefOfStaffActiveId.value, (a) => ({ ...a, verbosity }));
-}
-
-export function updateActiveAgentStyle(style: ChiefOfStaffStyle): void {
-  updateAgent(chiefOfStaffActiveId.value, (a) => ({ ...a, style }));
-}
-
-export function addAgent(name: string): string {
-  const id = `agent-${Date.now().toString(36)}`;
-  const agent: ChiefOfStaffAgent = {
-    id,
-    name: name.slice(0, 60) || 'New Agent',
-    systemPrompt: '',
-    model: '',
-    messages: [],
-    verbosity: DEFAULT_VERBOSITY,
-    style: DEFAULT_STYLE,
-  };
-  chiefOfStaffAgents.value = [...chiefOfStaffAgents.value, agent];
-  chiefOfStaffActiveId.value = id;
-  return id;
-}
-
-export function removeActiveAgent(): void {
-  const remaining = chiefOfStaffAgents.value.filter((a) => a.id !== chiefOfStaffActiveId.value);
-  if (remaining.length === 0) {
-    // Don't allow removing the last agent — reset it instead
-    void clearActiveAgentHistory();
-    return;
-  }
-  chiefOfStaffAgents.value = remaining;
-  chiefOfStaffActiveId.value = remaining[0].id;
 }
 
 type StreamAccum = {
