@@ -26,6 +26,7 @@ import {
   type DispatchInfo,
   extractDispatchInfo,
 } from './cos-dispatch-info.js';
+import { adminHeaders } from './admin-headers.js';
 
 export { type ChiefOfStaffToolCall, type DispatchInfo, extractDispatchInfo };
 
@@ -92,12 +93,6 @@ export type SendCosOptions = {
   elementRefs?: CosElementRef[];
   replyToTs?: number;
 };
-
-function adminHeaders(): Record<string, string> {
-  const token = localStorage.getItem('pw-admin-token');
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 
 export type ChiefOfStaffAgent = {
   id: string;
