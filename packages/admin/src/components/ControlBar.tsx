@@ -18,6 +18,7 @@ import type { PaneMruEntry } from '../lib/sessions.js';
 import { PopupMenu } from './PopupMenu.js';
 import { unreadNotificationCount, openNotificationCenter } from '../lib/notifications.js';
 import { ChiefOfStaffToggle } from './ChiefOfStaffBubble.js';
+import { isMobile } from '../lib/viewport.js';
 
 function getSessionMruLabel(sessionId: string, sessionMap: Map<string, any>): string {
   const custom = getSessionLabel(sessionId);
@@ -45,8 +46,11 @@ export function ControlBar() {
   const [running, setRunning] = useState<string | null>(null);
   const [appDropdown, setAppDropdown] = useState(false);
   const [mruDropdown, setMruDropdown] = useState(false);
+  const [moreDropdown, setMoreDropdown] = useState(false);
   const appBtnRef = useRef<HTMLButtonElement>(null);
   const mruBtnRef = useRef<HTMLButtonElement>(null);
+  const moreBtnRef = useRef<HTMLButtonElement>(null);
+  const mobile = isMobile.value;
 
   const panels = popoutPanels.value;
   const mruHistory = paneMruHistory.value;
@@ -113,6 +117,52 @@ export function ControlBar() {
       )}
 
       <div class="control-bar-sep" />
+
+      {/* Mobile-only dropdown surfacing app actions + Terminal + Setup */}
+      {mobile && app && (
+        <>
+          <button
+            ref={moreBtnRef}
+            class="control-bar-btn control-bar-more-btn"
+            onClick={() => setMoreDropdown(!moreDropdown)}
+            title="App actions"
+            aria-label="App actions"
+          >
+            <span class="control-bar-icon">{'☰'}</span>
+            <span class="control-bar-caret">{'▾'}</span>
+          </button>
+          {moreDropdown && (
+            <PopupMenu anchorRef={moreBtnRef} onClose={() => setMoreDropdown(false)}>
+              {actions.map((a) => (
+                <button
+                  key={a.id}
+                  class="popup-menu-item"
+                  disabled={running === a.id}
+                  onClick={() => { setMoreDropdown(false); run(a.id); }}
+                >
+                  {a.icon && <span style="margin-right:6px">{a.icon}</span>}
+                  {running === a.id ? 'Running…' : a.label}
+                </button>
+              ))}
+              {actions.length > 0 && <div class="popup-menu-divider" />}
+              <button
+                class="popup-menu-item"
+                onClick={() => { setMoreDropdown(false); spawnTerminal(appId); }}
+              >
+                <span style="margin-right:6px">{'\u{1F4DF}'}</span>
+                Terminal
+              </button>
+              <button
+                class="popup-menu-item"
+                onClick={() => { setMoreDropdown(false); openSetup(); }}
+              >
+                <span style="margin-right:6px">{'⚙'}</span>
+                {actions.length > 0 ? 'Edit Controls' : 'Setup Controls'}
+              </button>
+            </PopupMenu>
+          )}
+        </>
+      )}
 
       {/* Control actions or setup assistant */}
       {actions.length > 0 ? (
