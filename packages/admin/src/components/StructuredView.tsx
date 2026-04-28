@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { MessageRenderer, type ChatRenderOpts } from './MessageRenderer.js';
-import { JsonOutputParser, CodexOutputParser, type ParsedMessage } from '../lib/output-parser.js';
+import { type ParsedMessage } from '../lib/output-parser.js';
+import { useTranscriptStream } from '../lib/transcript-stream.js';
 import { api } from '../lib/api.js';
 import { sessionInputStates } from '../lib/session-state.js';
-import { exitedSessions, allSessions } from '../lib/sessions.js';
 import { isMobile, NarrowContext, useContainerNarrow, useNarrow } from '../lib/viewport.js';
 import { ChoicePrompt, type ChoiceOption } from './InteractivePrompt.js';
 import { SubagentBlock } from './SubagentBlock.js';
@@ -372,93 +372,16 @@ function AssistantGroup({
 }
 
 export function StructuredView({ sessionId, chat }: Props) {
-  const [messages, setMessages] = useState<ParsedMessage[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [choicePrompt, setChoicePrompt] = useState<DetectedChoicePrompt | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const containerNarrow = useContainerNarrow(containerRef);
   const narrow = isMobile.value || containerNarrow;
   const autoScroll = useRef(true);
-  const lastLength = useRef(0);
 
   const inputState = sessionInputStates.value.get(sessionId) || 'active';
   const isWaiting = inputState === 'waiting';
 
-  // Session is "done" if it has exited locally or reached a terminal status
-  // server-side. We still fetch once, but skip the 3s polling — no new JSONL
-  // lines will appear, and the extra load matters on mobile Safari.
-  const sessionRecord = allSessions.value.find((s: any) => s.id === sessionId);
-  const terminalStatus = sessionRecord?.status && ['completed', 'exited', 'failed', 'deleted', 'archived'].includes(sessionRecord.status);
-  const isSessionDone = exitedSessions.value.has(sessionId) || !!terminalStatus;
-  const isRunning = sessionRecord?.status === 'running';
-
-  useEffect(() => {
-    lastLength.current = 0;
-    setMessages([]);
-    setLoading(true);
-    setError(null);
-
-    // On mobile, request only the tail of the JSONL — a running session can
-    // accumulate multi-MB of history and parsing it synchronously freezes
-    // mobile Safari for seconds. We show the last N lines; users can expand
-    // history on demand via the "Show earlier" control.
-    const tailLines = isMobile.value ? 500 : 0;
-
-    let cancelled = false;
-    // In-flight guard: the server reads the full JSONL (+continuations +
-    // subagents) on every request, so for a busy running session a single
-    // fetch can take >3s. Without this guard the 3s interval stacks up
-    // pending requests, and mobile Safari stalls as each response triggers
-    // a parse + setState + full re-render in rapid succession.
-    let inFlight = false;
-    const fetchJsonl = async () => {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const text = await api.getJsonl(sessionId, undefined, tailLines);
-        if (cancelled) return;
-        if (text.length === lastLength.current) {
-          setLoading(false);
-          return;
-        }
-        lastLength.current = text.length;
-        const parser = sessionRecord?.runtime === 'codex'
-          ? new CodexOutputParser()
-          : new JsonOutputParser();
-        parser.feed(text + '\n');
-        setMessages(parser.getMessages());
-        setError(null);
-        setLoading(false);
-      } catch (err: any) {
-        if (cancelled) return;
-        // JSONL file won't exist for the first few seconds after dispatch
-        // while the agent is spinning up. Keep showing the "waiting" state
-        // and let polling retry — unless the session is already done, in
-        // which case the file really is missing.
-        const isMissing = err?.status === 404;
-        if (isMissing && !isSessionDone) {
-          setLoading(true);
-          setError(null);
-        } else {
-          setError(err.message);
-          setLoading(false);
-        }
-      } finally {
-        inFlight = false;
-      }
-    };
-
-    fetchJsonl();
-    if (isSessionDone) {
-      return () => { cancelled = true; };
-    }
-    // Poll less aggressively on mobile — Safari has less headroom to absorb
-    // the parse + re-render cycle for a running session that keeps growing.
-    const pollMs = isMobile.value ? 5000 : 3000;
-    const interval = setInterval(() => { if (!document.hidden) fetchJsonl(); }, pollMs);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [sessionId, isSessionDone]);
+  const { messages, loading, error, isSessionDone, isRunning } = useTranscriptStream(sessionId);
 
   // When the session is waiting for input, poll the captured terminal output
   // for permission-prompt patterns and surface them as a ChoicePrompt card.
