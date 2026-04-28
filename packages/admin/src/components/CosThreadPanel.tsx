@@ -5,25 +5,29 @@ import {
   type ChiefOfStaffVerbosity,
 } from '../lib/chief-of-staff.js';
 import { selectedAppId } from '../lib/state.js';
+import { getSessionIdForThread } from '../lib/cos-thread-meta.js';
 import { cosActiveThread } from '../lib/cos-popout-tree.js';
-import {
-  MessageAvatar,
-  MessageAttachments,
-  MessageBubble,
-  Timestamp,
-  HighlightedText,
-} from './CosMessage.js';
 import { groupIntoThreads, threadKeyOf } from './CosThread.js';
+import { StructuredView } from './StructuredView.js';
 
 /**
- * Slack-mode side panel: renders the currently-selected thread's replies in a
- * dedicated companion (popout tab or inPane drawer). Reads `cosActiveThread`
- * to find which thread to render against the supplied agent's messages.
+ * Slack-mode side panel for one thread.
+ *
+ * The body is rendered from the **JSONL stream** of the thread's backing
+ * agent session — not from cosMessages — because the cosMessages persistence
+ * path drops assistant turns when the operator types fast and never sees
+ * sub-agent (Task) transcripts at all. The JSONL has both. We delegate to
+ * `StructuredView` (the same component that drives the JSONL companion tab)
+ * with chat-mode opts so the rendering matches the bubble's compact style.
+ *
+ * The composer at the bottom is wired to `sendChiefOfStaffMessage` with
+ * `replyToTs` set to the thread's anchor timestamp, so a reply lands in
+ * this thread's session rather than starting a new top-level thread.
  */
 export function ThreadPanel({
   agentId,
-  showTools,
-  verbosity,
+  showTools: _showTools,
+  verbosity: _verbosity,
   onArtifactPopout,
   onReply,
   onClose,
@@ -37,6 +41,7 @@ export function ThreadPanel({
   onClose: () => void;
   compact?: boolean;
 }) {
+  void onArtifactPopout; // routed through the structured-view chat opts below if needed later
   const active = cosActiveThread.value;
   const agents = chiefOfStaffAgents.value;
   const agent = agents.find((a) => a.id === agentId) || null;
@@ -77,46 +82,18 @@ export function ThreadPanel({
   const threadServerId =
     userMsg?.threadId ?? replies.find((r) => r.msg.threadId)?.msg.threadId ?? null;
   const anchorTs = userMsg?.timestamp;
-  const replyCount = replies.length;
-  const bodyRef = useRef<HTMLDivElement>(null);
+  const sessionId = getSessionIdForThread(threadServerId);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  const [showScrollDown, setShowScrollDown] = useState(false);
   const [composerText, setComposerText] = useState('');
-  const wasAtBottomRef = useRef(true);
   const isAgentStreaming = replies.some((r) => r.msg.streaming);
-
-  function isBodyAtBottom(el: HTMLElement | null): boolean {
-    if (!el) return true;
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-  }
-  function scrollBodyToBottom(behavior: ScrollBehavior = 'auto') {
-    const el = bodyRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior });
-  }
-
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      const atBottom = isBodyAtBottom(el);
-      wasAtBottomRef.current = atBottom;
-      setShowScrollDown(!atBottom);
-    };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [active?.threadKey, active?.agentId]);
-
-  // Auto-stick to bottom when new replies arrive while pinned.
-  useEffect(() => {
-    const el = bodyRef.current;
-    if (!el) return;
-    if (wasAtBottomRef.current) {
-      el.scrollTop = el.scrollHeight;
-      setShowScrollDown(false);
-    }
-  }, [replies.length, active?.threadKey, active?.agentId]);
+  // Title preview: first ~60 chars of the anchor user message, falls back to
+  // the agent name. Helps the operator know which thread is in the panel
+  // without needing to read message bodies.
+  const titlePreview = (() => {
+    const t = (userMsg?.text || '').trim().replace(/\s+/g, ' ');
+    if (!t) return agent.name;
+    return t.length > 60 ? t.slice(0, 58) + '…' : t;
+  })();
 
   // Reset composer when switching threads — drafts are per-thread; ephemeral
   // text in this panel is for "reply right now" only and shouldn't leak across.
@@ -131,17 +108,12 @@ export function ThreadPanel({
       replyToTs: anchorTs,
     });
     setComposerText('');
-    // Stick to bottom so the new user message + streaming reply are visible.
-    wasAtBottomRef.current = true;
   }
 
   return (
     <div class={`cos-thread-panel${compact ? ' cos-thread-panel-compact' : ''}`}>
       <div class="cos-thread-panel-header">
-        <span class="cos-thread-panel-title">Thread</span>
-        <span class="cos-thread-panel-count">
-          {replyCount} repl{replyCount === 1 ? 'y' : 'ies'}
-        </span>
+        <span class="cos-thread-panel-title" title={userMsg?.text || ''}>{titlePreview}</span>
         <button
           type="button"
           class="cos-thread-panel-close"
@@ -150,109 +122,61 @@ export function ThreadPanel({
           aria-label="Close panel"
         >×</button>
       </div>
-      <div class="cos-thread-panel-scroll">
-      <div class="cos-thread-panel-body" ref={bodyRef}>
-        {userMsg && (
-          <div class="cos-thread-panel-anchor cos-msg cos-row cos-row-user cos-row-post">
-            <div class="cos-row-avatar">
-              <MessageAvatar role="user" label="You" />
-            </div>
-            <div class="cos-row-main">
-              <div class="cos-row-header">
-                <span class="cos-row-author">You</span>
-                {userMsg.timestamp && <Timestamp ts={userMsg.timestamp} />}
-              </div>
-              {userMsg.text && (
-                <div class="cos-row-content cos-msg-text">
-                  <HighlightedText text={userMsg.text} highlight={null} />
-                </div>
-              )}
-              <MessageAttachments attachments={userMsg.attachments} elementRefs={userMsg.elementRefs} />
-            </div>
+      <div class="cos-thread-panel-jsonl">
+        {sessionId ? (
+          <StructuredView sessionId={sessionId} chat={{}} />
+        ) : (
+          <div class="cos-thread-panel-empty-msg">
+            Session warming up — the agent's JSONL appears here once the first
+            turn writes a line.
           </div>
         )}
-        {replies.length === 0 ? (
-          <div class="cos-thread-panel-empty-msg">No replies yet.</div>
-        ) : (
-          replies.map((r) => (
-            <MessageBubble
-              key={r.idx}
-              msg={r.msg}
-              msgIdx={r.idx}
-              highlighted={false}
-              showTools={showTools}
-              onArtifactPopout={onArtifactPopout}
-              agentId={agentId}
-              agentName={agent.name}
-              verbosity={verbosity}
-              searchHighlight={null}
-            />
-          ))
-        )}
       </div>
-      <div class="cos-floating-actions" aria-hidden={!showScrollDown}>
-        {showScrollDown && (
+      <div class="cos-thread-panel-composer">
+        <textarea
+          ref={composerRef}
+          class="cos-input cos-thread-panel-input"
+          value={composerText}
+          placeholder={isAgentStreaming ? 'Reply (agent is responding…)' : 'Reply in this thread…'}
+          onInput={(e) => setComposerText((e.target as HTMLTextAreaElement).value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              submitReply();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              if (composerText) setComposerText('');
+              else if (userMsg?.text) onReply('user', userMsg.text, anchorTs, threadServerId);
+            }
+          }}
+          rows={2}
+        />
+        <div class="cos-thread-panel-composer-actions">
           <button
             type="button"
-            class="cos-scroll-down-btn"
-            onClick={() => scrollBodyToBottom('auto')}
-            title="Scroll to latest"
-            aria-label="Scroll to latest message"
+            class="cos-link-btn cos-thread-panel-handoff"
+            onClick={() => {
+              // Hand off to the main composer so the operator can attach
+              // images, paste element refs, or work on a longer reply.
+              if (userMsg?.text) onReply('user', userMsg.text, anchorTs, threadServerId);
+            }}
+            title="Reply from main chat (lets you attach images / element refs)"
+          >
+            Reply in main chat
+          </button>
+          <button
+            type="button"
+            class="cos-send"
+            onClick={submitReply}
+            disabled={!composerText.trim()}
+            title="Send (Enter)"
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M6 9l6 6 6-6" />
+              <path d="M5 12l14-7-7 14-2-5z" />
             </svg>
           </button>
-        )}
-      </div>
-      </div>
-      {userMsg && (
-        <div class="cos-thread-panel-composer">
-          <textarea
-            ref={composerRef}
-            class="cos-input cos-thread-panel-input"
-            value={composerText}
-            placeholder={isAgentStreaming ? 'Reply (agent is responding…)' : 'Reply in this thread…'}
-            onInput={(e) => setComposerText((e.target as HTMLTextAreaElement).value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                submitReply();
-              } else if (e.key === 'Escape') {
-                e.preventDefault();
-                if (composerText) setComposerText('');
-                else if (userMsg.text) onReply('user', userMsg.text, anchorTs, threadServerId);
-              }
-            }}
-            rows={2}
-          />
-          <div class="cos-thread-panel-composer-actions">
-            <button
-              type="button"
-              class="cos-link-btn cos-thread-panel-handoff"
-              onClick={() => {
-                // Hand off to the main composer so the operator can attach
-                // images, paste element refs, or work on a longer reply.
-                if (userMsg.text) onReply('user', userMsg.text, anchorTs, threadServerId);
-              }}
-              title="Reply from main chat (lets you attach images / element refs)"
-            >
-              Reply in main chat
-            </button>
-            <button
-              type="button"
-              class="cos-send"
-              onClick={submitReply}
-              disabled={!composerText.trim()}
-              title="Send (Enter)"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M5 12l14-7-7 14-2-5z" />
-              </svg>
-            </button>
-          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
