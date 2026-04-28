@@ -117,6 +117,7 @@ import { ThreadBlock, groupIntoThreads, threadKeyOf, type Thread } from './CosTh
 import { ThreadPanel } from './CosThreadPanel.js';
 import { AttachmentEditorModal } from './CosAttachmentEditor.js';
 import { CosAgentSettings } from './CosAgentSettings.js';
+import { CosScrollToolbar } from './CosScrollToolbar.js';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -459,10 +460,8 @@ export function ChiefOfStaffBubble({
   const [searchRole, setSearchRole] = useState<'all' | 'user' | 'assistant'>('all');
   // 'text' (message body), 'tools' (tool call inputs incl. file paths/edits), 'both'
   const [searchScope, setSearchScope] = useState<'text' | 'tools' | 'both'>('text');
-  const [searchFiltersOpen, setSearchFiltersOpen] = useState(false);
   const [optionsMenuOpen, setOptionsMenuOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const searchFiltersRef = useRef<HTMLDivElement>(null);
   const optionsMenuRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
   const seenMsgsRef = useRef<Map<number, boolean>>(new Map());
@@ -759,16 +758,7 @@ export function ChiefOfStaffBubble({
     }
   }, [searchMatches]);
 
-  // Close the filters dropdown on outside click.
-  useEffect(() => {
-    if (!searchFiltersOpen) return;
-    function onDoc(e: MouseEvent) {
-      const root = searchFiltersRef.current;
-      if (root && !root.contains(e.target as Node)) setSearchFiltersOpen(false);
-    }
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [searchFiltersOpen]);
+  // (search-filters dropdown outside-click is owned by CosScrollToolbar)
 
   useEffect(() => {
     if (!optionsMenuOpen) return;
@@ -1735,240 +1725,38 @@ export function ChiefOfStaffBubble({
                         />
                       </div>
                     )}
-                    <div class="cos-scroll-toolbar">
-                      {activeAgent.messages.length > 0 && (
-                        <>
-                          <button
-                            type="button"
-                            class={`cos-scroll-toolbar-btn${showTools ? ' cos-scroll-toolbar-btn-active' : ''}`}
-                            onClick={() => setShowTools(!showTools)}
-                            title={showTools ? 'Hide tool calls' : 'Show tool calls'}
-                            aria-pressed={showTools}
-                          >
-                            Tools
-                          </button>
-                          {hasMultipleThreads && (
-                            <button
-                              type="button"
-                              class="cos-scroll-toolbar-btn"
-                              onClick={toggleAllThreads}
-                              title={anyExpanded ? 'Collapse all threads' : 'Expand all threads'}
-                            >
-                              {anyExpanded ? 'Collapse' : 'Expand'}
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            class={`cos-scroll-toolbar-btn${searchOpen ? ' cos-scroll-toolbar-btn-active' : ''}`}
-                            onClick={() => {
-                              const next = !searchOpen;
-                              setSearchOpen(next);
-                              if (!next) { setSearchQuery(''); setSearchMatchPos(0); }
-                              else requestAnimationFrame(() => searchInputRef.current?.focus());
-                            }}
-                            title={searchOpen ? 'Close message search' : 'Search messages in this agent'}
-                            aria-pressed={searchOpen}
-                          >
-                            Search
-                          </button>
-                        </>
-                      )}
-                      <button
-                        type="button"
-                        class={`cos-scroll-toolbar-btn${learningsButtonActive ? ' cos-scroll-toolbar-btn-active' : ''}`}
-                        onClick={() => {
-                          if (inPane) {
-                            const next = !showLearnings;
-                            setShowLearnings(next);
-                            if (next) void loadCosLearnings();
-                          } else {
-                            // Popout mode: toggle the learnings tab in the
-                            // popout-local pane-tree instead of opening a
-                            // fixed-position side drawer.
-                            const opened = cosToggleLearningsTab('left');
-                            if (opened) void loadCosLearnings();
-                          }
-                        }}
-                        title="Wiggum self-reflection learnings"
-                        aria-pressed={learningsButtonActive}
-                      >
-                        Learnings{cosLearnings.value.length > 0 ? ` (${cosLearnings.value.length})` : ''}
-                      </button>
-                      <div class="cos-options-pill" ref={optionsMenuRef}>
-                        {(() => {
-                          const filtersActive = slackMode || showResolved || showArchived;
-                          return (
-                            <button
-                              type="button"
-                              class={`cos-scroll-toolbar-btn${filtersActive ? ' cos-scroll-toolbar-btn-active' : ''}`}
-                              onClick={() => setOptionsMenuOpen((v) => !v)}
-                              title="Toolbar options & filters"
-                              aria-haspopup="menu"
-                              aria-expanded={optionsMenuOpen}
-                            >
-                              Options{filtersActive ? ' •' : ''}
-                            </button>
-                          );
-                        })()}
-                        {optionsMenuOpen && (
-                          <div class="cos-search-filters-menu" role="menu">
-                            <div class="cos-search-filters-section">
-                              <div class="cos-search-filters-label">Display</div>
-                              <button
-                                type="button"
-                                role="menuitemcheckbox"
-                                aria-checked={slackMode}
-                                class={`cos-search-filters-item${slackMode ? ' cos-search-filters-item-active' : ''}`}
-                                onClick={() => {
-                                  const next = !slackMode;
-                                  setCosSlackMode(next);
-                                }}
-                                title="Hide thread replies inline; open them in a side panel"
-                              >
-                                <span class="cos-search-filters-check">{slackMode ? '✓' : ''}</span>
-                                <span>Slack mode</span>
-                              </button>
-                            </div>
-                            <div class="cos-search-filters-section">
-                              <div class="cos-search-filters-label">Filter threads</div>
-                              <button
-                                type="button"
-                                role="menuitemcheckbox"
-                                aria-checked={showResolved}
-                                class={`cos-search-filters-item${showResolved ? ' cos-search-filters-item-active' : ''}`}
-                                onClick={() => setCosShowResolved(!showResolved)}
-                                title="Include resolved threads in the chat and rail"
-                              >
-                                <span class="cos-search-filters-check">{showResolved ? '✓' : ''}</span>
-                                <span>Show resolved</span>
-                              </button>
-                              <button
-                                type="button"
-                                role="menuitemcheckbox"
-                                aria-checked={showArchived}
-                                class={`cos-search-filters-item${showArchived ? ' cos-search-filters-item-active' : ''}`}
-                                onClick={() => setCosShowArchived(!showArchived)}
-                                title="Include archived threads in the chat and rail"
-                              >
-                                <span class="cos-search-filters-check">{showArchived ? '✓' : ''}</span>
-                                <span>Show archived</span>
-                              </button>
-                              {hiddenThreadCount > 0 && (
-                                <div class="cos-search-filters-hint">
-                                  {hiddenThreadCount} thread{hiddenThreadCount === 1 ? '' : 's'} hidden
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    {searchOpen && (
-                      <div class="cos-scroll-search-row">
-                        <input
-                          ref={searchInputRef}
-                          type="text"
-                          class="cos-scroll-search-input"
-                          placeholder={searchScope === 'tools' ? 'Find filename or edit...' : searchScope === 'both' ? 'Find in messages + tool calls...' : 'Find in messages...'}
-                          value={searchQuery}
-                          onInput={(e) => { setSearchQuery((e.target as HTMLInputElement).value); setSearchMatchPos(0); }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Escape') { e.preventDefault(); setSearchOpen(false); setSearchQuery(''); setSearchMatchPos(0); setSearchFiltersOpen(false); }
-                            else if (e.key === 'Enter') { e.preventDefault(); gotoSearchMatch(searchMatchPos + (e.shiftKey ? -1 : 1)); }
-                          }}
-                        />
-                        <span class="cos-scroll-search-count">
-                          {(() => {
-                            const t = searchQuery.trim();
-                            if (!t) return '';
-                            if (t.length < 2) return '2+ chars';
-                            if (searchMatches.length === 0) return '0';
-                            return `${searchMatchPos + 1} / ${searchMatches.length}`;
-                          })()}
-                        </span>
-                        <button
-                          type="button"
-                          class="cos-scroll-toolbar-btn"
-                          onClick={() => gotoSearchMatch(searchMatchPos - 1)}
-                          disabled={searchMatches.length === 0}
-                          title="Previous match (Shift+Enter)"
-                          aria-label="Previous match"
-                        >
-                          {'↑'}
-                        </button>
-                        <button
-                          type="button"
-                          class="cos-scroll-toolbar-btn"
-                          onClick={() => gotoSearchMatch(searchMatchPos + 1)}
-                          disabled={searchMatches.length === 0}
-                          title="Next match (Enter)"
-                          aria-label="Next match"
-                        >
-                          {'↓'}
-                        </button>
-                        <div class="cos-search-filters" ref={searchFiltersRef}>
-                          <button
-                            type="button"
-                            class={`cos-scroll-toolbar-btn${(searchRole !== 'all' || searchScope !== 'text') ? ' cos-scroll-toolbar-btn-active' : ''}`}
-                            onClick={() => setSearchFiltersOpen((v) => !v)}
-                            title="Search filters"
-                            aria-haspopup="menu"
-                            aria-expanded={searchFiltersOpen}
-                          >
-                            Filters{(searchRole !== 'all' || searchScope !== 'text') ? ' •' : ''}
-                          </button>
-                          {searchFiltersOpen && (
-                            <div class="cos-search-filters-menu" role="menu">
-                              <div class="cos-search-filters-section">
-                                <div class="cos-search-filters-label">Role</div>
-                                {([
-                                  ['all', 'All messages'],
-                                  ['user', 'You only'],
-                                  ['assistant', 'Ops only'],
-                                ] as const).map(([val, label]) => (
-                                  <button
-                                    key={val}
-                                    type="button"
-                                    class={`cos-search-filters-item${searchRole === val ? ' cos-search-filters-item-active' : ''}`}
-                                    onClick={() => { setSearchRole(val); setSearchMatchPos(0); }}
-                                  >
-                                    <span class="cos-search-filters-check">{searchRole === val ? '✓' : ''}</span>
-                                    {label}
-                                  </button>
-                                ))}
-                              </div>
-                              <div class="cos-search-filters-section">
-                                <div class="cos-search-filters-label">Scope</div>
-                                {([
-                                  ['text', 'Message text'],
-                                  ['tools', 'Tool calls (filenames, edits)'],
-                                  ['both', 'Both'],
-                                ] as const).map(([val, label]) => (
-                                  <button
-                                    key={val}
-                                    type="button"
-                                    class={`cos-search-filters-item${searchScope === val ? ' cos-search-filters-item-active' : ''}`}
-                                    onClick={() => { setSearchScope(val); setSearchMatchPos(0); }}
-                                  >
-                                    <span class="cos-search-filters-check">{searchScope === val ? '✓' : ''}</span>
-                                    {label}
-                                  </button>
-                                ))}
-                              </div>
-                              {(searchRole !== 'all' || searchScope !== 'text') && (
-                                <button
-                                  type="button"
-                                  class="cos-search-filters-reset"
-                                  onClick={() => { setSearchRole('all'); setSearchScope('text'); setSearchMatchPos(0); }}
-                                >
-                                  Reset filters
-                                </button>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
+                    <CosScrollToolbar
+                      hasMessages={activeAgent.messages.length > 0}
+                      hasMultipleThreads={hasMultipleThreads}
+                      anyExpanded={anyExpanded}
+                      hiddenThreadCount={hiddenThreadCount}
+                      showTools={showTools}
+                      setShowTools={setShowTools}
+                      toggleAllThreads={toggleAllThreads}
+                      searchOpen={searchOpen}
+                      setSearchOpen={setSearchOpen}
+                      searchQuery={searchQuery}
+                      setSearchQuery={setSearchQuery}
+                      searchMatchPos={searchMatchPos}
+                      setSearchMatchPos={setSearchMatchPos}
+                      searchMatchCount={searchMatches.length}
+                      searchRole={searchRole}
+                      setSearchRole={setSearchRole}
+                      searchScope={searchScope}
+                      setSearchScope={setSearchScope}
+                      searchInputRef={searchInputRef}
+                      gotoSearchMatch={gotoSearchMatch}
+                      inPane={inPane}
+                      showLearnings={showLearnings}
+                      setShowLearnings={setShowLearnings}
+                      learningsButtonActive={learningsButtonActive}
+                      optionsMenuOpen={optionsMenuOpen}
+                      setOptionsMenuOpen={setOptionsMenuOpen}
+                      optionsMenuRef={optionsMenuRef}
+                      slackMode={slackMode}
+                      showResolved={showResolved}
+                      showArchived={showArchived}
+                    />
 
                     <div class="cos-scroll-wrap">
                     {hasMultipleThreads && (
