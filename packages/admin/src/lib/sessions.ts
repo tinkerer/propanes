@@ -422,7 +422,7 @@ export async function resumeSession(sessionId: string, opts?: { permissionProfil
       }
       const leaf = findLeafWithTab(sessionId);
       if (leaf) replaceTabInLeaf(leaf.id, sessionId, newId);
-      for (const ct of (['jsonl', 'feedback', 'iframe', 'terminal', 'isolate', 'wiggum-runs', 'artifact'] as const)) {
+      for (const ct of (['jsonl', 'summary', 'feedback', 'iframe', 'terminal', 'isolate', 'wiggum-runs', 'artifact'] as const)) {
         const oldTab = companionTabId(sessionId, ct);
         const compLeaf = findLeafWithTab(oldTab);
         if (compLeaf) replaceTabInLeaf(compLeaf.id, oldTab, companionTabId(newId, ct));

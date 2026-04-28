@@ -1,6 +1,7 @@
 import { SessionViewToggle } from './SessionViewToggle.js';
 import { ChiefOfStaffBubble } from './ChiefOfStaffBubble.js';
 import { JsonlView } from './JsonlView.js';
+import { SessionSummaryView } from './SessionSummaryView.js';
 import { FeedbackCompanionView } from './FeedbackCompanionView.js';
 import { IframeCompanion } from './IframeCompanion.js';
 import { getIsolateEntry } from '../lib/isolate.js';
@@ -122,6 +123,7 @@ export function renderTabContent(
   }
 
   const isJsonl = sid.startsWith('jsonl:');
+  const isSummary = sid.startsWith('summary:');
   const isFeedback = sid.startsWith('feedback:');
   const isIframe = sid.startsWith('iframe:');
   const isTerminal = sid.startsWith('terminal:');
@@ -130,7 +132,7 @@ export function renderTabContent(
   const isFile = sid.startsWith('file:');
   const isWiggumRuns = sid.startsWith('wiggum-runs:');
   const isArtifact = sid.startsWith('artifact:');
-  const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact;
+  const isCompanion = isJsonl || isSummary || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact;
   const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
   const sess = (isIsolate || isUrl || isFile || isWiggumRuns || isArtifact) ? null : sessionMap.get(realSid);
 
@@ -155,6 +157,8 @@ export function renderTabContent(
         })()
       ) : isJsonl ? (
         <JsonlView sessionId={realSid} />
+      ) : isSummary ? (
+        <SessionSummaryView sessionId={realSid} />
       ) : isFeedback ? (
         sess?.feedbackId
           ? <FeedbackCompanionView feedbackId={sess.feedbackId} />

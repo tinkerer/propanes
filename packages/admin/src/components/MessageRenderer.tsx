@@ -965,12 +965,14 @@ function AssistantMessage({ message }: { message: ParsedMessage }) {
 
 function ThinkingMessage({ message }: { message: ParsedMessage }) {
   const [expanded, setExpanded] = useState(false);
+  const time = formatMsgTime(message.timestamp);
 
   return (
     <div class="sm-message sm-thinking">
       <div class="sm-thinking-header" onClick={() => setExpanded(!expanded)}>
         <span class="sm-thinking-icon">💭</span>
         <span class="sm-thinking-label">Thinking</span>
+        {time && <span class="sm-msg-time" title={new Date(message.timestamp).toLocaleString()}>{time}</span>}
         <span class="sm-expand-indicator">{expanded ? '▾' : '▸'}</span>
       </div>
       {expanded && (
@@ -978,6 +980,22 @@ function ThinkingMessage({ message }: { message: ParsedMessage }) {
       )}
     </div>
   );
+}
+
+// Render a short HH:MM:SS marker. Returns null when the timestamp is unset
+// or stamped from Date.now() at parse time (no real event time available).
+// We treat anything within 2s of "now" as "no real timestamp" since freshly
+// parsed live-stream messages also satisfy that — but those are visible at
+// the bottom of the log anyway and a clock right-now isn't useful info.
+function formatMsgTime(ts: number): string | null {
+  if (!ts) return null;
+  if (Math.abs(Date.now() - ts) < 2000) return null;
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return null;
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
 }
 
 function UserInputMessage({ message }: { message: ParsedMessage }) {
@@ -1028,12 +1046,12 @@ function shortenPath(p: string): string {
   return '.../' + parts.slice(-3).join('/');
 }
 
-interface DiffLine {
+export interface DiffLine {
   type: 'context' | 'removed' | 'added';
   text: string;
 }
 
-function computeDiff(oldStr: string, newStr: string): DiffLine[] {
+export function computeDiff(oldStr: string, newStr: string): DiffLine[] {
   if (!oldStr && !newStr) return [];
   const oldLines = oldStr.split('\n');
   const newLines = newStr.split('\n');

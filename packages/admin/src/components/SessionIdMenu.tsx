@@ -134,6 +134,11 @@ export function SessionIdMenu({
               {isCompanionActive('jsonl') ? '\u2713 ' : ''}JSONL <kbd>L</kbd>
             </button>
           )}
+          {sess?.jsonlPath && (
+            <button class="popup-menu-item" onClick={() => { onClose(); toggle('summary'); }}>
+              {isCompanionActive('summary') ? '\u2713 ' : ''}Summary <kbd>Y</kbd>
+            </button>
+          )}
           {sess?.feedbackId && (
             <button class="popup-menu-item" onClick={() => { onClose(); toggle('feedback'); }}>
               {isCompanionActive('feedback') ? '\u2713 ' : ''}Ticket <kbd>F</kbd>

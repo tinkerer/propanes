@@ -444,6 +444,17 @@ export const cosThreads = sqliteTable('cos_threads', {
   turnStartSeq: integer('turn_start_seq'),
   turnUserText: text('turn_user_text'),
   turnRequestId: text('turn_request_id'),
+  // Operator-set "this thread is done, hide it from triage". Null = open.
+  // Set via PATCH /chief-of-staff/threads/:id { resolved: true }; cleared by
+  // passing { resolved: false }. Independent of the underlying agent session
+  // status — a failed session can be resolved (acknowledged), and an idle
+  // session can be re-opened.
+  resolvedAt: integer('resolved_at'),
+  // Operator-set "stash this further away" — archived threads are hidden from
+  // both the chat scroll and the rail by default. Reopen via { archived: false }.
+  // Independent of resolvedAt; archiving implicitly resolves but reopening an
+  // archived thread restores it to whatever resolved state it had.
+  archivedAt: integer('archived_at'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 });
@@ -457,6 +468,25 @@ export const cosMessages = sqliteTable('cos_messages', {
   // JSON: { images?: [{dataUrl, name?, mimeType?}], elements?: [CosElementRef, ...] }
   attachmentsJson: text('attachments_json'),
   createdAt: integer('created_at').notNull(),
+});
+
+// Per-(agent, app, thread) operator draft for the CoS compose textarea. The
+// scope is three-dimensional: agent picks the persona tab, app picks the
+// product the operator is looking at, threadId scopes to a specific in-thread
+// reply ('' = the top-level "new thread" compose draft, anything else = a
+// reply-in-thread draft). Switching the reply-pill scope swaps which row
+// hydrates the textarea, so the operator never loses an in-progress reply
+// when they jump between threads. Empty rows are deleted rather than
+// persisted, so presence == "this scope has unsent text".
+export const cosDrafts = sqliteTable('cos_drafts', {
+  // Synthetic key so drizzle has a primary column; the lookup index is on
+  // (agentId, appId, threadId) via a unique constraint enforced in migrations.
+  id: text('id').primaryKey(),
+  agentId: text('agent_id').notNull(),
+  appId: text('app_id').notNull().default(''),
+  threadId: text('thread_id').notNull().default(''),
+  text: text('text').notNull().default(''),
+  updatedAt: integer('updated_at').notNull(),
 });
 
 export const pendingDispatches = sqliteTable('pending_dispatches', {

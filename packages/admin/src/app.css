@@ -4479,6 +4479,70 @@ input:focus, select:focus, textarea:focus {
   vertical-align: middle;
 }
 
+/* Brainstorm (voice-captured) feedback grouping in the tickets table.
+   Multiple feedback items sharing a voiceSessionId collapse under one parent row. */
+.feedback-row-brainstorm-header {
+  cursor: pointer;
+  background: linear-gradient(180deg, rgba(124, 58, 237, 0.08), rgba(124, 58, 237, 0.04));
+  border-top: 1px solid rgba(124, 58, 237, 0.25);
+}
+
+.feedback-row-brainstorm-header:hover {
+  background: linear-gradient(180deg, rgba(124, 58, 237, 0.14), rgba(124, 58, 237, 0.06));
+}
+
+.feedback-row-brainstorm-header > td {
+  padding: 6px 10px;
+}
+
+.feedback-brainstorm-header-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.feedback-brainstorm-badge {
+  background: #7c3aed;
+}
+
+.feedback-brainstorm-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pw-text);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.feedback-brainstorm-count {
+  font-size: 11px;
+  color: var(--pw-text-muted);
+  white-space: nowrap;
+}
+
+.feedback-brainstorm-time {
+  font-size: 11px;
+  color: var(--pw-text-faint);
+  white-space: nowrap;
+}
+
+.feedback-row-brainstorm-child > td {
+  background: rgba(124, 58, 237, 0.03);
+}
+
+.feedback-brainstorm-indent {
+  display: inline-block;
+  width: 18px;
+  border-left: 2px solid rgba(124, 58, 237, 0.4);
+  margin-right: 8px;
+  height: 1em;
+  vertical-align: middle;
+}
+
 /* Per-thread caption inside a CoS agent group — separates rows that belong to
    different threads of the same agent. Subtle teal-tinted label, no row chrome. */
 .sidebar-cos-thread-divider {
@@ -5812,6 +5876,7 @@ input:focus, select:focus, textarea:focus {
   white-space: pre-wrap;
   border-left: 2px solid #334155;
 }
+.sm-thinking-chunk { margin-top: 8px; padding-top: 8px; border-top: 1px dashed #1e293b; }
 
 /* User input bubble */
 .sm-user-input {
@@ -11724,6 +11789,20 @@ body.pw-isolate {
 .cos-pane .popout-tab-bar { cursor: default; }
 .cos-pane .popout-tab-bar:active { cursor: default; }
 
+/* Inactive agent tab with a stashed draft. Subtle accent stripe + small
+   "·draft" chip so it scans as "you have unsent text here" without yelling. */
+.cos-popout .popout-tab.has-draft { box-shadow: inset 0 -2px 0 rgba(245, 158, 11, 0.65); }
+.cos-popout .popout-tab.has-draft .popout-tab-label { color: #fbbf24; }
+.cos-tab-draft-badge {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #fbbf24;
+  opacity: 0.85;
+  text-transform: lowercase;
+}
+
 /* CoS popout body: row of [chat pane] [optional artifact drawer]. Chat pane
    stacks its toolbar / scroll / input vertically so the input sits at the
    bottom. The Learnings drawer is rendered as a separate fixed overlay
@@ -11739,10 +11818,38 @@ body.pw-isolate {
   overflow: hidden;
 }
 
-.cos-artifact-drawer {
-  flex: 1 1 280px;
-  min-width: 200px;
-  overflow: hidden;
+/* Artifact drawer: floats over the chat from the right edge of cos-tree-root.
+   The chat keeps full width underneath; the drawer doesn't reflow it (so
+   nothing remounts and chat scroll is preserved). Left edge is a drag handle
+   for resizing. */
+.cos-artifact-drawer-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--pw-bg, var(--pw-terminal-bg));
+  border-left: 1px solid var(--pw-border);
+  box-shadow: -10px 0 24px rgba(0, 0, 0, 0.28);
+  z-index: 12;
+  min-width: 240px;
+  max-width: 95%;
+}
+.cos-artifact-drawer-overlay-dragging { user-select: none; }
+.cos-artifact-drawer-resize {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  z-index: 1;
+}
+.cos-artifact-drawer-resize:hover,
+.cos-artifact-drawer-overlay-dragging .cos-artifact-drawer-resize {
+  background: var(--pw-primary, #4a90e2);
+  opacity: 0.45;
 }
 .cos-artifact-drawer-tabs {
   display: flex;
@@ -11813,6 +11920,7 @@ body.pw-isolate {
   min-height: 0;
   display: flex;
   overflow: hidden;
+  position: relative;
 }
 .cos-tree-root > .pane-split { flex: 1 1 auto; min-width: 0; min-height: 0; }
 .cos-tree-root .pane-split-child { display: flex; }
@@ -12156,6 +12264,138 @@ body.pw-isolate {
   color: var(--pw-primary-text);
   border-color: var(--pw-primary-muted);
 }
+.cos-scroll-toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.cos-scroll-search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--pw-terminal-border);
+  flex: 0 0 auto;
+}
+.cos-scroll-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--pw-bg-surface);
+  border: 1px solid var(--pw-border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: var(--pw-text-primary);
+  font-family: inherit;
+}
+.cos-scroll-search-input:focus {
+  outline: none;
+  border-color: var(--pw-primary-muted);
+}
+.cos-scroll-search-count {
+  font-size: 11px;
+  color: var(--pw-text-muted);
+  min-width: 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.cos-search-hit {
+  background: rgba(250, 204, 21, 0.28);
+  color: inherit;
+  border-radius: 0;
+  padding: 0;
+  box-shadow: none;
+  /* Subtle bottom underline gives a "this is a match" cue without
+     fragmenting words into pill-shaped boxes when a short query matches
+     many places. */
+  border-bottom: 1px solid rgba(250, 204, 21, 0.65);
+}
+.cos-msg-highlight .cos-search-hit {
+  background: rgba(250, 204, 21, 0.55);
+  border-bottom-color: rgba(250, 204, 21, 0.95);
+}
+.cos-search-filters {
+  position: relative;
+  display: inline-flex;
+}
+.cos-search-filters-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  /* Hardcoded opaque dark fill — inside .cos-popout, --pw-bg-raised is overridden
+     to a near-transparent rgba so the menu would render see-through. */
+  background: #1e293b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+  min-width: 220px;
+  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+}
+.cos-search-filters-section {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--pw-border-light);
+}
+.cos-search-filters-section:last-child {
+  border-bottom: none;
+}
+.cos-search-filters-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--pw-text-muted);
+  padding: 2px 12px 4px;
+  letter-spacing: 0.04em;
+}
+.cos-search-filters-item {
+  background: transparent;
+  border: none;
+  text-align: left;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--pw-text-primary);
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cos-search-filters-item:hover {
+  background: var(--pw-bg-hover);
+}
+.cos-search-filters-check {
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+  color: var(--pw-primary-text);
+  font-size: 11px;
+}
+.cos-search-filters-item-active {
+  color: var(--pw-primary-text);
+}
+.cos-search-filters-hint {
+  padding: 4px 12px 6px;
+  font-size: 10px;
+  color: var(--pw-text-muted);
+  font-style: italic;
+}
+.cos-search-filters-reset {
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--pw-border-light);
+  text-align: left;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--pw-text-muted);
+  cursor: pointer;
+  font-family: inherit;
+}
+.cos-search-filters-reset:hover {
+  background: var(--pw-bg-hover);
+  color: var(--pw-text-primary);
+}
 .cos-view-segmented {
   display: inline-flex;
   border: 1px solid var(--pw-border);
@@ -12179,6 +12419,133 @@ body.pw-isolate {
   background: var(--pw-primary-soft);
   color: var(--pw-primary-text);
   font-weight: 500;
+}
+
+/* Options pill — thin wrapper so the popover anchors to the button. */
+.cos-options-pill {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Slack-mode thread companion panel.
+   Used inside the popout tab tree (cos-tree-leaf-body) and inside the
+   inPane side drawer (cos-thread-side). */
+.cos-thread-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: var(--pw-bg-body);
+  color: var(--pw-text-primary);
+  overflow: hidden;
+}
+.cos-thread-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--pw-terminal-border);
+  background: var(--pw-bg-surface);
+  flex: 0 0 auto;
+}
+.cos-thread-panel-title {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--pw-text-primary);
+}
+.cos-thread-panel-count {
+  font-size: 11px;
+  color: var(--pw-text-muted);
+  margin-right: auto;
+}
+.cos-thread-panel-close {
+  background: transparent;
+  border: none;
+  color: var(--pw-text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: inherit;
+}
+.cos-thread-panel-close:hover {
+  background: var(--pw-bg-hover);
+  color: var(--pw-text-primary);
+}
+.cos-thread-panel-scroll {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.cos-thread-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cos-thread-panel-anchor {
+  border-bottom: 1px solid var(--pw-border-light);
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+}
+.cos-thread-panel-empty-msg {
+  color: var(--pw-text-muted);
+  font-size: 12px;
+  font-style: italic;
+  padding: 8px 4px;
+}
+.cos-thread-panel-actions {
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--pw-terminal-border);
+  background: var(--pw-bg-surface);
+  flex: 0 0 auto;
+}
+
+/* InPane drawer wrapper — mirrors cos-learnings-side. */
+.cos-thread-side {
+  color: #e2e8f0;
+  --pw-text-primary: #e2e8f0;
+  --pw-text-secondary: #94a3b8;
+  --pw-text-muted: #64748b;
+  --pw-bg-body: transparent;
+  --pw-bg-surface: rgba(255, 255, 255, 0.04);
+  --pw-bg-raised: rgba(255, 255, 255, 0.06);
+  --pw-bg-sunken: rgba(0, 0, 0, 0.25);
+  --pw-bg-inset: rgba(0, 0, 0, 0.2);
+  --pw-bg-hover: rgba(255, 255, 255, 0.06);
+  --pw-border: #334155;
+  --pw-border-light: #1e293b;
+  background: var(--pw-terminal-bg, #0b1220);
+  border: 2px solid #475569;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  pointer-events: auto;
+}
+.cos-thread-side-left {
+  border-radius: 8px 0 0 8px;
+  border-right: none;
+}
+.cos-thread-side-right {
+  border-radius: 0 8px 8px 0;
+  border-left: none;
+}
+
+/* Visual hint when a thread summary represents the thread currently open
+   in the slack-mode side panel. */
+.cos-thread-summary-active {
+  border-color: var(--pw-primary-muted);
+  background: var(--pw-primary-soft);
+  color: var(--pw-primary-text);
 }
 
 /* Wiggum self-reflection learnings panel */
@@ -12226,27 +12593,32 @@ body.pw-isolate {
   flex: 0 0 auto;
   background: rgba(0, 0, 0, 0.25);
 }
-.cos-learnings-side .cos-learnings-panel {
-  border-top: none;
-  flex: 1 1 auto;
-  overflow-y: auto;
-  max-height: none;
-}
 .cos-learnings-panel {
-  border-top: 1px solid var(--pw-border);
   background: var(--pw-bg-surface);
   padding: 8px 12px 12px 12px;
   font-size: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 50%;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
   overflow-y: auto;
+  box-sizing: border-box;
 }
 .cos-learnings-header {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;
+  position: sticky;
+  top: -8px;
+  margin: -8px -12px 0;
+  padding: 8px 12px;
+  background: var(--pw-bg-surface);
+  z-index: 1;
+  border-bottom: 1px solid var(--pw-border);
 }
 .cos-learnings-title {
   font-weight: 600;
@@ -12563,16 +12935,19 @@ body.pw-isolate {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: flex-start;
   gap: 4px;
-  padding: 8px 2px;
+  padding: 2px;
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
   border-right: 1px solid var(--pw-border);
   background: var(--pw-bg-surface);
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
-.cos-thread-rail::-webkit-scrollbar { width: 4px; }
-.cos-thread-rail::-webkit-scrollbar-thumb { background: var(--pw-border); border-radius: 2px; }
+.cos-thread-rail::-webkit-scrollbar { width: 0; height: 0; display: none; }
+.cos-thread-rail > .cos-thread-rail-item:first-child { margin-top: auto; }
+.cos-thread-rail > .cos-thread-rail-item:last-child { margin-bottom: auto; }
 .cos-thread-rail-btn {
   position: relative;
   flex: 0 0 auto;
@@ -12621,6 +12996,203 @@ body.pw-isolate {
   text-align: center;
   box-shadow: 0 0 0 1.5px var(--pw-bg-surface);
   pointer-events: none;
+}
+
+/* Container for the rail dot + its inline resolve toggle. The resolve button
+   sits below the main dot and only takes hit-area when present. */
+.cos-thread-rail-item {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Per-thread status pip — a small colored dot anchored to the bottom-right of
+   the rail button. Color and animation are driven by the parent's
+   cos-thread-rail-btn-<status> class. Mirrors the underlying agent session
+   state (running/idle/failed/gc) plus the operator's unread/resolved overlay
+   so the operator can triage the rail at a glance. */
+.cos-thread-rail-status {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pw-secondary-text, #888);
+  box-shadow: 0 0 0 1.5px var(--pw-bg-surface);
+  pointer-events: none;
+}
+.cos-thread-rail-btn-streaming .cos-thread-rail-status {
+  background: var(--pw-primary, #4a90e2);
+  box-shadow:
+    0 0 0 1.5px var(--pw-bg-surface),
+    0 0 6px rgba(74, 144, 226, 0.7);
+}
+.cos-thread-rail-btn-streaming .cos-thread-rail-status::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+  border-top-color: var(--pw-primary, #4a90e2);
+  animation: cos-rail-spinner 0.9s linear infinite;
+}
+.cos-thread-rail-btn-unread .cos-thread-rail-status {
+  background: #2ea043;
+  animation: cos-rail-blink 1.2s ease-in-out infinite;
+  box-shadow:
+    0 0 0 1.5px var(--pw-bg-surface),
+    0 0 6px rgba(46, 160, 67, 0.8);
+}
+.cos-thread-rail-btn-idle .cos-thread-rail-status {
+  background: #2ea043;
+}
+.cos-thread-rail-btn-failed .cos-thread-rail-status {
+  background: #e5484d;
+  box-shadow:
+    0 0 0 1.5px var(--pw-bg-surface),
+    0 0 5px rgba(229, 72, 77, 0.7);
+}
+.cos-thread-rail-btn-gc .cos-thread-rail-status {
+  background: var(--pw-secondary-text, #888);
+  opacity: 0.55;
+}
+.cos-thread-rail-btn-resolved .cos-thread-rail-status {
+  background: var(--pw-secondary-text, #888);
+  opacity: 0.4;
+}
+.cos-thread-rail-btn-resolved {
+  opacity: 0.55;
+}
+.cos-thread-rail-btn-resolved:hover {
+  opacity: 1;
+}
+.cos-thread-rail-btn-archived .cos-thread-rail-status {
+  background: var(--pw-secondary-text, #888);
+  opacity: 0.25;
+}
+.cos-thread-rail-btn-archived {
+  opacity: 0.4;
+  border-style: dashed;
+}
+.cos-thread-rail-btn-archived:hover {
+  opacity: 1;
+}
+.cos-thread-rail-btn-failed {
+  border-color: rgba(229, 72, 77, 0.6);
+}
+
+@keyframes cos-rail-spinner {
+  to { transform: rotate(360deg); }
+}
+@keyframes cos-rail-blink {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.85); }
+}
+
+/* Tiny resolve toggle that sits under each rail button. Only shown when the
+   thread has a server-side id we can PATCH. Default = subtle outlined check
+   (mark as resolved). Active state = filled muted dash (already resolved,
+   click to reopen). Width matches the rail button for visual alignment. */
+.cos-thread-rail-resolve {
+  width: 18px;
+  height: 14px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--pw-border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--pw-secondary-text, #888);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s, background 0.12s;
+}
+.cos-thread-rail-resolve:hover,
+.cos-thread-rail-resolve:focus-visible {
+  opacity: 1;
+  color: #2ea043;
+  border-color: #2ea043;
+  outline: none;
+}
+.cos-thread-rail-resolve-active {
+  opacity: 1;
+  color: var(--pw-secondary-text, #888);
+  background: var(--pw-bg-hover, rgba(255, 255, 255, 0.04));
+  border-color: var(--pw-border);
+}
+.cos-thread-rail-resolve-active:hover,
+.cos-thread-rail-resolve-active:focus-visible {
+  color: var(--pw-primary-text);
+  border-color: var(--pw-primary, #f5a623);
+}
+
+/* Archive twin of the resolve toggle — sits below it. Same dimensions for
+   alignment; a slightly cooler accent on hover so the two are distinguishable
+   at a glance. */
+.cos-thread-rail-archive {
+  width: 18px;
+  height: 14px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--pw-border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--pw-secondary-text, #888);
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
+}
+.cos-thread-rail-archive:hover,
+.cos-thread-rail-archive:focus-visible {
+  opacity: 1;
+  color: var(--pw-primary, #f5a623);
+  border-color: var(--pw-primary, #f5a623);
+  outline: none;
+}
+
+/* Resolved threads de-emphasize in the main feed so the operator can scroll
+   past them while triaging. The action-row toggle reverts the state. */
+.cos-thread-block-resolved {
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+.cos-thread-block-resolved:hover,
+.cos-thread-block-resolved:focus-within {
+  opacity: 1;
+}
+.cos-thread-resolve-btn {
+  /* Inherit base reply-btn styling; this just tints the active variant. */
+}
+.cos-thread-resolve-btn:hover,
+.cos-thread-resolve-btn:focus-visible {
+  color: #2ea043;
+  border-color: #2ea043;
+}
+.cos-thread-resolve-btn-active {
+  color: var(--pw-secondary-text, #888);
+  border-color: var(--pw-border);
+  background: var(--pw-bg-hover, rgba(255, 255, 255, 0.04));
+}
+
+.cos-thread-block-archived {
+  opacity: 0.45;
+  transition: opacity 0.15s;
+}
+.cos-thread-block-archived:hover,
+.cos-thread-block-archived:focus-within {
+  opacity: 1;
+}
+.cos-thread-archive-btn:hover,
+.cos-thread-archive-btn:focus-visible {
+  color: var(--pw-primary, #f5a623);
+  border-color: var(--pw-primary, #f5a623);
 }
 
 .cos-floating-actions {
@@ -12743,6 +13315,43 @@ body.pw-isolate {
   padding-left: 0;
   border-left: none;
   margin-left: 0;
+}
+.cos-thread-collapse-rail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  width: 14px;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  z-index: 1;
+}
+.cos-thread-collapse-rail::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 6px;
+  width: 2px;
+  background: transparent;
+  border-radius: 2px;
+  transition: background 0.1s, width 0.1s, left 0.1s;
+}
+.cos-thread-collapse-rail:hover::before {
+  background: var(--pw-primary, var(--pw-accent, #f5a623));
+  width: 4px;
+  left: 5px;
+}
+.cos-thread-collapse-rail:focus-visible {
+  outline: none;
+}
+.cos-thread-collapse-rail:focus-visible::before {
+  background: var(--pw-primary, var(--pw-accent, #f5a623));
+  width: 4px;
+  left: 5px;
 }
 
 .cos-thread-summary {
@@ -13390,12 +13999,23 @@ button.cos-thinking-label-link:hover { color: var(--pw-text); text-decoration-st
   filter: none;
 }
 
-/* End-of-thread action bar: Reply in thread / Stop & reply. */
+/* End-of-thread action bar: Reply in thread / Stop & reply.
+   flex-wrap so the buttons stack instead of squishing on narrow CoS panels
+   (mobile, docked side rails). The wide-screen layout still fits on one row. */
 .cos-thread-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 1px 0 2px 40px;
+}
+body.pw-mobile .cos-thread-actions {
+  padding-left: 12px;
+  gap: 6px;
+}
+body.pw-mobile .cos-thread-reply-btn {
+  padding: 4px 8px;
+  font-size: 11px;
 }
 .cos-thread-reply-btn {
   display: inline-flex;
@@ -13482,6 +14102,25 @@ button.cos-thinking-label-link:hover { color: var(--pw-text); text-decoration-st
 .cos-reply-pill-close:hover {
   color: var(--pw-text-primary);
   background: var(--pw-bg-raised);
+}
+.cos-reply-pill-action {
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--pw-border);
+  border-radius: 4px;
+  background: var(--pw-bg-raised);
+  color: var(--pw-text-primary);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: background 0.1s, border-color 0.1s;
+}
+.cos-reply-pill-action:hover {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.6);
+  color: #fbbf24;
 }
 
 .cos-input-row {
@@ -13917,6 +14556,22 @@ button.cos-thinking-label-link:hover { color: var(--pw-text); text-decoration-st
 @keyframes cos-tool-pulse {
   50% { opacity: 0.55; }
 }
+.cos-tool-btn.active[aria-pressed="true"] {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+  animation: cos-tool-pulse 1.2s ease-in-out infinite;
+}
+.cos-mic-elapsed {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #fca5a5;
+  padding: 0 6px;
+  max-width: 180px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 .cos-tool-group {
   display: flex;
@@ -14134,6 +14789,56 @@ body.pw-mobile .cos-learnings-side {
   border: 2px solid #475569;
 }
 
+/* Mobile: slack-mode thread is rendered INLINE inside cos-chat-pane (replacing
+   the message list and rail) so the existing input row stays at the bottom and
+   the operator types into a real textarea anchored to the thread. The × in
+   the panel header is relabeled "← Back" so it reads as navigation. */
+.cos-thread-inline {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.cos-thread-inline > .cos-thread-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: transparent;
+}
+/* When the inline thread is present, hide the chat list toolbar/rail/scroll —
+   the ThreadPanel takes their place above the input row. */
+.cos-chat-pane:has(> .cos-thread-inline) > .cos-scroll-toolbar,
+.cos-chat-pane:has(> .cos-thread-inline) > .cos-scroll-wrap {
+  display: none;
+}
+body.pw-mobile .cos-thread-panel-header {
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+  gap: 10px;
+}
+body.pw-mobile .cos-thread-panel-count {
+  margin-right: 0;
+  margin-left: auto;
+}
+body.pw-mobile .cos-thread-panel-close {
+  font-size: 0;
+  padding: 4px 8px;
+  color: var(--pw-text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+body.pw-mobile .cos-thread-panel-close::before {
+  content: '← Back';
+  font-size: 13px;
+  font-weight: 500;
+}
+/* The footer "Reply in thread" button is redundant when the textarea is
+   visible directly below the thread — hide it in compact (inline) mode. */
+.cos-thread-panel.cos-thread-panel-compact .cos-thread-panel-actions {
+  display: none;
+}
+
 /* Resize handles have no purpose when the panel is locked to the viewport. */
 body.pw-mobile .cos-popout .popout-resize-n,
 body.pw-mobile .cos-popout .popout-resize-s,
@@ -14230,4 +14935,595 @@ body.pw-mobile .cos-popout .cos-input {
 }
 .artifact-companion-empty {
   padding: 24px;
+}
+
+/* --- Session Summary companion --- */
+.ssum-view {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: var(--pw-bg, #0b1220);
+  color: #cbd5e1;
+  font-size: 12.5px;
+}
+.ssum-section {
+  border-bottom: 1px solid #1e293b;
+}
+.ssum-section-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(15, 23, 42, 0.6);
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.ssum-section-header:hover { background: rgba(30, 41, 59, 0.6); }
+.ssum-section-caret {
+  width: 12px;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+.ssum-section-title { flex: 1; }
+.ssum-section-count {
+  background: #1e293b;
+  color: #94a3b8;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+.ssum-section-body { padding: 4px 0 8px; }
+.ssum-empty {
+  padding: 8px 14px;
+  font-style: italic;
+  color: #64748b;
+  font-size: 12px;
+}
+.ssum-task,
+.ssum-edit {
+  padding: 4px 12px;
+  border-bottom: 1px dashed #1e293b;
+}
+.ssum-task:last-child,
+.ssum-edit:last-child { border-bottom: 0; }
+.ssum-task-row,
+.ssum-edit-row,
+.ssum-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+.ssum-file-row {
+  padding: 4px 12px;
+  border-bottom: 1px dashed #1e293b;
+}
+.ssum-file-row:last-child { border-bottom: 0; }
+.ssum-task-id {
+  color: #94a3b8;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+}
+.ssum-task-subject {
+  flex: 1;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ssum-file-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+.ssum-file-count,
+.ssum-edit-count,
+.ssum-file-range {
+  background: #1e293b;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: 'SF Mono', Monaco, monospace;
+}
+.ssum-truncated {
+  padding: 6px 10px;
+  color: #64748b;
+  font-style: italic;
+  font-size: 11px;
+}
+
+/* --- JSONL filter chips --- */
+.jsonl-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px;
+  background: rgba(15, 23, 42, 0.6);
+  border-bottom: 1px solid #1e293b;
+  align-items: center;
+}
+.jsonl-filter-label {
+  font-size: 10px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-right: 4px;
+}
+.jsonl-filter-label-button {
+  background: transparent;
+  border: 0;
+  padding: 2px 4px;
+  cursor: pointer;
+  font-family: inherit;
+  border-radius: 4px;
+}
+.jsonl-filter-label-button:hover { color: #cbd5e1; background: rgba(148, 163, 184, 0.08); }
+.jsonl-filter-label-button.partial { color: #fde047; }
+.jsonl-filter-chip {
+  background: #1e293b;
+  color: #94a3b8;
+  border: 1px solid transparent;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.jsonl-filter-chip:hover { background: #334155; color: #e2e8f0; }
+.jsonl-filter-chip.active {
+  background: rgba(234, 179, 8, 0.15);
+  color: #fde047;
+  border-color: rgba(234, 179, 8, 0.4);
+}
+.jsonl-filter-chip-reset {
+  margin-left: auto;
+  background: transparent;
+  color: #64748b;
+  border: 0;
+  font-size: 11px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.jsonl-filter-chip-reset:hover { color: #cbd5e1; }
+
+/* JSONL drawer toggles + body layout */
+.jsonl-drawer-toggle {
+  background: #0f172a;
+  color: #cbd5e1;
+  border: 1px solid #1e293b;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 4px;
+}
+.jsonl-drawer-toggle.active {
+  background: rgba(56, 189, 248, 0.15);
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.4);
+}
+.jsonl-drawer-toggle:hover { background: #1e293b; color: #e2e8f0; }
+.jsonl-drawer-toggle-right { margin-right: 0; margin-left: 4px; }
+.jsonl-drawer-count {
+  background: #1e293b;
+  color: #94a3b8;
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 8px;
+}
+.jsonl-drawer-toggle.active .jsonl-drawer-count {
+  background: rgba(56, 189, 248, 0.3);
+  color: #e0f2fe;
+}
+
+.jsonl-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+.jsonl-drawer {
+  display: flex;
+  flex-direction: column;
+  width: 260px;
+  flex-shrink: 0;
+  border-right: 1px solid #1e293b;
+  background: rgba(15, 23, 42, 0.4);
+  overflow: auto;
+  font-size: 12px;
+}
+.jsonl-drawer-right {
+  border-right: 0;
+  border-left: 1px solid #1e293b;
+}
+.jsonl-drawer-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 10px;
+  background: rgba(15, 23, 42, 0.95);
+  color: #cbd5e1;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  border-bottom: 1px solid #1e293b;
+}
+.jsonl-drawer-body {
+  padding: 4px 0;
+}
+@media (max-width: 800px) {
+  .jsonl-drawer { width: 200px; }
+}
+
+/* Hierarchical tool cluster (sub-block within an assistant turn) */
+.jsonl-tool-cluster {
+  position: relative;
+  margin: 4px 0 4px 8px;
+  border-left: 2px solid #1e293b;
+}
+.jsonl-tool-cluster-edge {
+  position: absolute;
+  left: -6px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: pointer;
+}
+.jsonl-tool-cluster-edge:hover { background: rgba(56, 189, 248, 0.18); }
+.jsonl-tool-cluster-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 8px;
+  background: transparent;
+  border: 0;
+  color: #94a3b8;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.jsonl-tool-cluster-header:hover { background: rgba(30, 41, 59, 0.5); color: #cbd5e1; }
+.jsonl-cluster-caret { width: 10px; flex-shrink: 0; }
+.jsonl-cluster-label { flex: 1; }
+.jsonl-cluster-hidden {
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #64748b;
+  font-style: italic;
+}
+.jsonl-tool-cluster-body {
+  padding: 2px 6px 4px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.jsonl-tool-cluster.collapsed .jsonl-tool-cluster-body { display: none; }
+
+/* "N tools hidden by filter" badge when filters dropped every tool in a
+ * cluster — without this the cluster would render nothing and the user
+ * couldn't tell whether a turn ran any tools. */
+.jsonl-hidden-tools-badge {
+  margin: 4px 0 4px 16px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #64748b;
+  font-style: italic;
+  border-left: 2px dashed #1e293b;
+}
+
+/* Reply-level grouping: each assistant text + its trailing tools form a
+ * collapsible Reply within a turn. */
+.jsonl-reply {
+  position: relative;
+  margin: 6px 0 6px 4px;
+  border-left: 2px solid #1f2937;
+}
+.jsonl-reply-edge {
+  position: absolute;
+  left: -6px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: pointer;
+}
+.jsonl-reply-edge:hover { background: rgba(56, 189, 248, 0.18); }
+.jsonl-reply-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  user-select: none;
+}
+.jsonl-reply-header:hover { background: rgba(30, 41, 59, 0.4); color: #cbd5e1; }
+.jsonl-reply-caret { width: 10px; flex-shrink: 0; }
+.jsonl-reply-label { font-weight: 600; }
+.jsonl-reply-meta { font-size: 10px; color: #64748b; text-transform: none; letter-spacing: 0; }
+.jsonl-reply-meta-muted { font-style: italic; }
+.jsonl-reply-preview {
+  flex: 1;
+  font-size: 11px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #cbd5e1;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.jsonl-reply-body {
+  padding: 2px 6px 4px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.jsonl-reply.jsonl-reply-collapsed .jsonl-reply-body { display: none; }
+.jsonl-reply-empty {
+  margin: 4px 0 4px 16px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #64748b;
+  font-style: italic;
+}
+
+/* Click-to-collapse left edge for a whole assistant turn. */
+.sm-group-assistant_group { position: relative; }
+.sm-group-edge {
+  position: absolute;
+  left: -8px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: pointer;
+}
+.sm-group-edge:hover { background: rgba(56, 189, 248, 0.22); }
+
+/* Wall-clock time badge on assistant-group headers and thinking blocks. */
+.sm-group-time {
+  font-size: 10px;
+  color: #64748b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.sm-msg-time {
+  font-size: 10px;
+  color: #64748b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin-left: auto;
+  padding-right: 8px;
+}
+
+/* VoiceTracePanel — pipeline trace for voice-captured feedback */
+.vt-panel { display: flex; flex-direction: column; gap: 14px; }
+.vt-empty { color: var(--pw-text-faint); font-size: 13px; padding: 8px 0; }
+.vt-error { color: #f87171; }
+.vt-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  padding: 10px 12px;
+  background: var(--pw-border-light);
+  border: 1px solid var(--pw-border);
+  border-radius: 6px;
+}
+.vt-stat { display: flex; flex-direction: column; gap: 2px; min-width: 90px; }
+.vt-stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--pw-text-faint);
+}
+.vt-stat-value { font-size: 13px; color: var(--pw-text-primary); font-weight: 500; }
+.vt-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+.vt-block-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--pw-text-faint);
+}
+
+.vt-summary-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--pw-border-light);
+  border: 1px solid var(--pw-border);
+  border-radius: 6px;
+}
+.vt-summary-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--pw-text-secondary);
+  font-style: italic;
+}
+
+.vt-pipeline {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.vt-pipeline-step {
+  flex: 1 1 180px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  background: var(--pw-border-light);
+  border: 1px solid var(--pw-border);
+  border-radius: 6px;
+}
+.vt-pipeline-step-active {
+  border-color: #3e63dd;
+  box-shadow: 0 0 0 1px #3e63dd44;
+}
+.vt-pipeline-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--pw-border);
+  color: var(--pw-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.vt-pipeline-step-active .vt-pipeline-step-num {
+  background: #3e63dd;
+  color: #fff;
+}
+.vt-pipeline-step-body { display: flex; flex-direction: column; gap: 2px; }
+.vt-pipeline-step-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pw-text-primary);
+}
+.vt-pipeline-step-desc {
+  font-size: 11.5px;
+  color: var(--pw-text-secondary);
+  line-height: 1.4;
+}
+.vt-pipeline-arrow {
+  align-self: center;
+  font-size: 16px;
+  color: var(--pw-text-faint);
+}
+
+.vt-chunks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.vt-chunk {
+  border: 1px solid var(--pw-border);
+  border-left: 3px solid var(--pw-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--pw-border-light);
+}
+.vt-chunk-skipped { opacity: 0.7; }
+.vt-chunk-actionable { border-left-color: #3e63dd; }
+.vt-chunk-match {
+  border-color: #3e63dd;
+  border-left-color: #3e63dd;
+  box-shadow: 0 0 0 1px #3e63dd55;
+}
+.vt-chunk-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.vt-chunk-index {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--pw-text-secondary);
+}
+.vt-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.vt-badge-actionable { background: #3e63dd22; color: #5b7cf0; }
+.vt-badge-skip { background: var(--pw-border); color: var(--pw-text-muted); }
+.vt-chunk-reason {
+  font-size: 11px;
+  color: var(--pw-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.vt-chunk-duration {
+  font-size: 11px;
+  color: var(--pw-text-faint);
+  margin-left: auto;
+}
+.vt-chunk-match-tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #3e63dd;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.vt-chunk-other-link {
+  font-size: 11px;
+  color: var(--pw-text-muted);
+  text-decoration: none;
+}
+.vt-chunk-other-link:hover { color: var(--pw-text-primary); text-decoration: underline; }
+.vt-chunk-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--pw-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.vt-chunk-classification {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--pw-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.vt-chunk-classification-row {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+}
+.vt-chunk-classification-label {
+  color: var(--pw-text-faint);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  min-width: 80px;
+  padding-top: 2px;
+}
+.vt-chunk-classification-value { color: var(--pw-text-primary); flex: 1; }
+.vt-tag {
+  display: inline-block;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  margin-right: 4px;
+  background: var(--pw-border);
+  color: var(--pw-text-secondary);
+  border-radius: 3px;
 }

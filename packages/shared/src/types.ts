@@ -188,6 +188,7 @@ export interface WidgetConfig {
   shortcut: string;
   collectors: Collector[];
   appKey?: string;
+  hideTrigger?: boolean;
 }
 
 export interface SubmitOptions {

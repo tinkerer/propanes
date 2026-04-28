@@ -204,6 +204,8 @@ export function AssistantGroupHeader({
   let totalInput = 0;
   let totalOutput = 0;
   let toolCount = 0;
+  let firstTs = 0;
+  let lastTs = 0;
 
   for (const msg of messages) {
     if (msg.model && !model) model = msg.model;
@@ -212,11 +214,16 @@ export function AssistantGroupHeader({
       totalOutput += msg.usage.output_tokens || 0;
     }
     if (msg.role === 'tool_use') toolCount++;
+    if (msg.timestamp) {
+      if (!firstTs || msg.timestamp < firstTs) firstTs = msg.timestamp;
+      if (msg.timestamp > lastTs) lastTs = msg.timestamp;
+    }
   }
 
   const shortModel = model ? shortenModelName(model) : null;
   const hasTokens = totalInput > 0 || totalOutput > 0;
   const toggleable = !!onToggle;
+  const timeLabel = formatTurnTime(firstTs, lastTs);
   // Always render when toggleable so the user has a handle to expand an
   // empty-ish group header — otherwise groups with no model/tokens/tools
   // would have no click target.
@@ -242,11 +249,38 @@ export function AssistantGroupHeader({
           {totalInput.toLocaleString()}↓ {totalOutput.toLocaleString()}↑
         </span>
       )}
+      {timeLabel && (
+        <span class="sm-group-time" title={firstTs ? new Date(firstTs).toLocaleString() : undefined}>
+          {timeLabel}
+        </span>
+      )}
       {toggleable && collapsed && (
         <span class="sm-group-collapsed-hint">collapsed</span>
       )}
     </div>
   );
+}
+
+// Format the turn's wall-clock time. If the turn spans more than 2s, show the
+// duration too — long turns are useful to spot. Anything within 2s of "now"
+// is treated as a fresh live-stream message and gets no time stamp (the user
+// is watching it happen).
+function formatTurnTime(firstTs: number, lastTs: number): string | null {
+  if (!firstTs) return null;
+  if (Math.abs(Date.now() - firstTs) < 2000) return null;
+  const d = new Date(firstTs);
+  if (isNaN(d.getTime())) return null;
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  const base = `${hh}:${mm}:${ss}`;
+  const dur = lastTs - firstTs;
+  if (dur < 2000) return base;
+  const secs = Math.round(dur / 1000);
+  if (secs < 60) return `${base} · ${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remSec = secs % 60;
+  return `${base} · ${mins}m${remSec ? ` ${remSec}s` : ''}`;
 }
 
 function AssistantGroup({

@@ -61,12 +61,23 @@ import {
   closeCosPane,
   COS_PANE_TAB_ID,
   subscribeAgentLiveMessages,
+  cosDrafts,
+  getCosDraft,
+  setCosDraft,
+  clearCosDraft,
+  loadCosDrafts,
+  hasAnyCosDraftForAgent,
+  cosThreadMeta,
+  getThreadMeta,
+  setThreadResolved,
+  setThreadArchived,
 } from '../lib/chief-of-staff.js';
 import { MessageRenderer } from './MessageRenderer.js';
 import { layoutTree as layoutTreeSignal, findLeafWithTab, setFocusedLeaf } from '../lib/pane-tree.js';
 import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-picker';
 import { captureScreenshot } from '@propanes/widget/screenshot';
 import { ImageEditor } from '@propanes/widget/image-editor';
+import { VoiceRecorder } from '@propanes/widget/voice-recorder';
 import {
   popoutPanels,
   persistPopoutState,
@@ -100,11 +111,21 @@ import { PopupMenu } from './PopupMenu.js';
 import { WindowMenu } from './PopoutPanelContent.js';
 import {
   cosPopoutTree,
-  cosOpenArtifactTab,
   cosToggleLearningsTab,
   cosIsLearningsOpen,
+  cosSlackMode,
+  setCosSlackMode,
+  cosShowResolved,
+  setCosShowResolved,
+  cosShowArchived,
+  setCosShowArchived,
+  cosActiveThread,
+  cosOpenThreadTab,
+  cosCloseThreadTab,
+  cosIsThreadTabOpen,
 } from '../lib/cos-popout-tree.js';
 import { CosPopoutTreeView } from './CosPopoutTreeView.js';
+import { openArtifactDrawerTab, isArtifactDrawerOpen } from '../lib/cos-artifact-drawer.js';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -370,10 +391,86 @@ function ArtifactCard({
   );
 }
 
-function AssistantContent({ text, onArtifactPopout }: { text: string; onArtifactPopout: (artifactId: string) => void }) {
+// Splits `text` on (case-insensitive) occurrences of `highlight` and wraps the
+// matches in `<mark class="cos-search-hit">`. Falls back to plain text when
+// highlight is empty / not found. Used for inline search-result highlighting.
+function HighlightedText({ text, highlight }: { text: string; highlight?: string | null }) {
+  if (!highlight) return <>{text}</>;
+  const q = highlight.trim();
+  if (!q) return <>{text}</>;
+  const lowerText = text.toLowerCase();
+  const lowerQ = q.toLowerCase();
+  if (!lowerText.includes(lowerQ)) return <>{text}</>;
+  const parts: import('preact').ComponentChildren[] = [];
+  let i = 0;
+  let key = 0;
+  while (i < text.length) {
+    const hit = lowerText.indexOf(lowerQ, i);
+    if (hit < 0) {
+      parts.push(text.slice(i));
+      break;
+    }
+    if (hit > i) parts.push(text.slice(i, hit));
+    parts.push(<mark key={key++} class="cos-search-hit">{text.slice(hit, hit + q.length)}</mark>);
+    i = hit + q.length;
+  }
+  return <>{parts}</>;
+}
+
+// Walks all text nodes inside a rendered markdown container and wraps
+// substring matches in <mark class="cos-search-hit">. Skips nodes already
+// inside a mark (idempotent across re-runs). Run from a useEffect after the
+// dangerouslySetInnerHTML pass so we operate on the live DOM.
+function highlightTextNodesInDom(root: HTMLElement, query: string) {
+  if (!query) return;
+  const lowerQ = query.toLowerCase();
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      if (parent.tagName === 'MARK' && parent.classList.contains('cos-search-hit')) return NodeFilter.FILTER_REJECT;
+      if (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE') return NodeFilter.FILTER_REJECT;
+      const text = node.nodeValue || '';
+      return text.toLowerCase().includes(lowerQ) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const targets: Text[] = [];
+  let cur = walker.nextNode();
+  while (cur) { targets.push(cur as Text); cur = walker.nextNode(); }
+  for (const node of targets) {
+    const text = node.nodeValue || '';
+    const lower = text.toLowerCase();
+    const frag = document.createDocumentFragment();
+    let i = 0;
+    while (i < text.length) {
+      const hit = lower.indexOf(lowerQ, i);
+      if (hit < 0) { frag.appendChild(document.createTextNode(text.slice(i))); break; }
+      if (hit > i) frag.appendChild(document.createTextNode(text.slice(i, hit)));
+      const mark = document.createElement('mark');
+      mark.className = 'cos-search-hit';
+      mark.textContent = text.slice(hit, hit + query.length);
+      frag.appendChild(mark);
+      i = hit + query.length;
+    }
+    node.parentNode?.replaceChild(frag, node);
+  }
+}
+
+function AssistantContent({ text, onArtifactPopout, searchHighlight }: { text: string; onArtifactPopout: (artifactId: string) => void; searchHighlight?: string | null }) {
   const segments = useMemo(() => parseAssistantContent(text), [text]);
+  const proseRef = useRef<HTMLDivElement>(null);
+  // Re-apply DOM-level highlight after every render that might change the
+  // rendered markdown or the active query. The walker is idempotent thanks to
+  // the dangerouslySetInnerHTML reset that runs before this effect.
+  useEffect(() => {
+    const root = proseRef.current;
+    if (!root) return;
+    const q = (searchHighlight || '').trim();
+    if (!q) return;
+    highlightTextNodesInDom(root, q);
+  }, [text, searchHighlight]);
   return (
-    <div class="cos-msg-md">
+    <div class="cos-msg-md" ref={proseRef}>
       {segments.map((seg, i) => {
         if (seg.type === 'artifact') {
           return <ArtifactCard key={i} seg={seg} onPopout={onArtifactPopout} />;
@@ -681,6 +778,7 @@ function MessageBubble({
   agentId,
   agentName,
   verbosity,
+  searchHighlight,
 }: {
   msg: ChiefOfStaffMsg;
   msgIdx: number;
@@ -690,6 +788,7 @@ function MessageBubble({
   agentId: string;
   agentName: string;
   verbosity: ChiefOfStaffVerbosity;
+  searchHighlight?: string | null;
 }) {
   const hasTools = !!(msg.toolCalls && msg.toolCalls.length > 0);
   // Always show every text part the model emitted (markers stripped) so
@@ -764,11 +863,11 @@ function MessageBubble({
         )}
         {showAssistantText && (
           <div class="cos-row-content cos-msg-text cos-msg-text-md">
-            <AssistantContent text={assistantDisplay} onArtifactPopout={onArtifactPopout} />
+            <AssistantContent text={assistantDisplay} onArtifactPopout={onArtifactPopout} searchHighlight={searchHighlight} />
           </div>
         )}
         {showUserText && (
-          <div class="cos-row-content cos-msg-text">{msg.text}</div>
+          <div class="cos-row-content cos-msg-text"><HighlightedText text={msg.text} highlight={searchHighlight} /></div>
         )}
         {showAttachments && (
           <MessageAttachments attachments={msg.attachments} elementRefs={msg.elementRefs} />
@@ -938,6 +1037,21 @@ function groupIntoThreads(messages: ChiefOfStaffMsg[]): Thread[] {
   });
 
   return threads;
+}
+
+/**
+ * Stable key for slack-mode thread routing. Prefer the server-side cosThread
+ * id; fall back to the anchor user-message index (stable within an agent's
+ * message array). Orphans collapse to a single bucket.
+ */
+function threadKeyOf(t: Thread): string {
+  const tid =
+    t.userMsg?.threadId ??
+    t.replies.find((r) => r.msg.threadId)?.msg.threadId ??
+    null;
+  if (tid) return `tid:${tid}`;
+  if (t.userIdx != null) return `idx:${t.userIdx}`;
+  return 'orphan';
 }
 
 type LearningsView = 'list' | 'graph';
@@ -1850,6 +1964,10 @@ function ThreadBlock({
   agentId,
   agentName,
   verbosity,
+  searchHighlight,
+  slackMode,
+  isActiveInPanel,
+  onOpenInPanel,
 }: {
   thread: Thread;
   collapsed: boolean;
@@ -1857,12 +1975,16 @@ function ThreadBlock({
   onStop: () => void;
   showTools: boolean;
   highlightMsgIdx: number | null;
-  onReply: (role: string, text: string, anchorTs?: number) => void;
+  onReply: (role: string, text: string, anchorTs?: number, threadServerId?: string | null) => void;
   onArtifactPopout: (artifactId: string) => void;
   hasUnread: boolean;
   agentId: string;
   agentName: string;
   verbosity: ChiefOfStaffVerbosity;
+  searchHighlight?: string | null;
+  slackMode: boolean;
+  isActiveInPanel: boolean;
+  onOpenInPanel: () => void;
 }) {
   const { userMsg, userIdx, replies } = thread;
   const dispatches = useMemo(() => collectDispatches(replies), [replies]);
@@ -1870,8 +1992,13 @@ function ThreadBlock({
   const replyCount = replies.length;
   const hasReplies = replyCount > 0;
   const lastReply = replies[replies.length - 1]?.msg;
-  const showSummaryCollapsed = !!userMsg && collapsed && hasReplies;
-  const showExpandedReplies = !userMsg || !collapsed;
+  // In slack mode, never expand replies inline — the side panel owns them. We
+  // still render orphan groups (no userMsg) inline, since they don't fit the
+  // anchor-then-thread metaphor.
+  const slackCollapse = slackMode && !!userMsg && hasReplies;
+  const effectiveCollapsed = slackCollapse ? true : collapsed;
+  const showSummaryCollapsed = !!userMsg && effectiveCollapsed && hasReplies;
+  const showExpandedReplies = !userMsg || !effectiveCollapsed;
   const threadContext = userMsg?.text || '';
   const anchorTs = userMsg?.timestamp;
   const agentAvatarSrc = getAgentAvatarSrc(agentId);
@@ -1880,15 +2007,31 @@ function ThreadBlock({
   // of interrupting unrelated in-flight threads for the same agent.
   const threadServerId =
     userMsg?.threadId ?? replies.find((r) => r.msg.threadId)?.msg.threadId ?? null;
+  // Read the cosThreadMeta signal so this block re-renders when the operator
+  // toggles `resolved` from anywhere (rail button, this action row, another
+  // tab). getThreadMeta resolves to null when no meta has loaded yet.
+  const _metaVersion = cosThreadMeta.value;
+  void _metaVersion;
+  const threadMeta = threadServerId ? getThreadMeta(threadServerId) : null;
+  const isResolved = !!threadMeta?.resolvedAt;
+  const isArchived = !!threadMeta?.archivedAt;
   const handleThreadStop = () => {
     if (threadServerId) void interruptThread(threadServerId);
     else onStop();
   };
   const handleThreadReply = () => {
-    if (threadContext) onReply('user', threadContext, anchorTs);
+    if (threadContext) onReply('user', threadContext, anchorTs, threadServerId);
+  };
+  const handleToggleResolved = () => {
+    if (!threadServerId) return;
+    void setThreadResolved(threadServerId, !isResolved);
+  };
+  const handleToggleArchived = () => {
+    if (!threadServerId) return;
+    void setThreadArchived(threadServerId, !isArchived);
   };
   return (
-    <div class={`cos-thread-block${hasUnread ? ' cos-thread-block-unread' : ''}${userMsg ? '' : ' cos-thread-block-orphan'}`}>
+    <div class={`cos-thread-block${hasUnread ? ' cos-thread-block-unread' : ''}${userMsg ? '' : ' cos-thread-block-orphan'}${isResolved ? ' cos-thread-block-resolved' : ''}${isArchived ? ' cos-thread-block-archived' : ''}`}>
       {userMsg && (
         <div
           class={`cos-msg cos-row cos-row-user cos-row-post${highlightMsgIdx === userIdx ? ' cos-msg-highlight' : ''}${hasUnread ? ' cos-row-unread' : ''}`}
@@ -1907,7 +2050,7 @@ function ThreadBlock({
               )}
             </div>
             {userMsg.text && (
-              <div class="cos-row-content cos-msg-text">{userMsg.text}</div>
+              <div class="cos-row-content cos-msg-text"><HighlightedText text={userMsg.text} highlight={searchHighlight} /></div>
             )}
             <MessageAttachments attachments={userMsg.attachments} elementRefs={userMsg.elementRefs} />
           </div>
@@ -1915,14 +2058,25 @@ function ThreadBlock({
       )}
       {(hasReplies || dispatches.length > 0) && (
         <div class="cos-thread-children">
+          {showExpandedReplies && userMsg && hasReplies && (
+            <button
+              type="button"
+              class="cos-thread-collapse-rail"
+              onClick={onToggle}
+              aria-label="Collapse thread"
+              title="Collapse thread"
+            />
+          )}
           {dispatches.length > 0 && <DispatchStatusLine dispatches={dispatches} />}
           {showSummaryCollapsed && (
             <button
               type="button"
-              class={`cos-thread-summary${hasUnread ? ' cos-thread-summary-unread' : ''}`}
-              onClick={onToggle}
+              class={`cos-thread-summary${hasUnread ? ' cos-thread-summary-unread' : ''}${slackCollapse && isActiveInPanel ? ' cos-thread-summary-active' : ''}`}
+              onClick={slackCollapse ? onOpenInPanel : onToggle}
               aria-expanded="false"
-              aria-label={`Expand ${replyCount} repl${replyCount === 1 ? 'y' : 'ies'}`}
+              aria-label={slackCollapse
+                ? `Open thread in panel (${replyCount} repl${replyCount === 1 ? 'y' : 'ies'})`
+                : `Expand ${replyCount} repl${replyCount === 1 ? 'y' : 'ies'}`}
             >
               <span class="cos-thread-summary-avatars" aria-hidden="true">
                 <MessageAvatar role="assistant" label={agentName} size="sm" imageSrc={agentAvatarSrc} />
@@ -1935,7 +2089,9 @@ function ThreadBlock({
                   Last reply <Timestamp ts={lastReply.timestamp} />
                 </span>
               )}
-              <span class="cos-thread-summary-hint">View thread</span>
+              <span class="cos-thread-summary-hint">
+                {slackCollapse ? (isActiveInPanel ? 'Open in panel' : 'View in panel →') : 'View thread'}
+              </span>
             </button>
           )}
           {showExpandedReplies && (
@@ -1985,35 +2141,293 @@ function ThreadBlock({
                   agentId={agentId}
                   agentName={agentName}
                   verbosity={verbosity}
+                  searchHighlight={searchHighlight}
                 />
               ))}
             </>
           )}
         </div>
       )}
-      {userMsg && !(collapsed && hasReplies) && (
-        <div class="cos-thread-actions">
-          {isRunning && (
+      {userMsg && !(collapsed && hasReplies) && (() => {
+        const actionsLinkSid = getSessionIdForThread(threadServerId);
+        const openActionsSessionLog = () => {
+          if (!actionsLinkSid) return;
+          openSession(actionsLinkSid);
+          toggleCompanion(actionsLinkSid, 'jsonl');
+        };
+        return (
+          <div class="cos-thread-actions">
+            {isRunning && (
+              <button
+                type="button"
+                class="cos-thread-reply-btn cos-thread-reply-btn-running"
+                onClick={handleThreadStop}
+                title="Interrupt current response"
+                aria-label="Interrupt current response"
+              >
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <rect x="5" y="5" width="14" height="14" rx="2" />
+                </svg>
+                <span>Stop</span>
+              </button>
+            )}
             <button
               type="button"
-              class="cos-thread-reply-btn cos-thread-reply-btn-running"
-              onClick={handleThreadStop}
-              title="Interrupt current response"
-              aria-label="Interrupt current response"
+              class="cos-thread-reply-btn"
+              onClick={handleThreadReply}
+              title="Reply in thread"
+              aria-label="Reply in thread"
+              disabled={!threadContext}
             >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <rect x="5" y="5" width="14" height="14" rx="2" />
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="9 17 4 12 9 7" />
+                <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
               </svg>
-              <span>Stop</span>
+              <span>Reply in thread</span>
             </button>
-          )}
+            {actionsLinkSid && (
+              <button
+                type="button"
+                class="cos-thread-reply-btn"
+                onClick={openActionsSessionLog}
+                title={`Open full session log (${actionsLinkSid})`}
+                aria-label="Open session log"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="8" y1="13" x2="16" y2="13" />
+                  <line x1="8" y1="17" x2="13" y2="17" />
+                </svg>
+                <span>Session log</span>
+              </button>
+            )}
+            {threadServerId && (
+              <button
+                type="button"
+                class={`cos-thread-reply-btn cos-thread-resolve-btn${isResolved || isArchived ? ' cos-thread-resolve-btn-active' : ''}`}
+                onClick={isArchived ? handleToggleArchived : handleToggleResolved}
+                title={isArchived ? 'Reopen this archived thread' : (isResolved ? 'Reopen this thread' : 'Mark this thread resolved (clears it from triage)')}
+                aria-label={isArchived ? 'Reopen archived thread' : (isResolved ? 'Reopen thread' : 'Resolve thread')}
+              >
+                {isResolved || isArchived ? (
+                  <>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <circle cx="12" cy="12" r="9" />
+                      <path d="M9 12l2 2 4-4" />
+                    </svg>
+                    <span>Reopen</span>
+                  </>
+                ) : (
+                  <>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                    <span>Resolve</span>
+                  </>
+                )}
+              </button>
+            )}
+            {threadServerId && !isArchived && (
+              <button
+                type="button"
+                class="cos-thread-reply-btn cos-thread-archive-btn"
+                onClick={handleToggleArchived}
+                title="Archive this thread (hides it from triage and from the resolved view)"
+                aria-label="Archive thread"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 7h18M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7M9 11h6" />
+                </svg>
+                <span>Archive</span>
+              </button>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
+/**
+ * Slack-mode side panel: renders the currently-selected thread's replies in a
+ * dedicated companion (popout tab or inPane drawer). Reads `cosActiveThread`
+ * to find which thread to render against the supplied agent's messages.
+ */
+function ThreadPanel({
+  agentId,
+  showTools,
+  verbosity,
+  onArtifactPopout,
+  onReply,
+  onClose,
+  compact,
+}: {
+  agentId: string;
+  showTools: boolean;
+  verbosity: ChiefOfStaffVerbosity;
+  onArtifactPopout: (artifactId: string) => void;
+  onReply: (role: string, text: string, anchorTs?: number, threadServerId?: string | null) => void;
+  onClose: () => void;
+  compact?: boolean;
+}) {
+  const active = cosActiveThread.value;
+  const agents = chiefOfStaffAgents.value;
+  const agent = agents.find((a) => a.id === agentId) || null;
+  const threads = useMemo(
+    () => (agent ? groupIntoThreads(agent.messages) : []),
+    [agent?.messages],
+  );
+  const found = active && agent && active.agentId === agentId
+    ? threads.find((t) => threadKeyOf(t) === active.threadKey) || null
+    : null;
+
+  if (!agent) {
+    return (
+      <div class="cos-thread-panel cos-thread-panel-empty">
+        <div class="cos-thread-panel-header">
+          <span class="cos-thread-panel-title">Thread</span>
+          <button type="button" class="cos-thread-panel-close" onClick={onClose} aria-label="Close panel">×</button>
+        </div>
+        <div class="cos-thread-panel-empty-msg">No active agent.</div>
+      </div>
+    );
+  }
+  if (!active || !found) {
+    return (
+      <div class="cos-thread-panel cos-thread-panel-empty">
+        <div class="cos-thread-panel-header">
+          <span class="cos-thread-panel-title">Thread</span>
+          <button type="button" class="cos-thread-panel-close" onClick={onClose} aria-label="Close panel">×</button>
+        </div>
+        <div class="cos-thread-panel-empty-msg">
+          Pick a thread from chat to open it here.
+        </div>
+      </div>
+    );
+  }
+
+  const { userMsg, replies } = found;
+  const threadServerId =
+    userMsg?.threadId ?? replies.find((r) => r.msg.threadId)?.msg.threadId ?? null;
+  const anchorTs = userMsg?.timestamp;
+  const replyCount = replies.length;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [showScrollDown, setShowScrollDown] = useState(false);
+  const wasAtBottomRef = useRef(true);
+
+  function isBodyAtBottom(el: HTMLElement | null): boolean {
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  }
+  function scrollBodyToBottom(behavior: ScrollBehavior = 'auto') {
+    const el = bodyRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }
+
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const atBottom = isBodyAtBottom(el);
+      wasAtBottomRef.current = atBottom;
+      setShowScrollDown(!atBottom);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [active?.threadKey, active?.agentId]);
+
+  // Auto-stick to bottom when new replies arrive while pinned.
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    if (wasAtBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setShowScrollDown(false);
+    }
+  }, [replies.length, active?.threadKey, active?.agentId]);
+
+  return (
+    <div class={`cos-thread-panel${compact ? ' cos-thread-panel-compact' : ''}`}>
+      <div class="cos-thread-panel-header">
+        <span class="cos-thread-panel-title">Thread</span>
+        <span class="cos-thread-panel-count">
+          {replyCount} repl{replyCount === 1 ? 'y' : 'ies'}
+        </span>
+        <button
+          type="button"
+          class="cos-thread-panel-close"
+          onClick={onClose}
+          title="Close panel"
+          aria-label="Close panel"
+        >×</button>
+      </div>
+      <div class="cos-thread-panel-scroll">
+      <div class="cos-thread-panel-body" ref={bodyRef}>
+        {userMsg && (
+          <div class="cos-thread-panel-anchor cos-msg cos-row cos-row-user cos-row-post">
+            <div class="cos-row-avatar">
+              <MessageAvatar role="user" label="You" />
+            </div>
+            <div class="cos-row-main">
+              <div class="cos-row-header">
+                <span class="cos-row-author">You</span>
+                {userMsg.timestamp && <Timestamp ts={userMsg.timestamp} />}
+              </div>
+              {userMsg.text && (
+                <div class="cos-row-content cos-msg-text">
+                  <HighlightedText text={userMsg.text} highlight={null} />
+                </div>
+              )}
+              <MessageAttachments attachments={userMsg.attachments} elementRefs={userMsg.elementRefs} />
+            </div>
+          </div>
+        )}
+        {replies.length === 0 ? (
+          <div class="cos-thread-panel-empty-msg">No replies yet.</div>
+        ) : (
+          replies.map((r) => (
+            <MessageBubble
+              key={r.idx}
+              msg={r.msg}
+              msgIdx={r.idx}
+              highlighted={false}
+              showTools={showTools}
+              onArtifactPopout={onArtifactPopout}
+              agentId={agentId}
+              agentName={agent.name}
+              verbosity={verbosity}
+              searchHighlight={null}
+            />
+          ))
+        )}
+      </div>
+      <div class="cos-floating-actions" aria-hidden={!showScrollDown}>
+        {showScrollDown && (
+          <button
+            type="button"
+            class="cos-scroll-down-btn"
+            onClick={() => scrollBodyToBottom('auto')}
+            title="Scroll to latest"
+            aria-label="Scroll to latest message"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+        )}
+      </div>
+      </div>
+      {userMsg && (
+        <div class="cos-thread-panel-actions">
           <button
             type="button"
             class="cos-thread-reply-btn"
-            onClick={handleThreadReply}
+            onClick={() => userMsg.text && onReply('user', userMsg.text, anchorTs, threadServerId)}
+            disabled={!userMsg.text}
             title="Reply in thread"
-            aria-label="Reply in thread"
-            disabled={!threadContext}
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <polyline points="9 17 4 12 9 7" />
@@ -2102,7 +2516,7 @@ export function ChiefOfStaffBubble({
   const panel = allPanels.find((p) => p.id === COS_PANEL_ID);
   const inPane = mode === 'pane';
 
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(() => getCosDraft(chiefOfStaffActiveId.value, selectedAppId.value));
   type PendingAttachment = { id: string; dataUrl: string; name?: string; mimeType: string };
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [pendingElementRefs, setPendingElementRefs] = useState<CosElementRef[]>([]);
@@ -2115,6 +2529,14 @@ export function ChiefOfStaffBubble({
   const [pickerMenuPos, setPickerMenuPos] = useState<{ top: number; left: number } | null>(null);
   const cameraGroupRef = useRef<HTMLDivElement | null>(null);
   const pickerGroupRef = useRef<HTMLDivElement | null>(null);
+  const [micRecording, setMicRecording] = useState(false);
+  const [micElapsed, setMicElapsed] = useState(0);
+  const [micInterim, setMicInterim] = useState('');
+  const voiceRecorderRef = useRef<VoiceRecorder | null>(null);
+  const micTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const micStartRef = useRef<number>(0);
+  const micInputBaseRef = useRef<string>('');
+  const micFinalSegmentsRef = useRef<string[]>([]);
   const [screenshotExcludeWidget, setScreenshotExcludeWidget] = useState<boolean>(() => {
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-shot-excl-widget') : null;
     return v === null ? true : v === '1';
@@ -2131,10 +2553,6 @@ export function ChiefOfStaffBubble({
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-shot-keep') : null;
     return v === '1';
   });
-  const [pickerExcludeWidget, setPickerExcludeWidget] = useState<boolean>(() => {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-pick-excl-widget') : null;
-    return v === '1';
-  });
   const [pickerMultiSelect, setPickerMultiSelect] = useState<boolean>(() => {
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-pick-multi') : null;
     return v === '1';
@@ -2147,10 +2565,9 @@ export function ChiefOfStaffBubble({
   useEffect(() => { try { localStorage.setItem('pw-cos-shot-excl-cursor', screenshotExcludeCursor ? '1' : '0'); } catch { /* ignore */ } }, [screenshotExcludeCursor]);
   useEffect(() => { try { localStorage.setItem('pw-cos-shot-method', screenshotMethod); } catch { /* ignore */ } }, [screenshotMethod]);
   useEffect(() => { try { localStorage.setItem('pw-cos-shot-keep', screenshotKeepStream ? '1' : '0'); } catch { /* ignore */ } }, [screenshotKeepStream]);
-  useEffect(() => { try { localStorage.setItem('pw-cos-pick-excl-widget', pickerExcludeWidget ? '1' : '0'); } catch { /* ignore */ } }, [pickerExcludeWidget]);
   useEffect(() => { try { localStorage.setItem('pw-cos-pick-multi', pickerMultiSelect ? '1' : '0'); } catch { /* ignore */ } }, [pickerMultiSelect]);
   useEffect(() => { try { localStorage.setItem('pw-cos-pick-children', pickerIncludeChildren ? '1' : '0'); } catch { /* ignore */ } }, [pickerIncludeChildren]);
-  const [replyTo, setReplyTo] = useState<{ role: string; text: string; anchorTs?: number } | null>(null);
+  const [replyTo, setReplyTo] = useState<{ role: string; text: string; anchorTs?: number; threadServerId?: string | null } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -2160,6 +2577,10 @@ export function ChiefOfStaffBubble({
     return v === '1';
   });
   const [showLearnings, setShowLearnings] = useState(false);
+  const [showThreadPanel, setShowThreadPanel] = useState(false);
+  const slackMode = cosSlackMode.value;
+  const showResolved = cosShowResolved.value;
+  const showArchived = cosShowArchived.value;
   const [editingAttachment, setEditingAttachment] = useState<{ id: string; dataUrl: string } | null>(null);
   const [learningsSide, setLearningsSide] = useState<'left' | 'right'>(() => {
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-learnings-side') : null;
@@ -2171,10 +2592,13 @@ export function ChiefOfStaffBubble({
     try { localStorage.setItem('pw-cos-show-tools', showTools ? '1' : '0'); } catch { /* ignore */ }
   }, [showTools]);
   useEffect(() => {
+    if (!slackMode && showThreadPanel) setShowThreadPanel(false);
+  }, [slackMode, showThreadPanel]);
+  useEffect(() => {
     try { localStorage.setItem('pw-cos-learnings-side', learningsSide); } catch { /* ignore */ }
   }, [learningsSide]);
   useEffect(() => {
-    if (!showLearnings) { setShellRect(null); return; }
+    if (!showLearnings && !showThreadPanel) { setShellRect(null); return; }
     const el = wrapperRef.current;
     if (!el) return;
     let raf: number | null = null;
@@ -2188,7 +2612,7 @@ export function ChiefOfStaffBubble({
     const tick = () => { update(); raf = requestAnimationFrame(tick); };
     raf = requestAnimationFrame(tick);
     return () => { if (raf !== null) cancelAnimationFrame(raf); };
-  }, [showLearnings, inPane]);
+  }, [showLearnings, showThreadPanel, inPane]);
 
   const [nameEdit, setNameEdit] = useState<string | null>(null);
   const [promptEdit, setPromptEdit] = useState<string | null>(null);
@@ -2196,14 +2620,90 @@ export function ChiefOfStaffBubble({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
 
+  // The active draft scope is (agent, app, threadId-or-empty). When the
+  // operator is in "reply to thread" mode (replyTo set) this resolves to that
+  // thread's server id; otherwise '' meaning the new-thread compose draft.
+  // Putting it in a single derived const keeps the hydrate effect, applyInput,
+  // submit, and reply-pill actions all looking at the same key.
+  const draftScopeThreadId = replyTo?.threadServerId ?? '';
+  // Hydrate the textarea from the server-backed draft store whenever the
+  // active agent / app scope / reply-thread scope changes, OR when the draft
+  // store itself gets refreshed (e.g. initial load after page refresh). We
+  // only overwrite local input if it differs from the stored draft — this
+  // keeps in-flight typing from being clobbered when our own optimistic write
+  // makes the signal tick.
+  useEffect(() => {
+    const stored = getCosDraft(activeId, selectedAppId.value, draftScopeThreadId);
+    setInput((prev) => (prev === stored ? prev : stored));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId, selectedAppId.value, draftScopeThreadId, cosDrafts.value]);
+  // Mirror operator typing into the server-backed draft store so the input
+  // survives refresh and any peer tabs/windows pick it up.
+  function applyInput(next: string): void {
+    setInput(next);
+    setCosDraft(activeId, selectedAppId.value, draftScopeThreadId, next);
+  }
+  // Pull all drafts for the current app on mount and whenever the operator
+  // switches app scope. Per-(agent, thread) values land in the cosDrafts
+  // signal and the hydrate effect above replays them into the textarea.
+  useEffect(() => {
+    void loadCosDrafts(selectedAppId.value);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAppId.value]);
+
   const threads = useMemo(
     () => groupIntoThreads(activeAgent?.messages || []),
     [activeAgent?.messages],
   );
   const collapsibleThreads = threads.filter((t) => t.userIdx !== null);
-  const hasMultipleThreads = collapsibleThreads.length >= 2;
   const anyExpanded = collapsibleThreads.some((t) => !collapsedThreads.has(t.userIdx!));
   const isAgentStreaming = (activeAgent?.messages || []).some((m) => m.streaming);
+  // Read the per-thread meta signal so the rail re-renders when an operator
+  // toggles `resolved` or the server pushes a new sessionStatus on hydrate.
+  const _threadMetaVersion = cosThreadMeta.value;
+  void _threadMetaVersion;
+
+  function threadServerIdFor(t: Thread): string | null {
+    return (
+      t.userMsg?.threadId ??
+      t.replies.find((r) => r.msg.threadId)?.msg.threadId ??
+      null
+    );
+  }
+
+  type RailStatus = 'streaming' | 'unread' | 'failed' | 'idle' | 'gc' | 'resolved' | 'archived';
+  function railStatusFor(t: Thread): RailStatus {
+    const tid = threadServerIdFor(t);
+    const meta = tid ? getThreadMeta(tid) : null;
+    // Archived wins over resolved — both are terminal triage states but
+    // archived is "stash further away".
+    if (meta?.archivedAt) return 'archived';
+    if (meta?.resolvedAt) return 'resolved';
+    if (t.replies.some((r) => r.msg.streaming)) return 'streaming';
+    if (unreadByThread.get(t.userIdx)) return 'unread';
+    const s = meta?.sessionStatus;
+    if (s === 'failed' || s === 'killed') return 'failed';
+    if (s === null || s === undefined) return 'gc';
+    if (s === 'running' || s === 'pending') return 'streaming';
+    // 'idle' | 'completed' (or any other clean terminal) → solid green.
+    return 'idle';
+  }
+
+  // Apply visibility filters to the thread list. Resolved/archived are hidden
+  // by default; toggling the toolbar checkboxes restores them. Threads without
+  // a server id (still pending hydration) always show — they can't have meta.
+  function isThreadVisible(t: Thread): boolean {
+    const tid = threadServerIdFor(t);
+    if (!tid) return true;
+    const meta = getThreadMeta(tid);
+    if (meta?.archivedAt && !showArchived) return false;
+    if (meta?.resolvedAt && !meta.archivedAt && !showResolved) return false;
+    return true;
+  }
+  const visibleThreads = threads.filter(isThreadVisible);
+  const hiddenThreadCount = threads.length - visibleThreads.length;
+  const visibleCollapsibleThreads = visibleThreads.filter((t) => t.userIdx !== null);
+  const hasMultipleThreads = visibleCollapsibleThreads.length >= 2;
 
   function threadKey(t: Thread): string {
     return t.userIdx !== null ? `t-${t.userIdx}` : 'pre';
@@ -2239,7 +2739,19 @@ export function ChiefOfStaffBubble({
   }
 
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Tracking the scroll element as state (in addition to the ref) so effects
+  // can re-bind when the chat re-mounts. The popout tree splits when a Thread
+  // side panel opens, which causes Preact to mount a fresh `cos-scroll` DOM
+  // node — the old listeners are bound to a detached element and the user
+  // appears yanked to the top. lastScrollTopRef preserves position across
+  // those remounts so we can restore where the user was.
+  const [scrollEl, setScrollElState] = useState<HTMLDivElement | null>(null);
+  const setScrollEl = useCallback((el: HTMLDivElement | null) => {
+    scrollRef.current = el;
+    setScrollElState(el);
+  }, []);
+  const lastScrollTopRef = useRef(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dragging = useRef(false);
   const dragMoved = useRef(false);
@@ -2257,6 +2769,18 @@ export function ChiefOfStaffBubble({
   const [replyNotifs, setReplyNotifs] = useState<ReplyNotification[]>([]);
   const [highlightMsgIdx, setHighlightMsgIdx] = useState<number | null>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMatchPos, setSearchMatchPos] = useState(0);
+  // 'all' | 'user' | 'assistant'
+  const [searchRole, setSearchRole] = useState<'all' | 'user' | 'assistant'>('all');
+  // 'text' (message body), 'tools' (tool call inputs incl. file paths/edits), 'both'
+  const [searchScope, setSearchScope] = useState<'text' | 'tools' | 'both'>('text');
+  const [searchFiltersOpen, setSearchFiltersOpen] = useState(false);
+  const [optionsMenuOpen, setOptionsMenuOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchFiltersRef = useRef<HTMLDivElement>(null);
+  const optionsMenuRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
   const seenMsgsRef = useRef<Map<number, boolean>>(new Map());
   const seenInitializedRef = useRef(false);
@@ -2269,7 +2793,7 @@ export function ChiefOfStaffBubble({
     return el.scrollHeight - el.scrollTop - el.clientHeight < 24;
   }
 
-  function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
+  function scrollToBottom(behavior: ScrollBehavior = 'auto') {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior });
@@ -2286,20 +2810,26 @@ export function ChiefOfStaffBubble({
     setReplyNotifs([]);
     setHighlightMsgIdx(null);
     wasAtBottomRef.current = true;
+    lastScrollTopRef.current = 0;
   }, [activeId]);
 
   // Auto-scroll to bottom on load (panel open, agent switch, or when history
-  // count changes while user is already pinned to the bottom).
+  // count changes while user is already pinned to the bottom). Also restores
+  // the prior scrollTop when the chat re-mounts mid-session (popout tree
+  // splits) — `scrollEl` in deps fires this on remount even when isVisible /
+  // activeId / messages.length are unchanged.
   useEffect(() => {
     if (!isVisible) return;
-    const el = scrollRef.current;
+    const el = scrollEl;
     if (!el) return;
     if (!seenInitializedRef.current || wasAtBottomRef.current) {
       el.scrollTop = el.scrollHeight;
       wasAtBottomRef.current = true;
       setShowScrollDown(false);
+    } else if (lastScrollTopRef.current > 0 && el.scrollTop === 0) {
+      el.scrollTop = lastScrollTopRef.current;
     }
-  }, [isVisible, activeId, activeAgent?.messages.length]);
+  }, [isVisible, activeId, activeAgent?.messages.length, scrollEl]);
 
   // Subscribe to the agent-scoped idle SSE while the panel is visible. Picks
   // up out-of-band /messages POSTs (e.g. an agent script posting a screenshot
@@ -2316,11 +2846,12 @@ export function ChiefOfStaffBubble({
   // user's "at bottom" state so new messages don't yank them around.
   useEffect(() => {
     if (!isVisible) return;
-    const el = scrollRef.current;
+    const el = scrollEl;
     if (!el) return;
     const onScroll = () => {
       const atBottom = isScrollAtBottom(el);
       wasAtBottomRef.current = atBottom;
+      lastScrollTopRef.current = el.scrollTop;
       setShowScrollDown(!atBottom);
       // Clear any pending notifications once the user is back at the bottom.
       if (atBottom) {
@@ -2332,7 +2863,7 @@ export function ChiefOfStaffBubble({
     el.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
     return () => el.removeEventListener('scroll', onScroll);
-  }, [isVisible, activeId]);
+  }, [isVisible, activeId, scrollEl]);
 
   // Detect newly-completed assistant replies that arrive while the user is
   // scrolled away from the bottom and surface a stackable notification chip.
@@ -2441,11 +2972,11 @@ export function ChiefOfStaffBubble({
         const sel = `[data-cos-msg-idx="${notif.messageIdx}"]`;
         const target = root.querySelector(sel) as HTMLElement | null;
         if (target) {
-          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          target.scrollIntoView({ behavior: 'auto', block: 'center' });
           setHighlightMsgIdx(notif.messageIdx);
           window.setTimeout(() => {
             setHighlightMsgIdx((cur) => (cur === notif.messageIdx ? null : cur));
-          }, 2400);
+          }, 1200);
         }
       });
     });
@@ -2469,6 +3000,130 @@ export function ChiefOfStaffBubble({
     return map;
   }, [replyNotifs]);
 
+  // Indices in activeAgent.messages whose text contains the current search
+  // query. Recomputed on every keystroke or message-list change. Empty when
+  // search panel is closed or query is blank.
+  const searchMatches = useMemo(() => {
+    if (!searchOpen || !activeAgent) return [] as number[];
+    const q = searchQuery.trim().toLowerCase();
+    // Require ≥2 chars: single-character queries match almost every word and
+    // produce visual noise (a chunky highlight on every "e", "s", etc).
+    if (q.length < 2) return [] as number[];
+    const out: number[] = [];
+    activeAgent.messages.forEach((m, i) => {
+      if (searchRole !== 'all' && m.role !== searchRole) return;
+      const wantText = searchScope === 'text' || searchScope === 'both';
+      const wantTools = searchScope === 'tools' || searchScope === 'both';
+      if (wantText && (m.text || '').toLowerCase().includes(q)) { out.push(i); return; }
+      if (wantTools && m.toolCalls && m.toolCalls.length > 0) {
+        const hay = m.toolCalls
+          .map((c) => `${c.name} ${JSON.stringify(c.input || {})}`)
+          .join('\n')
+          .toLowerCase();
+        if (hay.includes(q)) out.push(i);
+      }
+    });
+    return out;
+  }, [searchOpen, searchQuery, searchRole, searchScope, activeAgent?.messages]);
+
+  // Clamp the cursor position whenever the match set shrinks (e.g. typing).
+  useEffect(() => {
+    if (searchMatchPos >= searchMatches.length) setSearchMatchPos(0);
+  }, [searchMatches.length]);
+
+  function scrollToMessageIdx(idx: number) {
+    const root = scrollRef.current;
+    // Try the fast path first — if the target is already mounted (no
+    // collapsed-thread expansion needed), jump synchronously so the operator
+    // sees the result on the same frame as their keystroke.
+    const fastTarget = root?.querySelector(`[data-cos-msg-idx="${idx}"]`) as HTMLElement | null;
+    if (fastTarget) {
+      fastTarget.scrollIntoView({ behavior: 'auto', block: 'center' });
+      setHighlightMsgIdx(idx);
+      window.setTimeout(() => {
+        setHighlightMsgIdx((cur) => (cur === idx ? null : cur));
+      }, 1200);
+      return;
+    }
+    // Slow path: target is in a collapsed thread. Expand it, then scroll on
+    // the next frame once the DOM has the row.
+    for (const t of threads) {
+      if (t.userIdx === null) continue;
+      if (!collapsedThreads.has(t.userIdx)) continue;
+      const inThread = t.userIdx === idx || t.replies.some((r) => r.idx === idx);
+      if (inThread) {
+        setCollapsedThreads((prev) => {
+          const next = new Set(prev);
+          next.delete(t.userIdx!);
+          return next;
+        });
+        break;
+      }
+    }
+    requestAnimationFrame(() => {
+      const r = scrollRef.current;
+      if (!r) return;
+      const target = r.querySelector(`[data-cos-msg-idx="${idx}"]`) as HTMLElement | null;
+      if (!target) return;
+      target.scrollIntoView({ behavior: 'auto', block: 'center' });
+      setHighlightMsgIdx(idx);
+      window.setTimeout(() => {
+        setHighlightMsgIdx((cur) => (cur === idx ? null : cur));
+      }, 1200);
+    });
+  }
+
+  function gotoSearchMatch(pos: number) {
+    if (searchMatches.length === 0) return;
+    const wrapped = ((pos % searchMatches.length) + searchMatches.length) % searchMatches.length;
+    setSearchMatchPos(wrapped);
+    scrollToMessageIdx(searchMatches[wrapped]);
+  }
+
+  // Auto-scroll to first match when query produces a hit.
+  useEffect(() => {
+    if (searchOpen && searchMatches.length > 0) {
+      scrollToMessageIdx(searchMatches[Math.min(searchMatchPos, searchMatches.length - 1)]);
+    }
+  }, [searchMatches]);
+
+  // Close the filters dropdown on outside click.
+  useEffect(() => {
+    if (!searchFiltersOpen) return;
+    function onDoc(e: MouseEvent) {
+      const root = searchFiltersRef.current;
+      if (root && !root.contains(e.target as Node)) setSearchFiltersOpen(false);
+    }
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [searchFiltersOpen]);
+
+  useEffect(() => {
+    if (!optionsMenuOpen) return;
+    function onDoc(e: MouseEvent) {
+      const root = optionsMenuRef.current;
+      if (root && !root.contains(e.target as Node)) setOptionsMenuOpen(false);
+    }
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [optionsMenuOpen]);
+
+  // Handle "jump to message" requests from the global cmd-K spotlight. The
+  // spotlight already switched the active agent + opened the bubble; we just
+  // need to find the matching message index and scroll to it.
+  useEffect(() => {
+    if (!activeAgent) return;
+    const agent = activeAgent;
+    function onJump(e: Event) {
+      const detail = (e as CustomEvent).detail as { agentId?: string; messageId?: string } | undefined;
+      if (!detail || detail.agentId !== agent.id || !detail.messageId) return;
+      const idx = agent.messages.findIndex((m) => m.serverId === detail.messageId);
+      if (idx >= 0) scrollToMessageIdx(idx);
+    }
+    window.addEventListener('cos-jump-to-message', onJump as EventListener);
+    return () => window.removeEventListener('cos-jump-to-message', onJump as EventListener);
+  }, [activeAgent?.id, activeAgent?.messages]);
+
   function jumpToThread(t: Thread) {
     const unread = unreadByThread.get(t.userIdx);
     // If there are unread replies, jump to the first unread message (block:'start'
@@ -2481,29 +3136,39 @@ export function ChiefOfStaffBubble({
       targetIdx = threadAnchorIdx(t);
     }
     if (targetIdx === null) return;
-
-    if (t.userIdx !== null && collapsedThreads.has(t.userIdx)) {
-      setCollapsedThreads((prev) => {
-        const next = new Set(prev);
-        next.delete(t.userIdx!);
-        return next;
-      });
-    }
-
     const idx = targetIdx;
-    requestAnimationFrame(() => {
+
+    // Fast path: row already mounted — jump synchronously, no RAF, no smooth.
+    const root = scrollRef.current;
+    const fastTarget = root?.querySelector(`[data-cos-msg-idx="${idx}"]`) as HTMLElement | null;
+    if (fastTarget) {
+      fastTarget.scrollIntoView({ behavior: 'auto', block: 'start' });
+      setHighlightMsgIdx(idx);
+      window.setTimeout(() => {
+        setHighlightMsgIdx((cur) => (cur === idx ? null : cur));
+      }, 1200);
+    } else {
+      // Slow path: target inside a collapsed thread. Expand, then scroll
+      // on the next frame.
+      if (t.userIdx !== null && collapsedThreads.has(t.userIdx)) {
+        setCollapsedThreads((prev) => {
+          const next = new Set(prev);
+          next.delete(t.userIdx!);
+          return next;
+        });
+      }
       requestAnimationFrame(() => {
-        const root = scrollRef.current;
-        if (!root) return;
-        const target = root.querySelector(`[data-cos-msg-idx="${idx}"]`) as HTMLElement | null;
+        const r = scrollRef.current;
+        if (!r) return;
+        const target = r.querySelector(`[data-cos-msg-idx="${idx}"]`) as HTMLElement | null;
         if (!target) return;
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        target.scrollIntoView({ behavior: 'auto', block: 'start' });
         setHighlightMsgIdx(idx);
         window.setTimeout(() => {
           setHighlightMsgIdx((cur) => (cur === idx ? null : cur));
-        }, 2000);
+        }, 1200);
       });
-    });
+    }
 
     if (unread) {
       for (const id of unread.ids) {
@@ -2516,7 +3181,7 @@ export function ChiefOfStaffBubble({
   }
 
   useEffect(() => {
-    if (open && inputRef.current && !showSettings) inputRef.current.focus();
+    if (open && inputRef.current && !showSettings && !isMobile.value) inputRef.current.focus();
   }, [open, activeId, showSettings]);
 
   useEffect(() => {
@@ -2573,11 +3238,52 @@ export function ChiefOfStaffBubble({
     }));
     const elementRefs: CosElementRef[] = pendingElementRefs.map((e) => ({ ...e }));
     const replyToTs = replyTo?.anchorTs;
+    const submittedScopeThreadId = draftScopeThreadId;
     setInput('');
+    // Clear whichever scope this submit consumed (the in-thread reply draft
+    // OR the new-thread compose draft) so it doesn't reappear on next hydrate.
+    clearCosDraft(activeId, selectedAppId.value, submittedScopeThreadId);
     setReplyTo(null);
     setPendingAttachments([]);
     setPendingElementRefs([]);
     sendChiefOfStaffMessage(text, selectedAppId.value, { attachments, elementRefs, replyToTs });
+  }
+
+  // Reply-pill "Close" button: drop the in-thread scope but keep the operator's
+  // text — it now becomes the agent's new-thread compose draft. Implemented by
+  // copying the current text into the new-thread scope before clearing the
+  // thread-scoped row, so refresh shows the same text in the right scope.
+  function closeReplyKeepText() {
+    const text = input;
+    if (replyTo?.threadServerId && text.length > 0) {
+      // Stash under new-thread scope first so the hydrate effect (which fires
+      // on replyTo change) reads back the same text and doesn't blank the box.
+      setCosDraft(activeId, selectedAppId.value, '', text);
+      clearCosDraft(activeId, selectedAppId.value, replyTo.threadServerId);
+    }
+    setReplyTo(null);
+  }
+
+  // Reply-pill "Save draft" button: persist the current text under the
+  // thread's scope (which is already the active scope while replyTo is set),
+  // then clear the input so the operator gets a clean canvas. Dropping the
+  // reply scope after save means they're back at the new-thread compose with
+  // an empty box, which matches Slack's "draft saved, fresh box" feel.
+  function saveReplyDraftClearInput() {
+    if (!replyTo?.threadServerId) {
+      setReplyTo(null);
+      return;
+    }
+    const text = input;
+    if (text.length > 0) {
+      // applyInput is debounced; force the write through synchronously so the
+      // draft is durable before we leave the scope.
+      setCosDraft(activeId, selectedAppId.value, replyTo.threadServerId, text);
+    } else {
+      clearCosDraft(activeId, selectedAppId.value, replyTo.threadServerId);
+    }
+    setInput('');
+    setReplyTo(null);
   }
 
   function blobToDataUrl(blob: Blob): Promise<string> {
@@ -2675,6 +3381,101 @@ export function ChiefOfStaffBubble({
     }
   }
 
+  function computeMicBridgeUrl(): string {
+    const originUrl = new URL(window.location.origin);
+    originUrl.hostname = 'localhost';
+    return `${originUrl.origin}/api/v1/local/mic-bridge`;
+  }
+
+  function micErrorMessage(err: unknown): string {
+    const message = (err as any)?.message ? String((err as any).message) : '';
+    const code = (err as any)?.code ? String((err as any).code) : '';
+    const name = (err as any)?.name ? String((err as any).name) : '';
+    if (code === 'INSECURE_CONTEXT') return 'Microphone requires HTTPS (or localhost)';
+    if (code === 'POPUP_BLOCKED') return 'Mic bridge popup was blocked — allow popups for this site';
+    if (code === 'NOT_FOUND' || name === 'NotFoundError') return 'No microphone found';
+    if (name === 'NotAllowedError') return 'Microphone permission denied';
+    return message || 'Could not start microphone';
+  }
+
+  async function toggleMicRecord() {
+    if (micRecording) {
+      const rec = voiceRecorderRef.current;
+      if (micTimerRef.current) {
+        clearInterval(micTimerRef.current);
+        micTimerRef.current = null;
+      }
+      setMicRecording(false);
+      setMicInterim('');
+      if (!rec) return;
+      try {
+        const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
+        const result = insecure && rec.usingMicBridge
+          ? await rec.stopViaIframe()
+          : await rec.stop();
+        const finalText = result.transcript
+          .filter((t) => t.isFinal)
+          .map((t) => t.text.trim())
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        if (finalText) {
+          const base = micInputBaseRef.current;
+          const sep = base && !/\s$/.test(base) ? ' ' : '';
+          applyInput(base + sep + finalText);
+          inputRef.current?.focus();
+        }
+      } catch (err: any) {
+        chiefOfStaffError.value = micErrorMessage(err);
+      }
+      return;
+    }
+
+    chiefOfStaffError.value = '';
+    micInputBaseRef.current = input;
+    micFinalSegmentsRef.current = [];
+    const rec = voiceRecorderRef.current ?? (voiceRecorderRef.current = new VoiceRecorder());
+    rec.onTranscript = (seg) => {
+      if (seg.isFinal) {
+        micFinalSegmentsRef.current.push(seg.text.trim());
+        setMicInterim('');
+      } else {
+        setMicInterim(seg.text);
+      }
+    };
+    try {
+      const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
+      if (insecure) {
+        await rec.startViaIframe(computeMicBridgeUrl());
+      } else {
+        await rec.start();
+      }
+      micStartRef.current = Date.now();
+      setMicElapsed(0);
+      setMicRecording(true);
+      micTimerRef.current = setInterval(() => {
+        setMicElapsed(Math.floor((Date.now() - micStartRef.current) / 1000));
+      }, 500);
+    } catch (err: any) {
+      chiefOfStaffError.value = micErrorMessage(err);
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (micTimerRef.current) {
+        clearInterval(micTimerRef.current);
+        micTimerRef.current = null;
+      }
+      const rec = voiceRecorderRef.current;
+      if (rec?.recording) {
+        const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
+        if (insecure && rec.usingMicBridge) void rec.stopViaIframe().catch(() => {});
+        else void rec.stop().catch(() => {});
+      }
+    };
+  }, []);
+
   function stopElementPicker() {
     if (pickerCleanupRef.current) {
       pickerCleanupRef.current();
@@ -2692,20 +3493,14 @@ export function ChiefOfStaffBubble({
     if (!host) return;
     setPickerActive(true);
     setPickerMenuOpen(false);
-    // On mobile the CoS panel fills the viewport, so fading it to 0.25 opacity
-    // leaves a grey haze over everything AND still intercepts taps (the picker
-    // excludes widget-host descendants). Hide it outright instead.
+    // On mobile the CoS panel fills the viewport, so it must be hidden to allow
+    // picking anything else. On desktop the panel stays put and is selectable
+    // like any other element — drag/minimize it if it's covering your target.
     const mobile = isMobile.value;
-    const prevOpacity = host.style.opacity;
     const prevDisplay = host.style.display;
-    if (mobile || pickerExcludeWidget) {
-      host.style.display = 'none';
-    } else {
-      host.style.opacity = '0.25';
-    }
+    if (mobile) host.style.display = 'none';
     const restoreHost = () => {
-      if (mobile || pickerExcludeWidget) host.style.display = prevDisplay;
-      else host.style.opacity = prevOpacity;
+      if (mobile) host.style.display = prevDisplay;
     };
     const cleanup = startPicker(
       (infos: SelectedElementInfo[]) => {
@@ -2726,7 +3521,7 @@ export function ChiefOfStaffBubble({
         inputRef.current?.focus();
       },
       host,
-      { multiSelect: pickerMultiSelect, excludeWidget: pickerExcludeWidget, includeChildren: pickerIncludeChildren },
+      { multiSelect: pickerMultiSelect, excludeWidget: false, includeChildren: pickerIncludeChildren },
     );
     pickerCleanupRef.current = cleanup;
   }
@@ -2755,10 +3550,10 @@ export function ChiefOfStaffBubble({
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [cameraMenuOpen, pickerMenuOpen]);
 
-  function handleReply(role: string, text: string, anchorTs?: number) {
+  function handleReply(role: string, text: string, anchorTs?: number, threadServerId?: string | null) {
     const excerpt = text.length > 120 ? text.slice(0, 120) : text;
-    setReplyTo({ role, text: excerpt, anchorTs });
-    inputRef.current?.focus();
+    setReplyTo({ role, text: excerpt, anchorTs, threadServerId: threadServerId ?? null });
+    if (!isMobile.value) inputRef.current?.focus();
   }
 
   function handleArtifactPopout(artifactId: string) {
@@ -2773,13 +3568,14 @@ export function ChiefOfStaffBubble({
       openArtifactCompanion(artifactId);
       return;
     }
-    // Popout mode: the popout window hosts its own pane-tree. Opening an
-    // artifact inserts a new split pane next to the chat.
-    const wasEmpty = !hasAnyArtifactLeaf(cosPopoutTree.value.root);
-    cosOpenArtifactTab(artifactId, 'right');
-    // When opening the first artifact split, widen the floating panel so the
-    // chat and artifact both have room. Skip when docked — docked width is
-    // part of the user's layout and shouldn't jump.
+    // Popout mode: open the artifact in the drawer overlay rather than
+    // splitting the cos popout tree — splitting forced the chat to remount
+    // under a new SplitPane parent and lost its scroll position.
+    const wasEmpty = !isArtifactDrawerOpen() && !hasAnyArtifactLeaf(cosPopoutTree.value.root);
+    openArtifactDrawerTab(artifactId);
+    // When opening the first artifact, widen the floating panel so the chat
+    // and the drawer both have room. Skip when docked — docked width is part
+    // of the user's layout and shouldn't jump.
     if (wasEmpty && panel && !panel.docked) {
       const needed = 720;
       if (panel.floatingRect.w < needed) {
@@ -2977,8 +3773,17 @@ export function ChiefOfStaffBubble({
     : !!(open && activeAgent && panel && panel.visible && !hasCosTabInTree);
 
   const learningsDrawerWidth = 340;
-  const learningsDrawerStyle = (() => {
-    if (!showLearnings || !shellRect) return null;
+  type DrawerStyle = {
+    position: 'fixed';
+    top: number;
+    height: number;
+    left: number;
+    width: number;
+    zIndex: number;
+    side: 'left' | 'right';
+  };
+  let learningsDrawerStyle: DrawerStyle | null = null;
+  if (showLearnings && shellRect) {
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
     let side: 'left' | 'right' = learningsSide;
     const leftSpot = shellRect.left - learningsDrawerWidth;
@@ -2989,8 +3794,8 @@ export function ChiefOfStaffBubble({
       ? Math.max(0, leftSpot)
       : Math.min(vw - learningsDrawerWidth, rightSpot);
     const zIdx = !inPane && panel ? getPanelZIndex(panel) + 1 : 900;
-    return {
-      position: 'fixed' as const,
+    learningsDrawerStyle = {
+      position: 'fixed',
       top: shellRect.top,
       height: shellRect.height,
       left: leftPx,
@@ -2998,7 +3803,33 @@ export function ChiefOfStaffBubble({
       zIndex: zIdx,
       side,
     };
-  })();
+  }
+
+  const threadDrawerWidth = 380;
+  let threadDrawerStyle: DrawerStyle | null = null;
+  if (showThreadPanel && shellRect) {
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
+    // Default to right; if learnings is open on right, slide thread to left.
+    let side: 'left' | 'right' = 'right';
+    if (learningsDrawerStyle && learningsDrawerStyle.side === 'right') side = 'left';
+    const leftSpot = shellRect.left - threadDrawerWidth;
+    const rightSpot = shellRect.left + shellRect.width;
+    if (side === 'right' && rightSpot + threadDrawerWidth > vw && leftSpot >= 0) side = 'left';
+    if (side === 'left' && leftSpot < 0 && rightSpot + threadDrawerWidth <= vw) side = 'right';
+    const leftPx = side === 'left'
+      ? Math.max(0, leftSpot)
+      : Math.min(vw - threadDrawerWidth, rightSpot);
+    const zIdx = !inPane && panel ? getPanelZIndex(panel) + 1 : 900;
+    threadDrawerStyle = {
+      position: 'fixed',
+      top: shellRect.top,
+      height: shellRect.height,
+      left: leftPx,
+      width: threadDrawerWidth,
+      zIndex: zIdx,
+      side,
+    };
+  }
 
   return (
     <>
@@ -3048,6 +3879,29 @@ export function ChiefOfStaffBubble({
         </div>
       )}
 
+      {shouldRenderShell && activeAgent && inPane && showThreadPanel && threadDrawerStyle && (
+        <div
+          class={`cos-thread-side cos-thread-side-${threadDrawerStyle.side}`}
+          style={{
+            position: threadDrawerStyle.position,
+            top: threadDrawerStyle.top,
+            left: threadDrawerStyle.left,
+            width: threadDrawerStyle.width,
+            height: threadDrawerStyle.height,
+            zIndex: threadDrawerStyle.zIndex,
+          }}
+        >
+          <ThreadPanel
+            agentId={activeAgent.id}
+            showTools={showTools}
+            verbosity={activeAgent.verbosity || DEFAULT_VERBOSITY}
+            onArtifactPopout={handleArtifactPopout}
+            onReply={handleReply}
+            onClose={() => { setShowThreadPanel(false); cosActiveThread.value = null; }}
+          />
+        </div>
+      )}
+
       {shouldRenderShell && activeAgent && (
         <div
           ref={wrapperRef}
@@ -3066,18 +3920,37 @@ export function ChiefOfStaffBubble({
             <div class="popout-tab-scroll">
               {agents.map((a) => {
                 const isActiveTab = a.id === activeId && !showSettings;
+                // "Has draft" lights up if *any* scope under this agent (the
+                // new-thread compose draft OR any reply-in-thread draft) holds
+                // unsent text. We hide the indicator on the active tab since
+                // the operator is already looking at the textarea.
+                const hasDraft = !isActiveTab && hasAnyCosDraftForAgent(a.id, selectedAppId.value);
+                // Preview the new-thread compose draft when present; reply
+                // drafts have no obvious one-line summary so we just show "·draft".
+                const newThreadDraft = getCosDraft(a.id, selectedAppId.value, '');
+                const previewSrc = newThreadDraft || '';
+                const draftPreview = previewSrc ? previewSrc.replace(/\s+/g, ' ').slice(0, 80) : '';
                 return (
                   <button
                     key={a.id}
-                    class={`popout-tab ${isActiveTab ? 'active' : ''}`}
+                    class={`popout-tab ${isActiveTab ? 'active' : ''}${hasDraft ? ' has-draft' : ''}`}
                     onClick={() => {
                       chiefOfStaffActiveId.value = a.id;
                       setShowSettings(false);
                       if (!inPane) bringToFront(COS_PANEL_ID);
+                      // Click on a tab w/ a stashed draft → focus the textarea so
+                      // the operator can pick up where they left off without an
+                      // extra click. Defer to after the activate-render commits.
+                      if (hasDraft && !isMobile.value) setTimeout(() => inputRef.current?.focus(), 0);
                     }}
-                    title={a.name}
+                    title={hasDraft
+                      ? (draftPreview ? `Draft: ${draftPreview}${previewSrc.length > 80 ? '…' : ''}` : 'Has unsent draft')
+                      : a.name}
                   >
                     <span class="popout-tab-label">{a.name}</span>
+                    {hasDraft && (
+                      <span class="cos-tab-draft-badge" aria-label="unsent draft">·draft</span>
+                    )}
                   </button>
                 );
               })}
@@ -3305,8 +4178,26 @@ export function ChiefOfStaffBubble({
                   </div>
                 </div>
               ) : ((() => {
+                const mobileThreadActive = isMobile.value && showThreadPanel && !!cosActiveThread.value;
                 const chatPane = (
                   <div class="cos-chat-pane">
+                    {mobileThreadActive && (
+                      <div class="cos-thread-inline">
+                        <ThreadPanel
+                          agentId={activeAgent.id}
+                          showTools={showTools}
+                          verbosity={activeAgent.verbosity || DEFAULT_VERBOSITY}
+                          onArtifactPopout={handleArtifactPopout}
+                          onReply={handleReply}
+                          onClose={() => {
+                            setShowThreadPanel(false);
+                            cosActiveThread.value = null;
+                            setReplyTo(null);
+                          }}
+                          compact
+                        />
+                      </div>
+                    )}
                     <div class="cos-scroll-toolbar">
                       {activeAgent.messages.length > 0 && (
                         <>
@@ -3329,6 +4220,20 @@ export function ChiefOfStaffBubble({
                               {anyExpanded ? 'Collapse' : 'Expand'}
                             </button>
                           )}
+                          <button
+                            type="button"
+                            class={`cos-scroll-toolbar-btn${searchOpen ? ' cos-scroll-toolbar-btn-active' : ''}`}
+                            onClick={() => {
+                              const next = !searchOpen;
+                              setSearchOpen(next);
+                              if (!next) { setSearchQuery(''); setSearchMatchPos(0); }
+                              else requestAnimationFrame(() => searchInputRef.current?.focus());
+                            }}
+                            title={searchOpen ? 'Close message search' : 'Search messages in this agent'}
+                            aria-pressed={searchOpen}
+                          >
+                            Search
+                          </button>
                         </>
                       )}
                       <button
@@ -3352,40 +4257,277 @@ export function ChiefOfStaffBubble({
                       >
                         Learnings{cosLearnings.value.length > 0 ? ` (${cosLearnings.value.length})` : ''}
                       </button>
+                      <div class="cos-options-pill" ref={optionsMenuRef}>
+                        {(() => {
+                          const filtersActive = slackMode || showResolved || showArchived;
+                          return (
+                            <button
+                              type="button"
+                              class={`cos-scroll-toolbar-btn${filtersActive ? ' cos-scroll-toolbar-btn-active' : ''}`}
+                              onClick={() => setOptionsMenuOpen((v) => !v)}
+                              title="Toolbar options & filters"
+                              aria-haspopup="menu"
+                              aria-expanded={optionsMenuOpen}
+                            >
+                              Options{filtersActive ? ' •' : ''}
+                            </button>
+                          );
+                        })()}
+                        {optionsMenuOpen && (
+                          <div class="cos-search-filters-menu" role="menu">
+                            <div class="cos-search-filters-section">
+                              <div class="cos-search-filters-label">Display</div>
+                              <button
+                                type="button"
+                                role="menuitemcheckbox"
+                                aria-checked={slackMode}
+                                class={`cos-search-filters-item${slackMode ? ' cos-search-filters-item-active' : ''}`}
+                                onClick={() => {
+                                  const next = !slackMode;
+                                  setCosSlackMode(next);
+                                }}
+                                title="Hide thread replies inline; open them in a side panel"
+                              >
+                                <span class="cos-search-filters-check">{slackMode ? '✓' : ''}</span>
+                                <span>Slack mode</span>
+                              </button>
+                            </div>
+                            <div class="cos-search-filters-section">
+                              <div class="cos-search-filters-label">Filter threads</div>
+                              <button
+                                type="button"
+                                role="menuitemcheckbox"
+                                aria-checked={showResolved}
+                                class={`cos-search-filters-item${showResolved ? ' cos-search-filters-item-active' : ''}`}
+                                onClick={() => setCosShowResolved(!showResolved)}
+                                title="Include resolved threads in the chat and rail"
+                              >
+                                <span class="cos-search-filters-check">{showResolved ? '✓' : ''}</span>
+                                <span>Show resolved</span>
+                              </button>
+                              <button
+                                type="button"
+                                role="menuitemcheckbox"
+                                aria-checked={showArchived}
+                                class={`cos-search-filters-item${showArchived ? ' cos-search-filters-item-active' : ''}`}
+                                onClick={() => setCosShowArchived(!showArchived)}
+                                title="Include archived threads in the chat and rail"
+                              >
+                                <span class="cos-search-filters-check">{showArchived ? '✓' : ''}</span>
+                                <span>Show archived</span>
+                              </button>
+                              {hiddenThreadCount > 0 && (
+                                <div class="cos-search-filters-hint">
+                                  {hiddenThreadCount} thread{hiddenThreadCount === 1 ? '' : 's'} hidden
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
+                    {searchOpen && (
+                      <div class="cos-scroll-search-row">
+                        <input
+                          ref={searchInputRef}
+                          type="text"
+                          class="cos-scroll-search-input"
+                          placeholder={searchScope === 'tools' ? 'Find filename or edit...' : searchScope === 'both' ? 'Find in messages + tool calls...' : 'Find in messages...'}
+                          value={searchQuery}
+                          onInput={(e) => { setSearchQuery((e.target as HTMLInputElement).value); setSearchMatchPos(0); }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') { e.preventDefault(); setSearchOpen(false); setSearchQuery(''); setSearchMatchPos(0); setSearchFiltersOpen(false); }
+                            else if (e.key === 'Enter') { e.preventDefault(); gotoSearchMatch(searchMatchPos + (e.shiftKey ? -1 : 1)); }
+                          }}
+                        />
+                        <span class="cos-scroll-search-count">
+                          {(() => {
+                            const t = searchQuery.trim();
+                            if (!t) return '';
+                            if (t.length < 2) return '2+ chars';
+                            if (searchMatches.length === 0) return '0';
+                            return `${searchMatchPos + 1} / ${searchMatches.length}`;
+                          })()}
+                        </span>
+                        <button
+                          type="button"
+                          class="cos-scroll-toolbar-btn"
+                          onClick={() => gotoSearchMatch(searchMatchPos - 1)}
+                          disabled={searchMatches.length === 0}
+                          title="Previous match (Shift+Enter)"
+                          aria-label="Previous match"
+                        >
+                          {'↑'}
+                        </button>
+                        <button
+                          type="button"
+                          class="cos-scroll-toolbar-btn"
+                          onClick={() => gotoSearchMatch(searchMatchPos + 1)}
+                          disabled={searchMatches.length === 0}
+                          title="Next match (Enter)"
+                          aria-label="Next match"
+                        >
+                          {'↓'}
+                        </button>
+                        <div class="cos-search-filters" ref={searchFiltersRef}>
+                          <button
+                            type="button"
+                            class={`cos-scroll-toolbar-btn${(searchRole !== 'all' || searchScope !== 'text') ? ' cos-scroll-toolbar-btn-active' : ''}`}
+                            onClick={() => setSearchFiltersOpen((v) => !v)}
+                            title="Search filters"
+                            aria-haspopup="menu"
+                            aria-expanded={searchFiltersOpen}
+                          >
+                            Filters{(searchRole !== 'all' || searchScope !== 'text') ? ' •' : ''}
+                          </button>
+                          {searchFiltersOpen && (
+                            <div class="cos-search-filters-menu" role="menu">
+                              <div class="cos-search-filters-section">
+                                <div class="cos-search-filters-label">Role</div>
+                                {([
+                                  ['all', 'All messages'],
+                                  ['user', 'You only'],
+                                  ['assistant', 'Ops only'],
+                                ] as const).map(([val, label]) => (
+                                  <button
+                                    key={val}
+                                    type="button"
+                                    class={`cos-search-filters-item${searchRole === val ? ' cos-search-filters-item-active' : ''}`}
+                                    onClick={() => { setSearchRole(val); setSearchMatchPos(0); }}
+                                  >
+                                    <span class="cos-search-filters-check">{searchRole === val ? '✓' : ''}</span>
+                                    {label}
+                                  </button>
+                                ))}
+                              </div>
+                              <div class="cos-search-filters-section">
+                                <div class="cos-search-filters-label">Scope</div>
+                                {([
+                                  ['text', 'Message text'],
+                                  ['tools', 'Tool calls (filenames, edits)'],
+                                  ['both', 'Both'],
+                                ] as const).map(([val, label]) => (
+                                  <button
+                                    key={val}
+                                    type="button"
+                                    class={`cos-search-filters-item${searchScope === val ? ' cos-search-filters-item-active' : ''}`}
+                                    onClick={() => { setSearchScope(val); setSearchMatchPos(0); }}
+                                  >
+                                    <span class="cos-search-filters-check">{searchScope === val ? '✓' : ''}</span>
+                                    {label}
+                                  </button>
+                                ))}
+                              </div>
+                              {(searchRole !== 'all' || searchScope !== 'text') && (
+                                <button
+                                  type="button"
+                                  class="cos-search-filters-reset"
+                                  onClick={() => { setSearchRole('all'); setSearchScope('text'); setSearchMatchPos(0); }}
+                                >
+                                  Reset filters
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     <div class="cos-scroll-wrap">
                     {hasMultipleThreads && (
                       <nav class="cos-thread-rail" aria-label="Threads">
-                        {threads.map((t, i) => {
+                        {visibleThreads.map((t, i) => {
                           const unread = unreadByThread.get(t.userIdx);
                           const anchor = threadAnchorIdx(t);
                           if (anchor === null) return null;
                           const title = threadTitle(t);
                           const label = title.length > 64 ? title.slice(0, 64) + '…' : title;
                           const num = i + 1;
+                          const status = railStatusFor(t);
+                          const tid = threadServerIdFor(t);
+                          const isResolved = status === 'resolved';
+                          const isArchived = status === 'archived';
+                          const statusLabel: Record<RailStatus, string> = {
+                            streaming: 'thinking',
+                            unread: 'new reply',
+                            failed: 'failed',
+                            idle: 'idle',
+                            gc: 'no session',
+                            resolved: 'resolved',
+                            archived: 'archived',
+                          };
+                          const fullTitle = unread
+                            ? `${label} — ${unread.count} new (${statusLabel[status]})`
+                            : `${label} (${statusLabel[status]})`;
                           return (
-                            <button
-                              type="button"
+                            <div
+                              class="cos-thread-rail-item"
                               key={t.userIdx ?? `pre-${i}`}
-                              class={`cos-thread-rail-btn${unread ? ' cos-thread-rail-btn-unread' : ''}`}
-                              onClick={() => jumpToThread(t)}
-                              title={unread ? `${label} — ${unread.count} new` : label}
-                              aria-label={unread ? `Jump to thread ${num}, ${unread.count} new` : `Jump to thread ${num}`}
                             >
-                              <span class="cos-thread-rail-num">{num}</span>
-                              {unread && (
-                                <span class="cos-thread-rail-badge" aria-hidden="true">
-                                  {unread.count > 9 ? '9+' : unread.count}
-                                </span>
+                              <button
+                                type="button"
+                                class={`cos-thread-rail-btn cos-thread-rail-btn-${status}${unread ? ' cos-thread-rail-btn-unread' : ''}`}
+                                data-status={status}
+                                onClick={() => jumpToThread(t)}
+                                title={fullTitle}
+                                aria-label={`Jump to thread ${num}, ${statusLabel[status]}${unread ? `, ${unread.count} new` : ''}`}
+                              >
+                                <span class="cos-thread-rail-status" aria-hidden="true" />
+                                <span class="cos-thread-rail-num">{num}</span>
+                                {unread && (
+                                  <span class="cos-thread-rail-badge" aria-hidden="true">
+                                    {unread.count > 9 ? '9+' : unread.count}
+                                  </span>
+                                )}
+                              </button>
+                              {tid && (
+                                <>
+                                  <button
+                                    type="button"
+                                    class={`cos-thread-rail-resolve${isResolved || isArchived ? ' cos-thread-rail-resolve-active' : ''}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (isArchived) void setThreadArchived(tid, false);
+                                      else void setThreadResolved(tid, !isResolved);
+                                    }}
+                                    title={isArchived ? 'Reopen archived thread' : (isResolved ? 'Reopen thread' : 'Mark thread resolved')}
+                                    aria-label={isArchived ? `Reopen archived thread ${num}` : (isResolved ? `Reopen thread ${num}` : `Resolve thread ${num}`)}
+                                  >
+                                    {isResolved || isArchived ? (
+                                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true">
+                                        <path d="M3 12h18" />
+                                      </svg>
+                                    ) : (
+                                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <polyline points="20 6 9 17 4 12" />
+                                      </svg>
+                                    )}
+                                  </button>
+                                  {!isArchived && (
+                                    <button
+                                      type="button"
+                                      class="cos-thread-rail-archive"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        void setThreadArchived(tid, true);
+                                      }}
+                                      title="Archive thread (hides from triage and from Resolved view)"
+                                      aria-label={`Archive thread ${num}`}
+                                    >
+                                      <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                        <path d="M3 7h18M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7M9 11h6" />
+                                      </svg>
+                                    </button>
+                                  )}
+                                </>
                               )}
-                            </button>
+                            </div>
                           );
                         })}
                       </nav>
                     )}
                     <div class="cos-scroll-col">
-                    <div class="cos-scroll" ref={scrollRef}>
+                    <div class="cos-scroll" ref={setScrollEl}>
                       {activeAgent.messages.length === 0 && (
                         <div class="cos-empty">
                           <div class="cos-empty-title">{activeAgent.name}</div>
@@ -3398,7 +4540,7 @@ export function ChiefOfStaffBubble({
                               'Any sessions stuck or running long?',
                               'Are all launchers online?',
                             ].map((q) => (
-                              <button key={q} class="cos-example" onClick={() => setInput(q)}>{q}</button>
+                              <button key={q} class="cos-example" onClick={() => applyInput(q)}>{q}</button>
                             ))}
                           </div>
                         </div>
@@ -3406,7 +4548,7 @@ export function ChiefOfStaffBubble({
                       {(() => {
                         const nodes: import('preact').VNode[] = [];
                         let lastDayKey: string | null = null;
-                        threads.forEach((t, i) => {
+                        visibleThreads.forEach((t, i) => {
                           const ts = t.userMsg?.timestamp ?? t.replies[0]?.msg.timestamp ?? null;
                           if (ts) {
                             const k = dayKeyOf(ts);
@@ -3415,6 +4557,11 @@ export function ChiefOfStaffBubble({
                               lastDayKey = k;
                             }
                           }
+                          const tKey = threadKeyOf(t);
+                          const isActiveInPanel =
+                            slackMode &&
+                            cosActiveThread.value?.agentId === activeAgent.id &&
+                            cosActiveThread.value?.threadKey === tKey;
                           nodes.push(
                             <ThreadBlock
                               key={t.userIdx ?? `pre-${i}`}
@@ -3430,6 +4577,21 @@ export function ChiefOfStaffBubble({
                               agentId={activeAgent.id}
                               agentName={activeAgent.name}
                               verbosity={activeAgent.verbosity || DEFAULT_VERBOSITY}
+                              searchHighlight={searchOpen && searchQuery.trim().length >= 2 ? searchQuery.trim() : null}
+                              slackMode={slackMode}
+                              isActiveInPanel={isActiveInPanel}
+                              onOpenInPanel={() => {
+                                cosActiveThread.value = { agentId: activeAgent.id, threadKey: tKey };
+                                if (inPane || isMobile.value) {
+                                  setShowThreadPanel(true);
+                                  if (isMobile.value && t.userMsg?.text) {
+                                    const tid = threadServerIdFor(t);
+                                    handleReply('user', t.userMsg.text, t.userMsg.timestamp, tid);
+                                  }
+                                } else {
+                                  cosOpenThreadTab('right');
+                                }
+                              }}
                             />
                           );
                         });
@@ -3455,7 +4617,7 @@ export function ChiefOfStaffBubble({
                         <button
                           type="button"
                           class={`cos-scroll-down-btn${replyNotifs.length > 0 ? ' cos-scroll-down-btn-unread' : ''}`}
-                          onClick={() => scrollToBottom('smooth')}
+                          onClick={() => scrollToBottom('auto')}
                           title={replyNotifs.length > 0 ? `${replyNotifs.length} new repl${replyNotifs.length === 1 ? 'y' : 'ies'} — scroll to latest` : 'Scroll to latest'}
                           aria-label="Scroll to latest message"
                         >
@@ -3475,11 +4637,22 @@ export function ChiefOfStaffBubble({
                       <div class="cos-reply-pill" role="status">
                         <span class="cos-reply-pill-label">Replying to {replyTo.role}</span>
                         <span class="cos-reply-pill-text">{replyTo.text}</span>
+                        {replyTo.threadServerId && input.length > 0 && (
+                          <button
+                            type="button"
+                            class="cos-reply-pill-action"
+                            onClick={saveReplyDraftClearInput}
+                            title="Save this text as a draft for this thread, then start a clean new thread"
+                            aria-label="Save draft"
+                          >
+                            Save draft
+                          </button>
+                        )}
                         <button
                           type="button"
                           class="cos-reply-pill-close"
-                          onClick={() => setReplyTo(null)}
-                          title="Clear reply"
+                          onClick={closeReplyKeepText}
+                          title={input.length > 0 ? 'Drop reply scope; text becomes a new-thread draft' : 'Clear reply'}
                           aria-label="Clear reply"
                         >
                           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">
@@ -3549,7 +4722,7 @@ export function ChiefOfStaffBubble({
                         class="cos-input"
                         value={input}
                         placeholder={mobile ? `Message ${activeAgent.name}…` : `Message ${activeAgent.name}… (paste images to attach)`}
-                        onInput={(e) => setInput((e.target as HTMLTextAreaElement).value)}
+                        onInput={(e) => applyInput((e.target as HTMLTextAreaElement).value)}
                         onKeyDown={onKeyDown}
                         onPaste={onPaste}
                         rows={1}
@@ -3658,14 +4831,6 @@ export function ChiefOfStaffBubble({
                               <label class="cos-tool-menu-item">
                                 <input
                                   type="checkbox"
-                                  checked={pickerExcludeWidget}
-                                  onChange={(e) => setPickerExcludeWidget((e.target as HTMLInputElement).checked)}
-                                />
-                                Exclude widget
-                              </label>
-                              <label class="cos-tool-menu-item">
-                                <input
-                                  type="checkbox"
                                   checked={pickerMultiSelect}
                                   onChange={(e) => setPickerMultiSelect((e.target as HTMLInputElement).checked)}
                                 />
@@ -3682,31 +4847,42 @@ export function ChiefOfStaffBubble({
                             </div>
                           )}
                         </div>
+                        <button
+                          type="button"
+                          class={`cos-tool-btn${micRecording ? ' active' : ''}`}
+                          onClick={() => { void toggleMicRecord(); }}
+                          title={micRecording ? `Stop recording (${micElapsed}s)` : 'Record voice input'}
+                          aria-label={micRecording ? 'Stop recording' : 'Record voice input'}
+                          aria-pressed={micRecording}
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="9" y="2" width="6" height="12" rx="3" />
+                            <path d="M5 10v2a7 7 0 0 0 14 0v-2" />
+                            <line x1="12" y1="19" x2="12" y2="22" />
+                          </svg>
+                        </button>
+                        {micRecording && (
+                          <span
+                            class="cos-mic-elapsed"
+                            title={micInterim || undefined}
+                            aria-live="polite"
+                          >
+                            {micInterim
+                              ? (micInterim.length > 24 ? '…' + micInterim.slice(-24) : micInterim)
+                              : `${micElapsed}s`}
+                          </span>
+                        )}
                         <div class="cos-input-toolbar-spacer" />
-                        {(!isAgentStreaming || mobile) && (
-                          <button
-                            class="cos-send"
-                            onClick={submit}
-                            disabled={!input.trim() && pendingAttachments.length === 0 && pendingElementRefs.length === 0}
-                            title="Send (Enter)"
-                          >
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                              <path d="M5 12l14-7-7 14-2-5z" />
-                            </svg>
-                          </button>
-                        )}
-                        {isAgentStreaming && !mobile && (
-                          <button
-                            class="cos-stop"
-                            onClick={() => void interruptActiveAgent()}
-                            title="Stop (interrupt response)"
-                            aria-label="Interrupt current response"
-                          >
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                              <rect x="5" y="5" width="14" height="14" rx="2" />
-                            </svg>
-                          </button>
-                        )}
+                        <button
+                          class="cos-send"
+                          onClick={submit}
+                          disabled={!input.trim() && pendingAttachments.length === 0 && pendingElementRefs.length === 0}
+                          title="Send (Enter)"
+                        >
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M5 12l14-7-7 14-2-5z" />
+                          </svg>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -3717,6 +4893,16 @@ export function ChiefOfStaffBubble({
                     tree={_cosTree}
                     chatContent={chatPane}
                     learningsContent={<LearningsPanel onClose={() => cosToggleLearningsTab('left')} />}
+                    threadContent={
+                      <ThreadPanel
+                        agentId={activeAgent.id}
+                        showTools={showTools}
+                        verbosity={activeAgent.verbosity || DEFAULT_VERBOSITY}
+                        onArtifactPopout={handleArtifactPopout}
+                        onReply={handleReply}
+                        onClose={() => { cosCloseThreadTab(); cosActiveThread.value = null; }}
+                      />
+                    }
                   />
                 );
               })())}

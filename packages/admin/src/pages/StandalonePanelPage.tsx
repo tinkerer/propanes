@@ -66,12 +66,14 @@ function isCompanionTabId(sid: string): boolean {
     || sid.startsWith('url:')
     || sid.startsWith('file:')
     || sid.startsWith('wiggum-runs:')
+    || sid.startsWith('summary:')
     || sid.startsWith('view:');
 }
 
 function companionIcon(sid: string): string {
   if (sid.startsWith('feedback:') || sid.startsWith('fb:')) return '\u{1F4AC}';
   if (sid.startsWith('jsonl:')) return '\u{1F4DC}';
+  if (sid.startsWith('summary:')) return '\u{1F4CA}';
   if (sid.startsWith('iframe:') || sid.startsWith('url:')) return '\u{1F310}';
   if (sid.startsWith('terminal:')) return '\u{25B8}';
   if (sid.startsWith('artifact:')) return '\u{1F4CB}';

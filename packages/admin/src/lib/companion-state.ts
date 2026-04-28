@@ -33,7 +33,7 @@ import {
 
 // --- Companion Types ---
 
-export type CompanionType = 'jsonl' | 'feedback' | 'iframe' | 'terminal' | 'isolate' | 'url' | 'file' | 'wiggum-runs' | 'artifact';
+export type CompanionType = 'jsonl' | 'summary' | 'feedback' | 'iframe' | 'terminal' | 'isolate' | 'url' | 'file' | 'wiggum-runs' | 'artifact';
 
 // --- Terminal Companion Map ---
 
@@ -115,7 +115,7 @@ export function extractCompanionType(tabId: string): CompanionType | null {
   const idx = tabId.indexOf(':');
   if (idx < 0) return null;
   const prefix = tabId.slice(0, idx);
-  if (prefix === 'jsonl' || prefix === 'feedback' || prefix === 'iframe' || prefix === 'terminal' || prefix === 'isolate' || prefix === 'url' || prefix === 'file' || prefix === 'wiggum-runs' || prefix === 'artifact') return prefix as CompanionType;
+  if (prefix === 'jsonl' || prefix === 'summary' || prefix === 'feedback' || prefix === 'iframe' || prefix === 'terminal' || prefix === 'isolate' || prefix === 'url' || prefix === 'file' || prefix === 'wiggum-runs' || prefix === 'artifact') return prefix as CompanionType;
   return null;
 }
 
@@ -364,6 +364,11 @@ export function openSettingsPanel(settingsKey: string) {
 // --- Feedback Item Tabs ---
 
 export const feedbackTitleCache = signal<Record<string, string>>({});
+// Tracks recent failed title lookups so reopening a `fb:` tab for a deleted
+// feedback doesn't refire a GET on every click. Mirrors the backoff in
+// chief-of-staff.ts::fetchFeedbackTitle (5 minutes for in-tab opens).
+const feedbackTitleMissAt = new Map<string, number>();
+const FB_TAB_MISS_TTL_MS = 5 * 60_000;
 
 export function openFeedbackItem(feedbackId: string) {
   const tabId = `fb:${feedbackId}`;
@@ -388,11 +393,19 @@ export function openFeedbackItem(feedbackId: string) {
   });
 
   if (!feedbackTitleCache.value[feedbackId]) {
-    api.getFeedbackById(feedbackId).then((fb: any) => {
-      if (fb?.title) {
-        feedbackTitleCache.value = { ...feedbackTitleCache.value, [feedbackId]: fb.title };
-      }
-    }).catch(() => {});
+    const lastMissAt = feedbackTitleMissAt.get(feedbackId);
+    if (lastMissAt === undefined || Date.now() - lastMissAt >= FB_TAB_MISS_TTL_MS) {
+      api.getFeedbackById(feedbackId).then((fb: any) => {
+        if (fb?.title) {
+          feedbackTitleCache.value = { ...feedbackTitleCache.value, [feedbackId]: fb.title };
+          feedbackTitleMissAt.delete(feedbackId);
+        } else {
+          feedbackTitleMissAt.set(feedbackId, Date.now());
+        }
+      }).catch(() => {
+        feedbackTitleMissAt.set(feedbackId, Date.now());
+      });
+    }
   }
 }
 
