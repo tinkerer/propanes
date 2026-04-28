@@ -383,10 +383,16 @@ type Reply = {
 
 function splitIntoReplies(messages: ParsedMessage[], hiddenIds: Set<string>): Reply[] {
   const replies: Reply[] = [];
-  let cur: Reply | null = null;
-  const ensureCur = (key: string) => {
-    if (!cur) { cur = { textBlocks: [], tools: [], hiddenTools: 0, key }; replies.push(cur); }
-    return cur;
+  // Wrap `cur` in an object so TS doesn't narrow it to `null` after the
+  // in-loop reset; property accesses on the object don't trigger the same
+  // closure-aware narrowing that bare `let` does.
+  const state: { cur: Reply | null } = { cur: null };
+  const ensureCur = (key: string): Reply => {
+    if (!state.cur) {
+      state.cur = { textBlocks: [], tools: [], hiddenTools: 0, key };
+      replies.push(state.cur);
+    }
+    return state.cur;
   };
   for (const m of messages) {
     if (m.role === 'tool_result') continue; // folded into preceding tool_use chip
@@ -394,8 +400,9 @@ function splitIntoReplies(messages: ParsedMessage[], hiddenIds: Set<string>): Re
       // assistant text starts a new reply IF the current one already has
       // any visible content (text or tools). Otherwise it just leads the
       // current empty reply.
-      if (cur && (cur.textBlocks.length > 0 || cur.tools.length > 0 || cur.hiddenTools > 0)) {
-        cur = null;
+      const c = state.cur;
+      if (c && (c.textBlocks.length > 0 || c.tools.length > 0 || c.hiddenTools > 0)) {
+        state.cur = null;
       }
       const r = ensureCur(m.id);
       if (!hiddenIds.has(m.id)) r.textBlocks.push(m);
