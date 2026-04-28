@@ -1,74 +1,49 @@
 import { useRef, useCallback, useEffect } from 'preact/hooks';
-import { copyText } from '../lib/clipboard.js';
 import {
   type PopoutPanelState,
   popoutPanels,
-  allSessions,
   sessionMapComputed,
   exitedSessions,
-  popBackIn,
   updatePanel,
   persistPopoutState,
-  killSession,
-  resumeSession,
-  getViewMode,
-  setViewMode,
   closeTab,
   getDockedPanelTop,
   allNumberedSessions,
-  pendingFirstDigit,
   focusedPanelId,
   activePanelId,
   snapGuides,
   dockedOrientation,
-  sessionInputStates,
-  getSessionLabel,
-  setSessionLabel,
-  getSessionColor,
-  togglePanelCompanion,
+  getViewMode,
   panelLeftTabs,
   syncPanelCompanions,
-  companionTabId,
   sidebarWidth,
   sidebarCollapsed,
-  AUTOJUMP_PANEL_ID,
   COS_PANEL_ID,
-  resolveSession,
   bringToFront,
   getPanelZIndex,
   panelZOrders,
-  toggleAlwaysOnTop,
-  switchAutoJumpActiveSession,
-  getTerminalCompanion,
   focusSessionTerminal,
-  termPickerOpen,
 } from '../lib/sessions.js';
-import { startTabDrag, startPanelDrag, detectExternalZone, openPanelExternally, applyExternalGhostHint } from '../lib/tab-drag.js';
+import { detectExternalZone, openPanelExternally, applyExternalGhostHint } from '../lib/tab-drag.js';
 import { ctrlShiftHeld, stickyModeActive } from '../lib/shortcuts.js';
 import { selectedAppId } from '../lib/state.js';
-import { showHotkeyHints } from '../lib/settings.js';
-import { api } from '../lib/api.js';
 import { renderTabContent } from './PaneContent.js';
 import { setFocusedLeaf } from '../lib/pane-tree.js';
 import {
   handleDragMove, handleResizeMove, handleSplitDividerMove,
 } from '../lib/popout-physics.js';
-import { PanelTabBadge, tabLabel, companionCopyId, IdDropdownMenu, WindowMenu } from './PopoutPanelContent.js';
+import { PanelTabBadge, tabLabel, companionCopyId } from './PopoutPanelContent.js';
 import { DockedPanelGrabHandle } from './PopoutGrabHandle.js';
 import { PopoutResizeHandles } from './PopoutResizeHandles.js';
 import { PopoutStatusMenu, PopoutHotkeyMenu } from './PopoutPanelMenus.js';
 import { PopoutSingletonBar } from './PopoutSingletonBar.js';
 import { PopoutMultiTabBar } from './PopoutMultiTabBar.js';
 import { PopoutSplitPane } from './PopoutSplitPane.js';
+import { usePopoutPanelHotkeys } from './usePopoutPanelHotkeys.js';
 
 import {
   popoutIdMenuOpen,
   popoutWindowMenuOpen,
-  popoutStatusMenuOpen,
-  popoutHotkeyMenuOpen,
-  renamingSessionId,
-  renameValue,
-  companionMenuOpen,
 } from './popout-signals.js';
 
 // Re-export the menu signals consumed by Layout.tsx so callers don't need to
@@ -303,7 +278,6 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
   }, []);
 
   const globalSessions = allNumberedSessions();
-  const inputSt = activeId ? (sessionInputStates.value.get(activeId) || null) : null;
   const tabsRef = useRef<HTMLDivElement>(null);
   const leftSplitTabsRef = useRef<HTMLDivElement>(null);
   const rightSplitTabsRef = useRef<HTMLDivElement>(null);
@@ -445,214 +419,7 @@ export function PopoutPanel() {
   const panels = popoutPanels.value;
   const guides = snapGuides.value;
 
-  useEffect(() => {
-    if (!popoutIdMenuOpen.value) return;
-    const close = () => { popoutIdMenuOpen.value = null; };
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [popoutIdMenuOpen.value]);
-
-  useEffect(() => {
-    if (!popoutStatusMenuOpen.value) return;
-    const close = () => { popoutStatusMenuOpen.value = null; };
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [popoutStatusMenuOpen.value]);
-
-  useEffect(() => {
-    if (!companionMenuOpen.value) return;
-    const close = () => { companionMenuOpen.value = null; };
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [companionMenuOpen.value]);
-
-  // Note: PopupMenu handles click-outside close via its own mousedown listener.
-  // We intentionally don't add a document-level click listener here — doing so
-  // would tear the menu down before nested submenu buttons can handle their
-  // click (e.g. Pop Out Panel / Pop Out Tab submenus).
-
-  // Keyboard shortcuts for the ID dropdown menu (matches bottom panel)
-  useEffect(() => {
-    const menuSessionId = popoutIdMenuOpen.value;
-    if (!menuSessionId) return;
-    const sMap = sessionMapComputed.value;
-    const onKey = (e: KeyboardEvent) => {
-      const key = e.key.toLowerCase();
-      let handled = true;
-      if (key === 'c') {
-        copyText(menuSessionId);
-      } else if (key === 'p') {
-        popBackIn(menuSessionId);
-      } else if (key === 'w') {
-        window.open(`#/session/${menuSessionId}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no');
-      } else if (key === 'b') {
-        window.open(`#/session/${menuSessionId}`, '_blank');
-      } else if (key === 'j') {
-        const s = sMap.get(menuSessionId);
-        if (s?.jsonlPath) copyText(s.jsonlPath);
-      } else if (key === 'l') {
-        const s = sMap.get(menuSessionId);
-        if (s?.jsonlPath) {
-          const ownerPanel = panels.find((p) => p.sessionIds.includes(menuSessionId));
-          if (ownerPanel) togglePanelCompanion(ownerPanel.id, menuSessionId, 'jsonl');
-        }
-      } else if (key === 'y') {
-        const s = sMap.get(menuSessionId);
-        if (s?.jsonlPath) {
-          const ownerPanel = panels.find((p) => p.sessionIds.includes(menuSessionId));
-          if (ownerPanel) togglePanelCompanion(ownerPanel.id, menuSessionId, 'summary');
-        }
-      } else if (key === 'f') {
-        const s = sMap.get(menuSessionId);
-        if (s?.feedbackId) {
-          const ownerPanel = panels.find((p) => p.sessionIds.includes(menuSessionId));
-          if (ownerPanel) togglePanelCompanion(ownerPanel.id, menuSessionId, 'feedback');
-        }
-      } else if (key === 'i') {
-        const s = sMap.get(menuSessionId);
-        if (s?.url) {
-          const ownerPanel = panels.find((p) => p.sessionIds.includes(menuSessionId));
-          if (ownerPanel) togglePanelCompanion(ownerPanel.id, menuSessionId, 'iframe');
-        }
-      } else if (key === 'm') {
-        const ownerPanel = panels.find((p) => p.sessionIds.includes(menuSessionId));
-        if (ownerPanel) {
-          const panelRight = ownerPanel.rightPaneTabs || [];
-          const termActive = panelRight.includes(companionTabId(menuSessionId, 'terminal')) && ownerPanel.splitEnabled;
-          if (termActive) {
-            togglePanelCompanion(ownerPanel.id, menuSessionId, 'terminal');
-          } else {
-            termPickerOpen.value = { kind: 'companion', sessionId: menuSessionId, panelId: ownerPanel.id };
-          }
-        }
-      } else if (key === 'escape') {
-        // just close
-      } else {
-        handled = false;
-      }
-      if (handled) {
-        e.preventDefault();
-        e.stopPropagation();
-        popoutIdMenuOpen.value = null;
-      }
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [popoutIdMenuOpen.value]);
-
-  // Keyboard shortcuts for the window menu
-  useEffect(() => {
-    const menuPanelId = popoutWindowMenuOpen.value;
-    if (!menuPanelId) return;
-    const onKey = (e: KeyboardEvent) => {
-      const key = e.key.toLowerCase();
-      let handled = true;
-      const panel = panels.find((p) => p.id === menuPanelId);
-      if (!panel) { popoutWindowMenuOpen.value = null; return; }
-      const activeId = panel.activeSessionId || panel.sessionIds[0];
-      if (key === 's' && activeId) {
-        popBackIn(activeId);
-      } else if (key === 'w') {
-        toggleAlwaysOnTop(panel.id);
-      } else if (key === 'a') {
-        const isLeftDocked = panel.docked && panel.dockedSide === 'left';
-        if (isLeftDocked) {
-          updatePanel(panel.id, { docked: false, minimized: false, grabY: 0 });
-        } else {
-          updatePanel(panel.id, { docked: true, dockedSide: 'left', dockedTopOffset: 0, minimized: false, grabY: 0, dockedHeight: panel.docked ? panel.dockedHeight : panel.floatingRect.h, dockedWidth: panel.docked ? panel.dockedWidth : panel.floatingRect.w });
-        }
-        persistPopoutState();
-        window.dispatchEvent(new Event('resize'));
-      } else if (key === 'd') {
-        const isRightDocked = panel.docked && panel.dockedSide !== 'left';
-        if (isRightDocked) {
-          updatePanel(panel.id, { docked: false, minimized: false, grabY: 0 });
-        } else {
-          updatePanel(panel.id, { docked: true, dockedSide: 'right', dockedTopOffset: 0, minimized: false, grabY: 0, dockedHeight: panel.docked ? panel.dockedHeight : panel.floatingRect.h, dockedWidth: panel.docked ? panel.dockedWidth : panel.floatingRect.w });
-        }
-        persistPopoutState();
-        window.dispatchEvent(new Event('resize'));
-      } else if (key === ' ' && !panel.docked) {
-        updatePanel(panel.id, { minimized: !panel.minimized });
-        persistPopoutState();
-      } else if (key === 'm' && !panel.docked) {
-        if (panel.maximized) {
-          if (panel.preMaximizeRect) {
-            updatePanel(panel.id, { maximized: false, floatingRect: panel.preMaximizeRect, preMaximizeRect: undefined });
-          } else {
-            updatePanel(panel.id, { maximized: false });
-          }
-        } else {
-          updatePanel(panel.id, {
-            maximized: true,
-            minimized: false,
-            preMaximizeRect: { ...panel.floatingRect },
-            floatingRect: { x: 0, y: 40, w: window.innerWidth, h: window.innerHeight - 40 },
-          });
-        }
-        persistPopoutState();
-      } else if (key === 'escape') {
-        // just close
-      } else {
-        handled = false;
-      }
-      if (handled) {
-        e.preventDefault();
-        e.stopPropagation();
-        popoutWindowMenuOpen.value = null;
-      }
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [popoutWindowMenuOpen.value]);
-
-  // Ctrl+Shift hotkey helper menu for the focused popout panel
-  useEffect(() => {
-    const held = ctrlShiftHeld.value;
-    if (!held || !showHotkeyHints.value) {
-      popoutHotkeyMenuOpen.value = null;
-      return;
-    }
-    // Find the focused/active popout panel
-    const focusedId = activePanelId.value;
-    const panel = panels.find((p) => p.id === focusedId && p.visible);
-    if (!panel) {
-      popoutHotkeyMenuOpen.value = null;
-      return;
-    }
-    const activeSessionId = panel.activeSessionId || panel.sessionIds[0];
-    if (!activeSessionId) {
-      popoutHotkeyMenuOpen.value = null;
-      return;
-    }
-
-    function updatePos() {
-      const panelEl = document.querySelector(`[data-panel-id="${panel!.id}"]`);
-      const dot = panelEl?.querySelector('.popout-tab.active .status-dot, .popout-tab .status-dot') as HTMLElement | null;
-      const scrollBox = panelEl?.querySelector('.popout-tab-scroll') as HTMLElement | null;
-      if (!dot) {
-        popoutHotkeyMenuOpen.value = null;
-        return;
-      }
-      const dotRect = dot.getBoundingClientRect();
-      if (scrollBox) {
-        const scrollRect = scrollBox.getBoundingClientRect();
-        if (dotRect.right < scrollRect.left || dotRect.left > scrollRect.right) {
-          popoutHotkeyMenuOpen.value = null;
-          return;
-        }
-      }
-      const x = dotRect.left;
-      const y = dotRect.bottom + 4;
-      popoutHotkeyMenuOpen.value = { sessionId: activeSessionId!, panelId: panel!.id, x, y };
-    }
-
-    updatePos();
-    const panelEl = document.querySelector(`[data-panel-id="${panel.id}"]`);
-    const scrollEl = panelEl?.querySelector('.popout-tab-scroll');
-    scrollEl?.addEventListener('scroll', updatePos, { passive: true });
-    return () => scrollEl?.removeEventListener('scroll', updatePos);
-  }, [ctrlShiftHeld.value, activePanelId.value]);
+  usePopoutPanelHotkeys(panels);
 
   if (panels.length === 0 && guides.length === 0) return null;
 
