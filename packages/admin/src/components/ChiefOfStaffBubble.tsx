@@ -35,10 +35,7 @@ import {
 } from '../lib/chief-of-staff.js';
 import { MessageRenderer } from './MessageRenderer.js';
 import { layoutTree as layoutTreeSignal, findLeafWithTab, setFocusedLeaf } from '../lib/pane-tree.js';
-import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-picker';
-import { captureScreenshot } from '@propanes/widget/screenshot';
 import { ImageEditor } from '@propanes/widget/image-editor';
-import { VoiceRecorder } from '@propanes/widget/voice-recorder';
 import {
   popoutPanels,
   persistPopoutState,
@@ -69,7 +66,6 @@ import {
 import { openArtifactCompanion, openUrlCompanion } from '../lib/companion-state.js';
 import { ArtifactCompanionView } from './ArtifactCompanionView.js';
 import { PopupMenu } from './PopupMenu.js';
-import { WindowMenu } from './PopoutPanelContent.js';
 import {
   cosPopoutTree,
   cosToggleLearningsTab,
@@ -97,6 +93,10 @@ import {
   hasAnyCosDraftForAgent,
 } from '../lib/cos-drafts.js';
 import { extractCosReply, stripCosReplyMarkers } from '../lib/cos-reply-tags.js';
+import { useCosSearch } from '../lib/use-cos-search.js';
+import { useCosVoice } from '../lib/use-cos-voice.js';
+import { useCosScreenshot } from '../lib/use-cos-screenshot.js';
+import { useCosElementPicker } from '../lib/use-cos-element-picker.js';
 import {
   fetchFeedbackTitle,
   getCachedFeedbackTitle,
@@ -122,6 +122,8 @@ import { CosThreadRail, type RailStatus } from './CosThreadRail.js';
 import { CosInputToolbar } from './CosInputToolbar.js';
 import { CosTabList } from './CosTabList.js';
 import { CosResizeHandles } from './CosResizeHandles.js';
+import { CosLearningsDrawer, CosThreadDrawer, type CosDrawerStyle } from './CosBubbleDrawers.js';
+import { CosBubbleWindowControls } from './CosBubbleHeader.js';
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -212,53 +214,12 @@ export function ChiefOfStaffBubble({
   type PendingAttachment = { id: string; dataUrl: string; name?: string; mimeType: string };
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [pendingElementRefs, setPendingElementRefs] = useState<CosElementRef[]>([]);
-  const [pickerActive, setPickerActive] = useState(false);
-  const [capturingScreenshot, setCapturingScreenshot] = useState(false);
-  const pickerCleanupRef = useRef<(() => void) | null>(null);
   const [cameraMenuOpen, setCameraMenuOpen] = useState(false);
   const [pickerMenuOpen, setPickerMenuOpen] = useState(false);
   const [cameraMenuPos, setCameraMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [pickerMenuPos, setPickerMenuPos] = useState<{ top: number; left: number } | null>(null);
   const cameraGroupRef = useRef<HTMLDivElement | null>(null);
   const pickerGroupRef = useRef<HTMLDivElement | null>(null);
-  const [micRecording, setMicRecording] = useState(false);
-  const [micElapsed, setMicElapsed] = useState(0);
-  const [micInterim, setMicInterim] = useState('');
-  const voiceRecorderRef = useRef<VoiceRecorder | null>(null);
-  const micTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const micStartRef = useRef<number>(0);
-  const micInputBaseRef = useRef<string>('');
-  const micFinalSegmentsRef = useRef<string[]>([]);
-  const [screenshotExcludeWidget, setScreenshotExcludeWidget] = useState<boolean>(() => {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-shot-excl-widget') : null;
-    return v === null ? true : v === '1';
-  });
-  const [screenshotExcludeCursor, setScreenshotExcludeCursor] = useState<boolean>(() => {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-shot-excl-cursor') : null;
-    return v === null ? true : v === '1';
-  });
-  const [screenshotMethod, setScreenshotMethod] = useState<'html-to-image' | 'display-media'>(() => {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-shot-method') : null;
-    return v === 'display-media' ? 'display-media' : 'html-to-image';
-  });
-  const [screenshotKeepStream, setScreenshotKeepStream] = useState<boolean>(() => {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-shot-keep') : null;
-    return v === '1';
-  });
-  const [pickerMultiSelect, setPickerMultiSelect] = useState<boolean>(() => {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-pick-multi') : null;
-    return v === '1';
-  });
-  const [pickerIncludeChildren, setPickerIncludeChildren] = useState<boolean>(() => {
-    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-pick-children') : null;
-    return v === '1';
-  });
-  useEffect(() => { try { localStorage.setItem('pw-cos-shot-excl-widget', screenshotExcludeWidget ? '1' : '0'); } catch { /* ignore */ } }, [screenshotExcludeWidget]);
-  useEffect(() => { try { localStorage.setItem('pw-cos-shot-excl-cursor', screenshotExcludeCursor ? '1' : '0'); } catch { /* ignore */ } }, [screenshotExcludeCursor]);
-  useEffect(() => { try { localStorage.setItem('pw-cos-shot-method', screenshotMethod); } catch { /* ignore */ } }, [screenshotMethod]);
-  useEffect(() => { try { localStorage.setItem('pw-cos-shot-keep', screenshotKeepStream ? '1' : '0'); } catch { /* ignore */ } }, [screenshotKeepStream]);
-  useEffect(() => { try { localStorage.setItem('pw-cos-pick-multi', pickerMultiSelect ? '1' : '0'); } catch { /* ignore */ } }, [pickerMultiSelect]);
-  useEffect(() => { try { localStorage.setItem('pw-cos-pick-children', pickerIncludeChildren ? '1' : '0'); } catch { /* ignore */ } }, [pickerIncludeChildren]);
   const [replyTo, setReplyTo] = useState<{ role: string; text: string; anchorTs?: number; threadServerId?: string | null } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -456,15 +417,21 @@ export function ChiefOfStaffBubble({
   const [replyNotifs, setReplyNotifs] = useState<ReplyNotification[]>([]);
   const [highlightMsgIdx, setHighlightMsgIdx] = useState<number | null>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchMatchPos, setSearchMatchPos] = useState(0);
-  // 'all' | 'user' | 'assistant'
-  const [searchRole, setSearchRole] = useState<'all' | 'user' | 'assistant'>('all');
-  // 'text' (message body), 'tools' (tool call inputs incl. file paths/edits), 'both'
-  const [searchScope, setSearchScope] = useState<'text' | 'tools' | 'both'>('text');
+  const {
+    searchOpen,
+    setSearchOpen,
+    searchQuery,
+    setSearchQuery,
+    searchMatchPos,
+    setSearchMatchPos,
+    searchRole,
+    setSearchRole,
+    searchScope,
+    setSearchScope,
+    searchInputRef,
+    searchMatches,
+  } = useCosSearch(activeAgent?.messages);
   const [optionsMenuOpen, setOptionsMenuOpen] = useState(false);
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const optionsMenuRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
   const seenMsgsRef = useRef<Map<number, boolean>>(new Map());
@@ -673,37 +640,6 @@ export function ChiefOfStaffBubble({
     }
     return map;
   }, [replyNotifs]);
-
-  // Indices in activeAgent.messages whose text contains the current search
-  // query. Recomputed on every keystroke or message-list change. Empty when
-  // search panel is closed or query is blank.
-  const searchMatches = useMemo(() => {
-    if (!searchOpen || !activeAgent) return [] as number[];
-    const q = searchQuery.trim().toLowerCase();
-    // Require ≥2 chars: single-character queries match almost every word and
-    // produce visual noise (a chunky highlight on every "e", "s", etc).
-    if (q.length < 2) return [] as number[];
-    const out: number[] = [];
-    activeAgent.messages.forEach((m, i) => {
-      if (searchRole !== 'all' && m.role !== searchRole) return;
-      const wantText = searchScope === 'text' || searchScope === 'both';
-      const wantTools = searchScope === 'tools' || searchScope === 'both';
-      if (wantText && (m.text || '').toLowerCase().includes(q)) { out.push(i); return; }
-      if (wantTools && m.toolCalls && m.toolCalls.length > 0) {
-        const hay = m.toolCalls
-          .map((c) => `${c.name} ${JSON.stringify(c.input || {})}`)
-          .join('\n')
-          .toLowerCase();
-        if (hay.includes(q)) out.push(i);
-      }
-    });
-    return out;
-  }, [searchOpen, searchQuery, searchRole, searchScope, activeAgent?.messages]);
-
-  // Clamp the cursor position whenever the match set shrinks (e.g. typing).
-  useEffect(() => {
-    if (searchMatchPos >= searchMatches.length) setSearchMatchPos(0);
-  }, [searchMatches.length]);
 
   function scrollToMessageIdx(idx: number) {
     const root = scrollRef.current;
@@ -991,209 +927,47 @@ export function ChiefOfStaffBubble({
     if (handled) e.preventDefault();
   }
 
-  async function captureAndAttachScreenshot() {
-    if (capturingScreenshot) return;
-    setCapturingScreenshot(true);
-    try {
-      const blob = await captureScreenshot({
-        method: screenshotMethod,
-        excludeWidget: screenshotExcludeWidget,
-        excludeCursor: screenshotExcludeCursor,
-        keepStream: screenshotMethod === 'display-media' && screenshotKeepStream,
-      });
-      if (!blob) {
-        chiefOfStaffError.value = 'Screenshot capture failed';
-        return;
-      }
-      await addImageBlob(blob, `screenshot-${Date.now()}.png`);
-    } catch (err: any) {
-      chiefOfStaffError.value = `Screenshot failed: ${err?.message || err}`;
-    } finally {
-      setCapturingScreenshot(false);
-    }
-  }
+  const {
+    capturingScreenshot,
+    screenshotExcludeWidget,
+    setScreenshotExcludeWidget,
+    screenshotExcludeCursor,
+    setScreenshotExcludeCursor,
+    screenshotMethod,
+    setScreenshotMethod,
+    screenshotKeepStream,
+    setScreenshotKeepStream,
+    captureAndAttachScreenshot,
+    startTimedScreenshot,
+  } = useCosScreenshot({
+    onAttachBlob: (blob, name) => addImageBlob(blob, name),
+    closeCameraMenu: () => setCameraMenuOpen(false),
+  });
 
-  async function startTimedScreenshot(seconds: number) {
-    if (capturingScreenshot) return;
-    setCameraMenuOpen(false);
-    setCapturingScreenshot(true);
-    try {
-      for (let i = seconds; i > 0; i--) {
-        chiefOfStaffError.value = `Screenshot in ${i}…`;
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-      chiefOfStaffError.value = '';
-      const blob = await captureScreenshot({
-        method: screenshotMethod,
-        excludeWidget: screenshotExcludeWidget,
-        excludeCursor: screenshotExcludeCursor,
-        keepStream: screenshotMethod === 'display-media' && screenshotKeepStream,
-      });
-      if (!blob) {
-        chiefOfStaffError.value = 'Screenshot capture failed';
-        return;
-      }
-      await addImageBlob(blob, `screenshot-${Date.now()}.png`);
-    } catch (err: any) {
-      chiefOfStaffError.value = `Screenshot failed: ${err?.message || err}`;
-    } finally {
-      setCapturingScreenshot(false);
-    }
-  }
+  const {
+    recording: micRecording,
+    elapsed: micElapsed,
+    interim: micInterim,
+    toggleRecord: toggleMicRecord,
+  } = useCosVoice({
+    getInputBase: () => input,
+    onAppendInput: (next) => applyInput(next),
+    focusInput: () => inputRef.current?.focus(),
+  });
 
-  function computeMicBridgeUrl(): string {
-    const originUrl = new URL(window.location.origin);
-    originUrl.hostname = 'localhost';
-    return `${originUrl.origin}/api/v1/local/mic-bridge`;
-  }
-
-  function micErrorMessage(err: unknown): string {
-    const message = (err as any)?.message ? String((err as any).message) : '';
-    const code = (err as any)?.code ? String((err as any).code) : '';
-    const name = (err as any)?.name ? String((err as any).name) : '';
-    if (code === 'INSECURE_CONTEXT') return 'Microphone requires HTTPS (or localhost)';
-    if (code === 'POPUP_BLOCKED') return 'Mic bridge popup was blocked — allow popups for this site';
-    if (code === 'NOT_FOUND' || name === 'NotFoundError') return 'No microphone found';
-    if (name === 'NotAllowedError') return 'Microphone permission denied';
-    return message || 'Could not start microphone';
-  }
-
-  async function toggleMicRecord() {
-    if (micRecording) {
-      const rec = voiceRecorderRef.current;
-      if (micTimerRef.current) {
-        clearInterval(micTimerRef.current);
-        micTimerRef.current = null;
-      }
-      setMicRecording(false);
-      setMicInterim('');
-      if (!rec) return;
-      try {
-        const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
-        const result = insecure && rec.usingMicBridge
-          ? await rec.stopViaIframe()
-          : await rec.stop();
-        const finalText = result.transcript
-          .filter((t) => t.isFinal)
-          .map((t) => t.text.trim())
-          .filter(Boolean)
-          .join(' ')
-          .trim();
-        if (finalText) {
-          const base = micInputBaseRef.current;
-          const sep = base && !/\s$/.test(base) ? ' ' : '';
-          applyInput(base + sep + finalText);
-          inputRef.current?.focus();
-        }
-      } catch (err: any) {
-        chiefOfStaffError.value = micErrorMessage(err);
-      }
-      return;
-    }
-
-    chiefOfStaffError.value = '';
-    micInputBaseRef.current = input;
-    micFinalSegmentsRef.current = [];
-    const rec = voiceRecorderRef.current ?? (voiceRecorderRef.current = new VoiceRecorder());
-    rec.onTranscript = (seg) => {
-      if (seg.isFinal) {
-        micFinalSegmentsRef.current.push(seg.text.trim());
-        setMicInterim('');
-      } else {
-        setMicInterim(seg.text);
-      }
-    };
-    try {
-      const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
-      if (insecure) {
-        await rec.startViaIframe(computeMicBridgeUrl());
-      } else {
-        await rec.start();
-      }
-      micStartRef.current = Date.now();
-      setMicElapsed(0);
-      setMicRecording(true);
-      micTimerRef.current = setInterval(() => {
-        setMicElapsed(Math.floor((Date.now() - micStartRef.current) / 1000));
-      }, 500);
-    } catch (err: any) {
-      chiefOfStaffError.value = micErrorMessage(err);
-    }
-  }
-
-  useEffect(() => {
-    return () => {
-      if (micTimerRef.current) {
-        clearInterval(micTimerRef.current);
-        micTimerRef.current = null;
-      }
-      const rec = voiceRecorderRef.current;
-      if (rec?.recording) {
-        const insecure = typeof window !== 'undefined' && window.isSecureContext === false;
-        if (insecure && rec.usingMicBridge) void rec.stopViaIframe().catch(() => {});
-        else void rec.stop().catch(() => {});
-      }
-    };
-  }, []);
-
-  function stopElementPicker() {
-    if (pickerCleanupRef.current) {
-      pickerCleanupRef.current();
-      pickerCleanupRef.current = null;
-    }
-    setPickerActive(false);
-  }
-
-  function startElementPick() {
-    if (pickerActive) {
-      stopElementPicker();
-      return;
-    }
-    const host = wrapperRef.current;
-    if (!host) return;
-    setPickerActive(true);
-    setPickerMenuOpen(false);
-    // On mobile the CoS panel fills the viewport, so it must be hidden to allow
-    // picking anything else. On desktop the panel stays put and is selectable
-    // like any other element — drag/minimize it if it's covering your target.
-    const mobile = isMobile.value;
-    const prevDisplay = host.style.display;
-    if (mobile) host.style.display = 'none';
-    const restoreHost = () => {
-      if (mobile) host.style.display = prevDisplay;
-    };
-    const cleanup = startPicker(
-      (infos: SelectedElementInfo[]) => {
-        restoreHost();
-        pickerCleanupRef.current = null;
-        setPickerActive(false);
-        if (infos.length === 0) return;
-        const mapped: CosElementRef[] = infos.map((i) => ({
-          selector: i.selector,
-          tagName: i.tagName,
-          id: i.id || undefined,
-          classes: i.classes,
-          textContent: i.textContent,
-          boundingRect: i.boundingRect,
-          attributes: i.attributes,
-        }));
-        setPendingElementRefs((prev) => [...prev, ...mapped]);
-        inputRef.current?.focus();
-      },
-      host,
-      { multiSelect: pickerMultiSelect, excludeWidget: false, includeChildren: pickerIncludeChildren },
-    );
-    pickerCleanupRef.current = cleanup;
-  }
-
-  useEffect(() => {
-    return () => {
-      if (pickerCleanupRef.current) {
-        pickerCleanupRef.current();
-        pickerCleanupRef.current = null;
-      }
-    };
-  }, []);
+  const {
+    pickerActive,
+    pickerMultiSelect,
+    setPickerMultiSelect,
+    pickerIncludeChildren,
+    setPickerIncludeChildren,
+    startElementPick,
+  } = useCosElementPicker({
+    wrapperRef,
+    appendElementRefs: (mapped) => setPendingElementRefs((prev) => [...prev, ...mapped]),
+    focusInput: () => inputRef.current?.focus(),
+    closePickerMenu: () => setPickerMenuOpen(false),
+  });
 
   useEffect(() => {
     if (!cameraMenuOpen && !pickerMenuOpen) return;
@@ -1423,16 +1197,7 @@ export function ChiefOfStaffBubble({
     : !!(open && activeAgent && panel && panel.visible && !hasCosTabInTree);
 
   const learningsDrawerWidth = 340;
-  type DrawerStyle = {
-    position: 'fixed';
-    top: number;
-    height: number;
-    left: number;
-    width: number;
-    zIndex: number;
-    side: 'left' | 'right';
-  };
-  let learningsDrawerStyle: DrawerStyle | null = null;
+  let learningsDrawerStyle: CosDrawerStyle | null = null;
   if (showLearnings && shellRect) {
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
     let side: 'left' | 'right' = learningsSide;
@@ -1456,7 +1221,7 @@ export function ChiefOfStaffBubble({
   }
 
   const threadDrawerWidth = 380;
-  let threadDrawerStyle: DrawerStyle | null = null;
+  let threadDrawerStyle: CosDrawerStyle | null = null;
   if (showThreadPanel && shellRect) {
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
     // Default to right; if learnings is open on right, slide thread to left.
@@ -1503,53 +1268,23 @@ export function ChiefOfStaffBubble({
       )}
 
       {shouldRenderShell && activeAgent && inPane && showLearnings && learningsDrawerStyle && (
-        <div
-          class={`cos-learnings-side cos-learnings-side-${learningsDrawerStyle.side}`}
-          style={{
-            position: learningsDrawerStyle.position,
-            top: learningsDrawerStyle.top,
-            left: learningsDrawerStyle.left,
-            width: learningsDrawerStyle.width,
-            height: learningsDrawerStyle.height,
-            zIndex: learningsDrawerStyle.zIndex,
-          }}
-        >
-          <div class="cos-learnings-side-controls">
-            <button
-              type="button"
-              class="cos-link-btn"
-              onClick={() => setLearningsSide(learningsDrawerStyle.side === 'left' ? 'right' : 'left')}
-              title={`Move to ${learningsDrawerStyle.side === 'left' ? 'right' : 'left'}`}
-              aria-label="Flip drawer side"
-            >
-              {learningsDrawerStyle.side === 'left' ? '→' : '←'}
-            </button>
-          </div>
-          <LearningsPanel onClose={() => setShowLearnings(false)} />
-        </div>
+        <CosLearningsDrawer
+          style={learningsDrawerStyle}
+          setLearningsSide={setLearningsSide}
+          onClose={() => setShowLearnings(false)}
+        />
       )}
 
       {shouldRenderShell && activeAgent && inPane && showThreadPanel && threadDrawerStyle && (
-        <div
-          class={`cos-thread-side cos-thread-side-${threadDrawerStyle.side}`}
-          style={{
-            position: threadDrawerStyle.position,
-            top: threadDrawerStyle.top,
-            left: threadDrawerStyle.left,
-            width: threadDrawerStyle.width,
-            height: threadDrawerStyle.height,
-            zIndex: threadDrawerStyle.zIndex,
-          }}
-        >
-          <ThreadPanel
-            agentId={activeAgent.id}
-            showTools={showTools}
-            verbosity={activeAgent.verbosity || DEFAULT_VERBOSITY}
-            onArtifactPopout={handleArtifactPopout}
-            onReply={handleReply}
-            onClose={() => { setShowThreadPanel(false); cosActiveThread.value = null; }}
-          />
-        </div>
+        <CosThreadDrawer
+          style={threadDrawerStyle}
+          agentId={activeAgent.id}
+          showTools={showTools}
+          verbosity={activeAgent.verbosity || DEFAULT_VERBOSITY}
+          onArtifactPopout={handleArtifactPopout}
+          onReply={handleReply}
+          onClose={() => setShowThreadPanel(false)}
+        />
       )}
 
       {shouldRenderShell && activeAgent && (
@@ -1588,61 +1323,16 @@ export function ChiefOfStaffBubble({
               />
             </div>
             {!inPane && panel && (
-              <div class="popout-window-controls">
-                <button
-                  ref={menuButtonRef}
-                  class="btn-close-panel cos-hamburger-draggable"
-                  onClick={() => setMenuOpen((v) => !v)}
-                  onMouseDown={(e) => {
-                    // Drag-to-popout: if the user drags the hamburger >40px, open
-                    // a standalone CoS window via ?embed=cos (chat-only, no admin
-                    // chrome) so the popped-out window matches what the
-                    // CosEmbedRoot renders. Click-only opens the menu instead.
-                    const startX = (e as MouseEvent).clientX;
-                    const startY = (e as MouseEvent).clientY;
-                    let dragged = false;
-                    const onMove = (ev: MouseEvent) => {
-                      const dx = ev.clientX - startX;
-                      const dy = ev.clientY - startY;
-                      if (!dragged && Math.hypot(dx, dy) > 40) {
-                        dragged = true;
-                        document.removeEventListener('mousemove', onMove);
-                        document.removeEventListener('mouseup', onUp);
-                        setMenuOpen(false);
-                        // Decide window vs tab based on drop position: near screen
-                        // edge → detached window, anywhere else → new tab.
-                        const nearEdge =
-                          ev.clientX < 20 ||
-                          ev.clientX > window.innerWidth - 20 ||
-                          ev.clientY < 20 ||
-                          ev.clientY > window.innerHeight - 20;
-                        openCosExternally(nearEdge ? 'new-window' : 'new-tab');
-                      }
-                    };
-                    const onUp = () => {
-                      document.removeEventListener('mousemove', onMove);
-                      document.removeEventListener('mouseup', onUp);
-                    };
-                    document.addEventListener('mousemove', onMove);
-                    document.addEventListener('mouseup', onUp);
-                  }}
-                  title="Panel options (drag to pop out to new window/tab)"
-                  aria-haspopup="true"
-                  aria-expanded={menuOpen}
-                >{'☰'}</button>
-                <button class="btn-close-panel" onClick={toggleChiefOfStaff} title="Hide panel">&times;</button>
-                {menuOpen && (
-                  <WindowMenu
-                    panel={panel}
-                    activeId={COS_PANE_TAB_ID}
-                    docked={isDocked}
-                    isLeftDocked={isLeftDocked}
-                    isMinimized={isMinimized}
-                    anchorRef={menuButtonRef}
-                    onClose={() => setMenuOpen(false)}
-                  />
-                )}
-              </div>
+              <CosBubbleWindowControls
+                panel={panel}
+                isDocked={isDocked}
+                isLeftDocked={isLeftDocked}
+                isMinimized={isMinimized}
+                menuOpen={menuOpen}
+                setMenuOpen={setMenuOpen}
+                menuButtonRef={menuButtonRef}
+                onClosePanel={toggleChiefOfStaff}
+              />
             )}
           </div>
 
