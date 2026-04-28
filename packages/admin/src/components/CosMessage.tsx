@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { marked } from 'marked';
 import {
-  stripCosReplyMarkers,
   getSessionIdForThread,
   retryFailedAssistantMessage,
   dismissFailedAssistantMessage,
@@ -10,6 +9,7 @@ import {
   type CosImageAttachment,
   type CosElementRef,
 } from '../lib/chief-of-staff.js';
+import { stripCosReplyMarkers } from '../lib/cos-reply-tags.js';
 import { openSession, toggleCompanion } from '../lib/sessions.js';
 import { openUrlCompanion } from '../lib/companion-state.js';
 import { registerCosArtifact, artifactIdFor } from '../lib/cos-artifacts.js';

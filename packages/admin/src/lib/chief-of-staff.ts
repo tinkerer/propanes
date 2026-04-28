@@ -76,77 +76,6 @@ export function extractDispatchInfo(call: ChiefOfStaffToolCall): DispatchInfo | 
   return { feedbackId, sessionId };
 }
 
-// Tiny in-memory cache of feedback titles for the dispatch status-line expansion.
-const feedbackTitleCache = new Map<string, string>();
-const feedbackTitleInFlight = new Map<string, Promise<string | null>>();
-// Tracks failed lookups (404 for deleted feedback, network errors, etc.) so we
-// don't refetch on every re-render. Value = { failedAt, attempts } drives an
-// exponential backoff capped at FEEDBACK_TITLE_MISS_MAX_DELAY_MS. The dispatch
-// status line in CoS rerenders frequently as messages stream in, so without
-// this we fired one GET per render for any feedback that no longer exists.
-const feedbackTitleMisses = new Map<string, { failedAt: number; attempts: number }>();
-const FEEDBACK_TITLE_MISS_BASE_DELAY_MS = 30_000;
-const FEEDBACK_TITLE_MISS_MAX_DELAY_MS = 30 * 60_000;
-const FEEDBACK_TITLE_MISS_MAX_ATTEMPTS = 5;
-export const feedbackTitlesVersion = signal(0);
-
-function feedbackTitleMissBackoffMs(attempts: number): number {
-  // 30s, 1m, 2m, 4m, 8m, ... capped.
-  const ms = FEEDBACK_TITLE_MISS_BASE_DELAY_MS * 2 ** Math.max(0, attempts - 1);
-  return Math.min(ms, FEEDBACK_TITLE_MISS_MAX_DELAY_MS);
-}
-
-export function getCachedFeedbackTitle(id: string): string | null {
-  return feedbackTitleCache.get(id) ?? null;
-}
-
-export async function fetchFeedbackTitle(id: string): Promise<string | null> {
-  const cached = feedbackTitleCache.get(id);
-  if (cached) return cached;
-  const miss = feedbackTitleMisses.get(id);
-  if (miss) {
-    if (miss.attempts >= FEEDBACK_TITLE_MISS_MAX_ATTEMPTS) return null;
-    if (Date.now() - miss.failedAt < feedbackTitleMissBackoffMs(miss.attempts)) return null;
-  }
-  const inFlight = feedbackTitleInFlight.get(id);
-  if (inFlight) return inFlight;
-  const p = (async () => {
-    const recordMiss = () => {
-      const prev = feedbackTitleMisses.get(id);
-      feedbackTitleMisses.set(id, {
-        failedAt: Date.now(),
-        attempts: (prev?.attempts ?? 0) + 1,
-      });
-    };
-    try {
-      const token = localStorage.getItem('pw-admin-token');
-      const headers: Record<string, string> = {};
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      const res = await fetch(`/api/v1/admin/feedback/${encodeURIComponent(id)}`, { headers });
-      if (!res.ok) {
-        recordMiss();
-        return null;
-      }
-      const data = await res.json();
-      const title = typeof data?.title === 'string' ? data.title : null;
-      if (title) {
-        feedbackTitleCache.set(id, title);
-        feedbackTitleMisses.delete(id);
-        feedbackTitlesVersion.value = feedbackTitlesVersion.value + 1;
-      } else {
-        recordMiss();
-      }
-      return title;
-    } catch {
-      recordMiss();
-      return null;
-    } finally {
-      feedbackTitleInFlight.delete(id);
-    }
-  })();
-  feedbackTitleInFlight.set(id, p);
-  return p;
-}
 
 export type ChiefOfStaffVerbosity = 'terse' | 'normal' | 'verbose';
 export type ChiefOfStaffStyle = 'dry' | 'neutral' | 'friendly';
@@ -347,58 +276,6 @@ export async function setThreadArchived(threadId: string, archived: boolean): Pr
   await patchThreadFlags(threadId, { archived }, optimistic);
 }
 
-/**
- * Extract the user-facing reply(s) from an assistant message. The model is
- * instructed to wrap its reply in <cos-reply>...</cos-reply>; anything outside
- * is internal reasoning. The model may emit MULTIPLE tags per turn (typically
- * an ack/ETA tag first, then a final-answer tag) — this extractor concatenates
- * all closed segments and appends any currently-open tail so streaming stays
- * visible. If no tag is present (model misbehaved or stream hasn't reached the
- * first open tag), returns the original text so something is visible.
- * isOpen = true while a tag is open but not yet closed (streaming).
- */
-export function extractCosReply(text: string): { displayText: string; hasTag: boolean; isOpen: boolean } {
-  if (!text) return { displayText: '', hasTag: false, isOpen: false };
-  const openRe = /<cos-reply(?:\s[^>]*)?>/g;
-  const segments: string[] = [];
-  let isOpen = false;
-  let hasTag = false;
-  let idx = 0;
-  while (idx < text.length) {
-    openRe.lastIndex = idx;
-    const openMatch = openRe.exec(text);
-    if (!openMatch) break;
-    hasTag = true;
-    const contentStart = openMatch.index + openMatch[0].length;
-    const rest = text.slice(contentStart);
-    const closeIdx = rest.indexOf('</cos-reply>');
-    if (closeIdx === -1) {
-      segments.push(rest.replace(/^\s+/, ''));
-      isOpen = true;
-      break;
-    }
-    segments.push(rest.slice(0, closeIdx).trim());
-    idx = contentStart + closeIdx + '</cos-reply>'.length;
-  }
-  if (!hasTag) return { displayText: text, hasTag: false, isOpen: false };
-  const joined = segments.filter((s) => s.length > 0).join('\n\n');
-  return { displayText: joined, hasTag: true, isOpen };
-}
-
-/**
- * Verbose display: strip the <cos-reply> markers so the raw text is visible,
- * including any scratch-work / planning the model emitted outside the tags.
- * Used when the agent's verbosity is set to 'verbose' — matches the user
- * request to "take all the text parts from the jsonl and send them to CoS".
- */
-export function stripCosReplyMarkers(text: string): string {
-  if (!text) return '';
-  return text
-    .replace(/<cos-reply(?:\s[^>]*)?>/g, '')
-    .replace(/<\/cos-reply>/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
 
 const STORAGE_KEY = 'pw-chief-of-staff-v1';
 
