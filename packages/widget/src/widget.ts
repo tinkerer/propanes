@@ -1362,7 +1362,14 @@ export class ProPanesElement {
     };
 
     const excludeWidget = this.sessionBridge.screenshotIncludeWidget && this.excludeWidget;
-    const blob = await captureScreenshot({ excludeWidget, excludeCursor: this.excludeCursor, keepStream: this.keepStream, method: this.screenshotMethod, onStatus });
+    const blob = await captureScreenshot({
+      excludeWidget,
+      excludeCursor: this.excludeCursor,
+      keepStream: this.keepStream,
+      method: this.screenshotMethod,
+      onStatus,
+      bridgeCapture: () => this.voiceRecorder.captureScreenViaBridge(this.computeMicBridgeUrl()),
+    });
     if (blob) {
       this.addScreenshot(blob);
     }
@@ -1375,14 +1382,46 @@ export class ProPanesElement {
   }
 
   private async captureScreenViaGesture(origin: { x: number; y: number }) {
-    // Gesture screenshots always use html-to-image — getDisplayMedia would
-    // require a user-activation prompt that the shake gesture can't supply.
+    // Gesture screenshots can't trigger getDisplayMedia directly — the prompt
+    // needs user activation that a shake gesture can't supply. But if the
+    // bridge popup already owns a live screen-share stream (user shared
+    // earlier in the session), grab a frame from it: no prompt, no activation
+    // required. Otherwise fall back to html-to-image.
     const excludeWidget = this.sessionBridge.screenshotIncludeWidget && this.excludeWidget;
-    const blob = await captureScreenshot({
-      excludeWidget,
-      excludeCursor: this.excludeCursor,
-      method: 'html-to-image',
-    });
+    let blob: Blob | null = null;
+
+    if (this.voiceRecorder.hasActiveScreenBridgeStream) {
+      // Hide the widget + virtual cursor in our DOM before the bridge grabs a
+      // frame, then restore. The bridge captures whatever is currently on
+      // screen, so the elements have to be out of the live document — not just
+      // filtered out post-render the way html-to-image does.
+      const host = excludeWidget ? this.shadow.host as HTMLElement : null;
+      const prevHostDisplay = host?.style.display;
+      if (host) host.style.display = 'none';
+      const cursor = this.excludeCursor ? document.getElementById('__pw-virtual-cursor') : null;
+      const prevCursorDisplay = cursor?.style.display;
+      if (cursor) cursor.style.display = 'none';
+      // Two RAFs lets the screen-share encoder push a frame past the change
+      // (one to lay out the next paint, one for the encoder to pick it up).
+      await new Promise<void>(r => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+      try {
+        blob = await this.voiceRecorder.captureScreenStreamFrameViaBridge(this.computeMicBridgeUrl());
+      } catch (err) {
+        console.warn('[pw] gesture: bridge stream frame failed, falling back to html-to-image', err);
+      } finally {
+        if (host) host.style.display = prevHostDisplay ?? '';
+        if (cursor) cursor.style.display = prevCursorDisplay ?? '';
+      }
+    }
+
+    if (!blob) {
+      blob = await captureScreenshot({
+        excludeWidget,
+        excludeCursor: this.excludeCursor,
+        method: 'html-to-image',
+      });
+    }
+
     if (!blob) {
       this.showGestureToast(origin, 'Screenshot failed', false);
       return;
@@ -3232,7 +3271,13 @@ export class ProPanesElement {
 
     if (opts.screenshot) {
       const excludeWidget = this.sessionBridge.screenshotIncludeWidget && this.excludeWidget;
-      const blob = await captureScreenshot({ excludeWidget, excludeCursor: this.excludeCursor, keepStream: this.keepStream, method: this.screenshotMethod });
+      const blob = await captureScreenshot({
+        excludeWidget,
+        excludeCursor: this.excludeCursor,
+        keepStream: this.keepStream,
+        method: this.screenshotMethod,
+        bridgeCapture: () => this.voiceRecorder.captureScreenViaBridge(this.computeMicBridgeUrl()),
+      });
       if (blob) screenshots.push(blob);
     }
 

@@ -6,10 +6,14 @@ import {
   setCosSlackMode,
   setCosShowResolved,
   setCosShowArchived,
+  setCosThreadFilter,
+  type CosThreadFilter,
 } from '../lib/cos-popout-tree.js';
 
 export type CosSearchRole = 'all' | 'user' | 'assistant';
 export type CosSearchScope = 'text' | 'tools' | 'both';
+
+const EXCLUSIVE_MODE_DISABLED_TITLE = 'Disabled while an "Only" mode is active';
 
 /**
  * The horizontal toolbar that hangs off the top of the chat scroll area:
@@ -52,6 +56,7 @@ export function CosScrollToolbar({
   slackMode,
   showResolved,
   showArchived,
+  threadFilter,
 }: {
   hasMessages: boolean;
   hasMultipleThreads: boolean;
@@ -83,6 +88,7 @@ export function CosScrollToolbar({
   slackMode: boolean;
   showResolved: boolean;
   showArchived: boolean;
+  threadFilter: CosThreadFilter;
 }) {
   const [searchFiltersOpen, setSearchFiltersOpen] = useState(false);
   const searchFiltersRef = useRef<HTMLDivElement>(null);
@@ -98,7 +104,8 @@ export function CosScrollToolbar({
     return () => document.removeEventListener('mousedown', onDoc);
   }, [searchFiltersOpen]);
 
-  const filtersActive = slackMode || showResolved || showArchived;
+  const filtersActive = slackMode || showResolved || showArchived || threadFilter !== 'default';
+  const inExclusiveMode = threadFilter !== 'default';
   const searchPlaceholder =
     searchScope === 'tools' ? 'Find filename or edit...'
     : searchScope === 'both' ? 'Find in messages + tool calls...'
@@ -198,9 +205,12 @@ export function CosScrollToolbar({
                   type="button"
                   role="menuitemcheckbox"
                   aria-checked={showResolved}
-                  class={`cos-search-filters-item${showResolved ? ' cos-search-filters-item-active' : ''}`}
-                  onClick={() => setCosShowResolved(!showResolved)}
-                  title="Include resolved threads in the chat and rail"
+                  disabled={inExclusiveMode}
+                  class={`cos-search-filters-item${showResolved ? ' cos-search-filters-item-active' : ''}${inExclusiveMode ? ' cos-search-filters-item-disabled' : ''}`}
+                  onClick={() => { if (!inExclusiveMode) setCosShowResolved(!showResolved); }}
+                  title={inExclusiveMode
+                    ? EXCLUSIVE_MODE_DISABLED_TITLE
+                    : 'Include resolved threads in the chat and rail'}
                 >
                   <span class="cos-search-filters-check">{showResolved ? '✓' : ''}</span>
                   <span>Show resolved</span>
@@ -209,12 +219,38 @@ export function CosScrollToolbar({
                   type="button"
                   role="menuitemcheckbox"
                   aria-checked={showArchived}
-                  class={`cos-search-filters-item${showArchived ? ' cos-search-filters-item-active' : ''}`}
-                  onClick={() => setCosShowArchived(!showArchived)}
-                  title="Include archived threads in the chat and rail"
+                  disabled={inExclusiveMode}
+                  class={`cos-search-filters-item${showArchived ? ' cos-search-filters-item-active' : ''}${inExclusiveMode ? ' cos-search-filters-item-disabled' : ''}`}
+                  onClick={() => { if (!inExclusiveMode) setCosShowArchived(!showArchived); }}
+                  title={inExclusiveMode
+                    ? EXCLUSIVE_MODE_DISABLED_TITLE
+                    : 'Include archived threads in the chat and rail'}
                 >
                   <span class="cos-search-filters-check">{showArchived ? '✓' : ''}</span>
                   <span>Show archived</span>
+                </button>
+                <div class="cos-search-filters-divider" aria-hidden="true" />
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={threadFilter === 'drafts'}
+                  class={`cos-search-filters-item${threadFilter === 'drafts' ? ' cos-search-filters-item-active' : ''}`}
+                  onClick={() => setCosThreadFilter(threadFilter === 'drafts' ? 'default' : 'drafts')}
+                  title="Show only threads that have saved drafts"
+                >
+                  <span class="cos-search-filters-check">{threadFilter === 'drafts' ? '●' : ''}</span>
+                  <span>Only drafts</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={threadFilter === 'archived'}
+                  class={`cos-search-filters-item${threadFilter === 'archived' ? ' cos-search-filters-item-active' : ''}`}
+                  onClick={() => setCosThreadFilter(threadFilter === 'archived' ? 'default' : 'archived')}
+                  title="Show only archived threads"
+                >
+                  <span class="cos-search-filters-check">{threadFilter === 'archived' ? '●' : ''}</span>
+                  <span>Only archived</span>
                 </button>
                 {hiddenThreadCount > 0 && (
                   <div class="cos-search-filters-hint">

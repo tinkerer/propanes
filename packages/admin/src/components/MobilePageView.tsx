@@ -24,16 +24,21 @@ function renderMobileRoute(route: string) {
   const appMatch = route.match(/^\/app\/([^/]+)(?:\/(.+))?$/);
   if (appMatch) {
     const appId = appMatch[1];
-    const rest = appMatch[2] || 'feedback';
+    const rest = appMatch[2] || 'tickets';
 
-    if (rest === 'feedback') return <FeedbackListPage appId={appId} />;
-    const fbDetail = rest.match(/^feedback\/(.+)$/);
+    if (rest === 'tickets' || rest === 'feedback') return <FeedbackListPage appId={appId} />;
+    const fbDetail = rest.match(/^(?:tickets|feedback)\/(.+)$/);
     if (fbDetail) return <FeedbackDetailPage id={fbDetail[1]} appId={appId} />;
     if (rest === 'sessions') return <SessionsPage appId={appId} />;
     if (rest === 'live') return <LiveConnectionsPage appId={appId} />;
     if (rest === 'settings' || rest.startsWith('settings/')) return <AppSettingsPage appId={appId} />;
     if (rest === 'wiggum') return <WiggumPage />;
     return <FeedbackListPage appId={appId} />;
+  }
+
+  const rootDetail = route.match(/^\/(?:tickets|feedback)\/(.+)$/);
+  if (rootDetail) {
+    return <FeedbackDetailPage id={rootDetail[1]} appId={null} />;
   }
 
   if (route.startsWith('/session/')) {

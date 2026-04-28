@@ -22,6 +22,31 @@ import type {
   ChiefOfStaffToolCall,
 } from './chief-of-staff.js';
 
+// The server prepends per-turn metadata (TURN requestId, other active sessions,
+// attached image paths, selected DOM elements) before the operator's actual
+// text, joined by `\n\n---\n\n`. We render the JSONL directly in the thread
+// panel so we have to strip those preamble lines back off before display —
+// otherwise the right-hand pane shows the raw fullTurnText while the left-hand
+// bubble (which reads cosMessages.text) shows only the operator's message.
+function stripTurnPreamble(raw: string): string {
+  // If the canonical separator is present, everything before the *last* one
+  // is server-injected context.
+  const sepIdx = raw.lastIndexOf('\n\n---\n\n');
+  if (sepIdx >= 0) return raw.slice(sepIdx + '\n\n---\n\n'.length).trim();
+
+  // No `---` separator → no context blocks were attached. Only the bare
+  // `[TURN requestId=...]` header may be present. Strip leading lines.
+  const lines = raw.split('\n');
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\[TURN requestId=/.test(line)) { i++; continue; }
+    if (line === '' && i < 2) { i++; continue; }
+    break;
+  }
+  return lines.slice(i).join('\n').trim();
+}
+
 export function jsonlToCosMessages(messages: ParsedMessage[]): ChiefOfStaffMsg[] {
   const main = messages.filter((m) => !m.subagentId);
 
@@ -46,10 +71,10 @@ export function jsonlToCosMessages(messages: ParsedMessage[]): ChiefOfStaffMsg[]
   for (const m of main) {
     if (m.role === 'user_input') {
       flushAssistant();
-      // user_input wraps the user's outgoing text; carry it through. Skip
-      // empty system-bookkeeping inputs (e.g. injected meta-context lines)
-      // by suppressing trivial entries — keeps the slack feed clean.
-      const text = (m.content || '').trim();
+      // user_input wraps the full fullTurnText sent to the agent — strip the
+      // server-injected preamble (TURN header, attachments list, DOM elements)
+      // so we display only what the operator actually typed.
+      const text = stripTurnPreamble(m.content || '');
       if (!text) continue;
       out.push({
         role: 'user',

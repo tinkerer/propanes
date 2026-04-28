@@ -11,6 +11,7 @@ import { openSession, toggleCompanion } from '../lib/sessions.js';
 import { MessageRenderer } from './MessageRenderer.js';
 import { MessageAttachments } from './CosMessageAttachments.js';
 import { AssistantContent } from './CosAssistantContent.js';
+import { Tooltip } from './Tooltip.js';
 
 // Re-export pure helpers/types so existing imports of CosMessage continue to
 // resolve while keeping the heavy parsing logic in lib/cos-markdown.ts and
@@ -72,7 +73,11 @@ export function Timestamp({ ts }: { ts: number }) {
     return () => clearInterval(t);
   }, [ts]);
   const { rel, abs } = formatRelativeTime(ts, now);
-  return <span class="cos-msg-time" title={abs}>{rel}</span>;
+  return (
+    <Tooltip text={abs}>
+      <span class="cos-msg-time">{rel}</span>
+    </Tooltip>
+  );
 }
 
 export function dayKeyOf(ts: number): string {

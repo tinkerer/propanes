@@ -121,6 +121,7 @@ function routeToViewId(route: string): string | null {
   const m = route.match(/^\/app\/[^/]+\/([^/]+)/);
   if (!m) return null;
   const map: Record<string, string> = {
+    tickets: 'view:feedback',
     feedback: 'view:feedback',
     sessions: 'view:sessions-page',
     live: 'view:live',

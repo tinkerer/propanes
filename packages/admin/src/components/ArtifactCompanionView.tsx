@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 import { marked } from 'marked';
 import hljs from 'highlight.js/lib/common';
 import { cosArtifacts } from '../lib/cos-artifacts.js';
+import { closeArtifactDrawerTab, cosArtifactDrawer } from '../lib/cos-artifact-drawer.js';
+import { closeTab } from '../lib/sessions.js';
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -31,12 +33,25 @@ export function ArtifactCompanionView({ artifactId }: { artifactId: string }) {
     return { __html: typeof html === 'string' ? html : '' };
   }, [artifact?.raw, artifact?.kind, artifact?.lang]);
 
+  // Stale tab — the artifact registry doesn't have an entry for this id.
+  // Almost always a localStorage-restored drawer/pane tab whose backing
+  // artifact didn't survive the reload (or belongs to a thread that hasn't
+  // been parsed yet). Give the JSONL stream a brief grace period to register
+  // the artifact, then quietly close the tab instead of showing an error.
+  useEffect(() => {
+    if (artifact) return;
+    const t = window.setTimeout(() => {
+      if (cosArtifacts.value[artifactId]) return;
+      if (cosArtifactDrawer.value.tabs.includes(artifactId)) {
+        closeArtifactDrawerTab(artifactId);
+      }
+      closeTab(`artifact:${artifactId}`);
+    }, 1500);
+    return () => window.clearTimeout(t);
+  }, [artifactId, artifact]);
+
   if (!artifact) {
-    return (
-      <div class="artifact-companion artifact-companion-empty">
-        <div class="companion-error">Artifact not found (may have been closed or the page reloaded).</div>
-      </div>
-    );
+    return <div class="artifact-companion artifact-companion-empty" />;
   }
 
   const rawForCopy = artifact.kind === 'code' ? codeBody(artifact.raw) : artifact.raw;

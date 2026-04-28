@@ -13,6 +13,9 @@ import {
   getThreadMeta,
   setThreadResolved,
   setThreadArchived,
+  leavingThreadIds,
+  isThreadLeaving,
+  markThreadLeaving,
   type CosThreadMeta,
 } from './cos-thread-meta.js';
 import {
@@ -22,6 +25,7 @@ import {
   openCosInPane,
   isCosInPane,
   closeCosPane,
+  reclampCosPanelToViewport,
   COS_PANE_TAB_ID,
 } from './cos-pane.js';
 
@@ -33,6 +37,9 @@ export {
   getThreadMeta,
   setThreadResolved,
   setThreadArchived,
+  leavingThreadIds,
+  isThreadLeaving,
+  markThreadLeaving,
   type CosThreadMeta,
 };
 export {
@@ -42,6 +49,7 @@ export {
   openCosInPane,
   isCosInPane,
   closeCosPane,
+  reclampCosPanelToViewport,
   COS_PANE_TAB_ID,
 };
 
@@ -189,6 +197,11 @@ function loadState(): { agents: ChiefOfStaffAgent[]; activeAgentId: string; open
             text: m.text || '',
             toolCalls: m.toolCalls,
             timestamp: m.timestamp,
+            // Per-message threadId is what threadKeyOf uses to group replies and
+            // match the persisted cosActiveThread on reload. Dropping it here
+            // forced thread keys to fall back to positional `idx:N`, which never
+            // matched the saved `tid:<id>` key.
+            threadId: typeof m.threadId === 'string' ? m.threadId : undefined,
             // Never persist streaming=true / sending=true across reloads — those
             // streams are dead, so the UI would lie about being mid-request.
             streaming: false,
@@ -483,17 +496,24 @@ function processClaudeEvent(obj: any, s: StreamAccum): boolean {
  * assistant message is keyed by its timestamp so streams don't stomp on each
  * other.
  */
+/**
+ * Dispatches a CoS message. Resolves once the server has accepted the turn
+ * (POST /chat returned 202 with a turn descriptor). Rejects if that POST
+ * fails. Live SSE streaming continues in the background after resolve — the
+ * resolved promise just means "the server has the message, the composer can
+ * safely clear." Callers that don't care can `void` the return.
+ */
 export function sendChiefOfStaffMessage(
   text: string,
   appId: string | null,
   opts?: SendCosOptions,
-): void {
+): Promise<void> {
   const agent = getActiveAgent();
-  if (!agent) return;
+  if (!agent) return Promise.resolve();
   const trimmed = text.trim();
   const attachments = opts?.attachments ?? [];
   const elementRefs = opts?.elementRefs ?? [];
-  if (!trimmed && attachments.length === 0 && elementRefs.length === 0) return;
+  if (!trimmed && attachments.length === 0 && elementRefs.length === 0) return Promise.resolve();
 
   const agentId = agent.id;
   const userTs = Date.now();
@@ -541,6 +561,16 @@ export function sendChiefOfStaffMessage(
   };
 
   chiefOfStaffInFlight.value = chiefOfStaffInFlight.value + 1;
+
+  // Deferred promise that resolves on POST /chat 202 ack (rejects on POST
+  // failure). Composer awaits this to keep the textarea frozen until the
+  // server has the message — see CosComposer.submit().
+  let resolveAck!: () => void;
+  let rejectAck!: (e: Error) => void;
+  const ackPromise = new Promise<void>((res, rej) => {
+    resolveAck = res;
+    rejectAck = rej;
+  });
 
   void (async () => {
     // POST /chat now returns 202 immediately with { turnId, startSeq } and
@@ -667,20 +697,23 @@ export function sendChiefOfStaffMessage(
         throw new Error(errMsg);
       }
 
-      let ack: { turnId?: string; threadId?: string; startSeq?: number; agentSessionId?: string };
+      let chatAck: { turnId?: string; threadId?: string; startSeq?: number; agentSessionId?: string };
       try {
-        ack = await res.json();
+        chatAck = await res.json();
       } catch {
         throw new Error('Server did not return a turn descriptor');
       }
-      if (!ack.turnId || !ack.threadId) {
+      if (!chatAck.turnId || !chatAck.threadId) {
         throw new Error('Server did not return a turnId');
       }
 
-      const myTurnId = ack.turnId;
-      const ackThreadId = ack.threadId;
+      // POST acked — composer can safely clear now.
+      resolveAck();
+
+      const myTurnId = chatAck.turnId;
+      const ackThreadId = chatAck.threadId;
       threadIdForResume = ackThreadId;
-      const initialFromSeq = typeof ack.startSeq === 'number' ? ack.startSeq : 0;
+      const initialFromSeq = typeof chatAck.startSeq === 'number' ? chatAck.startSeq : 0;
       lastSeenSeq = initialFromSeq;
 
       // Subscribe to the long-lived per-thread event stream. The browser's
@@ -784,10 +817,18 @@ export function sendChiefOfStaffMessage(
           elementRefs: elementRefs.length > 0 ? elementRefs : undefined,
         },
       }));
+      // Reject the composer-ack promise so the textarea unfreezes with the
+      // operator's text intact. resolveAck() may have already run if the
+      // POST ack succeeded but the SSE stream failed afterward — Promise
+      // semantics already swallow the second settle, so this is safe either
+      // way.
+      rejectAck(err instanceof Error ? err : new Error(msg));
     } finally {
       chiefOfStaffInFlight.value = Math.max(0, chiefOfStaffInFlight.value - 1);
     }
   })();
+
+  return ackPromise;
 }
 
 /**
@@ -814,7 +855,7 @@ export function retryFailedAssistantMessage(targetTimestamp: number): void {
   sendChiefOfStaffMessage(payload.text, payload.appId, {
     attachments: payload.attachments,
     elementRefs: payload.elementRefs,
-  });
+  }).catch(() => { /* error already surfaces via chiefOfStaffError */ });
 }
 
 export function dismissFailedAssistantMessage(targetTimestamp: number): void {

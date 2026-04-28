@@ -87,6 +87,32 @@ export function getThreadMeta(threadId: string | undefined | null): CosThreadMet
   return cosThreadMeta.value[threadId] ?? null;
 }
 
+// Threads currently animating out of the visible list after resolve/archive.
+// The visibility filter keeps these threads mounted while the CSS collapse
+// animation runs; the entry auto-clears when the timer fires.
+export const leavingThreadIds = signal<Set<string>>(new Set());
+
+export const LEAVING_ANIMATION_MS = 280;
+
+export function markThreadLeaving(threadId: string): void {
+  if (!threadId) return;
+  if (leavingThreadIds.value.has(threadId)) return;
+  const next = new Set(leavingThreadIds.value);
+  next.add(threadId);
+  leavingThreadIds.value = next;
+  setTimeout(() => {
+    if (!leavingThreadIds.value.has(threadId)) return;
+    const cur = new Set(leavingThreadIds.value);
+    cur.delete(threadId);
+    leavingThreadIds.value = cur;
+  }, LEAVING_ANIMATION_MS);
+}
+
+export function isThreadLeaving(threadId: string | undefined | null): boolean {
+  if (!threadId) return false;
+  return leavingThreadIds.value.has(threadId);
+}
+
 const EMPTY_THREAD_META: CosThreadMeta = { sessionStatus: null, resolvedAt: null, archivedAt: null };
 
 async function patchThreadFlags(
