@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
   chiefOfStaffAgents,
+  sendChiefOfStaffMessage,
   type ChiefOfStaffVerbosity,
 } from '../lib/chief-of-staff.js';
+import { selectedAppId } from '../lib/state.js';
 import { cosActiveThread } from '../lib/cos-popout-tree.js';
 import {
   MessageAvatar,
@@ -77,8 +79,11 @@ export function ThreadPanel({
   const anchorTs = userMsg?.timestamp;
   const replyCount = replies.length;
   const bodyRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
+  const [composerText, setComposerText] = useState('');
   const wasAtBottomRef = useRef(true);
+  const isAgentStreaming = replies.some((r) => r.msg.streaming);
 
   function isBodyAtBottom(el: HTMLElement | null): boolean {
     if (!el) return true;
@@ -112,6 +117,23 @@ export function ThreadPanel({
       setShowScrollDown(false);
     }
   }, [replies.length, active?.threadKey, active?.agentId]);
+
+  // Reset composer when switching threads — drafts are per-thread; ephemeral
+  // text in this panel is for "reply right now" only and shouldn't leak across.
+  useEffect(() => {
+    setComposerText('');
+  }, [active?.threadKey, active?.agentId]);
+
+  function submitReply() {
+    const trimmed = composerText.trim();
+    if (!trimmed) return;
+    sendChiefOfStaffMessage(trimmed, selectedAppId.value, {
+      replyToTs: anchorTs,
+    });
+    setComposerText('');
+    // Stick to bottom so the new user message + streaming reply are visible.
+    wasAtBottomRef.current = true;
+  }
 
   return (
     <div class={`cos-thread-panel${compact ? ' cos-thread-panel-compact' : ''}`}>
@@ -185,20 +207,50 @@ export function ThreadPanel({
       </div>
       </div>
       {userMsg && (
-        <div class="cos-thread-panel-actions">
-          <button
-            type="button"
-            class="cos-thread-reply-btn"
-            onClick={() => userMsg.text && onReply('user', userMsg.text, anchorTs, threadServerId)}
-            disabled={!userMsg.text}
-            title="Reply in thread"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <polyline points="9 17 4 12 9 7" />
-              <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
-            </svg>
-            <span>Reply in thread</span>
-          </button>
+        <div class="cos-thread-panel-composer">
+          <textarea
+            ref={composerRef}
+            class="cos-input cos-thread-panel-input"
+            value={composerText}
+            placeholder={isAgentStreaming ? 'Reply (agent is responding…)' : 'Reply in this thread…'}
+            onInput={(e) => setComposerText((e.target as HTMLTextAreaElement).value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                submitReply();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                if (composerText) setComposerText('');
+                else if (userMsg.text) onReply('user', userMsg.text, anchorTs, threadServerId);
+              }
+            }}
+            rows={2}
+          />
+          <div class="cos-thread-panel-composer-actions">
+            <button
+              type="button"
+              class="cos-link-btn cos-thread-panel-handoff"
+              onClick={() => {
+                // Hand off to the main composer so the operator can attach
+                // images, paste element refs, or work on a longer reply.
+                if (userMsg.text) onReply('user', userMsg.text, anchorTs, threadServerId);
+              }}
+              title="Reply from main chat (lets you attach images / element refs)"
+            >
+              Reply in main chat
+            </button>
+            <button
+              type="button"
+              class="cos-send"
+              onClick={submitReply}
+              disabled={!composerText.trim()}
+              title="Send (Enter)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 12l14-7-7 14-2-5z" />
+              </svg>
+            </button>
+          </div>
         </div>
       )}
     </div>
