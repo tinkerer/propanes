@@ -32,8 +32,6 @@ import {
   type ChiefOfStaffStyle,
   type CosImageAttachment,
   type CosElementRef,
-  cosLearnings,
-  loadCosLearnings,
   extractDispatchInfo,
   fetchFeedbackTitle,
   getCachedFeedbackTitle,
@@ -108,6 +106,7 @@ import {
 } from '../lib/cos-popout-tree.js';
 import { CosPopoutTreeView } from './CosPopoutTreeView.js';
 import { openArtifactDrawerTab, isArtifactDrawerOpen } from '../lib/cos-artifact-drawer.js';
+import { cosLearnings, loadCosLearnings } from '../lib/cos-learnings.js';
 import { LearningsPanel } from './LearningsDrawer.js';
 import {
   MessageAvatar,

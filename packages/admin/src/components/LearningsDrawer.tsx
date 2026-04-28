@@ -19,7 +19,7 @@ import {
   deleteCosLearningLink,
   updateCosLearning,
   wiggumAnnouncement,
-} from '../lib/chief-of-staff.js';
+} from '../lib/cos-learnings.js';
 
 type LearningsView = 'list' | 'graph';
 
