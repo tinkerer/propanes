@@ -1,3 +1,6 @@
+import { api } from './api.js';
+import { ensureAgentsLoaded, openSession, loadAllSessions } from './sessions.js';
+
 export const DEFAULT_PROMPT_TEMPLATE = `Feedback: {{feedback.url}}
 
 Title: {{feedback.title}}
@@ -325,10 +328,6 @@ export async function launchFAFOAssistant(opts: {
   appId?: string | null;
   context?: string;
 }): Promise<string> {
-  // Lazy imports to avoid circular deps
-  const { api } = await import('./api.js');
-  const { ensureAgentsLoaded, openSession, loadAllSessions } = await import('./sessions.js');
-
   const appId = opts.appId || '';
   const fb = await api.createFeedback({
     title: 'FAFO Setup Assistant',

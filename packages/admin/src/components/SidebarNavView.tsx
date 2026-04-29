@@ -10,6 +10,7 @@ import {
 import { api } from '../lib/api.js';
 import { subscribeAdmin } from '../lib/admin-ws.js';
 import { sidebarCollapsed, sidebarAnimating, toggleSidebar, sidebarWidth, openSettingsPanel, openPageView } from '../lib/sessions.js';
+import { loadChannelThreads } from '../pages/ChannelPage.js';
 import { Tooltip } from './Tooltip.js';
 
 const KIND_DOT: Record<ChannelKind, string> = {
@@ -126,7 +127,6 @@ function ChannelSubsection({ appId, route }: { appId: string; route: string }) {
             if (!threadId) return;
             e.preventDefault();
             await api.moveThreadToChannel('_unsorted', threadId);
-            const { loadChannelThreads } = await import('../pages/ChannelPage.js');
             await Promise.all([loadChannels(appId), loadChannelThreads(appId)]);
           }}
           style={{ paddingLeft: 16 }}
@@ -149,7 +149,6 @@ function ChannelSubsection({ appId, route }: { appId: string; route: string }) {
             if (!threadId) return;
             e.preventDefault();
             await api.moveThreadToChannel(ch.id, threadId);
-            const { loadChannelThreads } = await import('../pages/ChannelPage.js');
             await Promise.all([loadChannels(appId), loadChannelThreads(appId)]);
           }}
           title={`${ch.name} (${ch.kind})${ch.description ? ' — ' + ch.description : ''}`}

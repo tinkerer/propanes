@@ -111,17 +111,19 @@ export function SpotlightSearch({ onClose }: Props) {
     for (const s of allSessions.value) {
       if (s.status === 'deleted') continue;
       const customLabel = getSessionLabel(s.id);
-      const label = customLabel || s.feedbackTitle || s.agentName || s.id;
-      const searchable = [label, s.id, s.paneTitle, s.paneCommand, s.panePath].filter(Boolean).join(' ').toLowerCase();
+      const label = customLabel || s.title || s.feedbackTitle || s.agentName || s.id;
+      const searchable = [label, s.id, s.title, s.paneTitle, s.paneCommand, s.panePath].filter(Boolean).join(' ').toLowerCase();
       if (searchable.includes(lower)) {
         const isPlain = s.permissionProfile === 'plain';
-        const plainLabel = s.paneCommand
-          ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s.paneTitle || s.id.slice(-6)}`
-          : (s.paneTitle || s.id.slice(-6));
+        const plainLabel = s.title
+          ? s.title
+          : s.paneCommand
+            ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s.paneTitle || s.id.slice(-6)}`
+            : (s.paneTitle || s.id.slice(-6));
         matched.push({
           type: 'session',
           id: s.id,
-          title: customLabel || (isPlain ? `\u{1F5A5}\uFE0F ${plainLabel}` : (s.feedbackTitle || s.agentName || `Session ${s.id.slice(-6)}`)),
+          title: customLabel || (isPlain ? `\u{1F5A5}\uFE0F ${plainLabel}` : (s.title || s.feedbackTitle || s.agentName || `Session ${s.id.slice(-6)}`)),
           subtitle: s.status,
           icon: isPlain ? '\u{1F4BB}' : '\u26A1',
           route: '',
@@ -214,9 +216,9 @@ export function SpotlightSearch({ onClose }: Props) {
       let context = '';
 
       // Console errors from live widget sessions
-      if (errorSummary.consoleErrors?.length > 0) {
+      if ((errorSummary.consoleErrors?.length ?? 0) > 0) {
         context += '\n\nBrowser console errors from live widget sessions:\n';
-        for (const ce of errorSummary.consoleErrors) {
+        for (const ce of errorSummary.consoleErrors ?? []) {
           context += `- Widget session on ${ce.url || 'unknown page'}: ${ce.errors.length} error(s)\n`;
           for (const err of ce.errors.slice(0, 3)) {
             context += `  [${err.level}] ${err.message?.slice(0, 200) || 'N/A'}${err.source ? ` (${err.source})` : ''}\n`;

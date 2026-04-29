@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect } from 'preact/hooks';
 import { createPortal } from 'preact/compat';
-import { resumeSession, allSessions, exitedSessions } from '../lib/sessions.js';
+import { resumeSession, allSessions, exitedSessions, lastResumeError } from '../lib/sessions.js';
 import { api } from '../lib/api.js';
 import { captureScreenshot, type ScreenshotMethod } from '@propanes/widget/screenshot';
 import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-picker';
@@ -363,7 +363,12 @@ export function InterruptBar({ sessionId, permissionProfile }: Props) {
       }
 
       const newId = await resumeSession(sessionId, { additionalPrompt: enriched });
-      if (!newId) throw new Error(mode === 'interrupt' ? 'Restart failed' : 'Resume failed');
+      if (!newId) {
+        const real = lastResumeError.value;
+        const fallback = mode === 'interrupt' ? 'Restart failed' : 'Resume failed';
+        const realMsg = real && real.sessionId === sessionId ? real.message : null;
+        throw new Error(realMsg ? `${fallback}: ${realMsg}` : fallback);
+      }
       setText('');
       for (const img of images) URL.revokeObjectURL(img.previewUrl);
       setImages([]);
