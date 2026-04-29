@@ -102,23 +102,25 @@ export function ThreadPanel({
     };
   }, [active?.agentId, active?.threadKey]);
 
-  // Hooks must run on every render — declare composerRef and the
-  // saved-drafts subscription before the early-return below so the hook order
-  // stays stable across `isEmpty` flips.
+  // All hooks below MUST run on every render — including when isEmpty. A prior
+  // version put `useTranscriptStream` + the two `useMemo`s after the
+  // `if (isEmpty) return null` early-return, so opening a thread (isEmpty
+  // flipping false) reordered the hook slots and Preact crashed the whole
+  // CoS subtree to blank. Derive thread-locals with optional fallbacks so the
+  // hooks always run with a stable shape; the JSX below the early-return
+  // re-narrows from `found` directly.
   const composerRef = useRef<CosComposerHandle | null>(null);
   const _savedDraftsTick = cosSavedDrafts.value;
   void _savedDraftsTick;
   const _followupsTick = cosFollowups.value;
   void _followupsTick;
 
-  if (isEmpty) return null;
-
-  const { userMsg, replies } = found;
+  const fUserMsg = found?.userMsg ?? null;
+  const fReplies = found?.replies ?? [];
   const threadServerId =
-    userMsg?.threadId ?? replies.find((r) => r.msg.threadId)?.msg.threadId ?? null;
-  const anchorTs = userMsg?.timestamp;
+    fUserMsg?.threadId ?? fReplies.find((r) => r.msg.threadId)?.msg.threadId ?? null;
+  const anchorTs = fUserMsg?.timestamp;
   const sessionId = getSessionIdForThread(threadServerId);
-  const isAgentStreaming = replies.some((r) => r.msg.streaming);
 
   // Lift the JSONL stream up here so we can dedupe optimistic user messages
   // against what's already landed on disk. The body below renders `projected`
@@ -156,6 +158,11 @@ export function ThreadPanel({
       return true;
     });
   }, [agent?.messages, projected, threadServerId, anchorTs]);
+
+  if (isEmpty) return null;
+
+  const { userMsg, replies } = found;
+  const isAgentStreaming = replies.some((r) => r.msg.streaming);
   // Title preview: first ~60 chars of the anchor user message, falls back to
   // the agent name. Helps the operator know which thread is in the panel
   // without needing to read message bodies.
