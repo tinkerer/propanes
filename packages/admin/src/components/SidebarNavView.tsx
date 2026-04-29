@@ -1,10 +1,21 @@
-import { useEffect } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
-import { currentRoute, clearToken, navigate, selectedAppId, applications, unlinkedCount, appFeedbackCounts, addAppModalOpen } from '../lib/state.js';
+import {
+  currentRoute, clearToken, navigate, selectedAppId, applications, unlinkedCount,
+  appFeedbackCounts, addAppModalOpen,
+  channelsByApp, unsortedCountByApp, channelOrgProposalOpen, loadChannels,
+  type ChannelKind,
+} from '../lib/state.js';
 import { api } from '../lib/api.js';
 import { subscribeAdmin } from '../lib/admin-ws.js';
 import { sidebarCollapsed, sidebarAnimating, toggleSidebar, sidebarWidth, openSettingsPanel, openPageView } from '../lib/sessions.js';
 import { Tooltip } from './Tooltip.js';
+
+const KIND_DOT: Record<ChannelKind, string> = {
+  prod: '#ef4444',
+  staging: '#eab308',
+  exploratory: '#22c55e',
+};
 
 interface LiveConnection {
   sessionId: string;
@@ -56,6 +67,117 @@ const settingsItems = [
   { path: '/settings/getting-started', label: 'Getting Started', icon: '\u{1F680}' },
   { path: '/settings/preferences', label: 'Preferences', icon: '\u2699' },
 ];
+
+function ChannelSubsection({ appId, route }: { appId: string; route: string }) {
+  const channels = channelsByApp.value[appId] || [];
+  const unsorted = unsortedCountByApp.value[appId];
+  const hasUnsorted = (unsorted?.threadCount ?? 0) > 0;
+  const [creating, setCreating] = useState<string | null>(null);
+  const [draft, setDraft] = useState<string>('');
+
+  return (
+    <>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '6px 12px 2px', fontSize: 10, textTransform: 'uppercase',
+        color: 'var(--pw-text-muted)', letterSpacing: 0.5,
+      }}>
+        <span>Channels</span>
+        <button
+          onClick={(e) => { e.stopPropagation(); setCreating(appId); setDraft(''); }}
+          title="Create channel"
+          style={{ background: 'transparent', border: 'none', color: 'var(--pw-text-muted)', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}
+        >+</button>
+      </div>
+      {creating === appId && (
+        <input
+          value={draft}
+          onInput={(e) => setDraft((e.currentTarget as HTMLInputElement).value)}
+          placeholder="channel name…"
+          autoFocus
+          onKeyDown={async (e) => {
+            if (e.key === 'Enter' && draft.trim()) {
+              await api.createChannel({ appId, name: draft.trim() });
+              setCreating(null); setDraft('');
+              await loadChannels(appId);
+            } else if (e.key === 'Escape') {
+              setCreating(null); setDraft('');
+            }
+          }}
+          onBlur={() => { if (!draft.trim()) setCreating(null); }}
+          style={{
+            margin: '0 8px 4px 16px',
+            padding: '3px 6px', fontSize: 12,
+            background: 'rgba(0,0,0,0.3)', border: '1px solid var(--pw-border)',
+            borderRadius: 3, color: 'var(--pw-text)', width: 'calc(100% - 24px)',
+            boxSizing: 'border-box',
+          }}
+        />
+      )}
+      {hasUnsorted && (
+        <a
+          href={`#/app/${appId}/c/_unsorted`}
+          class={route === `/app/${appId}/c/_unsorted` ? 'active' : ''}
+          onClick={(e) => { e.preventDefault(); navigate(`/app/${appId}/c/_unsorted`); openPageView('view:channel'); }}
+          onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; }}
+          onDrop={async (e) => {
+            const threadId = e.dataTransfer?.getData('application/x-cos-thread');
+            if (!threadId) return;
+            e.preventDefault();
+            await api.moveThreadToChannel('_unsorted', threadId);
+            const { loadChannelThreads } = await import('../pages/ChannelPage.js');
+            await Promise.all([loadChannels(appId), loadChannelThreads(appId)]);
+          }}
+          style={{ paddingLeft: 16 }}
+        >
+          {'\u{1F4E5}'} Unsorted
+          <span class="sidebar-count">{unsorted?.openCount ?? unsorted?.threadCount ?? 0}</span>
+        </a>
+      )}
+      {channels.map((ch) => (
+        <a
+          key={ch.id}
+          href={`#/app/${appId}/c/${ch.slug}`}
+          class={route === `/app/${appId}/c/${ch.slug}` || route.startsWith(`/app/${appId}/c/${ch.slug}/`) ? 'active' : ''}
+          onClick={(e) => { e.preventDefault(); navigate(`/app/${appId}/c/${ch.slug}`); openPageView('view:channel'); }}
+          onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; (e.currentTarget as HTMLElement).style.background = 'rgba(59,130,246,0.15)'; }}
+          onDragLeave={(e) => { (e.currentTarget as HTMLElement).style.background = ''; }}
+          onDrop={async (e) => {
+            (e.currentTarget as HTMLElement).style.background = '';
+            const threadId = e.dataTransfer?.getData('application/x-cos-thread');
+            if (!threadId) return;
+            e.preventDefault();
+            await api.moveThreadToChannel(ch.id, threadId);
+            const { loadChannelThreads } = await import('../pages/ChannelPage.js');
+            await Promise.all([loadChannels(appId), loadChannelThreads(appId)]);
+          }}
+          title={`${ch.name} (${ch.kind})${ch.description ? ' — ' + ch.description : ''}`}
+          style={{ paddingLeft: 16, display: 'flex', alignItems: 'center', gap: 6 }}
+        >
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: KIND_DOT[ch.kind] || '#6b7280', flexShrink: 0 }} />
+          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>#{ch.slug}</span>
+          {ch.openCount > 0 && <span class="sidebar-count">{ch.openCount}</span>}
+        </a>
+      ))}
+      {channels.length === 0 && hasUnsorted && (
+        <button
+          onClick={async (e) => {
+            e.stopPropagation();
+            channelOrgProposalOpen.value = true;
+            try { await api.autoOrganizeChannels(appId); } catch { /* error surfaced inside modal */ }
+          }}
+          style={{
+            margin: '4px 8px 4px 16px', padding: '4px 8px', fontSize: 11,
+            background: 'rgba(59,130,246,0.15)', color: '#93c5fd',
+            border: '1px solid rgba(59,130,246,0.3)', borderRadius: 3,
+            cursor: 'pointer', textAlign: 'left',
+          }}
+          title="Ask Claude to organize threads into channels"
+        >✨ Auto-organize</button>
+      )}
+    </>
+  );
+}
 
 export function SidebarNavView() {
   const route = currentRoute.value;
@@ -153,6 +275,7 @@ export function SidebarNavView() {
                   >
                     {'\u{1F9EC}'} FAFO / Wiggum
                   </a>
+                  <ChannelSubsection appId={app.id} route={route} />
                   <a
                     href={`#/app/${app.id}/settings`}
                     class={route === `/app/${app.id}/settings` ? 'active' : ''}

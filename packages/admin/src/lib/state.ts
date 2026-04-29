@@ -38,6 +38,11 @@ function extractAppIdFromRoute(route: string): string | null {
   return m ? m[1] : null;
 }
 
+function extractChannelSlugFromRoute(route: string): string | null {
+  const m = route.match(/^\/app\/[^/]+\/c\/([^/]+)/);
+  return m ? m[1] : null;
+}
+
 const initialAppId = embedAppId
   || extractAppIdFromRoute(window.location.hash.slice(1) || '/')
   || localStorage.getItem('pw-selected-app-id');
@@ -47,6 +52,62 @@ export const unlinkedCount = signal(0);
 export const appFeedbackCounts = signal<Record<string, { total: number; new: number; running: number }>>({});
 export const addAppModalOpen = signal(false);
 export const spotlightOpen = signal(false);
+
+// Channels (CoS workspace-scoped thread buckets). Loaded per-workspace; the
+// active channel is resolved either from the URL slug (#/app/X/c/SLUG) or
+// from the operator's last selection persisted in localStorage.
+export type ChannelKind = 'prod' | 'staging' | 'exploratory';
+export type ChannelRow = {
+  id: string;
+  appId: string;
+  slug: string;
+  name: string;
+  description: string;
+  kind: ChannelKind;
+  policy: {
+    classification: ChannelKind;
+    allowedProfiles: string[];
+    allowedAgentIds: string[] | null;
+    requireApproval: boolean;
+    pathGuards: string[];
+    powwow: { enabled: boolean; providers: string[] };
+  };
+  archivedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  threadCount: number;
+  openCount: number;
+};
+
+const initialChannelSlug = extractChannelSlugFromRoute(window.location.hash.slice(1) || '/');
+
+export const channelsByApp = signal<Record<string, ChannelRow[]>>({});
+export const unsortedCountByApp = signal<Record<string, { threadCount: number; openCount: number }>>({});
+export const activeChannelSlug = signal<string | null>(initialChannelSlug);
+export const channelOrgProposalOpen = signal(false);
+
+export const activeChannel = computed(() => {
+  const appId = selectedAppId.value;
+  const slug = activeChannelSlug.value;
+  if (!appId || !slug) return null;
+  return (channelsByApp.value[appId] || []).find((c) => c.slug === slug) ?? null;
+});
+
+export async function loadChannels(appId: string): Promise<void> {
+  try {
+    const res = await api.getChannels(appId);
+    channelsByApp.value = { ...channelsByApp.value, [appId]: res.channels };
+    unsortedCountByApp.value = { ...unsortedCountByApp.value, [appId]: res.unsorted };
+  } catch {
+    // ignore — caller can retry
+  }
+}
+
+// Whenever the selected workspace changes, refresh its channel list.
+effect(() => {
+  const id = selectedAppId.value;
+  if (id) loadChannels(id);
+});
 
 export function openSpotlight() { spotlightOpen.value = true; }
 export function closeSpotlight() { spotlightOpen.value = false; }
@@ -118,6 +179,10 @@ function routeToViewId(route: string): string | null {
   if (route.startsWith('/settings/')) {
     return null;
   }
+  // Channel routes — `/app/:appId/c/:slug[/...]` open the Channels pane.
+  if (/^\/app\/[^/]+\/c\//.test(route)) {
+    return 'view:channel';
+  }
   const m = route.match(/^\/app\/[^/]+\/([^/]+)/);
   if (!m) return null;
   const map: Record<string, string> = {
@@ -135,6 +200,7 @@ export function navigate(path: string) {
   currentRoute.value = path;
   const appId = extractAppIdFromRoute(path);
   if (appId) selectedAppId.value = appId;
+  activeChannelSlug.value = extractChannelSlugFromRoute(path);
   const viewId = routeToViewId(path);
   if (viewId) openPageView(viewId);
 }
@@ -144,6 +210,7 @@ window.addEventListener('hashchange', () => {
   currentRoute.value = route;
   const appId = extractAppIdFromRoute(route);
   if (appId) selectedAppId.value = appId;
+  activeChannelSlug.value = extractChannelSlugFromRoute(route);
   const viewId = routeToViewId(route);
   if (viewId) openPageView(viewId);
 });

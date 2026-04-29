@@ -15,6 +15,7 @@ import { killSession } from '../../agent-sessions.js';
 import { listLaunchers, getLauncher } from '../../launcher-registry.js';
 import { countActiveSpriteSessions } from '../../sprite-sessions.js';
 import { feedbackEvents } from '../../events.js';
+import { checkDispatchPolicy } from './cos-channels.js';
 
 export const agentRoutes = new Hono();
 
@@ -356,7 +357,29 @@ async function handleDispatch(c: any, payload: unknown) {
     return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
   }
 
-  const { feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId, permissionProfile } = parsed.data;
+  const { feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId, permissionProfile, channelId } = parsed.data;
+
+  // Channel policy gate: when the caller specifies channelId, the channel's
+  // policyJson governs which permission profiles / agents are allowed and
+  // whether dispatch needs approval first. No-op when channelId is omitted.
+  if (channelId) {
+    const effectiveProfile = permissionProfile
+      || (await db.query.agentEndpoints.findFirst({ where: eq(schema.agentEndpoints.id, agentEndpointId) }))?.permissionProfile
+      || 'interactive-require';
+    const check = await checkDispatchPolicy({
+      channelId,
+      permissionProfile: effectiveProfile,
+      agentEndpointId,
+    });
+    if (!check.allowed) {
+      return c.json({
+        dispatched: false,
+        error: check.reason,
+        requiresApproval: 'requiresApproval' in check ? check.requiresApproval : false,
+        policy: 'policy' in check ? check.policy : undefined,
+      }, 403);
+    }
+  }
 
   try {
     // Admin-specific: detect and kill stuck sessions before dispatching
