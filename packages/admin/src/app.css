@@ -16211,3 +16211,95 @@ body.pw-mobile .cos-popout .cos-input {
   color: var(--pw-text);
   filter: none;
 }
+
+/* ===== Channel feature: mobile / narrow-tablet responsive =====
+   The `body.pw-mobile` class is set by `viewport.ts` whenever
+   `matchMedia('(max-width: 768px)')` matches, so the rules below are
+   already gated by viewport width — no need to nest inside @media. This
+   matches the codebase pattern (see other `body.pw-mobile .…` rules
+   above). */
+
+/* HTML5 drag-and-drop on thread rows is desktop-only; on touch devices a
+   long-press triggers a half-broken drag that breaks vertical scroll. Let
+   touch scroll vertically through the thread list normally. */
+.cos-channel-page button[draggable] {
+  touch-action: pan-y;
+}
+
+/* Sidebar channel rows: enforce ellipsis even at narrow sidebar widths.
+   The inline JSX styles already set flex:1/overflow/ellipsis on the slug
+   span; this guards the row itself in case of long labels at < 280px. */
+.sidebar-subnav .sidebar-channels a {
+  min-width: 0;
+}
+
+/* Bigger tap targets for the channel rail rows on mobile. The
+   .sidebar-subnav default is padding:6px 16px (≈30px tall); bump to
+   min-height:36px so a fingertip lands. */
+body.pw-mobile .sidebar-channels a {
+  min-height: 36px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+body.pw-mobile .sidebar-channels-header {
+  padding-top: 10px !important;
+  padding-bottom: 4px !important;
+}
+
+/* Channel page: stack vertically — main column over the member rail.
+   Default desktop layout is flex-row; on mobile the member rail (240px
+   wide on the right) becomes a full-width strip below the thread list
+   with a top border instead of a left border. */
+body.pw-mobile .cos-channel-page {
+  flex-direction: column;
+}
+body.pw-mobile .cos-channel-page-main {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+body.pw-mobile .cos-channel-page-rail {
+  width: 100% !important;
+  border-left: none !important;
+  border-top: 1px solid var(--pw-border);
+  flex: 0 0 auto;
+  max-height: 40vh;
+}
+
+/* Channel header: chips/counts wrap instead of overflowing. The JSX now
+   sets flex-wrap:wrap inline, but reinforce gap spacing here for
+   consistency. */
+body.pw-mobile .cos-channel-header-row {
+  gap: 8px !important;
+}
+
+/* Inline edit form: stack action buttons (Save / Archive / Delete /
+   Cancel) instead of running off the right edge. */
+body.pw-mobile .cos-channel-edit-actions {
+  gap: 6px !important;
+}
+body.pw-mobile .cos-channel-edit-actions > button {
+  min-height: 36px;
+}
+
+/* Auto-organize modal: fullscreen with safe-area-aware padding. The
+   desktop default is maxWidth:720, maxHeight:90vh, centered with 20px
+   gutter; on mobile we want edge-to-edge so all the channel cards are
+   legible without horizontal squeeze. The modal already has an opaque
+   #1e293b background — preserve that. */
+body.pw-mobile .cos-channel-org-modal-backdrop {
+  padding: 0 !important;
+  align-items: stretch !important;
+}
+body.pw-mobile .cos-channel-org-modal {
+  max-width: 100% !important;
+  max-height: 100% !important;
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+  padding-top: var(--pw-safe-top, 0px);
+  padding-bottom: var(--pw-safe-bottom, 0px);
+  padding-left: var(--pw-safe-left, 0px);
+  padding-right: var(--pw-safe-right, 0px);
+  box-sizing: border-box;
+}
+
