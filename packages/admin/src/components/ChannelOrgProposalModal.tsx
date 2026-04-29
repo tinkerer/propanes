@@ -55,6 +55,7 @@ export function ChannelOrgProposalModal() {
 
   return (
     <div
+      class="cos-channel-org-modal-backdrop"
       onClick={(e) => { if (e.target === e.currentTarget) channelOrgProposalOpen.value = false; }}
       style={{
         position: 'fixed', inset: 0, zIndex: 10000,
@@ -62,7 +63,7 @@ export function ChannelOrgProposalModal() {
         alignItems: 'center', justifyContent: 'center', padding: 20,
       }}
     >
-      <div style={{
+      <div class="cos-channel-org-modal" style={{
         width: '100%', maxWidth: 720, maxHeight: '90vh',
         background: '#1e293b', borderRadius: 8, color: 'var(--pw-text)',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
