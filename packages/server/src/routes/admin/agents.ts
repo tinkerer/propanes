@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { ulid } from 'ulidx';
 import { eq, and, or, isNull, sql, inArray } from 'drizzle-orm';
+// (status code 202 used below intentionally — pending approval, not error.)
 import { agentEndpointSchema, dispatchSchema, powwowSchema } from '@propanes/shared';
 import { db, schema } from '../../db/index.js';
 import {
@@ -372,10 +373,34 @@ async function handleDispatch(c: any, payload: unknown) {
       agentEndpointId,
     });
     if (!check.allowed) {
+      // requireApproval = queue the request, otherwise hard-403. The queued
+      // row preserves the original payload so /approve can replay it via
+      // dispatchFeedbackToAgent without reasking the operator for inputs.
+      if ('requiresApproval' in check && check.requiresApproval) {
+        const approvalId = ulid();
+        await db.insert(schema.cosDispatchApprovals).values({
+          id: approvalId,
+          channelId,
+          feedbackId,
+          agentEndpointId,
+          instructions: instructions || null,
+          permissionProfile: effectiveProfile,
+          requestedBy: null,
+          status: 'pending',
+          createdAt: Date.now(),
+        });
+        return c.json({
+          dispatched: false,
+          queued: true,
+          approvalId,
+          reason: check.reason,
+          policy: 'policy' in check ? check.policy : undefined,
+        }, 202);
+      }
       return c.json({
         dispatched: false,
         error: check.reason,
-        requiresApproval: 'requiresApproval' in check ? check.requiresApproval : false,
+        requiresApproval: false,
         policy: 'policy' in check ? check.policy : undefined,
       }, 403);
     }

@@ -142,8 +142,16 @@ export const api = {
   deleteAgent: (id: string) =>
     request(`/admin/agents/${id}`, { method: 'DELETE' }),
 
-  dispatch: (data: { feedbackId: string; agentEndpointId: string; instructions?: string; launcherId?: string; harnessConfigId?: string }) =>
-    request<{ dispatched: boolean; sessionId?: string; status: number; response: string }>('/admin/dispatch', {
+  dispatch: (data: {
+    feedbackId: string;
+    agentEndpointId: string;
+    instructions?: string;
+    launcherId?: string;
+    harnessConfigId?: string;
+    permissionProfile?: string;
+    channelId?: string | null;
+  }) =>
+    request<{ dispatched: boolean; sessionId?: string; status: number; response: string; error?: string }>('/admin/dispatch', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
@@ -1012,6 +1020,78 @@ export const api = {
       { method: 'POST' },
     ),
 
+  getThreadByFeedbackId: (feedbackId: string) =>
+    request<{
+      thread: {
+        id: string;
+        agentId: string;
+        appId: string | null;
+        channelId: string | null;
+        feedbackId: string | null;
+        name: string;
+        agentSessionId: string | null;
+        createdAt: number;
+        updatedAt: number;
+      };
+      messages: Array<{
+        id: string;
+        threadId: string;
+        role: 'user' | 'assistant' | 'system';
+        text: string;
+        toolCallsJson: string | null;
+        attachmentsJson: string | null;
+        mentionsJson: string | null;
+        slashCommand: string | null;
+        createdAt: number;
+      }>;
+    }>(`/admin/chief-of-staff/threads/by-feedback/${encodeURIComponent(feedbackId)}`),
+
+  postThreadNote: (threadId: string, text: string) =>
+    request<{ id: string; threadId: string; role: 'user'; text: string; createdAt: number }>(
+      `/admin/chief-of-staff/threads/${encodeURIComponent(threadId)}/note`,
+      { method: 'POST', body: JSON.stringify({ text }) },
+    ),
+
   rejectOrgProposal: (id: string) =>
     request<{ ok: boolean }>(`/admin/chief-of-staff/org-proposals/${id}/reject`, { method: 'POST' }),
+
+  // Approval queue (channels with policy.requireApproval)
+  getApprovals: (appId?: string, status: 'pending' | 'all' = 'pending') => {
+    const qs = new URLSearchParams();
+    if (appId) qs.set('appId', appId);
+    if (status) qs.set('status', status);
+    return request<{
+      approvals: Array<{
+        id: string;
+        channelId: string;
+        channelSlug: string | null;
+        channelName: string | null;
+        channelKind: 'prod' | 'staging' | 'exploratory' | null;
+        appId: string | null;
+        feedbackId: string;
+        agentEndpointId: string;
+        instructions: string | null;
+        permissionProfile: string | null;
+        requestedBy: string | null;
+        status: 'pending' | 'approved' | 'denied' | 'expired';
+        denyReason: string | null;
+        dispatchedSessionId: string | null;
+        createdAt: number;
+        resolvedAt: number | null;
+        resolvedBy: string | null;
+      }>;
+    }>(`/admin/chief-of-staff/approvals?${qs}`);
+  },
+
+  approveApproval: (id: string) =>
+    request<{ ok: boolean; approvalId: string; sessionId?: string; status?: number; response?: string }>(
+      `/admin/chief-of-staff/approvals/${id}/approve`,
+      { method: 'POST' },
+    ),
+
+  denyApproval: (id: string, reason?: string) =>
+    request<{ ok: boolean; approvalId: string }>(
+      `/admin/chief-of-staff/approvals/${id}/deny`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    ),
 };

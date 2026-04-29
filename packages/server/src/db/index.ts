@@ -210,6 +210,11 @@ export function runMigrations() {
     `ALTER TABLE cos_messages ADD COLUMN mentions_json TEXT`,
     `ALTER TABLE cos_messages ADD COLUMN slash_command TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_cos_messages_slash ON cos_messages(slash_command)`,
+    // Bridge column linking a CoS thread back to the widget feedback that
+    // spawned it. Populated by mintFeedbackThread; ON DELETE SET NULL so the
+    // thread survives feedback purges. Indexed for the by-feedback lookup.
+    `ALTER TABLE cos_threads ADD COLUMN feedback_id TEXT REFERENCES feedback_items(id) ON DELETE SET NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_cos_threads_feedback ON cos_threads(feedback_id) WHERE feedback_id IS NOT NULL`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after
@@ -664,6 +669,27 @@ export function runMigrations() {
 
     CREATE INDEX IF NOT EXISTS idx_cos_channel_org_proposals_app
       ON cos_channel_org_proposals(app_id, status, created_at);
+
+    CREATE TABLE IF NOT EXISTS cos_dispatch_approvals (
+      id TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL REFERENCES cos_channels(id) ON DELETE CASCADE,
+      feedback_id TEXT NOT NULL,
+      agent_endpoint_id TEXT NOT NULL,
+      instructions TEXT,
+      permission_profile TEXT,
+      requested_by TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      deny_reason TEXT,
+      dispatched_session_id TEXT,
+      created_at INTEGER NOT NULL,
+      resolved_at INTEGER,
+      resolved_by TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cos_dispatch_approvals_channel
+      ON cos_dispatch_approvals(channel_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_cos_dispatch_approvals_status
+      ON cos_dispatch_approvals(status, created_at);
   `);
 
   // CoS threads and messages tables
