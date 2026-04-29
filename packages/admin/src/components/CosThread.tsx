@@ -21,7 +21,7 @@ import {
   fetchFeedbackTitle,
   feedbackTitlesVersion,
 } from '../lib/cos-feedback-titles.js';
-import { openSession, openFeedbackItem, toggleCompanion } from '../lib/sessions.js';
+import { openSession, openFeedbackItem, toggleCompanion, openSessionLogDrawer } from '../lib/sessions.js';
 import {
   MessageAvatar,
   MessageAttachments,
@@ -30,6 +30,7 @@ import {
   HighlightedText,
   getAgentAvatarSrc,
 } from './CosMessage.js';
+import type { RailStatus } from './CosThreadRail.js';
 
 export type Thread = {
   userIdx: number | null;
@@ -180,8 +181,7 @@ function DispatchStatusLine({ dispatches }: { dispatches: DispatchInfo[] }) {
                   title={`Open JSONL viewer for session ${d.sessionId}`}
                   onClick={(e) => {
                     e.stopPropagation();
-                    openSession(d.sessionId!);
-                    toggleCompanion(d.sessionId!, 'jsonl');
+                    openSessionLogDrawer(d.sessionId!);
                   }}
                 >
                   JSONL
@@ -211,6 +211,8 @@ export function ThreadBlock({
   slackMode,
   isActiveInPanel,
   onOpenInPanel,
+  railNumber,
+  railStatus,
 }: {
   thread: Thread;
   collapsed: boolean;
@@ -227,6 +229,13 @@ export function ThreadBlock({
   slackMode: boolean;
   isActiveInPanel: boolean;
   onOpenInPanel: () => void;
+  /** 1-based index that mirrors the left-rail's number for this thread.
+   *  Used by the collapsed one-line layout so the operator can read across
+   *  rail → row at a glance. */
+  railNumber?: number;
+  /** Status pip for the collapsed one-line layout. Same enum the rail uses
+   *  so the dot color matches between rail and inline row. */
+  railStatus?: RailStatus;
 }) {
   const { userMsg, userIdx, replies } = thread;
   const dispatches = useMemo(() => collectDispatches(replies), [replies]);
@@ -275,6 +284,53 @@ export function ThreadBlock({
     if (!isArchived && !cosShowArchived.value) markThreadLeaving(threadServerId);
     void setThreadArchived(threadServerId, !isArchived);
   };
+  // One-line collapsed view: when this thread is collapsed AND we have a
+  // numbered rail entry to mirror, render the whole block as a single row
+  // (rail # + status pip + truncated text + reply count). Hides the avatar/
+  // header/actions to maximize how many threads the operator can scan at once.
+  // Click → open in panel (slack mode) or expand inline.
+  const renderCollapsedLine =
+    effectiveCollapsed && !!userMsg && hasReplies && railNumber !== undefined;
+  if (renderCollapsedLine && userMsg) {
+    const previewText = (userMsg.text || '').replace(/\s+/g, ' ').trim();
+    const onClick = slackCollapse ? onOpenInPanel : onToggle;
+    return (
+      <div
+        class={`cos-thread-block cos-thread-block-collapsed-line${hasUnread ? ' cos-thread-block-unread' : ''}${isResolved ? ' cos-thread-block-resolved' : ''}${isArchived ? ' cos-thread-block-archived' : ''}${isLeaving ? ' cos-thread-block-leaving' : ''}`}
+      >
+        <button
+          type="button"
+          class={`cos-thread-collapsed-line${slackCollapse && isActiveInPanel ? ' cos-thread-collapsed-line-active' : ''}${hasUnread ? ' cos-thread-collapsed-line-unread' : ''}`}
+          onClick={onClick}
+          data-cos-msg-idx={userIdx ?? undefined}
+          data-cos-thread-anchor={userIdx ?? undefined}
+          title={previewText}
+          aria-label={slackCollapse
+            ? `Thread ${railNumber}: open in panel (${replyCount} repl${replyCount === 1 ? 'y' : 'ies'})`
+            : `Thread ${railNumber}: expand (${replyCount} repl${replyCount === 1 ? 'y' : 'ies'})`}
+        >
+          <span
+            class="cos-thread-collapsed-num"
+            data-status={railStatus}
+            aria-hidden="true"
+          >
+            {railNumber}
+          </span>
+          <span class="cos-thread-collapsed-text">
+            <HighlightedText text={previewText} highlight={searchHighlight} />
+          </span>
+          <span class="cos-thread-collapsed-meta">
+            <span class="cos-thread-collapsed-count">
+              {replyCount} repl{replyCount === 1 ? 'y' : 'ies'}
+            </span>
+            {lastReply?.timestamp && (
+              <Timestamp ts={lastReply.timestamp} />
+            )}
+          </span>
+        </button>
+      </div>
+    );
+  }
   return (
     <div class={`cos-thread-block${hasUnread ? ' cos-thread-block-unread' : ''}${userMsg ? '' : ' cos-thread-block-orphan'}${isResolved ? ' cos-thread-block-resolved' : ''}${isArchived ? ' cos-thread-block-archived' : ''}${isLeaving ? ' cos-thread-block-leaving' : ''}`}>
       {userMsg && (
@@ -345,8 +401,7 @@ export function ThreadBlock({
                 const linkSid = getSessionIdForThread(threadServerId);
                 const openSessionLog = () => {
                   if (!linkSid) return;
-                  openSession(linkSid);
-                  toggleCompanion(linkSid, 'jsonl');
+                  openSessionLogDrawer(linkSid);
                 };
                 return (
                   <div class="cos-thread-header-row">
@@ -397,8 +452,7 @@ export function ThreadBlock({
         const actionsLinkSid = getSessionIdForThread(threadServerId);
         const openActionsSessionLog = () => {
           if (!actionsLinkSid) return;
-          openSession(actionsLinkSid);
-          toggleCompanion(actionsLinkSid, 'jsonl');
+          openSessionLogDrawer(actionsLinkSid);
         };
         return (
           <div class="cos-thread-actions">

@@ -158,7 +158,7 @@ export function SessionsListView() {
   const filtered = recentSessions.filter((s) => {
     if (!sessionSearchQuery.value) return true;
     const q = sessionSearchQuery.value.toLowerCase();
-    const text = [getSessionLabel(s.id), s.feedbackTitle, s.agentName, s.id, s.paneTitle, s.paneCommand, s.panePath].filter(Boolean).join(' ').toLowerCase();
+    const text = [getSessionLabel(s.id), s.title, s.feedbackTitle, s.agentName, s.id, s.paneTitle, s.paneCommand, s.panePath].filter(Boolean).join(' ').toLowerCase();
     return text.includes(q);
   });
   const agents = filtered.filter((s: any) => s.permissionProfile !== 'plain');
@@ -213,9 +213,11 @@ export function SessionsListView() {
     const isNumbered = isTabbed || isInPanel;
     const inputSt = s.status === 'running' ? (sessionInputStates.value.get(s.id) || null) : null;
     const isPlain = s.permissionProfile === 'plain';
-    const plainLabel = s.paneCommand
-      ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s.paneTitle || s.id.slice(-6)}`
-      : (s.paneTitle || s.id.slice(-6));
+    const plainLabel = s.title
+      ? s.title
+      : s.paneCommand
+        ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s.paneTitle || s.id.slice(-6)}`
+        : (s.paneTitle || s.id.slice(-6));
     const customLabel = getSessionLabel(s.id);
     const locationPrefix = s.isHarness ? '\u{1F4E6}' : s.isRemote ? '\u{1F310}' : '';
     const raw = customLabel || (isPlain ? `${locationPrefix || '\u{1F5A5}\uFE0F'} ${plainLabel}` : `${locationPrefix ? locationPrefix + ' ' : ''}${s.feedbackTitle || s.title || s.agentName || `Session ${s.id.slice(-6)}`}`);

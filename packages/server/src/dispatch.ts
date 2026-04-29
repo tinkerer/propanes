@@ -19,6 +19,7 @@ import type {
   SyncCodebaseToContainer,
   SyncCodebaseToContainerResult,
 } from '@propanes/shared';
+import { ptyColsForProfile } from '@propanes/shared';
 import { db, schema } from './db/index.js';
 import { spawnAgentSession } from './agent-sessions.js';
 import { getLauncher, addSessionToLauncher, sendAndWait } from './launcher-registry.js';
@@ -76,6 +77,15 @@ const AUTO_CONTINUE_MAX_ATTEMPTS = 12;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function terminalSlug(input: string): string {
+  return input
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32) || 'term';
 }
 
 async function sendKeysToSession(sessionId: string, launcherId: string | null | undefined, keys: string, enter = true): Promise<boolean> {
@@ -318,6 +328,22 @@ export async function dispatchFeedbackToAgent(params: {
       allowedTools: agent.allowedTools || (app as any)?.defaultAllowedTools || null,
       launcherId: launcherId || undefined,
     });
+
+    // Bridge the spawned session into the unified CoS thread/channel model.
+    // The thread was minted at feedback-creation time and lives in the per-app
+    // #inbox channel; this populates agent_sessions.cos_thread_id so the
+    // session shows up in both the feedback view and the CoS thread render.
+    const linkedThread = db
+      .select({ id: schema.cosThreads.id })
+      .from(schema.cosThreads)
+      .where(eq(schema.cosThreads.feedbackId, feedbackId))
+      .get();
+    if (linkedThread) {
+      db.update(schema.agentSessions)
+        .set({ cosThreadId: linkedThread.id })
+        .where(eq(schema.agentSessions.id, sessionId))
+        .run();
+    }
 
     const now = new Date().toISOString();
     db.update(schema.feedbackItems).set({
@@ -613,7 +639,7 @@ export async function dispatchAgentSession(params: {
         permissionProfile: params.permissionProfile,
         allowedTools: params.allowedTools,
         claudeSessionId,
-        cols: 120,
+        cols: ptyColsForProfile(params.permissionProfile),
         rows: 40,
       };
       try {
@@ -671,12 +697,29 @@ export async function dispatchTerminalSession(params: {
   appId?: string | null;
   launcherId?: string | null;
   permissionProfile?: PermissionProfile;
+  title?: string | null;
+  titlePrefix?: string | null;
 }): Promise<{ sessionId: string }> {
   const sessionId = ulid();
   const now = new Date().toISOString();
   const profile: PermissionProfile = params.permissionProfile || 'plain';
 
   const launcher = params.launcherId ? getLauncher(params.launcherId) : undefined;
+
+  // Default the title to "<app-slug>-XXXXXX" so sidebar tabs read like
+  // "propanes-admin-FT94P6" instead of a bare ULID. Caller-supplied title
+  // wins; titlePrefix overrides the auto-derived app slug.
+  let derivedPrefix = params.titlePrefix;
+  if (!params.title && !derivedPrefix && params.appId) {
+    const app = db.select({ name: schema.applications.name })
+      .from(schema.applications)
+      .where(eq(schema.applications.id, params.appId))
+      .get();
+    if (app?.name) derivedPrefix = terminalSlug(app.name);
+  }
+  if (!params.title && !derivedPrefix) derivedPrefix = 'term';
+  const resolvedTitle = params.title
+    ?? (derivedPrefix ? `${derivedPrefix}-${sessionId.slice(-6)}` : null);
 
   db.insert(schema.agentSessions)
     .values({
@@ -689,6 +732,7 @@ export async function dispatchTerminalSession(params: {
       outputBytes: 0,
       launcherId: launcher ? launcher.id : null,
       cwd: params.cwd || null,
+      title: resolvedTitle,
       createdAt: now,
     })
     .run();
@@ -708,7 +752,7 @@ export async function dispatchTerminalSession(params: {
       prompt: '',
       cwd: remoteCwd,
       permissionProfile: profile,
-      cols: 120,
+      cols: ptyColsForProfile(profile),
       rows: 40,
     };
     try {
@@ -779,47 +823,54 @@ export async function resumeAgentSession(
     return dispatchTerminalSession({ cwd: process.cwd() });
   }
 
-  if (!parent.agentEndpointId) {
-    throw new Error('Agent endpoint not found');
-  }
-  if (!parent.feedbackId) {
-    throw new Error('Original feedback not found');
-  }
+  // Look up the agent endpoint and original feedback when present. These are
+  // required for the legacy context-dump fallback path further down, but the
+  // modern --resume <claudeSessionId> path works without them — so missing
+  // rows here are NOT a hard failure. Sessions originating from a CoS thread
+  // (organic chat) have no feedbackId/agentEndpointId by design, and they
+  // must still be resumable.
+  const agent = parent.agentEndpointId
+    ? db
+        .select()
+        .from(schema.agentEndpoints)
+        .where(eq(schema.agentEndpoints.id, parent.agentEndpointId))
+        .get()
+    : null;
 
-  const agent = db
-    .select()
-    .from(schema.agentEndpoints)
-    .where(eq(schema.agentEndpoints.id, parent.agentEndpointId))
-    .get();
+  const feedbackRow = parent.feedbackId
+    ? db
+        .select()
+        .from(schema.feedbackItems)
+        .where(eq(schema.feedbackItems.id, parent.feedbackId))
+        .get()
+    : null;
 
-  if (!agent) {
-    throw new Error('Agent endpoint not found');
-  }
+  const cosThread = parent.cosThreadId
+    ? db
+        .select()
+        .from(schema.cosThreads)
+        .where(eq(schema.cosThreads.id, parent.cosThreadId))
+        .get()
+    : null;
 
-  const feedbackRow = db
-    .select()
-    .from(schema.feedbackItems)
-    .where(eq(schema.feedbackItems.id, parent.feedbackId))
-    .get();
-
-  if (!feedbackRow) {
-    throw new Error('Original feedback not found');
-  }
-
-  let cwd = process.cwd();
-  const resumeAppId = agent.appId || feedbackRow.appId;
-  if (resumeAppId) {
-    const appRow = db
-      .select()
-      .from(schema.applications)
-      .where(eq(schema.applications.id, resumeAppId))
-      .get();
-    if (appRow?.projectDir) cwd = appRow.projectDir;
+  // cwd resolution: parent's recorded cwd > agent.appId's projectDir >
+  // feedback.appId's projectDir > thread.appId's projectDir > server cwd.
+  let cwd = parent.cwd || process.cwd();
+  if (!parent.cwd) {
+    const resumeAppId = agent?.appId || feedbackRow?.appId || cosThread?.appId || null;
+    if (resumeAppId) {
+      const appRow = db
+        .select()
+        .from(schema.applications)
+        .where(eq(schema.applications.id, resumeAppId))
+        .get();
+      if (appRow?.projectDir) cwd = appRow.projectDir;
+    }
   }
 
   // Resolve target launcher: explicit param > agent preference > harness config > same as parent > local
   let resolvedLauncherId = targetLauncherId || null;
-  if (!resolvedLauncherId) {
+  if (!resolvedLauncherId && agent) {
     if (agent.preferredLauncherId) {
       resolvedLauncherId = agent.preferredLauncherId;
     }
@@ -833,14 +884,14 @@ export async function resumeAgentSession(
         resolvedLauncherId = harnessConfig.launcherId;
       }
     }
-    // Fall back to same launcher as parent session
-    if (!resolvedLauncherId && parent.launcherId) {
-      resolvedLauncherId = parent.launcherId;
-    }
+  }
+  // Fall back to same launcher as parent session
+  if (!resolvedLauncherId && parent.launcherId) {
+    resolvedLauncherId = parent.launcherId;
   }
 
   const launcher = resolvedLauncherId ? getLauncher(resolvedLauncherId) : undefined;
-  const runtime = (overrideRuntime || parent.runtime || agent.runtime || 'claude') as AgentRuntime;
+  const runtime = (overrideRuntime || parent.runtime || agent?.runtime || 'claude') as AgentRuntime;
 
   const sessionId = ulid();
   const now = new Date().toISOString();
@@ -870,6 +921,7 @@ export async function resumeAgentSession(
         id: sessionId,
         feedbackId: parent.feedbackId,
         agentEndpointId: parent.agentEndpointId,
+        cosThreadId: parent.cosThreadId,
         parentSessionId,
         runtime,
         permissionProfile,
@@ -882,6 +934,29 @@ export async function resumeAgentSession(
       })
       .run();
 
+    // Resumes that target a thread should also append the user's input to the
+    // thread, so the thread is the canonical conversation log regardless of
+    // which session-instance is actively running it.
+    if (parent.cosThreadId && additionalPrompt && additionalPrompt.trim()) {
+      try {
+        db.insert(schema.cosMessages)
+          .values({
+            id: ulid(),
+            threadId: parent.cosThreadId,
+            role: 'user',
+            text: additionalPrompt.trim(),
+            toolCallsJson: null,
+            attachmentsJson: null,
+            mentionsJson: null,
+            slashCommand: null,
+            createdAt: Date.now(),
+          })
+          .run();
+      } catch (err) {
+        console.error(`[dispatch] Failed to append resume prompt to thread ${parent.cosThreadId}:`, err);
+      }
+    }
+
     const resumePrompt = additionalPrompt ? additionalPrompt.trim() : '';
 
     if (launcher && launcher.ws.readyState === 1) {
@@ -893,7 +968,7 @@ export async function resumeAgentSession(
         runtime,
         permissionProfile,
         resumeSessionId: parent.claudeSessionId,
-        cols: 120,
+        cols: ptyColsForProfile(permissionProfile),
         rows: 40,
       };
       try {
@@ -926,7 +1001,13 @@ export async function resumeAgentSession(
     return { sessionId };
   }
 
-  // Legacy fallback: no stored Claude session ID, use context-dump approach
+  // Legacy fallback: no stored Claude session ID, use context-dump approach.
+  // This path needs the original feedback row to rebuild the prompt, so it
+  // can't run for organic CoS-thread sessions — surface a clear error rather
+  // than a generic "Resume failed".
+  if (!feedbackRow || !parent.feedbackId) {
+    throw new Error('Cannot resume: no claudeSessionId stored and no original feedback to rebuild context from');
+  }
   const claudeSessionId = runtime === 'claude' ? crypto.randomUUID() : null;
   const publicBaseUrl = (process.env.PW_PUBLIC_BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
   const originalPrompt = `Feedback: ${publicBaseUrl}/api/v1/admin/feedback/${parent.feedbackId}\n\nTitle: ${feedbackRow.title}${feedbackRow.description ? `\nDescription: ${feedbackRow.description}` : ''}`;
@@ -957,6 +1038,7 @@ IMPORTANT: The previous session may have made partial progress. Check the curren
       id: sessionId,
       feedbackId: parent.feedbackId,
       agentEndpointId: parent.agentEndpointId,
+      cosThreadId: parent.cosThreadId,
       parentSessionId,
       runtime,
       permissionProfile,
@@ -978,7 +1060,7 @@ IMPORTANT: The previous session may have made partial progress. Check the curren
       runtime,
       permissionProfile,
       claudeSessionId: claudeSessionId || undefined,
-      cols: 120,
+      cols: ptyColsForProfile(permissionProfile),
       rows: 40,
     };
     try {
@@ -1083,7 +1165,7 @@ export async function dispatchHarnessSession(params: {
       containerCwd,
       claudeSessionId,
       anthropicApiKey: harnessConfig.anthropicApiKey || undefined,
-      cols: 120,
+      cols: ptyColsForProfile(params.permissionProfile),
       rows: 40,
     };
 

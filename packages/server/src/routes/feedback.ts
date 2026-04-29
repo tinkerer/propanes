@@ -25,6 +25,7 @@ import { feedbackSubmitSchema } from '@propanes/shared';
 import { db, schema } from '../db/index.js';
 import { getSession } from '../sessions.js';
 import { feedbackEvents } from '../events.js';
+import { mintFeedbackThread } from '../cos-inbox.js';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 
@@ -141,6 +142,10 @@ feedbackRoutes.post('/', async (c) => {
   }
 
   const screenshotResults: { id: string; filename: string; path: string }[] = [];
+  // Inline-image refs to seed onto the linked CoS thread message. We embed via
+  // /api/v1/images/:id rather than dataURLs to avoid bloating the cosMessages
+  // attachments JSON with base64 payloads.
+  const threadImages: { dataUrl: string; name: string; mimeType: string }[] = [];
   if (imageFiles.length > 0 || audioFiles.length > 0) {
     await mkdir(UPLOAD_DIR, { recursive: true });
     for (const file of imageFiles) {
@@ -159,6 +164,11 @@ feedbackRoutes.post('/', async (c) => {
       });
       const tmpPath = await linkToTmp(absPath, filename);
       screenshotResults.push({ id: screenshotId, filename, path: tmpPath });
+      threadImages.push({
+        dataUrl: `/api/v1/images/${screenshotId}`,
+        name: file.name,
+        mimeType: file.type,
+      });
     }
     for (const file of audioFiles) {
       const audioId = ulid();
@@ -177,6 +187,15 @@ feedbackRoutes.post('/', async (c) => {
       });
     }
   }
+
+  void mintFeedbackThread({
+    feedbackId: id,
+    appId,
+    title,
+    description: input.description,
+    images: threadImages,
+    elements: (input.data as { selectedElements?: unknown[] } | undefined)?.selectedElements ?? [],
+  });
 
   feedbackEvents.emit('new', { id, appId, autoDispatch: !!input.autoDispatch, launcherId: input.launcherId, agentEndpointId: input.agentEndpointId, permissionProfile: input.permissionProfile });
   return c.json({ id, appId, status: 'new', createdAt: now, screenshots: screenshotResults }, 201);
@@ -345,6 +364,14 @@ feedbackRoutes.post('/programmatic', async (c) => {
       input.tags.map((tag) => ({ feedbackId: id, tag }))
     );
   }
+
+  void mintFeedbackThread({
+    feedbackId: id,
+    appId: progAppId,
+    title: progTitle,
+    description: input.description,
+    elements: (input.data as { selectedElements?: unknown[] } | undefined)?.selectedElements ?? [],
+  });
 
   feedbackEvents.emit('new', { id, appId: progAppId, autoDispatch: !!input.autoDispatch, launcherId: input.launcherId, agentEndpointId: input.agentEndpointId, permissionProfile: input.permissionProfile });
   return c.json({ id, appId: progAppId, status: 'new', createdAt: now }, 201);

@@ -2265,10 +2265,10 @@ export class ProPanesElement {
   }
 
   /**
-   * Persistent brainstorm pill at the bottom-center. Two states:
-   *  - inactive: mic icon — clicking starts listen mode
-   *  - active: red blinking dot — clicking *only the dot* stops; clicking the
-   *    label expands the full CC overlay
+   * Brainstorm pill at the bottom-center — only visible while listen mode is
+   * active. Red blinking dot stops listening; the label expands the full CC
+   * overlay. Entry to listen mode happens via the regular widget controls /
+   * mic menu, not the pill.
    */
   private renderBrainstormPill() {
     if (this.brainstormPill) {
@@ -2279,23 +2279,21 @@ export class ProPanesElement {
     // controls (Close button + minimize) and the pill would visually duplicate.
     if (this.ccOverlay) return;
 
-    const isActive = !!this.voiceListenSessionId;
+    // Pill is only a *control surface for an active listen session*. When
+    // brainstorm/listen mode hasn't been started, the pill should not appear —
+    // entry to listen mode happens via the regular widget controls / mic menu.
+    if (!this.voiceListenSessionId) return;
+
     const bar = document.createElement('div');
-    bar.className = 'pw-cc-toggle-bar' + (isActive ? ' pw-cc-toggle-bar-active' : '');
+    bar.className = 'pw-cc-toggle-bar pw-cc-toggle-bar-active';
 
     const icon = document.createElement('button');
-    icon.className = isActive ? 'pw-cc-toggle-dot' : 'pw-cc-toggle-mic';
-    icon.title = isActive ? 'Stop brainstorm' : 'Start brainstorm';
-    if (isActive) {
-      // active: red blinking dot stops listening
-      icon.innerHTML = '';
-    } else {
-      icon.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>';
-    }
+    icon.className = 'pw-cc-toggle-dot';
+    icon.title = 'Stop brainstorm';
+    icon.innerHTML = '';
     icon.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (isActive) this.stopListenMode('user');
-      else this.startListenMode();
+      this.stopListenMode('user');
     });
 
     const label = document.createElement('span');
@@ -2303,14 +2301,10 @@ export class ProPanesElement {
     label.textContent = 'Brainstorm';
     label.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (isActive) {
-        this.showCCOverlay();
-        if (this.brainstormPill) {
-          this.brainstormPill.remove();
-          this.brainstormPill = null;
-        }
-      } else {
-        this.startListenMode();
+      this.showCCOverlay();
+      if (this.brainstormPill) {
+        this.brainstormPill.remove();
+        this.brainstormPill = null;
       }
     });
 

@@ -7,7 +7,7 @@ import {
   type ChiefOfStaffVerbosity,
 } from '../lib/chief-of-staff.js';
 import { stripCosReplyMarkers } from '../lib/cos-reply-tags.js';
-import { openSession, toggleCompanion } from '../lib/sessions.js';
+import { openSession, toggleCompanion, openSessionLogDrawer } from '../lib/sessions.js';
 import { MessageRenderer } from './MessageRenderer.js';
 import { MessageAttachments } from './CosMessageAttachments.js';
 import { AssistantContent } from './CosAssistantContent.js';
@@ -283,8 +283,7 @@ export function MessageBubble({
           const linkSid = getSessionIdForThread(msg.threadId);
           const openJsonl = () => {
             if (!linkSid) return;
-            openSession(linkSid);
-            toggleCompanion(linkSid, 'jsonl');
+            openSessionLogDrawer(linkSid);
           };
           return (
             <div class="cos-thinking-row">
@@ -347,8 +346,7 @@ export function MessageBubble({
                     class="cos-msg-error-btn cos-msg-error-btn-secondary"
                     onClick={(e) => {
                       e.stopPropagation();
-                      openSession(linkSid);
-                      toggleCompanion(linkSid, 'jsonl');
+                      openSessionLogDrawer(linkSid);
                     }}
                     title="Open session jsonl log"
                   >

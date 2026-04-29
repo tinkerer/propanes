@@ -27,6 +27,22 @@ Category differentiation (badges, tool kinds, activity types) must come
 from labels, icons, shape, or shade — NOT from hue jumps outside the
 flame palette.
 
+## Testing / screenshots
+
+When verifying UI changes, use **Playwright**, not the widget's
+html-to-image capture. Default to the headless shared browser:
+
+```bash
+~/.claude/bin/pw goto 'http://localhost:3001/admin/#/...'
+~/.claude/bin/pw screenshot   # → /tmp/pw_screen.png, then Read it
+```
+
+Use `pw-vnc` instead when you need a visible display. The widget's
+`/screenshot` / `screenshot: true` path runs html-to-image and misses
+canvas, cross-origin iframes, transforms, and assorted CSS — only use
+it when you specifically need the PNG attached to a feedback row.
+See `CLAUDE.md` → "Screenshots / Visual Testing".
+
 ## Other conventions
 
 - Never use `window.prompt/alert/confirm` in admin code — build proper

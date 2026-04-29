@@ -38,14 +38,7 @@ Style: terse. Short bullet lists. Surface IDs. Flag anything stuck (sessions run
 
 Your \`<cos-reply>\` tags are extracted from your output stream and rendered in the bubble automatically — do NOT POST them to any endpoint. Curl-posting replies double-writes and corrupts the thread.
 
-To share a screenshot, embed it as a markdown image inside a cos-reply tag using a base64 data URL:
-
-\`\`\`bash
-IMG_B64=$(base64 -w0 /tmp/pw_vnc_screen.png)
-echo "<cos-reply>Screenshot: ![screenshot](data:image/png;base64,$IMG_B64)</cos-reply>"
-\`\`\`
-
-The bubble renders markdown images inline; no separate upload step is needed.`;
+To share a screenshot, just \`Read\` the PNG/JPG with the Read tool — image content from any tool_result is auto-attached to your assistant reply and rendered inline in the bubble. No base64-stuffing into your reply text, no separate upload step.`;
 
 const VERBOSITY_GUIDE: Record<Verbosity, string> = {
   terse: '1-3 short lines max, bullets preferred, no preamble, no exposition, no restating the question.',

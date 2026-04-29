@@ -4,7 +4,7 @@ import { api } from '../lib/api.js';
 import { launchFAFOAssistant } from '../lib/agent-constants.js';
 import { selectedAppId } from '../lib/state.js';
 import { openSession } from '../lib/sessions.js';
-import { toggleCompanion } from '../lib/companion-state.js';
+import { openSessionLogDrawer } from '../lib/companion-state.js';
 
 interface SwarmSummary {
   id: string;
@@ -894,7 +894,7 @@ function RunCell({ run, detail }: { run: SwarmRun; detail: SwarmDetail }) {
                       {sids.length > 1 ? `#${i}` : ''} {sid.slice(-8)}
                     </a>
                     <button
-                      onClick={() => { openSession(sid); toggleCompanion(sid, 'jsonl'); }}
+                      onClick={() => { openSessionLogDrawer(sid); }}
                       style={{
                         fontSize: 9, padding: '1px 4px', background: 'rgba(100,181,246,0.15)',
                         border: '1px solid rgba(100,181,246,0.3)', borderRadius: 3,

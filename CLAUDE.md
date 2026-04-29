@@ -68,16 +68,27 @@ The admin dashboard is at `http://localhost:3001/admin/`. The widget is embedded
 - **Sessions page**: `http://localhost:3001/admin/#/sessions`
 - **Agents page**: `http://localhost:3001/admin/#/agents`
 
-## Screenshots
+## Screenshots / Visual Testing
 
-**Prefer Playwright captures (`pw screenshot` or `pw-vnc screenshot`) over the widget's html-to-image capture.** The widget's built-in screenshot uses html-to-image, which frequently misses canvas content, cross-origin iframes, transformed/animated layers, and arbitrary CSS — the resulting PNG often doesn't match what's actually on screen.
+**RULE: When you need to *see* the admin UI to verify a change, use Playwright. Do not use the widget's html-to-image capture for testing.**
 
-Order of preference:
-1. **`pw screenshot`** (headless shared browser) — fast, scriptable, drives the same Chromium the rest of the workflow uses. Result lands at `/tmp/pw_screen.png`; `Read` it directly.
-2. **`pw-vnc screenshot`** (visible Chromium on `DISPLAY=:1`, watchable via NoVNC at `:6080`) — when you need to see the page rendered with a real display, or when the user is watching live. Result lands at `/tmp/pw_vnc_screen.png`.
-3. **Ask the user to capture and attach a screenshot** — when neither headless nor VNC Playwright can reach the page (e.g. an external app, native UI, or auth state you can't reproduce).
+The widget's `/screenshot` slash command and programmatic `screenshot: true` feedback both run html-to-image in the page. That path frequently misses canvas content, cross-origin iframes, transformed/animated layers, and arbitrary CSS — the resulting PNG often does not match what's actually on screen, which makes it useless as ground truth when you're checking your own work.
 
-Only fall back to the widget's html-to-image (`/screenshot` slash command or programmatic feedback with `screenshot: true`) when you specifically need the screenshot attached to a feedback item via `/api/v1/images/:screenshotId` — and even then expect lossy capture.
+Use this in any "let me verify the UI" / "did the change land" / "what does it look like now" workflow:
+
+1. **`pw screenshot`** (headless shared browser at `~/.claude/bin/pw`) — default choice. Fast, scriptable, drives a real Chromium. Combine with `pw goto <url>` then `pw screenshot`; result lands at `/tmp/pw_screen.png`; `Read` it directly. Auth via `pw-login` if the page requires it.
+2. **`pw-vnc screenshot`** (visible Chromium on `DISPLAY=:1`, watchable via NoVNC at `:6080`) — when you need a real display (some Chrome features differ headless vs. headed) or when the user is watching live. Result lands at `/tmp/pw_vnc_screen.png`.
+3. **Ask the user to capture and attach a screenshot** — only when neither Playwright daemon can reach the page (external app, native UI, auth state you can't reproduce).
+
+The widget's html-to-image capture is **only** appropriate when you specifically need the screenshot attached to a feedback item via `/api/v1/images/:screenshotId` (i.e. you're testing the screenshot pipeline itself, or persisting evidence into a feedback row). Even then, expect lossy capture — don't trust it as a ground-truth render.
+
+Quick recipe for verifying admin UI changes:
+
+```bash
+~/.claude/bin/pw goto 'http://localhost:3001/admin/#/...'   # or pw-login first
+~/.claude/bin/pw screenshot
+# then Read /tmp/pw_screen.png
+```
 
 ## Virtual Mouse & Keyboard (Agent API)
 

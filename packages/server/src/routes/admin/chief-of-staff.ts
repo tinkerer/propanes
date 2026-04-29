@@ -661,14 +661,15 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
       threadId: threadIdForCallbacks,
       agentId: agentIdForCallbacks,
       startSeq,
-      onAssistantText: (finalText, toolCallsById, toolOrder) => {
+      onAssistantText: (finalText, toolCallsById, toolOrder, images) => {
         if (!finalText) return;
         const now2 = Date.now();
         const toolCallsArr = toolOrder.map((id) => toolCallsById.get(id)).filter(Boolean);
+        const attachmentsJson = images.length > 0 ? JSON.stringify({ images }) : null;
         db.insert(schema.cosMessages).values({
           id: ulid(), threadId: threadIdForCallbacks, role: 'assistant', text: finalText,
           toolCallsJson: toolCallsArr.length > 0 ? JSON.stringify(toolCallsArr) : null,
-          attachmentsJson: null, createdAt: now2,
+          attachmentsJson, createdAt: now2,
         }).run();
         db.update(schema.cosThreads).set({ updatedAt: now2 }).where(eq(schema.cosThreads.id, threadIdForCallbacks)).run();
         db.update(schema.agentSessions).set({
