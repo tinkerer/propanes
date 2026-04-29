@@ -96,8 +96,8 @@ export function ChannelPage() {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 
   return (
-    <div style={{ display: 'flex', width: '100%', height: '100%', overflow: 'hidden' }}>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'auto' }}>
+    <div class="cos-channel-page" style={{ display: 'flex', width: '100%', height: '100%', overflow: 'hidden' }}>
+      <div class="cos-channel-page-main" style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'auto' }}>
         <ChannelHeader
           ch={ch}
           unsorted={showUnsorted}
@@ -152,8 +152,8 @@ function ChannelHeader({
 }) {
   if (unsorted) {
     return (
-      <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--pw-border)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div class="cos-channel-header" style={{ padding: '12px 16px', borderBottom: '1px solid var(--pw-border)' }}>
+        <div class="cos-channel-header-row" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 18, fontWeight: 600 }}>📥 Unsorted</span>
           <span style={{ color: 'var(--pw-text-muted)' }}>{unsortedCount} threads not assigned to a channel</span>
         </div>
@@ -195,8 +195,8 @@ function ChannelSettingsHeader({ ch }: { ch: NonNullable<ReturnType<typeof activ
   const appId = selectedAppId.value;
 
   return (
-    <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--pw-border)' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+    <div class="cos-channel-header" style={{ padding: '12px 16px', borderBottom: '1px solid var(--pw-border)' }}>
+      <div class="cos-channel-header-row" style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 18, fontWeight: 600 }}>#{ch.slug}</span>
         <span title={`${ch.kind} channel`} style={{
           display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -236,7 +236,7 @@ function ChannelSettingsHeader({ ch }: { ch: NonNullable<ReturnType<typeof activ
         </div>
       )}
       {editing && (
-        <div style={{ marginTop: 10, padding: 10, background: 'rgba(255,255,255,0.04)', borderRadius: 4, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div class="cos-channel-edit-form" style={{ marginTop: 10, padding: 10, background: 'rgba(255,255,255,0.04)', borderRadius: 4, display: 'flex', flexDirection: 'column', gap: 8 }}>
           <Field label="Name">
             <input
               value={name}
@@ -266,7 +266,7 @@ function ChannelSettingsHeader({ ch }: { ch: NonNullable<ReturnType<typeof activ
           <div style={{ fontSize: 11, color: 'var(--pw-text-muted)' }}>
             Changing kind resets the channel's policy preset (allowed profiles, approval gate, etc.).
           </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <div class="cos-channel-edit-actions" style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
             <button
               onClick={async () => {
                 await api.patchChannel(ch.id, { name, description, kind });
@@ -396,7 +396,7 @@ function ChannelMemberRail({
   const agents = members.filter((m) => m.kind === 'agent');
 
   return (
-    <div style={{
+    <div class="cos-channel-page-rail" style={{
       width: 240, borderLeft: '1px solid var(--pw-border)',
       padding: 12, overflow: 'auto', fontSize: 13,
       background: 'rgba(0,0,0,0.15)',

@@ -76,8 +76,8 @@ function ChannelSubsection({ appId, route }: { appId: string; route: string }) {
   const [draft, setDraft] = useState<string>('');
 
   return (
-    <>
-      <div style={{
+    <div class="sidebar-channels">
+      <div class="sidebar-channels-header" style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '6px 12px 2px', fontSize: 10, textTransform: 'uppercase',
         color: 'var(--pw-text-muted)', letterSpacing: 0.5,
@@ -175,7 +175,7 @@ function ChannelSubsection({ appId, route }: { appId: string; route: string }) {
           title="Ask Claude to organize threads into channels"
         >✨ Auto-organize</button>
       )}
-    </>
+    </div>
   );
 }
 
