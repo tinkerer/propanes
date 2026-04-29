@@ -16,12 +16,7 @@ import {
 import { CosEnqueuedList } from './CosEnqueuedList.js';
 import { selectedAppId } from '../lib/state.js';
 import { getSessionIdForThread } from '../lib/cos-thread-meta.js';
-import {
-  cosActiveThread,
-  getThreadDraft,
-  setThreadDraft,
-  clearThreadDraft,
-} from '../lib/cos-popout-tree.js';
+import { cosActiveThread } from '../lib/cos-popout-tree.js';
 import { useTranscriptStream } from '../lib/transcript-stream.js';
 import { jsonlToCosMessages } from '../lib/jsonl-to-cos.js';
 import { groupIntoThreads, threadKeyOf } from './CosThread.js';
@@ -87,19 +82,11 @@ export function ThreadPanel({
     if (isEmpty) onClose();
   }, [isEmpty, onClose]);
 
-  // Stable reference for the per-thread draft binding so CosComposer's
-  // `useEffect([draft])` re-fires when (and only when) the operator switches
-  // threads. Re-creating the object on every render would thrash the
-  // composer's internal state.
-  const draftBinding = useMemo(() => {
-    if (!active) return undefined;
-    const { agentId: aid, threadKey: tk } = active;
-    return {
-      read: () => getThreadDraft(aid, tk),
-      write: (text: string) => setThreadDraft(aid, tk, text),
-      clear: () => clearThreadDraft(aid, tk),
-    };
-  }, [active?.agentId, active?.threadKey]);
+  // Draft persistence is delegated to UnifiedComposer (server-backed via
+  // /api/v1/admin/drafts/cos:<threadServerId>). The thread-key in `active`
+  // is the local groupIntoThreads identity; server-side threadServerId is
+  // the canonical key for cross-mount persistence. Resolved below once we
+  // have access to the thread itself.
 
   // Hooks must run on every render — declare composerRef and the
   // saved-drafts subscription before the early-return below so the hook order
@@ -267,7 +254,7 @@ export function ThreadPanel({
         <CosComposer
           ref={composerRef}
           placeholder={isAgentStreaming ? 'Reply (agent is responding…)' : 'Reply in this thread… (paste images to attach)'}
-          draft={draftBinding}
+          threadId={threadServerId ?? active?.threadKey ?? null}
           onSend={handleSend}
           onSaveDraft={threadServerId ? handleSaveAsDraft : undefined}
           streaming={isAgentStreaming}
