@@ -32,6 +32,33 @@ const SHOW_RESOLVED_STORAGE_KEY = 'pw-cos-show-resolved';
 const SHOW_ARCHIVED_STORAGE_KEY = 'pw-cos-show-archived';
 const THREAD_FILTER_STORAGE_KEY = 'pw-cos-thread-filter';
 const ACTIVE_THREAD_STORAGE_KEY = 'pw-cos-active-thread';
+const THREAD_DRAWER_WIDTH_KEY = 'pw-cos-thread-drawer-width';
+
+const THREAD_DRAWER_WIDTH_MIN = 220;
+const THREAD_DRAWER_WIDTH_MAX = 1200;
+const THREAD_DRAWER_WIDTH_DEFAULT = 380;
+
+function loadThreadDrawerWidth(): number {
+  try {
+    if (typeof localStorage === 'undefined') return THREAD_DRAWER_WIDTH_DEFAULT;
+    const v = parseInt(localStorage.getItem(THREAD_DRAWER_WIDTH_KEY) || '', 10);
+    if (!Number.isFinite(v) || v < THREAD_DRAWER_WIDTH_MIN) return THREAD_DRAWER_WIDTH_DEFAULT;
+    return Math.min(THREAD_DRAWER_WIDTH_MAX, v);
+  } catch { return THREAD_DRAWER_WIDTH_DEFAULT; }
+}
+
+export const cosThreadDrawerWidth = signal<number>(loadThreadDrawerWidth());
+
+export function setCosThreadDrawerWidth(n: number) {
+  const clamped = Math.max(THREAD_DRAWER_WIDTH_MIN, Math.min(THREAD_DRAWER_WIDTH_MAX, Math.round(n)));
+  if (cosThreadDrawerWidth.value === clamped) return;
+  cosThreadDrawerWidth.value = clamped;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(THREAD_DRAWER_WIDTH_KEY, String(clamped));
+    }
+  } catch { /* ignore */ }
+}
 
 // Legacy drawer LocalStorage keys — read once at boot to migrate any tabs the
 // user had open under the old floating-drawer architecture back into the tree,
@@ -487,8 +514,12 @@ function pickAnchorLeafId(): string {
 }
 
 /**
- * Open an artifact as a tree tab. If the tab already exists anywhere in the
- * tree, just activate it. Otherwise add it to the chat leaf.
+ * Open an artifact as its own drawer pane next to the thread. If a floating
+ * drawer is already open, the artifact gets a fresh floating leaf split off
+ * to the inner side of the existing drawer's leaf — they sit side-by-side
+ * inside the drawer overlay area, the thread on the outer edge and the
+ * artifact closer to the chat. With no drawer open yet, falls back to a
+ * fresh single-pane floating drawer at the right edge.
  */
 export function cosOpenArtifactTab(artifactId: string) {
   const tabId = artifactTabId(artifactId);
@@ -497,7 +528,118 @@ export function cosOpenArtifactTab(artifactId: string) {
     if (existing.activeTabId !== tabId) cosSetActiveTab(existing.id, tabId);
     return;
   }
-  cosAddTabToLeaf(pickAnchorLeafId(), tabId, true);
+  cosDockAsFloatingCompanion(tabId, 'R');
+}
+
+/**
+ * Locate a leaf together with its parent split, so callers can replace the
+ * leaf with a new subtree in-place.
+ */
+function findLeafAndParent(
+  node: PaneNode,
+  leafId: string,
+  parent: SplitNode | null,
+  idxInParent: 0 | 1,
+): { leaf: LeafNode; parent: SplitNode | null; idx: 0 | 1 } | null {
+  if (node.type === 'leaf') {
+    return node.id === leafId ? { leaf: node, parent, idx: idxInParent } : null;
+  }
+  return (
+    findLeafAndParent(node.children[0], leafId, node, 0) ??
+    findLeafAndParent(node.children[1], leafId, node, 1)
+  );
+}
+
+/**
+ * If at least one floating leaf already exists, split the innermost one
+ * (closest to the chat) so the new tab gets its own floating sibling pane
+ * next to it. Returns true when a split happened, false when there's no
+ * existing floating leaf to split (caller should fall back to a fresh
+ * dock).
+ */
+function addFloatingCompanionPane(tabId: string): boolean {
+  const tree = clone(cosPopoutTree.value);
+  // Detach the tab from wherever it lives now. addFloatingCompanionPane is
+  // also used by drag-to-edge, where the tab originated in a non-floating
+  // leaf — leaving it there would result in two copies.
+  for (const leaf of getAllLeavesLocal(tree.root)) {
+    if (leaf.tabs.includes(tabId)) {
+      leaf.tabs = leaf.tabs.filter((t) => t !== tabId);
+      if (leaf.activeTabId === tabId) leaf.activeTabId = leaf.tabs[0] ?? null;
+    }
+  }
+  const floating = getAllLeavesLocal(tree.root).filter((l) => l.floating);
+  if (floating.length === 0) {
+    // No drawer to companion against — caller should fall back to the
+    // fresh-dock path. Restore the tree (we stripped the tab; let
+    // cosDockTabToEdge handle detach again).
+    return false;
+  }
+  // Pick the floating leaf farthest from the right edge — i.e. the one that
+  // currently sits closest to the chat. The new pane goes inside of it,
+  // pushing the existing drawer content further out toward the edge.
+  const target = floating[0];
+  const found = findLeafAndParent(tree.root, target.id, null, 0);
+  if (!found) return false;
+  const newLeaf: LeafNode = {
+    type: 'leaf',
+    id: genId('cos-leaf'),
+    panelType: 'tabs',
+    tabs: [tabId],
+    activeTabId: tabId,
+    floating: true,
+  };
+  // Split horizontally: new pane on the left (chat side), existing leaf
+  // on the right. Within the right-edge drawer area this puts artifacts
+  // between the chat and the thread.
+  const newSplit: SplitNode = {
+    type: 'split',
+    id: genId('cos-split'),
+    direction: 'horizontal',
+    ratio: 0.5,
+    children: [newLeaf, found.leaf],
+  };
+  if (found.parent === null) {
+    tree.root = newSplit;
+  } else {
+    found.parent.children[found.idx] = newSplit;
+  }
+  cleanupEmptyLeaves(tree);
+  tree.focusedLeafId = newLeaf.id;
+  commit(tree);
+  return true;
+}
+
+/**
+ * Public wrapper: dock a tab as a floating companion pane. Adds it next to
+ * any existing floating drawer (split into siblings) when one is open;
+ * otherwise creates a fresh single-pane floating drawer at `edge`. Used by
+ * `cosOpenArtifactTab` and the tab-drag drop handlers so both flows share
+ * the same companion-pane behavior.
+ */
+export function cosDockAsFloatingCompanion(tabId: string, edge: 'L' | 'R' | 'T' | 'B' = 'R') {
+  if (addFloatingCompanionPane(tabId)) return;
+  cosDockTabToEdge(tabId, edge, true, { floating: true });
+}
+
+/**
+ * Close every floating leaf in the tree — used by the drawer's edge handle
+ * so a single click collapses the whole companion-drawer area regardless of
+ * how many panes (thread + N artifacts) live inside it.
+ */
+export function cosCloseFloatingDrawers() {
+  const tree = clone(cosPopoutTree.value);
+  let mutated = false;
+  for (const leaf of getAllLeavesLocal(tree.root)) {
+    if (leaf.floating && leaf.tabs.length > 0) {
+      leaf.tabs = [];
+      leaf.activeTabId = null;
+      mutated = true;
+    }
+  }
+  if (!mutated) return;
+  cleanupEmptyLeaves(tree);
+  commit(tree);
 }
 
 /**
@@ -710,10 +852,10 @@ export function clearThreadDraft(agentId: string, threadKey: string) {
 }
 
 /**
- * Open the slack-mode thread companion as a right-edge companion drawer. If
+ * Open the slack-mode thread companion as a floating right-edge drawer. If
  * the tab is already open anywhere, just activate it; otherwise dock it to
- * the popout's right edge as a side companion (a top-level horizontal split
- * with the thread on the right at a narrow ratio).
+ * the popout's right edge as an overlay drawer that floats over the chat
+ * instead of splitting the layout.
  */
 export function cosOpenThreadTab(_position: PanePosition = 'right') {
   void _position;
@@ -724,7 +866,7 @@ export function cosOpenThreadTab(_position: PanePosition = 'right') {
     }
     return;
   }
-  cosDockTabToEdge(COS_POPOUT_THREAD_TAB, 'R');
+  cosDockTabToEdge(COS_POPOUT_THREAD_TAB, 'R', true, { floating: true });
 }
 
 export function cosCloseThreadTab() {
@@ -756,8 +898,14 @@ const COMPANION_DRAWER_RATIO = 0.32;
  *   'T' top   → vertical,   first
  *   'B' bottom→ vertical,   second
  */
-export function cosDockTabToEdge(tabId: string, edge: 'L' | 'R' | 'T' | 'B', activate = true) {
+export function cosDockTabToEdge(
+  tabId: string,
+  edge: 'L' | 'R' | 'T' | 'B',
+  activate = true,
+  opts?: { floating?: boolean },
+) {
   const tree = clone(cosPopoutTree.value);
+  const floating = opts?.floating === true;
 
   // Detach the tab from any leaf currently holding it.
   for (const leaf of getAllLeavesLocal(tree.root)) {
@@ -772,11 +920,12 @@ export function cosDockTabToEdge(tabId: string, edge: 'L' | 'R' | 'T' | 'B', act
 
   // Try to reuse an existing root-level companion split on the same edge —
   // when the user docks multiple tabs to the same edge they should land in
-  // the same companion pane.
+  // the same companion pane. Only reuse when the floating-ness matches; we
+  // don't want a floating dock to merge into an existing non-floating split.
   if (tree.root.type === 'split' && tree.root.direction === wantDir) {
     const idx = wantPos === 'first' ? 0 : 1;
     const sideChild = tree.root.children[idx];
-    if (sideChild.type === 'leaf') {
+    if (sideChild.type === 'leaf' && !!sideChild.floating === floating) {
       if (!sideChild.tabs.includes(tabId)) sideChild.tabs.push(tabId);
       if (activate) sideChild.activeTabId = tabId;
       cleanupEmptyLeaves(tree);
@@ -793,6 +942,7 @@ export function cosDockTabToEdge(tabId: string, edge: 'L' | 'R' | 'T' | 'B', act
     panelType: 'tabs',
     tabs: [tabId],
     activeTabId: tabId,
+    ...(floating ? { floating: true } : {}),
   };
   cleanupEmptyLeaves(tree);
   const oldRoot = structuredClone(tree.root);

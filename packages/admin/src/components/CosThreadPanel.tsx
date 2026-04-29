@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
   chiefOfStaffAgents,
   sendChiefOfStaffMessage,
@@ -15,8 +15,14 @@ import {
 } from '../lib/cos-followups.js';
 import { CosEnqueuedList } from './CosEnqueuedList.js';
 import { selectedAppId } from '../lib/state.js';
-import { getSessionIdForThread } from '../lib/cos-thread-meta.js';
-import { cosActiveThread } from '../lib/cos-popout-tree.js';
+import { getSessionIdForThread, getThreadMeta } from '../lib/cos-thread-meta.js';
+import { openSession, openThreadAsInteractive } from '../lib/sessions.js';
+import {
+  cosActiveThread,
+  getThreadDraft,
+  setThreadDraft,
+  clearThreadDraft,
+} from '../lib/cos-popout-tree.js';
 import { useTranscriptStream } from '../lib/transcript-stream.js';
 import { jsonlToCosMessages } from '../lib/jsonl-to-cos.js';
 import { groupIntoThreads, threadKeyOf } from './CosThread.js';
@@ -82,11 +88,19 @@ export function ThreadPanel({
     if (isEmpty) onClose();
   }, [isEmpty, onClose]);
 
-  // Draft persistence is delegated to UnifiedComposer (server-backed via
-  // /api/v1/admin/drafts/cos:<threadServerId>). The thread-key in `active`
-  // is the local groupIntoThreads identity; server-side threadServerId is
-  // the canonical key for cross-mount persistence. Resolved below once we
-  // have access to the thread itself.
+  // Stable reference for the per-thread draft binding so CosComposer's
+  // `useEffect([draft])` re-fires when (and only when) the operator switches
+  // threads. Re-creating the object on every render would thrash the
+  // composer's internal state.
+  const draftBinding = useMemo(() => {
+    if (!active) return undefined;
+    const { agentId: aid, threadKey: tk } = active;
+    return {
+      read: () => getThreadDraft(aid, tk),
+      write: (text: string) => setThreadDraft(aid, tk, text),
+      clear: () => clearThreadDraft(aid, tk),
+    };
+  }, [active?.agentId, active?.threadKey]);
 
   // Hooks must run on every render — declare composerRef and the
   // saved-drafts subscription before the early-return below so the hook order
@@ -217,6 +231,10 @@ export function ThreadPanel({
     <div class={`cos-thread-panel${compact ? ' cos-thread-panel-compact' : ''}`}>
       <div class="cos-thread-panel-header">
         <span class="cos-thread-panel-title" title={userMsg?.text || ''}>{titlePreview}</span>
+        <ThreadInteractivePanelButton
+          threadServerId={threadServerId}
+          sessionId={sessionId}
+        />
         <button
           type="button"
           class="cos-thread-panel-close"
@@ -254,7 +272,7 @@ export function ThreadPanel({
         <CosComposer
           ref={composerRef}
           placeholder={isAgentStreaming ? 'Reply (agent is responding…)' : 'Reply in this thread… (paste images to attach)'}
-          threadId={threadServerId ?? active?.threadKey ?? null}
+          draft={draftBinding}
           onSend={handleSend}
           onSaveDraft={threadServerId ? handleSaveAsDraft : undefined}
           streaming={isAgentStreaming}
@@ -383,5 +401,64 @@ function ThreadPanelBody({
         </div>
       ))}
     </div>
+  );
+}
+
+function ThreadInteractivePanelButton({
+  threadServerId,
+  sessionId,
+}: {
+  threadServerId: string | null;
+  sessionId: string | null;
+}) {
+  const [busy, setBusy] = useState(false);
+  const meta = threadServerId ? getThreadMeta(threadServerId) : null;
+  const status = meta?.sessionStatus ?? null;
+  const profile = meta?.sessionPermissionProfile ?? null;
+  const isRunning = status === 'running' || status === 'pending';
+  const isInteractiveAlready = profile === 'interactive-yolo' || profile === 'interactive-require';
+  const focusOnly = isRunning && isInteractiveAlready && !!sessionId;
+
+  const label = focusOnly
+    ? 'Open interactive panel'
+    : isRunning
+      ? 'Convert to interactive'
+      : 'Open as interactive';
+  const tooltip = focusOnly
+    ? 'Focus the live interactive session in the main pane'
+    : isRunning
+      ? 'Kill the headless run and re-spawn as a TTY (interactive-yolo)'
+      : 'Spawn an interactive (TTY + skip-permissions) Claude session for this thread';
+
+  async function handleClick() {
+    if (busy) return;
+    if (focusOnly && sessionId) {
+      openSession(sessionId);
+      return;
+    }
+    if (!threadServerId) return;
+    setBusy(true);
+    try {
+      await openThreadAsInteractive(threadServerId);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      class="cos-thread-panel-interactive"
+      onClick={handleClick}
+      disabled={busy || (!threadServerId && !focusOnly)}
+      title={tooltip}
+      aria-label={tooltip}
+    >
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="4 17 10 11 4 5" />
+        <line x1="12" y1="19" x2="20" y2="19" />
+      </svg>
+      <span>{busy ? 'Opening…' : label}</span>
+    </button>
   );
 }

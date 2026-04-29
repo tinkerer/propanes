@@ -48,6 +48,11 @@ export type CosThreadMeta = {
   sessionStatus: string | null;
   resolvedAt: number | null;
   archivedAt: number | null;
+  // The backing agent session's permissionProfile (e.g. 'interactive-yolo'
+  // vs 'headless-stream-yolo'). Drives the rail's interactive-mode glyph
+  // and the "Open as interactive" button copy ("Open" vs "Convert to
+  // interactive").
+  sessionPermissionProfile: string | null;
 };
 export const cosThreadMeta = signal<Record<string, CosThreadMeta>>({});
 
@@ -57,6 +62,7 @@ export function mergeThreadMeta(
     sessionStatus?: unknown;
     resolvedAt?: unknown;
     archivedAt?: unknown;
+    sessionPermissionProfile?: unknown;
   }>,
 ): void {
   if (!Array.isArray(threads) || threads.length === 0) return;
@@ -68,14 +74,17 @@ export function mergeThreadMeta(
     const sessionStatus = typeof t.sessionStatus === 'string' ? t.sessionStatus : null;
     const resolvedAt = typeof t.resolvedAt === 'number' ? t.resolvedAt : null;
     const archivedAt = typeof t.archivedAt === 'number' ? t.archivedAt : null;
+    const sessionPermissionProfile =
+      typeof t.sessionPermissionProfile === 'string' ? t.sessionPermissionProfile : null;
     const prev = next[tid];
     if (
       !prev ||
       prev.sessionStatus !== sessionStatus ||
       prev.resolvedAt !== resolvedAt ||
-      prev.archivedAt !== archivedAt
+      prev.archivedAt !== archivedAt ||
+      prev.sessionPermissionProfile !== sessionPermissionProfile
     ) {
-      next[tid] = { sessionStatus, resolvedAt, archivedAt };
+      next[tid] = { sessionStatus, resolvedAt, archivedAt, sessionPermissionProfile };
       changed = true;
     }
   }
@@ -113,7 +122,12 @@ export function isThreadLeaving(threadId: string | undefined | null): boolean {
   return leavingThreadIds.value.has(threadId);
 }
 
-const EMPTY_THREAD_META: CosThreadMeta = { sessionStatus: null, resolvedAt: null, archivedAt: null };
+const EMPTY_THREAD_META: CosThreadMeta = {
+  sessionStatus: null,
+  resolvedAt: null,
+  archivedAt: null,
+  sessionPermissionProfile: null,
+};
 
 async function patchThreadFlags(
   threadId: string,

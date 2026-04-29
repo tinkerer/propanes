@@ -454,6 +454,29 @@ export async function resumeSession(sessionId: string, opts?: { permissionProfil
   }
 }
 
+/**
+ * Promote a CoS thread to a live interactive (TTY + interactive-yolo) panel.
+ *
+ * Routes through `POST /admin/chief-of-staff/threads/:id/spawn-interactive`,
+ * which either resumes the thread's backing agent session with override
+ * profile `interactive-yolo` (preferred — preserves prior context via
+ * `--resume <claudeSid>`) or spawns a fresh interactive session if the thread
+ * has no resumable session yet.
+ *
+ * Returns the new sessionId on success and opens it in the active pane.
+ */
+export async function openThreadAsInteractive(threadId: string): Promise<string | null> {
+  try {
+    const { sessionId } = await api.spawnInteractiveForThread(threadId);
+    openSession(sessionId);
+    loadAllSessions();
+    return sessionId;
+  } catch (err: any) {
+    console.error('Open thread as interactive failed:', err?.message || err);
+    return null;
+  }
+}
+
 export async function spawnTerminal(appId?: string | null, launcherId?: string, harnessConfigId?: string, permissionProfile?: string, skipOpen?: boolean) {
   try {
     const data: { appId?: string; launcherId?: string; harnessConfigId?: string; permissionProfile?: string } = {};

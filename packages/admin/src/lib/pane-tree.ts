@@ -36,6 +36,10 @@ export interface LeafNode {
   // `collapsedOffset` slides the handle along the parallel axis (pixels from
   // the default position). Bounded by the PaneTree at render time.
   collapsedOffset?: number;
+  // CoS popout only: render this leaf as an absolutely-positioned overlay
+  // ("companion drawer") on its parent split's edge instead of a flex sibling.
+  // The non-floating sibling fills 100% — the drawer floats over it.
+  floating?: boolean;
 }
 
 export type PaneNode = SplitNode | LeafNode;

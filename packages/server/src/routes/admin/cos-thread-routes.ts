@@ -17,6 +17,11 @@ import { existsSync } from 'node:fs';
 import { ulid } from 'ulidx';
 import { db, schema } from '../../db/index.js';
 import { mintFeedbackThread } from '../../cos-inbox.js';
+import { resumeAgentSession } from '../../dispatch.js';
+import {
+  spawnSessionRemote,
+  killSessionRemote,
+} from '../../session-service-client.js';
 
 export function resolveRepoRoot(): string {
   const envDir = process.env.CHIEF_OF_STAFF_CWD;
@@ -61,6 +66,7 @@ export async function fetchThreadsWithSessionStatus(
       updatedAt: schema.cosThreads.updatedAt,
       sessionStatus: schema.agentSessions.status,
       sessionExitCode: schema.agentSessions.exitCode,
+      sessionPermissionProfile: schema.agentSessions.permissionProfile,
     })
     .from(schema.cosThreads)
     .leftJoin(
@@ -206,6 +212,149 @@ cosThreadRoutes.patch('/chief-of-staff/threads/:id', async (c) => {
     .where(eq(schema.cosThreads.id, id))
     .limit(1);
   return c.json({ ok: true, id, resolvedAt: row?.resolvedAt ?? null, archivedAt: row?.archivedAt ?? null });
+});
+
+// Promote a CoS thread to a live interactive TTY session.
+//
+// Resolution order:
+//   1. Thread has a backing agentSession (any status)
+//      → kill it if running, then resume with override profile
+//        `interactive-yolo` so the new session inherits --resume <claudeSid>
+//        and a TTY frontend.
+//   2. Thread has no backing agentSession yet (pre-migration row, or one
+//      that lost its row to GC)
+//      → ensure one, then route through (1).
+//   3. New session has no claudeSessionId to resume from
+//      → spawn a fresh interactive-yolo claude TTY in the repo's cwd.
+//
+// In every case the thread's `agentSessionId` column is updated to point at
+// the new live session so the next chat turn (or future "Open as
+// interactive" click) finds it correctly.
+cosThreadRoutes.post('/chief-of-staff/threads/:id/spawn-interactive', async (c) => {
+  const threadId = c.req.param('id');
+  const thread = await db.query.cosThreads.findFirst({
+    where: eq(schema.cosThreads.id, threadId),
+  });
+  if (!thread) return c.json({ error: 'Thread not found' }, 404);
+
+  // Make sure a row exists so the resume path has a parent. The migration
+  // helper handles "thread predates auto-provision" cleanly.
+  await ensureAgentSessionForThread(thread);
+  const fresh = await db.query.cosThreads.findFirst({
+    where: eq(schema.cosThreads.id, threadId),
+  });
+  if (!fresh?.agentSessionId) {
+    return c.json({ error: 'Failed to provision agent session for thread' }, 500);
+  }
+
+  const existing = db
+    .select()
+    .from(schema.agentSessions)
+    .where(eq(schema.agentSessions.id, fresh.agentSessionId))
+    .get();
+  if (!existing) {
+    return c.json({ error: 'Linked agent session row missing' }, 500);
+  }
+
+  // If the existing session is still running we have to terminate it first
+  // — claude won't let two TTYs share one --session-id.
+  if (existing.status === 'running' || existing.status === 'pending') {
+    await killSessionRemote(existing.id).catch(() => false);
+    db.update(schema.agentSessions)
+      .set({ status: 'killed', completedAt: new Date().toISOString() })
+      .where(eq(schema.agentSessions.id, existing.id))
+      .run();
+  }
+
+  // Path A — we have a claudeSessionId. Use the standard resume helper so
+  // the new TTY launches with `--resume <claudeSid> --session-id <new>` and
+  // inherits full prior context. resumeAgentSession was extended to accept
+  // thread-only parents (no feedback/agent-endpoint) so this just works.
+  const claudeSessionId = fresh.claudeSessionId || existing.claudeSessionId || null;
+  if (claudeSessionId) {
+    // Prime the parent's claudeSessionId column if it was only on the thread
+    // row (older threads stored it on cosThreads but not on agentSessions).
+    if (!existing.claudeSessionId && claudeSessionId) {
+      db.update(schema.agentSessions)
+        .set({ claudeSessionId })
+        .where(eq(schema.agentSessions.id, existing.id))
+        .run();
+    }
+    try {
+      const { sessionId } = await resumeAgentSession(
+        existing.id,
+        null,
+        'interactive-yolo',
+        null,
+        'claude',
+      );
+      // Re-link the thread to the new live session.
+      db.update(schema.cosThreads)
+        .set({ agentSessionId: sessionId, updatedAt: Date.now() })
+        .where(eq(schema.cosThreads.id, threadId))
+        .run();
+      return c.json({ sessionId, mode: 'resumed' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Resume failed';
+      return c.json({ error: msg }, 500);
+    }
+  }
+
+  // Path B — fresh thread, no prior claude session. Allocate a new session
+  // id and spawn an interactive-yolo TTY against the repo root so the
+  // operator can drive claude directly. The thread's chat composer keeps
+  // working too — it just queues stream-json against the same agentSession
+  // row on the next /chat call.
+  const newSessionId = ulid();
+  const nowIso = new Date().toISOString();
+  const newClaudeSessionId = crypto.randomUUID();
+  const cwd = existing.cwd || resolveRepoRoot();
+
+  db.insert(schema.agentSessions).values({
+    id: newSessionId,
+    cosThreadId: threadId,
+    parentSessionId: existing.id,
+    runtime: 'claude',
+    permissionProfile: 'interactive-yolo',
+    status: 'pending',
+    outputBytes: 0,
+    title: thread.name,
+    claudeSessionId: newClaudeSessionId,
+    cwd,
+    createdAt: nowIso,
+    startedAt: nowIso,
+    lastActivityAt: nowIso,
+  }).run();
+
+  try {
+    await spawnSessionRemote({
+      sessionId: newSessionId,
+      cwd,
+      runtime: 'claude',
+      permissionProfile: 'interactive-yolo',
+      claudeSessionId: newClaudeSessionId,
+    });
+  } catch (err) {
+    db.update(schema.agentSessions)
+      .set({ status: 'failed', completedAt: new Date().toISOString() })
+      .where(eq(schema.agentSessions.id, newSessionId))
+      .run();
+    const msg = err instanceof Error ? err.message : 'Spawn failed';
+    return c.json({ error: msg }, 500);
+  }
+
+  // Re-link the thread to the new live session and remember the
+  // claudeSessionId so future resumes have a context to re-attach to.
+  db.update(schema.cosThreads)
+    .set({
+      agentSessionId: newSessionId,
+      claudeSessionId: newClaudeSessionId,
+      updatedAt: Date.now(),
+    })
+    .where(eq(schema.cosThreads.id, threadId))
+    .run();
+
+  return c.json({ sessionId: newSessionId, mode: 'fresh' });
 });
 
 cosThreadRoutes.post('/chief-of-staff/threads', async (c) => {
