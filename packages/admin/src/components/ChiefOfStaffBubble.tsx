@@ -98,7 +98,9 @@ import { CosSavedDraftsList } from './CosSavedDraftsList.js';
 import { CosEnqueuedList } from './CosEnqueuedList.js';
 import { CosPopoutTreeView } from './CosPopoutTreeView.js';
 import { cosOpenArtifactTab } from '../lib/cos-popout-tree.js';
-import { runSlashCommandIfAny } from '../lib/cos-slash-commands.js';
+import { runSlashCommandIfAny, parseAgentMentions } from '../lib/cos-slash-commands.js';
+import { api } from '../lib/api.js';
+import { activeChannel } from '../lib/state.js';
 import { cosLearnings, loadCosLearnings } from '../lib/cos-learnings.js';
 import {
   cosDrafts,
@@ -902,6 +904,63 @@ export function ChiefOfStaffBubble({
         else if (result.toast) chiefOfStaffError.value = result.toast;
         return;
       }
+    }
+    // @-mention auto-dispatch. Additive — the chat message still goes to the
+    // model so the operator's CoS thread stays coherent. Each mentioned agent
+    // gets a fire-and-forget /admin/dispatch with the message text as
+    // instructions; channel policy (if any active channel) gates the call
+    // server-side. Resolution requires both a linked feedback item and the
+    // agentEndpoints listing — skip silently if either is missing instead of
+    // bouncing the operator out of the chat send flow.
+    const mentions = parseAgentMentions(text);
+    if (mentions.length > 0) {
+      void (async () => {
+        try {
+          const tid = cosActiveThread.value?.threadKey?.startsWith('tid:')
+            ? cosActiveThread.value.threadKey.slice(4)
+            : null;
+          let feedbackId: string | null = null;
+          if (tid) {
+            const qs = selectedAppId.value ? `?appId=${encodeURIComponent(selectedAppId.value)}` : '';
+            const token = localStorage.getItem('pw-admin-token');
+            const headers: Record<string, string> = {};
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+            const res = await fetch(`/api/v1/admin/chief-of-staff/threads${qs}`, { headers });
+            if (res.ok) {
+              const data = await res.json();
+              const found = (data?.threads || []).find((t: { id: string }) => t.id === tid);
+              feedbackId = found?.feedbackId ?? null;
+            }
+          }
+          if (!feedbackId) return;
+          const allAgents = await api.getAgents(selectedAppId.value || undefined);
+          const channelId = activeChannel.value?.id ?? null;
+          const dispatched: string[] = [];
+          for (const m of mentions) {
+            const agent = allAgents.find((a: any) => {
+              if (a.id === m.slug) return true;
+              if (typeof a.name === 'string') {
+                if (a.name.toLowerCase() === m.slug.toLowerCase()) return true;
+                if (a.name.toLowerCase().replace(/\s+/g, '-') === m.slug.toLowerCase()) return true;
+              }
+              return false;
+            });
+            if (!agent) continue;
+            try {
+              const res = await api.dispatch({
+                feedbackId,
+                agentEndpointId: agent.id,
+                instructions: text,
+                channelId,
+              });
+              if (res?.dispatched !== false) dispatched.push(agent.name || agent.id);
+            } catch { /* per-mention failure is non-fatal */ }
+          }
+          if (dispatched.length > 0) {
+            chiefOfStaffError.value = `Auto-dispatched: ${dispatched.join(', ')}`;
+          }
+        } catch { /* swallow — chat send proceeds independently */ }
+      })();
     }
     const replyToTs = replyTo?.anchorTs;
     setReplyTo(null);
