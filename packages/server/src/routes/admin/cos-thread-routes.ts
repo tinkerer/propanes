@@ -40,6 +40,11 @@ export async function fetchThreadsWithSessionStatus(
       agentId: schema.cosThreads.agentId,
       appId: schema.cosThreads.appId,
       channelId: schema.cosThreads.channelId,
+      // Surfaced from the joined agent session — every CoS thread has exactly
+      // one persistent headless-stream session, and feedbackId lives there.
+      // Used by /dispatch and /powwow slash commands + @-mention auto-dispatch
+      // to resolve the policy-gated dispatch target without a second hop.
+      feedbackId: schema.agentSessions.feedbackId,
       name: schema.cosThreads.name,
       systemPrompt: schema.cosThreads.systemPrompt,
       model: schema.cosThreads.model,

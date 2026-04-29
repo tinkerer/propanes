@@ -142,8 +142,16 @@ export const api = {
   deleteAgent: (id: string) =>
     request(`/admin/agents/${id}`, { method: 'DELETE' }),
 
-  dispatch: (data: { feedbackId: string; agentEndpointId: string; instructions?: string; launcherId?: string; harnessConfigId?: string }) =>
-    request<{ dispatched: boolean; sessionId?: string; status: number; response: string }>('/admin/dispatch', {
+  dispatch: (data: {
+    feedbackId: string;
+    agentEndpointId: string;
+    instructions?: string;
+    launcherId?: string;
+    harnessConfigId?: string;
+    permissionProfile?: string;
+    channelId?: string | null;
+  }) =>
+    request<{ dispatched: boolean; sessionId?: string; status: number; response: string; error?: string }>('/admin/dispatch', {
       method: 'POST',
       body: JSON.stringify(data),
     }),

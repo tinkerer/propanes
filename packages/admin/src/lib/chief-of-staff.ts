@@ -237,6 +237,11 @@ export const chiefOfStaffError = signal<string | null>(null);
 // Count of in-flight streams across all agents — informational only, never blocks input.
 export const chiefOfStaffInFlight = signal(0);
 
+// Override permission profile for the next /dispatch slash command. Set via
+// `/profile <name>`; consumed (and cleared) by the dispatch slash command so
+// the override is one-shot, not sticky.
+export const pendingProfileOverride = signal<string | null>(null);
+
 // Provision the popout panel state row up-front so consumers can read its
 // floating rect without first calling ensureCosPanel themselves.
 ensureCosPanel();

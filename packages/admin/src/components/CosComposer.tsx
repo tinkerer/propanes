@@ -2,9 +2,12 @@ import { useEffect, useImperativeHandle, useRef, useState } from 'preact/hooks';
 import { forwardRef } from 'preact/compat';
 import type { ComponentChildren, JSX, RefObject } from 'preact';
 import {
+  chiefOfStaffAgents,
   type CosImageAttachment,
   type CosElementRef,
 } from '../lib/chief-of-staff.js';
+import { activeChannel } from '../lib/state.js';
+import { api } from '../lib/api.js';
 import { useCosVoice } from '../lib/use-cos-voice.js';
 import { useCosScreenshot } from '../lib/use-cos-screenshot.js';
 import { useCosElementPicker } from '../lib/use-cos-element-picker.js';
@@ -208,6 +211,37 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
   const [sendModeOpen, setSendModeOpen] = useState(false);
   const [sendModeMenuPos, setSendModeMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [fanOutSelected, setFanOutSelected] = useState<Set<string>>(() => new Set());
+
+  // Inline @mention picker state. `prefix` null = picker hidden; non-null
+  // (incl. empty string) = "@" was just typed, dropdown should be open.
+  // `start` is the caret index *after* the @ — i.e. the start of the partial
+  // slug — so insertion can replace from start to current caret.
+  const [mentionPrefix, setMentionPrefix] = useState<string | null>(null);
+  const [mentionStart, setMentionStart] = useState<number>(0);
+  const [mentionHighlight, setMentionHighlight] = useState<number>(0);
+  const [channelMembers, setChannelMembers] = useState<
+    Array<{ kind: 'user' | 'agent'; refId: string; role: string }>
+  >([]);
+  // Cache channel members on mount + whenever the active channel id changes.
+  // Members rarely shift mid-session; one fetch is enough.
+  const channelId = activeChannel.value?.id ?? null;
+  useEffect(() => {
+    if (!channelId) {
+      setChannelMembers([]);
+      return;
+    }
+    let cancelled = false;
+    api.getChannelMembers(channelId)
+      .then((res) => {
+        if (cancelled) return;
+        setChannelMembers(res.members);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setChannelMembers([]);
+      });
+    return () => { cancelled = true; };
+  }, [channelId]);
 
   // Single effect that owns the draft<->text bridge for both axes:
   //   * binding identity change (scope switch / signal-tick rebuild) →
@@ -446,6 +480,102 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
     clearAfterSend();
   }
 
+  // Recompute @mention state from a textarea's current value + caret. Called
+  // after every input/keystroke that could change either. The trigger fires
+  // when the char immediately before the caret is `@` AND that `@` sits at a
+  // word boundary (start of input or after whitespace) — same boundary rule
+  // parseAgentMentions uses on send.
+  function refreshMentionState(value: string, caret: number) {
+    if (caret <= 0) {
+      if (mentionPrefix !== null) setMentionPrefix(null);
+      return;
+    }
+    let i = caret;
+    while (i > 0) {
+      const ch = value[i - 1];
+      if (ch === '@') {
+        const before = i >= 2 ? value[i - 2] : '';
+        const atBoundary = i === 1 || /\s/.test(before);
+        if (!atBoundary) break;
+        const partial = value.slice(i, caret);
+        setMentionStart(i);
+        setMentionPrefix(partial);
+        setMentionHighlight(0);
+        return;
+      }
+      if (!/[a-zA-Z0-9_-]/.test(ch)) break;
+      i--;
+    }
+    if (mentionPrefix !== null) setMentionPrefix(null);
+  }
+
+  function onTextareaInput(e: Event) {
+    const ta = e.target as HTMLTextAreaElement;
+    setText(ta.value);
+    refreshMentionState(ta.value, ta.selectionStart ?? ta.value.length);
+  }
+
+  type MentionCandidate = {
+    key: string;
+    slug: string;
+    label: string;
+    sublabel: string;
+    icon: string;
+  };
+  function buildMentionCandidates(prefix: string): MentionCandidate[] {
+    const lower = prefix.toLowerCase();
+    const out: MentionCandidate[] = [];
+    const seenSlugs = new Set<string>();
+    for (const a of chiefOfStaffAgents.value) {
+      const slug = (a.name || a.id).toLowerCase().replace(/\s+/g, '-');
+      const matches = !lower
+        || slug.startsWith(lower)
+        || a.id.toLowerCase().startsWith(lower)
+        || a.name.toLowerCase().startsWith(lower);
+      if (!matches) continue;
+      seenSlugs.add(slug);
+      out.push({ key: `agent:${a.id}`, slug, label: a.name, sublabel: 'agent', icon: '🤖' });
+    }
+    for (const m of channelMembers) {
+      if (!m.refId.toLowerCase().startsWith(lower)) continue;
+      const slug = m.refId.toLowerCase().replace(/\s+/g, '-');
+      if (seenSlugs.has(slug)) continue;
+      seenSlugs.add(slug);
+      out.push({
+        key: `member:${m.kind}:${m.refId}`,
+        slug: m.refId,
+        label: m.refId,
+        sublabel: m.kind === 'agent' ? 'agent member' : 'user member',
+        icon: m.kind === 'agent' ? '🤖' : '👤',
+      });
+    }
+    return out.slice(0, 8);
+  }
+
+  const mentionCandidates =
+    mentionPrefix === null ? [] : buildMentionCandidates(mentionPrefix);
+
+  function insertMention(slug: string) {
+    const ta = textareaRef.current;
+    if (!ta) return;
+    const before = text.slice(0, mentionStart);
+    const afterStart = ta.selectionStart ?? mentionStart;
+    const after = text.slice(afterStart);
+    // Trailing space matches Slack/Twitter behavior — operator can keep
+    // typing without manually separating the next word.
+    const insertion = `${slug} `;
+    const next = `${before}${insertion}${after}`;
+    setText(next);
+    setMentionPrefix(null);
+    requestAnimationFrame(() => {
+      const node = textareaRef.current;
+      if (!node) return;
+      node.focus();
+      const pos = before.length + insertion.length;
+      node.setSelectionRange(pos, pos);
+    });
+  }
+
   function onPaste(e: ClipboardEvent) {
     const items = Array.from(e.clipboardData?.items || []);
     const imageItems = items.filter((it) => it.kind === 'file' && it.type.startsWith('image/'));
@@ -458,6 +588,38 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
   }
 
   function onKeyDown(e: KeyboardEvent) {
+    // @mention picker eats nav keys when open. Escape just closes it (does
+    // NOT fall through to the existing clear-text / drop-reply-scope flow,
+    // which is what the conventions ask for).
+    if (mentionPrefix !== null && mentionCandidates.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMentionHighlight((h) => Math.min(h + 1, mentionCandidates.length - 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMentionHighlight((h) => Math.max(h - 1, 0));
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const pick = mentionCandidates[mentionHighlight];
+        if (pick) insertMention(pick.slug);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMentionPrefix(null);
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const pick = mentionCandidates[mentionHighlight];
+        if (pick) insertMention(pick.slug);
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -646,18 +808,88 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
           )}
         </div>
       )}
-      <textarea
-        ref={setTextareaEl}
-        class={`cos-input${submitting ? ' cos-input-submitting' : ''}`}
-        value={text}
-        placeholder={placeholder}
-        disabled={disabled || submitting}
-        style={inputStyle}
-        onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
-        onPaste={onPaste}
-        onKeyDown={onKeyDown}
-        rows={rows}
-      />
+      <div class="cos-composer-input-wrap" style={{ position: 'relative' }}>
+        <textarea
+          ref={setTextareaEl}
+          class={`cos-input${submitting ? ' cos-input-submitting' : ''}`}
+          value={text}
+          placeholder={placeholder}
+          disabled={disabled || submitting}
+          style={inputStyle}
+          onInput={onTextareaInput}
+          onClick={(e) => {
+            const ta = e.target as HTMLTextAreaElement;
+            refreshMentionState(ta.value, ta.selectionStart ?? ta.value.length);
+          }}
+          onKeyUp={(e) => {
+            // Arrow keys can move caret without changing value — keep the
+            // mention picker in sync.
+            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
+              const ta = e.target as HTMLTextAreaElement;
+              refreshMentionState(ta.value, ta.selectionStart ?? ta.value.length);
+            }
+          }}
+          onBlur={() => {
+            // Close the picker on blur, but defer so a click on a row still
+            // fires its handler before the dropdown unmounts.
+            setTimeout(() => setMentionPrefix(null), 120);
+          }}
+          onPaste={onPaste}
+          onKeyDown={onKeyDown}
+          rows={rows}
+        />
+        {mentionPrefix !== null && mentionCandidates.length > 0 && (
+          <div
+            class="cos-mention-picker"
+            style={{
+              position: 'absolute',
+              left: 0,
+              bottom: '100%',
+              marginBottom: '4px',
+              minWidth: '220px',
+              maxHeight: '240px',
+              overflowY: 'auto',
+              background: '#1e293b',
+              border: '1px solid var(--pw-border)',
+              borderRadius: '4px',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+              zIndex: 50,
+              padding: '4px 0',
+            }}
+            role="listbox"
+          >
+            {mentionCandidates.map((c, idx) => (
+              <div
+                key={c.key}
+                class={`cos-mention-row${idx === mentionHighlight ? ' cos-mention-row-active' : ''}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '6px 10px',
+                  cursor: 'pointer',
+                  background: idx === mentionHighlight ? 'rgba(255,255,255,0.08)' : 'transparent',
+                  fontSize: '13px',
+                  color: 'var(--pw-text)',
+                }}
+                role="option"
+                aria-selected={idx === mentionHighlight}
+                onMouseEnter={() => setMentionHighlight(idx)}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  insertMention(c.slug);
+                }}
+              >
+                <span aria-hidden="true">{c.icon}</span>
+                <span style={{ fontWeight: 500 }}>{c.slug}</span>
+                <span style={{ color: 'var(--pw-text-muted)', fontSize: '11px', marginLeft: 'auto' }}>
+                  {c.sublabel}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
       <CosInputToolbar
         cameraGroupRef={cameraGroupRef}
         pickerGroupRef={pickerGroupRef}
