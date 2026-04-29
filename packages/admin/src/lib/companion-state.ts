@@ -200,6 +200,56 @@ export function toggleCompanion(sessionId: string, type: CompanionType, position
 
 // --- Companion Openers ---
 
+// Open the JSONL log for a session as a side companion drawer pane —
+// without mounting the parent terminal session as a tab. If the parent
+// session pane is already in the tree, place the drawer next to it
+// (siblings); otherwise split off the focused leaf and dock the drawer
+// on the right.
+export function openSessionLogDrawer(sessionId: string, position: PanePosition = 'right') {
+  const tabId = companionTabId(sessionId, 'jsonl');
+  const current = getCompanions(sessionId);
+  if (!current.includes('jsonl')) {
+    sessionCompanions.value = { ...sessionCompanions.value, [sessionId]: [...current, 'jsonl'] };
+    persistCompanions();
+  }
+
+  const existingLeaf = findLeafWithTab(tabId);
+  if (existingLeaf) {
+    setActiveTab(existingLeaf.id, tabId);
+    setFocusedLeaf(existingLeaf.id);
+    return;
+  }
+
+  if (!openTabs.value.includes(tabId)) {
+    openTabs.value = [...openTabs.value, tabId];
+    persistTabs();
+  }
+
+  const sessionLeaf = findLeafWithTab(sessionId);
+  if (sessionLeaf) {
+    const sibling = findCompanionSibling(sessionLeaf.id, sessionId);
+    if (sibling) {
+      addTabToLeaf(sibling.id, tabId, true);
+    } else {
+      splitLeafAtPosition(sessionLeaf.id, position, [tabId], 0.5);
+    }
+  } else {
+    const focused = focusedLeafId.value;
+    const focusedLeaf = focused ? findLeaf(layoutTree.value.root, focused) : null;
+    if (focusedLeaf && focusedLeaf.panelType === 'tabs' && focusedLeaf.tabs.length > 0) {
+      splitLeafAtPosition(focusedLeaf.id, position, [tabId], 0.5);
+    } else {
+      batchTreeOps(() => {
+        const leafId = ensureSessionsLeaf();
+        addTabToLeaf(leafId, tabId, true);
+        showSessionsLeaf();
+      });
+    }
+  }
+
+  openSessionInRightPane(tabId);
+}
+
 export function openIsolateCompanion(componentName: string, position?: PanePosition) {
   const tabId = `isolate:${componentName}`;
   if (!openTabs.value.includes(tabId)) {

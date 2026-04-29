@@ -5,6 +5,8 @@ import { getIsolateNames, getIsolateEntry } from '../lib/isolate.js';
 import { cachedTargets, ensureTargetsLoaded, refreshTargets } from './DispatchTargetSelect.js';
 import { api } from '../lib/api.js';
 import { addTabToLeaf, focusedLeafId, resetLayout, findLeafWithTab } from '../lib/pane-tree.js';
+import { cosResetPopoutTree, cosActiveThread } from '../lib/cos-popout-tree.js';
+import { reclampAllPanelsToViewport } from '../lib/popout-state.js';
 
 export type TerminalPickerMode =
   | { kind: 'companion'; sessionId: string; panelId?: string }
@@ -254,7 +256,7 @@ export function TerminalPicker({ mode, onClose }: Props) {
     for (const rid of recentIds) {
       const s = sessions.find(x => x.id === rid);
       if (!s) continue;
-      const label = s.feedbackTitle || (s.paneCommand
+      const label = s.title || s.feedbackTitle || (s.paneCommand
         ? `${s.paneCommand}:${s.panePath || ''}`
         : (s.paneTitle || `pw-${s.id.slice(-6)}`));
       items.push({
@@ -273,7 +275,7 @@ export function TerminalPicker({ mode, onClose }: Props) {
     const recentSet = new Set(items.filter(i => i.category === 'Recent').map(i => i.id.replace('recent:', '')));
     for (const s of existingTerminals) {
       if (recentSet.has(s.id)) continue;
-      const label = s.feedbackTitle || (s.paneCommand
+      const label = s.title || s.feedbackTitle || (s.paneCommand
         ? `${s.paneCommand}:${s.panePath || ''}`
         : (s.paneTitle || `pw-${s.id.slice(-6)}`));
       items.push({
@@ -338,8 +340,14 @@ export function TerminalPicker({ mode, onClose }: Props) {
     category: 'Layout',
     icon: '\u{1F504}',
     title: 'Reset Layout',
-    subtitle: 'Restore default sidebar, nav, and sessions',
-    action: () => { resetLayout(); onClose(); },
+    subtitle: 'Restore default sidebar, nav, sessions, and CoS chat',
+    action: () => {
+      resetLayout();
+      cosResetPopoutTree();
+      reclampAllPanelsToViewport();
+      cosActiveThread.value = null;
+      onClose();
+    },
   });
 
   // 10. Open URL iframe

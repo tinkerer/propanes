@@ -11,6 +11,7 @@ import { db, schema, sqlite } from '../../db/index.js';
 import { hydrateFeedback } from '../../dispatch.js';
 import { feedbackEvents } from '../../events.js';
 import { verifyAdminToken } from '../../auth.js';
+import { mintFeedbackThread } from '../../cos-inbox.js';
 
 export const feedbackRoutes = new Hono();
 
@@ -103,6 +104,15 @@ feedbackRoutes.post('/feedback', async (c) => {
     await db.insert(schema.feedbackTags).values(
       input.tags.map((tag) => ({ feedbackId: id, tag }))
     );
+  }
+
+  if (input.appId) {
+    void mintFeedbackThread({
+      feedbackId: id,
+      appId: input.appId,
+      title: input.title,
+      description: input.description,
+    });
   }
 
   feedbackEvents.emit('new', { id, appId: input.appId });

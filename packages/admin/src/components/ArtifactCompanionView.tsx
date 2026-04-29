@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'preact/hooks';
 import { marked } from 'marked';
 import hljs from 'highlight.js/lib/common';
 import { cosArtifacts } from '../lib/cos-artifacts.js';
-import { closeArtifactDrawerTab, cosArtifactDrawer } from '../lib/cos-artifact-drawer.js';
+import { cosRemoveTab, artifactTabId } from '../lib/cos-popout-tree.js';
 import { closeTab } from '../lib/sessions.js';
 
 function escapeHtml(s: string): string {
@@ -34,17 +34,16 @@ export function ArtifactCompanionView({ artifactId }: { artifactId: string }) {
   }, [artifact?.raw, artifact?.kind, artifact?.lang]);
 
   // Stale tab — the artifact registry doesn't have an entry for this id.
-  // Almost always a localStorage-restored drawer/pane tab whose backing
-  // artifact didn't survive the reload (or belongs to a thread that hasn't
-  // been parsed yet). Give the JSONL stream a brief grace period to register
-  // the artifact, then quietly close the tab instead of showing an error.
+  // Almost always a localStorage-restored tab whose backing artifact didn't
+  // survive the reload (or belongs to a thread that hasn't been parsed yet).
+  // Give the JSONL stream a brief grace period to register the artifact, then
+  // quietly close the tab instead of showing an error. Strip from both trees
+  // (cos popout tree + main pane tree) since this view is shared between them.
   useEffect(() => {
     if (artifact) return;
     const t = window.setTimeout(() => {
       if (cosArtifacts.value[artifactId]) return;
-      if (cosArtifactDrawer.value.tabs.includes(artifactId)) {
-        closeArtifactDrawerTab(artifactId);
-      }
+      cosRemoveTab(artifactTabId(artifactId));
       closeTab(`artifact:${artifactId}`);
     }, 1500);
     return () => window.clearTimeout(t);

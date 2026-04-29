@@ -545,13 +545,15 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
 
   const isPlain = sess?.permissionProfile === 'plain';
   if (isPlain) {
-    const plainLabel = sess?.paneCommand
-      ? `${sess.paneCommand}:${sess.panePath || ''} \u2014 ${sess?.paneTitle || realSid.slice(-6)}`
-      : (sess?.paneTitle || realSid.slice(-6));
+    const plainLabel = sess?.title
+      ? sess.title
+      : sess?.paneCommand
+        ? `${sess.paneCommand}:${sess.panePath || ''} \u2014 ${sess?.paneTitle || realSid.slice(-6)}`
+        : (sess?.paneTitle || realSid.slice(-6));
     return `${sess?.isHarness ? '\u{1F4E6}' : sess?.isRemote ? '\u{1F310}' : '\u{1F5A5}\uFE0F'} ${plainLabel}`;
   }
   const locationPrefix = sess?.isHarness ? '\u{1F4E6}' : sess?.isRemote ? '\u{1F310}' : '';
-  return `${locationPrefix ? locationPrefix + ' ' : ''}${sess?.feedbackTitle || sess?.agentName || `Session ${sid.slice(-6)}`}`;
+  return `${locationPrefix ? locationPrefix + ' ' : ''}${sess?.title || sess?.feedbackTitle || sess?.agentName || `Session ${sid.slice(-6)}`}`;
 }
 
 // --- Diagonal drop zone (shown during tab drag) ---

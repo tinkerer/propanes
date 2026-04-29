@@ -5192,6 +5192,15 @@ select:focus, textarea:focus {
   max-height: 320px;
   overflow: auto;
 }
+.sm-chat-tool-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.sm-chat-tool-images:last-child {
+  margin-bottom: 0;
+}
 
 /* Tool use — per-category colors */
 .sm-tool-use {
@@ -11941,11 +11950,10 @@ body.pw-isolate {
   text-transform: lowercase;
 }
 
-/* CoS popout body: row of [chat pane] [optional artifact drawer]. Chat pane
-   stacks its toolbar / scroll / input vertically so the input sits at the
-   bottom. The Learnings drawer is rendered as a separate fixed overlay
-   anchored to the side of the popout (see .cos-learnings-side), so it does
-   not live inside this flex row. */
+/* CoS popout body hosts the popout-local pane tree (cos-tree-root). The chat,
+   artifacts, threads, and learnings all live as first-class tabs in that tree
+   — see CosPopoutTreeView. Chat scroll is preserved across leaf re-mounts via
+   `lastScrollTopRef` in ChiefOfStaffBubble. */
 .cos-popout-body { flex-direction: row; }
 .cos-chat-pane {
   flex: 1 1 auto;
@@ -11955,206 +11963,6 @@ body.pw-isolate {
   flex-direction: column;
   overflow: hidden;
 }
-
-/* Artifact drawer: floats over the chat from the right edge of cos-tree-root.
-   The chat keeps full width underneath; the drawer doesn't reflow it (so
-   nothing remounts and chat scroll is preserved). Left edge is a drag handle
-   for resizing. */
-.cos-artifact-drawer-overlay {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--pw-bg, var(--pw-terminal-bg));
-  border-left: 1px solid var(--pw-border);
-  box-shadow: -10px 0 24px rgba(0, 0, 0, 0.28);
-  z-index: 12;
-  min-width: 240px;
-  max-width: 95%;
-}
-.cos-artifact-drawer-overlay-dragging { user-select: none; }
-.cos-artifact-drawer-resize {
-  position: absolute;
-  left: -3px;
-  top: 0;
-  bottom: 0;
-  width: 7px;
-  cursor: ew-resize;
-  z-index: 1;
-}
-.cos-artifact-drawer-resize:hover,
-.cos-artifact-drawer-overlay-dragging .cos-artifact-drawer-resize {
-  background: var(--pw-primary, #4a90e2);
-  opacity: 0.45;
-}
-
-/* Popout-style grab tab that replaces the plain resize handle on the artifact
-   drawer's left edge. Click toggles drawer visibility, drag resizes. */
-.cos-artifact-drawer-grab {
-  position: absolute;
-  left: -10px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 14px;
-  height: 56px;
-  background: #1e3a8a;
-  border: 2px solid #1d9bf0;
-  border-right: none;
-  border-radius: 8px 0 0 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: ew-resize;
-  z-index: 2;
-}
-.cos-artifact-drawer-grab:hover {
-  background: #1e40af;
-  border-color: #60a5fa;
-}
-.cos-artifact-drawer-grab .grab-indicator {
-  color: #60a5fa;
-  opacity: 0.9;
-  font-size: 11px;
-  line-height: 1;
-  letter-spacing: -1px;
-}
-/* When the drawer is collapsed the overlay is the grab tab itself — anchor
-   it to the right edge so it stays clickable. */
-.cos-artifact-drawer-overlay-collapsed {
-  width: 0 !important;
-  background: transparent;
-  border-left: none;
-  box-shadow: none;
-  pointer-events: none;
-}
-.cos-artifact-drawer-overlay-collapsed .cos-artifact-drawer-grab-collapsed {
-  pointer-events: auto;
-  left: -14px;
-}
-.cos-artifact-drawer-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  padding: 4px 4px 0;
-  border-bottom: 1px solid var(--pw-border);
-  background: var(--pw-bg-surface);
-  flex: 0 0 auto;
-}
-.cos-artifact-drawer-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  max-width: 180px;
-  padding: 3px 6px;
-  border: 1px solid transparent;
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
-  background: transparent;
-  color: var(--pw-secondary-text);
-  font-size: 11px;
-  cursor: pointer;
-}
-.cos-artifact-drawer-tab:hover { background: var(--pw-bg-hover); color: var(--pw-primary-text); }
-.cos-artifact-drawer-tab-active {
-  background: var(--pw-bg-hover);
-  color: var(--pw-primary-text);
-  border-color: var(--pw-border);
-}
-.cos-artifact-drawer-tab-icon { opacity: 0.75; flex: 0 0 auto; }
-.cos-artifact-drawer-tab-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.cos-artifact-drawer-tab-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  border-radius: 3px;
-  font-size: 13px;
-  line-height: 1;
-  opacity: 0.55;
-  cursor: pointer;
-  flex: 0 0 auto;
-}
-.cos-artifact-drawer-tab-close:hover { opacity: 1; background: var(--pw-bg-active); }
-.cos-artifact-drawer-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
-}
-.cos-artifact-drawer-body > .artifact-companion { flex: 1 1 auto; min-width: 0; min-height: 0; }
-
-/* Thread drawer: mirrors the artifact drawer, anchored to the same right
-   edge. Artifact drawer has a higher z-index so it stacks OVER the thread
-   when both are open. The chat keeps full width underneath either way. */
-.cos-thread-drawer-overlay {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--pw-bg, var(--pw-terminal-bg));
-  border-left: 1px solid var(--pw-border);
-  box-shadow: -10px 0 24px rgba(0, 0, 0, 0.28);
-  z-index: 11;
-  min-width: 280px;
-  max-width: 95%;
-}
-.cos-thread-drawer-overlay-dragging { user-select: none; }
-.cos-thread-drawer-grab {
-  position: absolute;
-  left: -10px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 14px;
-  height: 56px;
-  background: #14532d;
-  border: 2px solid #34d399;
-  border-right: none;
-  border-radius: 8px 0 0 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: ew-resize;
-  z-index: 2;
-}
-.cos-thread-drawer-grab:hover {
-  background: #166534;
-  border-color: #6ee7b7;
-}
-.cos-thread-drawer-grab .grab-indicator {
-  color: #6ee7b7;
-  opacity: 0.95;
-  font-size: 11px;
-  line-height: 1;
-}
-.cos-thread-drawer-overlay-collapsed {
-  width: 0 !important;
-  background: transparent;
-  border-left: none;
-  box-shadow: none;
-  pointer-events: none;
-}
-.cos-thread-drawer-overlay-collapsed .cos-thread-drawer-grab-collapsed {
-  pointer-events: auto;
-  left: -14px;
-}
-.cos-thread-drawer-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
-}
-.cos-thread-drawer-body > .cos-thread-panel { flex: 1 1 auto; min-width: 0; min-height: 0; }
 
 /* Popout-local pane-tree: fills the popout body and houses chat + companion
    leaves as real pane splits (instead of fixed-position side drawers). The
@@ -12181,7 +11989,17 @@ body.pw-isolate {
   overflow: hidden;
   background: var(--pw-terminal-bg);
 }
-.cos-tree-leaf-empty { opacity: 0.4; }
+.cos-tree-leaf-empty .cos-tree-leaf-body { opacity: 0.55; }
+.cos-tree-empty-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 20px 16px;
+  font-size: 11px;
+  color: var(--pw-secondary-text);
+  font-style: italic;
+}
 .cos-tree-leaf-body {
   flex: 1 1 auto;
   min-width: 0;
@@ -12196,13 +12014,53 @@ body.pw-isolate {
 }
 .cos-tree-tab-bar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
+  align-items: stretch;
+  gap: 0;
   padding: 4px 4px 0;
   border-bottom: 1px solid var(--pw-border);
   background: var(--pw-bg-surface);
   flex: 0 0 auto;
+  min-height: 28px;
 }
+.cos-tree-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.cos-tree-tab-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  position: relative;
+  padding-left: 4px;
+  border-left: 1px solid var(--pw-border);
+  margin-left: 4px;
+}
+.cos-tree-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--pw-secondary-text);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.cos-tree-action-btn:hover {
+  background: var(--pw-bg-hover);
+  color: var(--pw-primary-text);
+  border-color: var(--pw-border);
+}
+.cos-tree-action-close:hover { color: #ef4444; }
 .cos-tree-tab {
   display: inline-flex;
   align-items: center;
@@ -12245,6 +12103,126 @@ body.pw-isolate {
   flex: 0 0 auto;
 }
 .cos-tree-tab-close:hover { opacity: 1; background: var(--pw-bg-active); }
+.cos-tree-leaf { position: relative; }
+.cos-tree-leaf.drop-target {
+  outline: 2px solid var(--pw-primary, #4a90e2);
+  outline-offset: -2px;
+}
+/* Collapsed leaf — slim grab handle on the parent split's edge. Click to
+   expand; drag to slide along the parallel axis. Mirrors the main pane-tree
+   collapsed handle so the visual language is consistent across both trees. */
+.cos-tree-leaf-collapsed {
+  flex: 0 0 auto !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: #1e293b;
+  border: 1px solid var(--pw-border);
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 10px;
+  color: var(--pw-secondary-text);
+  padding: 2px 4px;
+  overflow: hidden;
+}
+.cos-tree-leaf-collapsed:hover {
+  background: #283449;
+  color: var(--pw-primary-text);
+  border-color: var(--pw-primary, #4a90e2);
+}
+.cos-tree-leaf-collapsed-horizontal {
+  width: 22px !important;
+  height: 100%;
+  flex-direction: column;
+  writing-mode: vertical-rl;
+}
+.cos-tree-leaf-collapsed-vertical {
+  height: 22px !important;
+  width: 100%;
+  flex-direction: row;
+}
+.cos-tree-collapsed-icon { flex: 0 0 auto; opacity: 0.7; }
+.cos-tree-collapsed-count {
+  flex: 0 0 auto;
+  font-weight: 600;
+  color: var(--pw-primary, #4a90e2);
+  font-variant-numeric: tabular-nums;
+}
+.cos-tree-collapsed-label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+
+/* Edge drop-zones during a tab or hamburger drag. Each edge gets a 18% strip
+   highlight so the operator can clearly target left/right/top/bottom dock
+   without overlapping with the diagonal split zones. */
+.cos-edge-zone-overlay { overflow: hidden; }
+.cos-edge-zone-fill {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(74, 144, 226, 0.12);
+  border: 2px dashed rgba(74, 144, 226, 0.7);
+  pointer-events: none;
+}
+.cos-edge-zone-fill.active {
+  background: rgba(74, 144, 226, 0.22);
+  border-style: solid;
+}
+.cos-edge-zone-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #cfe2ff;
+  background: rgba(15, 23, 42, 0.85);
+  padding: 4px 8px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.cos-edge-zone-left-edge-fill   { left: 0;  top: 0; bottom: 0; width: 18%; }
+.cos-edge-zone-right-edge-fill  { right: 0; top: 0; bottom: 0; width: 18%; }
+.cos-edge-zone-top-edge-fill    { left: 0; right: 0; top: 0; height: 18%; }
+.cos-edge-zone-bottom-edge-fill { left: 0; right: 0; bottom: 0; height: 18%; }
+
+/* Drop-target highlight on the cos popout's outer resizer strips. The drag
+   helper adds .drop-target on hover; the strip glows so the operator knows
+   they can release to dock as a companion drawer at that edge. */
+.cos-popout .popout-resize-w.drop-target,
+.cos-popout .popout-resize-e.drop-target,
+.cos-popout .popout-resize-n.drop-target,
+.cos-popout .popout-resize-s.drop-target {
+  background: rgba(74, 144, 226, 0.55);
+  box-shadow: 0 0 12px 2px rgba(74, 144, 226, 0.65);
+  z-index: 1000;
+}
+.cos-tree-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+  display: inline-block;
+}
+.popup-menu-section {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pw-secondary-text);
+  padding: 6px 10px 2px;
+  opacity: 0.7;
+}
+.popup-menu-empty {
+  font-size: 11px;
+  color: var(--pw-secondary-text);
+  padding: 4px 10px 8px;
+  font-style: italic;
+  opacity: 0.65;
+}
 
 .cos-settings.cos-settings-full {
   flex: 1 1 auto;
@@ -13770,6 +13748,106 @@ body.pw-isolate {
   color: var(--pw-primary, #f5a623);
 }
 
+/* One-line collapsed thread row — used when the operator has the rail's
+   numbered nav up and just wants a scannable list keyed off those numbers.
+   Layout: numbered status badge · truncated user-msg text · reply count +
+   last-reply timestamp on the right. The number badge background is colored
+   from data-status to mirror the rail's dot palette so cross-referencing
+   "thread 3 in the rail" → "row 3 here" is instant. */
+.cos-thread-block-collapsed-line {
+  gap: 0;
+}
+.cos-thread-block-collapsed-line + .cos-thread-block-collapsed-line {
+  margin-top: 0;
+}
+.cos-thread-collapsed-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 5px 10px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--pw-text-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+.cos-thread-collapsed-line:hover {
+  background: var(--pw-bg-surface);
+  border-color: var(--pw-border);
+}
+.cos-thread-collapsed-line-active {
+  background: rgba(74, 144, 226, 0.1);
+  border-color: rgba(74, 144, 226, 0.4);
+}
+.cos-thread-collapsed-line-unread {
+  /* Match the rail's unread cue: a soft green left edge so the row sticks out
+     in a long list without the number itself blinking. */
+  box-shadow: inset 3px 0 0 0 #2ea043;
+}
+.cos-thread-collapsed-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 22px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: var(--pw-secondary-text, #888);
+  /* Default background; data-status overrides below match the rail's dot
+     colors. Using the same palette keeps the cross-reference muscle-memory
+     consistent across rail and inline rows. */
+}
+.cos-thread-collapsed-num[data-status='streaming'] {
+  background: var(--pw-primary, #4a90e2);
+  box-shadow: 0 0 6px rgba(74, 144, 226, 0.55);
+}
+.cos-thread-collapsed-num[data-status='unread'] {
+  background: #2ea043;
+}
+.cos-thread-collapsed-num[data-status='attention'] {
+  background: #f5a623;
+}
+.cos-thread-collapsed-num[data-status='failed'] {
+  background: #e5484d;
+}
+.cos-thread-collapsed-num[data-status='idle'],
+.cos-thread-collapsed-num[data-status='gc'],
+.cos-thread-collapsed-num[data-status='resolved'],
+.cos-thread-collapsed-num[data-status='archived'] {
+  background: var(--pw-secondary-text, #888);
+  opacity: 0.7;
+}
+.cos-thread-collapsed-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pw-text-primary);
+}
+.cos-thread-collapsed-meta {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--pw-text-muted);
+  font-size: 11px;
+}
+.cos-thread-collapsed-count {
+  color: var(--pw-primary, var(--pw-accent, #3e63dd));
+  font-weight: 600;
+}
+
 .cos-thread-header-row {
   display: flex;
   align-items: center;
@@ -14597,6 +14675,86 @@ body.pw-mobile .cos-thread-reply-btn {
 }
 .cos-send:hover:not(:disabled) { background: var(--pw-primary-hover); }
 .cos-send:disabled { opacity: 0.4; cursor: not-allowed; }
+.cos-send-submitting {
+  /* Keep the send button readable while submitting — the disabled-fade is too
+     dim to see the spinner. Override the generic :disabled rule. */
+  opacity: 0.85;
+  cursor: progress;
+}
+.cos-send-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  animation: cos-rail-spinner 0.7s linear infinite;
+  display: inline-block;
+}
+/* Inline "Sending…" pill that lives in the toolbar between the spacer and the
+   send button. Subtle pulse so the operator's eye lands on it without the
+   spinner flicker dominating focus. */
+.cos-sending-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--pw-primary, #4a90e2);
+  background: rgba(74, 144, 226, 0.12);
+  border: 1px solid rgba(74, 144, 226, 0.35);
+  margin-right: 6px;
+  animation: cos-sending-pulse 1.4s ease-in-out infinite;
+}
+.cos-sending-spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(74, 144, 226, 0.35);
+  border-top-color: var(--pw-primary, #4a90e2);
+  animation: cos-rail-spinner 0.7s linear infinite;
+}
+@keyframes cos-sending-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+/* Optimistic in-flight user message in the thread panel body — wraps the
+   MessageBubble so we can drop a "Sending…" pill in the bottom-right corner
+   without disturbing the bubble's own layout. */
+.cos-msg-pending-wrap {
+  position: relative;
+  opacity: 0.85;
+}
+.cos-msg-pending-pill {
+  position: absolute;
+  bottom: 4px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--pw-primary, #4a90e2);
+  background: rgba(74, 144, 226, 0.14);
+  border: 1px solid rgba(74, 144, 226, 0.35);
+  pointer-events: none;
+}
+.cos-send-queue-mode {
+  /* Subtle accent shift while the agent is streaming — Enter / Send-click
+     auto-queues instead of firing a fresh turn. The icon also changes to a
+     clock to reinforce the "wait for current" semantic. */
+  background: var(--pw-bg-surface, #334155);
+  color: var(--pw-text);
+  border: 1px solid var(--pw-primary);
+}
+.cos-send-queue-mode:hover:not(:disabled) {
+  background: var(--pw-primary);
+  color: #fff;
+}
 .cos-stop {
   width: 28px;
   height: 26px;
@@ -15097,34 +15255,9 @@ body.pw-mobile .cos-thread-reply-btn {
 }
 .cos-send-stop:hover { background: #c12333; }
 
-.cos-send-mode-group {
-  display: inline-flex;
-  align-items: stretch;
-}
-.cos-send-mode-group .cos-save-draft-btn.cos-tool-btn-main {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-  border-right: none;
-}
-.cos-send-mode-group .cos-tool-dropdown-toggle {
-  height: 22px;
-  border: 1px dashed var(--pw-border);
-  border-left: none;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-  border-top-right-radius: 10px;
-  border-bottom-right-radius: 10px;
-  padding: 0 4px;
-  color: var(--pw-text-secondary);
-  background: transparent;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-}
-.cos-send-mode-group .cos-tool-dropdown-toggle:hover {
-  color: var(--pw-text);
-  border-color: var(--pw-text-secondary);
-}
+/* Save-draft + send-mode caret pair lives in the input toolbar like every
+   other tool group, so it inherits .cos-tool-btn / .cos-tool-dropdown-toggle
+   styling. Only override the menu width here. */
 .cos-send-mode-menu {
   min-width: 220px;
 }
@@ -16005,33 +16138,11 @@ body.pw-mobile .cos-popout .cos-input {
   cursor: not-allowed;
 }
 
-.cos-composer-extras {
-  display: flex;
-  justify-content: flex-end;
-  padding: 2px 6px 0;
-}
-.cos-save-draft-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-style: italic;
-  color: var(--pw-text-secondary);
-  background: transparent;
-  border: 1px dashed var(--pw-border);
-  padding: 2px 8px;
-  border-radius: 10px;
-  cursor: pointer;
-  line-height: 1;
-}
-.cos-save-draft-btn:hover:not(:disabled) {
-  color: var(--pw-text);
-  border-color: var(--pw-text-secondary);
-}
-.cos-save-draft-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
+/* Save-draft icon now lives inside the input toolbar; the bespoke
+   text-button styles are gone. The standard .cos-tool-btn rules handle
+   the look; the only delta is a subtle accent so it reads as a write
+   action distinct from the camera/picker/mic input tools. */
+.cos-save-draft-btn { color: var(--pw-text-secondary); }
 
 .cos-saved-drafts {
   display: flex;
@@ -16136,6 +16247,20 @@ body.pw-mobile .cos-popout .cos-input {
   padding: 4px 6px 0;
 }
 
+/* Pending-lists wrapper rendered between reply pill and composer. Keeps
+   the lists tight against the input so the operator visually links their
+   queued/draft items to the place they're typing. */
+.cos-composer-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 4px;
+}
+.cos-composer-pending .cos-saved-drafts {
+  margin: 0;
+  padding: 4px 4px;
+}
+
 .cos-enqueued-row {
   cursor: default;
 }
@@ -16145,13 +16270,13 @@ body.pw-mobile .cos-popout .cos-input {
 .cos-enqueued-row-sending .cos-saved-draft-text {
   cursor: default;
 }
-.cos-enqueued-badge {
-  background: rgba(59, 130, 246, 0.18);
-  color: #93c5fd;
-}
+/* Match the "DRAFT" badge styling for visual continuity — queued is just
+   a draft that auto-fires when the current turn finishes, not a separate
+   visual category. Sending shifts to a subtle accent so the operator can
+   tell the row is mid-flight. */
 .cos-enqueued-badge-sending {
-  background: rgba(34, 197, 94, 0.18);
-  color: #86efac;
+  background: rgba(96, 165, 250, 0.22);
+  color: var(--pw-primary, #93c5fd);
 }
 .cos-enqueued-spinner {
   animation: cos-enqueued-spin 0.9s linear infinite;
@@ -16168,9 +16293,25 @@ body.pw-mobile .cos-popout .cos-input {
   border-style: solid;
   border-color: var(--pw-text-secondary);
   background: rgba(255, 255, 255, 0.04);
+  /* Editing wants the textarea as wide as possible — stack badge / textarea
+     / action buttons vertically inside the row so the input gets the full
+     row width instead of fighting badge + buttons for ~30px. */
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.cos-enqueued-row-editing .cos-saved-draft-badge {
+  align-self: flex-start;
+}
+.cos-enqueued-row-editing .cos-enqueued-edit-actions {
+  justify-content: flex-end;
 }
 .cos-enqueued-edit-input {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  /* min-width: 0 lets the textarea shrink below its intrinsic width
+     inside the flex row instead of bullying its way to single-column. */
+  min-width: 0;
+  width: 100%;
   min-height: 28px;
   resize: none;
   border: 1px solid var(--pw-border);

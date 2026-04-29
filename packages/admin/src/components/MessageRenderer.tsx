@@ -241,16 +241,42 @@ function ChatToolChip({ message }: { message: ParsedMessage }) {
           {!hasError && hasResult && (
             <div class="sm-chat-tool-section">
               <div class="sm-chat-tool-section-label">result</div>
-              <pre class="sm-chat-tool-pre">{
-                typeof extras!.result === 'string'
-                  ? extras!.result
-                  : JSON.stringify(extras!.result, null, 2)
-              }</pre>
+              <ChatToolResult result={extras!.result} />
             </div>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+// Render a chat-chip tool result. If the result string contains image
+// data URIs (e.g. Read of a .png returns `data:image/png;base64,…`),
+// render thumbnails instead of dumping the raw base64 into a <pre>.
+function ChatToolResult({ result }: { result: unknown }) {
+  const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+  const imageUrls = useMemo(() => extractImageUrls(text), [text]);
+  // Strip any matched image URIs from the text and see if anything
+  // meaningful remains. If the whole result is just data URIs, suppress
+  // the pre block entirely so the chip is image-only.
+  const remainder = useMemo(() => {
+    if (imageUrls.length === 0) return text;
+    let stripped = text;
+    for (const url of imageUrls) stripped = stripped.split(url).join('');
+    return stripped.trim();
+  }, [text, imageUrls]);
+
+  return (
+    <>
+      {imageUrls.length > 0 && (
+        <div class="sm-chat-tool-images">
+          {imageUrls.map((url, i) => <ImageViewer key={i} src={url} />)}
+        </div>
+      )}
+      {(imageUrls.length === 0 || remainder.length > 0) && (
+        <pre class="sm-chat-tool-pre">{imageUrls.length > 0 ? remainder : text}</pre>
+      )}
+    </>
   );
 }
 

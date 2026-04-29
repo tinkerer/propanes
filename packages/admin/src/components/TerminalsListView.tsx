@@ -50,7 +50,7 @@ export function TerminalsListView() {
   const filtered = terminals.filter((s: any) => {
     if (!sessionSearchQuery.value) return true;
     const q = sessionSearchQuery.value.toLowerCase();
-    const text = [getSessionLabel(s.id), s.paneTitle, s.paneCommand, s.panePath, s.id].filter(Boolean).join(' ').toLowerCase();
+    const text = [getSessionLabel(s.id), s.title, s.paneTitle, s.paneCommand, s.panePath, s.id].filter(Boolean).join(' ').toLowerCase();
     return text.includes(q);
   });
 
@@ -62,9 +62,11 @@ export function TerminalsListView() {
           const isInPanel = !!findPanelForSession(s.id);
           const isVisible = visibleSet.has(s.id);
           const inputSt = s.status === 'running' ? (sessionInputStates.value.get(s.id) || null) : null;
-          const plainLabel = s.paneCommand
-            ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s.paneTitle || s.id.slice(-6)}`
-            : (s.paneTitle || s.id.slice(-6));
+          const plainLabel = s.title
+            ? s.title
+            : s.paneCommand
+              ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s.paneTitle || s.id.slice(-6)}`
+              : (s.paneTitle || s.id.slice(-6));
           const customLabel = getSessionLabel(s.id);
           const locationPrefix = s.isHarness ? '\u{1F4E6}' : s.isRemote ? '\u{1F310}' : '';
           const label = customLabel || `${locationPrefix || '\u{1F5A5}\uFE0F'} ${plainLabel}`;

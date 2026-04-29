@@ -8,16 +8,23 @@ import {
   type PanePosition,
   positionToSplit,
 } from './pane-tree.js';
-import { openArtifactDrawerTab, closeArtifactDrawer } from './cos-artifact-drawer.js';
-import { setThreadDrawerVisible } from './cos-thread-drawer.js';
 
 // Well-known tab ids for leaves in the CoS popout tree.
 export const COS_POPOUT_CHAT_TAB = 'cos-chat:main';
 export const COS_POPOUT_LEARNINGS_TAB = 'cos-learnings:main';
+export const COS_POPOUT_THREAD_TAB = 'thread:active';
 export const COS_POPOUT_ROOT_LEAF = 'cos-root-leaf';
 
-// Legacy tab id — kept only for migrating older persisted trees off it.
-const LEGACY_COS_POPOUT_THREAD_TAB = 'cos-thread:main';
+export const ARTIFACT_TAB_PREFIX = 'artifact:';
+export function isArtifactTab(tabId: string): boolean {
+  return tabId.startsWith(ARTIFACT_TAB_PREFIX);
+}
+export function artifactIdFromTab(tabId: string): string {
+  return tabId.slice(ARTIFACT_TAB_PREFIX.length);
+}
+export function artifactTabId(artifactId: string): string {
+  return `${ARTIFACT_TAB_PREFIX}${artifactId}`;
+}
 
 const STORAGE_KEY = 'pw-cos-popout-tree';
 const SLACK_MODE_STORAGE_KEY = 'pw-cos-slack-mode';
@@ -25,6 +32,19 @@ const SHOW_RESOLVED_STORAGE_KEY = 'pw-cos-show-resolved';
 const SHOW_ARCHIVED_STORAGE_KEY = 'pw-cos-show-archived';
 const THREAD_FILTER_STORAGE_KEY = 'pw-cos-thread-filter';
 const ACTIVE_THREAD_STORAGE_KEY = 'pw-cos-active-thread';
+
+// Legacy drawer LocalStorage keys — read once at boot to migrate any tabs the
+// user had open under the old floating-drawer architecture back into the tree,
+// then deleted so we don't double-migrate on the next reload.
+const LEGACY_ARTIFACT_DRAWER_KEY = 'pw-cos-artifact-drawer';
+const LEGACY_THREAD_DRAWER_KEY = 'pw-cos-thread-drawer';
+
+// Tab ids that previously existed in a persisted tree but are no longer
+// resolved by CosPopoutTreeView. Without this list, the resolve() fallback
+// renders them as a tab labeled with the raw id (e.g. "cos-thread:main").
+const LEGACY_TAB_IDS = new Set<string>([
+  'cos-thread:main', // renamed to 'thread:active'
+]);
 
 function buildDefault(): LayoutTree {
   return {
@@ -42,62 +62,84 @@ function buildDefault(): LayoutTree {
 function loadTree(): LayoutTree {
   try {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null;
-    if (!raw) return buildDefault();
-    const parsed = JSON.parse(raw) as LayoutTree;
-    if (!parsed?.root) return buildDefault();
-    // Ensure the chat tab is always present in at least one leaf; if not, fall
-    // back to the default layout so the user never gets stuck without chat.
-    if (!findLeafWithTabLocal(parsed.root, COS_POPOUT_CHAT_TAB)) return buildDefault();
-    // Artifacts now render as a drawer overlay (not a tree split). Migrate any
-    // legacy `artifact:*` tabs out of the tree and reopen them in the drawer.
-    migrateArtifactTabsToDrawer(parsed);
-    // Thread is also a drawer overlay now — strip stale tree tabs.
-    migrateLegacyThreadTab(parsed);
-    return parsed;
+    let tree: LayoutTree;
+    if (!raw) {
+      tree = buildDefault();
+    } else {
+      const parsed = JSON.parse(raw) as LayoutTree;
+      if (!parsed?.root) tree = buildDefault();
+      else if (!findLeafWithTabLocal(parsed.root, COS_POPOUT_CHAT_TAB)) tree = buildDefault();
+      else tree = parsed;
+    }
+    // One-shot reverse migration: lift any artifact / thread tabs that were
+    // stored in the legacy drawer LS back into the tree, then drop the LS keys.
+    migrateDrawerStateToTree(tree);
+    stripLegacyTabs(tree);
+    return tree;
   } catch {
     return buildDefault();
   }
 }
 
-function migrateArtifactTabsToDrawer(tree: LayoutTree) {
-  const migrated: string[] = [];
-  for (const leaf of getAllLeavesLocal(tree.root)) {
-    const keep: string[] = [];
-    for (const tab of leaf.tabs) {
-      if (tab.startsWith('artifact:')) {
-        migrated.push(tab.slice('artifact:'.length));
-      } else {
-        keep.push(tab);
+function migrateDrawerStateToTree(tree: LayoutTree) {
+  if (typeof localStorage === 'undefined') return;
+  let mutated = false;
+
+  // Artifact drawer → artifact:* tabs in the chat leaf.
+  try {
+    const raw = localStorage.getItem(LEGACY_ARTIFACT_DRAWER_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { tabs?: string[] };
+      const ids = Array.isArray(parsed?.tabs) ? parsed.tabs.filter((t) => typeof t === 'string') : [];
+      if (ids.length > 0) {
+        const chatLeaf = findLeafWithTabLocal(tree.root, COS_POPOUT_CHAT_TAB);
+        if (chatLeaf) {
+          for (const id of ids) {
+            const tabId = artifactTabId(id);
+            if (!chatLeaf.tabs.includes(tabId)) {
+              chatLeaf.tabs.push(tabId);
+              mutated = true;
+            }
+          }
+        }
       }
+      localStorage.removeItem(LEGACY_ARTIFACT_DRAWER_KEY);
     }
-    if (keep.length !== leaf.tabs.length) {
-      leaf.tabs = keep;
-      if (leaf.activeTabId && !keep.includes(leaf.activeTabId)) {
-        leaf.activeTabId = keep[0] ?? null;
+  } catch { /* ignore */ }
+
+  // Thread drawer → thread:active tab in the chat leaf, but only if the user
+  // had previously opened a thread (active-thread LS is set).
+  try {
+    const drawerRaw = localStorage.getItem(LEGACY_THREAD_DRAWER_KEY);
+    if (drawerRaw) {
+      const activeRaw = localStorage.getItem(ACTIVE_THREAD_STORAGE_KEY);
+      if (activeRaw) {
+        const chatLeaf = findLeafWithTabLocal(tree.root, COS_POPOUT_CHAT_TAB);
+        if (chatLeaf && !chatLeaf.tabs.includes(COS_POPOUT_THREAD_TAB)) {
+          chatLeaf.tabs.push(COS_POPOUT_THREAD_TAB);
+          mutated = true;
+        }
       }
+      localStorage.removeItem(LEGACY_THREAD_DRAWER_KEY);
     }
-  }
-  if (migrated.length === 0) return;
-  cleanupEmptyLeaves(tree);
-  // Defer drawer mutation to after the tree signal is constructed.
-  if (typeof queueMicrotask === 'function') {
-    queueMicrotask(() => migrated.forEach(openArtifactDrawerTab));
-  } else {
-    setTimeout(() => migrated.forEach(openArtifactDrawerTab), 0);
+  } catch { /* ignore */ }
+
+  if (mutated) {
+    // No commit() here — caller is loadTree() and the signal isn't constructed
+    // yet. The mutated tree gets handed back to the signal initializer.
   }
 }
 
-function migrateLegacyThreadTab(tree: LayoutTree) {
-  let stripped = false;
+function stripLegacyTabs(tree: LayoutTree) {
   for (const leaf of getAllLeavesLocal(tree.root)) {
-    if (!leaf.tabs.includes(LEGACY_COS_POPOUT_THREAD_TAB)) continue;
-    leaf.tabs = leaf.tabs.filter((t) => t !== LEGACY_COS_POPOUT_THREAD_TAB);
-    if (leaf.activeTabId === LEGACY_COS_POPOUT_THREAD_TAB) {
-      leaf.activeTabId = leaf.tabs[0] ?? null;
+    const next = leaf.tabs.filter((t) => !LEGACY_TAB_IDS.has(t));
+    if (next.length === leaf.tabs.length) continue;
+    leaf.tabs = next;
+    if (leaf.activeTabId && !next.includes(leaf.activeTabId)) {
+      leaf.activeTabId = next[0] ?? null;
     }
-    stripped = true;
   }
-  if (stripped) cleanupEmptyLeaves(tree);
+  cleanupEmptyLeaves(tree);
 }
 
 function persist() {
@@ -145,6 +187,10 @@ export function cosFindLeafWithTab(tabId: string): LeafNode | null {
   return findLeafWithTabLocal(cosPopoutTree.value.root, tabId);
 }
 
+export function cosGetAllLeaves(): LeafNode[] {
+  return getAllLeavesLocal(cosPopoutTree.value.root);
+}
+
 // --- ID generation ---
 
 let _counter = 0;
@@ -172,7 +218,6 @@ export function cosAddTabToLeaf(leafId: string, tabId: string, activate = true) 
   const leaf = findLeafLocal(tree.root, leafId);
   if (!leaf) return;
 
-  // Remove from any other leaf that holds this tab.
   for (const other of getAllLeavesLocal(tree.root)) {
     if (other.id === leafId) continue;
     if (other.tabs.includes(tabId)) {
@@ -186,19 +231,10 @@ export function cosAddTabToLeaf(leafId: string, tabId: string, activate = true) 
   if (!leaf.tabs.includes(tabId)) leaf.tabs.push(tabId);
   if (activate) leaf.activeTabId = tabId;
 
-  // Drop any leaves that became empty as a result of the move (except the
-  // root-leaf fallback — that one is allowed to be empty if chat moved away,
-  // though we try to avoid that case).
   cleanupEmptyLeaves(tree);
-
   commit(tree);
 }
 
-/**
- * Replace a leaf with a new split. `newTabs` becomes the new sibling leaf.
- * `position` determines whether the new leaf appears before or after the
- * original, and along which axis.
- */
 export function cosSplitLeafAtPosition(
   leafId: string,
   position: PanePosition,
@@ -215,15 +251,22 @@ export function cosSplitLeaf(
   newPosition: 'first' | 'second',
   newTabs: string[],
   ratio = 0.5,
+  moveActiveTab = false,
 ): string | null {
   const tree = clone(cosPopoutTree.value);
   const leaf = findLeafLocal(tree.root, leafId);
   const parent = findParentLocal(tree.root, leafId);
   if (!leaf) return null;
 
-  // If any of the requested tabs already exist in another leaf, remove them
-  // from that leaf first — tabs are unique per tree.
-  for (const tab of newTabs) {
+  const tabsForNew = [...newTabs];
+  if (moveActiveTab && tabsForNew.length === 0 && leaf.activeTabId && leaf.tabs.length > 1) {
+    const movingTab = leaf.activeTabId;
+    tabsForNew.push(movingTab);
+    leaf.tabs = leaf.tabs.filter((t) => t !== movingTab);
+    leaf.activeTabId = leaf.tabs[0] ?? null;
+  }
+
+  for (const tab of tabsForNew) {
     for (const other of getAllLeavesLocal(tree.root)) {
       if (other.id === leafId) continue;
       if (other.tabs.includes(tab)) {
@@ -234,13 +277,23 @@ export function cosSplitLeaf(
       }
     }
   }
+  // Cleanup BEFORE the split is placed: any leaf emptied by the tab moves
+  // above is folded into its sibling. Doing this after adding the new (often
+  // empty) leaf would collapse it back out — defeating the user's split.
+  cleanupEmptyLeaves(tree);
+
+  // Re-resolve leaf/parent: cleanupEmptyLeaves may have promoted a sibling,
+  // changing the parent reference, but `leaf` itself is preserved.
+  const leafAfter = findLeafLocal(tree.root, leafId);
+  const parentAfter = findParentLocal(tree.root, leafId);
+  if (!leafAfter) return null;
 
   const newLeaf: LeafNode = {
     type: 'leaf',
     id: genId('cos-leaf'),
     panelType: 'tabs',
-    tabs: [...newTabs],
-    activeTabId: newTabs[0] ?? null,
+    tabs: [...tabsForNew],
+    activeTabId: tabsForNew[0] ?? null,
   };
 
   const split: SplitNode = {
@@ -249,19 +302,18 @@ export function cosSplitLeaf(
     direction,
     ratio,
     children: newPosition === 'second'
-      ? [structuredClone(leaf), newLeaf]
-      : [newLeaf, structuredClone(leaf)],
+      ? [structuredClone(leafAfter), newLeaf]
+      : [newLeaf, structuredClone(leafAfter)],
   };
 
-  if (!parent) {
+  if (!parentAfter) {
     tree.root = split;
   } else {
-    if (parent.children[0].id === leafId) parent.children[0] = split;
-    else parent.children[1] = split;
+    if (parentAfter.children[0].id === leafId) parentAfter.children[0] = split;
+    else parentAfter.children[1] = split;
   }
 
   tree.focusedLeafId = newLeaf.id;
-  cleanupEmptyLeaves(tree);
   commit(tree);
   return newLeaf.id;
 }
@@ -306,11 +358,87 @@ export function cosSetFocusedLeaf(leafId: string | null) {
   commit(tree);
 }
 
+export function cosMoveTab(fromLeafId: string, toLeafId: string, tabId: string, activate = true) {
+  if (fromLeafId === toLeafId) return;
+  const tree = clone(cosPopoutTree.value);
+  const from = findLeafLocal(tree.root, fromLeafId);
+  const to = findLeafLocal(tree.root, toLeafId);
+  if (!from || !to) return;
+
+  from.tabs = from.tabs.filter((t) => t !== tabId);
+  if (from.activeTabId === tabId) {
+    from.activeTabId = from.tabs[0] ?? null;
+  }
+  if (!to.tabs.includes(tabId)) to.tabs.push(tabId);
+  if (activate) to.activeTabId = tabId;
+
+  cleanupEmptyLeaves(tree);
+  commit(tree);
+}
+
+export function cosReorderTabInLeaf(leafId: string, tabId: string, insertBeforeTabId: string | null) {
+  const tree = clone(cosPopoutTree.value);
+  const leaf = findLeafLocal(tree.root, leafId);
+  if (!leaf) return;
+  const idx = leaf.tabs.indexOf(tabId);
+  if (idx < 0) return;
+  leaf.tabs.splice(idx, 1);
+  if (insertBeforeTabId) {
+    const targetIdx = leaf.tabs.indexOf(insertBeforeTabId);
+    if (targetIdx >= 0) leaf.tabs.splice(targetIdx, 0, tabId);
+    else leaf.tabs.push(tabId);
+  } else {
+    leaf.tabs.push(tabId);
+  }
+  commit(tree);
+}
+
 /**
- * Walk the tree and collapse any split that has an empty leaf child (the
- * sibling is promoted in its place). The root leaf is preserved even when
- * empty — we always want at least one leaf to render. The chat tab is the
- * only tab that isn't allowed to be orphaned; we never remove it implicitly.
+ * Merge a leaf into its sibling — promotes the sibling in place. If the leaf
+ * still holds tabs, those tabs migrate to the first leaf in the sibling.
+ * No-op if the leaf is the root (no sibling exists).
+ */
+export function cosMergeLeaf(leafId: string) {
+  const tree = clone(cosPopoutTree.value);
+  const leaf = findLeafLocal(tree.root, leafId);
+  const parent = findParentLocal(tree.root, leafId);
+  if (!parent || !leaf) return;
+
+  const sibling = parent.children[0].id === leafId ? parent.children[1] : parent.children[0];
+
+  if (leaf.tabs.length > 0) {
+    const targetLeaves = getAllLeavesLocal(sibling);
+    const target = targetLeaves[0];
+    if (target) {
+      for (const t of leaf.tabs) {
+        if (!target.tabs.includes(t)) target.tabs.push(t);
+      }
+      if (!target.activeTabId && leaf.activeTabId) target.activeTabId = leaf.activeTabId;
+    }
+  }
+
+  const grandparent = findParentLocal(tree.root, parent.id);
+  const sibClone = structuredClone(sibling);
+  if (!grandparent) {
+    tree.root = sibClone;
+  } else {
+    if (grandparent.children[0].id === parent.id) grandparent.children[0] = sibClone;
+    else grandparent.children[1] = sibClone;
+  }
+
+  if (tree.focusedLeafId === leafId) {
+    const firstLeaf = getAllLeavesLocal(tree.root)[0];
+    tree.focusedLeafId = firstLeaf?.id ?? null;
+  }
+
+  cleanupEmptyLeaves(tree);
+  commit(tree);
+}
+
+/**
+ * Walk the tree and collapse any split that has an empty leaf child. The chat
+ * tab must always remain present somewhere; we never auto-collapse a leaf that
+ * still holds it.
  */
 function cleanupEmptyLeaves(tree: LayoutTree) {
   let changed = true;
@@ -321,11 +449,7 @@ function cleanupEmptyLeaves(tree: LayoutTree) {
     for (const leaf of leaves) {
       if (leaf.tabs.length > 0) continue;
       const parent = findParentLocal(tree.root, leaf.id);
-      if (!parent) continue; // can't remove the root
-      // Clone the sibling so the collapsed node is a fresh reference — if we
-      // hoisted the nested child directly into root, Preact signal subscribers
-      // that compared `tree.root.id` or held a reference to the sub-node
-      // could miss the change.
+      if (!parent) continue;
       const sibling = structuredClone(
         parent.children[0].id === leaf.id ? parent.children[1] : parent.children[0]
       );
@@ -347,16 +471,54 @@ function cleanupEmptyLeaves(tree: LayoutTree) {
 }
 
 /**
- * Open an artifact in the popout drawer overlay. Artifacts no longer split
- * the tree — splitting forced Preact to remount the chat under a new
- * SplitPane parent, which lost scroll position and felt jarring. The
- * drawer floats over the chat content and can be closed/resized in place.
- *
- * `position` is accepted for back-compat with older callers but is ignored.
+ * Pick the leaf that should host new companion tabs (artifacts, threads,
+ * learnings). Prefers the chat-tab leaf so companions sit next to chat.
  */
-export function cosOpenArtifactTab(artifactId: string, _position: PanePosition = 'right') {
-  void _position;
-  openArtifactDrawerTab(artifactId);
+function pickAnchorLeafId(): string {
+  const tree = cosPopoutTree.value;
+  const chatLeaf = findLeafWithTabLocal(tree.root, COS_POPOUT_CHAT_TAB);
+  if (chatLeaf) return chatLeaf.id;
+  if (tree.focusedLeafId) {
+    const focused = findLeafLocal(tree.root, tree.focusedLeafId);
+    if (focused) return focused.id;
+  }
+  const anyLeaf = getAllLeavesLocal(tree.root)[0];
+  return anyLeaf?.id ?? COS_POPOUT_ROOT_LEAF;
+}
+
+/**
+ * Open an artifact as a tree tab. If the tab already exists anywhere in the
+ * tree, just activate it. Otherwise add it to the chat leaf.
+ */
+export function cosOpenArtifactTab(artifactId: string) {
+  const tabId = artifactTabId(artifactId);
+  const existing = cosFindLeafWithTab(tabId);
+  if (existing) {
+    if (existing.activeTabId !== tabId) cosSetActiveTab(existing.id, tabId);
+    return;
+  }
+  cosAddTabToLeaf(pickAnchorLeafId(), tabId, true);
+}
+
+/**
+ * Close all artifact:* tabs, leaving the rest of the tree intact.
+ */
+export function cosCloseAllArtifactTabs() {
+  const tree = clone(cosPopoutTree.value);
+  let mutated = false;
+  for (const leaf of getAllLeavesLocal(tree.root)) {
+    const next = leaf.tabs.filter((t) => !isArtifactTab(t));
+    if (next.length !== leaf.tabs.length) {
+      leaf.tabs = next;
+      if (leaf.activeTabId && !next.includes(leaf.activeTabId)) {
+        leaf.activeTabId = next[0] ?? null;
+      }
+      mutated = true;
+    }
+  }
+  if (!mutated) return;
+  cleanupEmptyLeaves(tree);
+  commit(tree);
 }
 
 /**
@@ -388,8 +550,6 @@ function loadSlackMode(): boolean {
   try {
     if (typeof localStorage === 'undefined') return true;
     const v = localStorage.getItem(SLACK_MODE_STORAGE_KEY);
-    // Default ON so thread replies open in a companion pane instead of
-    // expanding inline. Only an explicit '0' opts out.
     return v !== '0';
   } catch { return true; }
 }
@@ -409,11 +569,6 @@ export function setCosSlackMode(next: boolean) {
   }
 }
 
-/**
- * Per-bubble visibility filters for resolved / archived threads. Both default
- * to false so the operator only sees the active triage queue. Persisted across
- * sessions so the user's preferred filter state sticks.
- */
 function loadFlag(key: string): boolean {
   try {
     if (typeof localStorage === 'undefined') return false;
@@ -442,12 +597,6 @@ export function setCosShowArchived(next: boolean) {
   } catch { /* ignore */ }
 }
 
-/**
- * Exclusive filter mode that overrides the show-resolved/show-archived
- * include-toggles when set. `default` defers to those toggles. `drafts`
- * shows only threads that have at least one saved draft (and the new-thread
- * scope if it has any). `archived` shows only archived threads.
- */
 export type CosThreadFilter = 'default' | 'drafts' | 'archived';
 
 function loadThreadFilter(): CosThreadFilter {
@@ -488,9 +637,6 @@ function loadActiveThread(): CosActiveThread | null {
 
 export const cosActiveThread = signal<CosActiveThread | null>(loadActiveThread());
 
-// Persist the active thread so reload reopens the same thread instead of
-// landing on the empty "pick a thread" placeholder. ThreadPanel auto-closes
-// itself if the thread no longer exists, so a stale value is harmless.
 effect(() => {
   const v = cosActiveThread.value;
   try {
@@ -502,23 +648,17 @@ effect(() => {
 
 // Close any open artifact panes when the active thread changes. Artifacts are
 // scoped to a thread; carrying them across switches confuses the operator.
-// Skip the initial subscribe run so reload doesn't wipe a freshly-restored
-// drawer state.
 let prevActiveThreadKey: string | null | undefined = undefined;
 effect(() => {
   const v = cosActiveThread.value;
   const key = v ? `${v.agentId}::${v.threadKey}` : null;
   if (prevActiveThreadKey !== undefined && prevActiveThreadKey !== key) {
-    closeArtifactDrawer();
+    cosCloseAllArtifactTabs();
   }
   prevActiveThreadKey = key;
 });
 
 // --- Per-thread composer drafts ---
-//
-// Drafts are keyed by `${agentId}::${threadKey}` and persisted across reloads
-// and thread switches so a half-typed reply isn't lost when the operator
-// flips between threads.
 
 const THREAD_DRAFTS_STORAGE_KEY = 'pw-cos-thread-drafts';
 
@@ -570,35 +710,174 @@ export function clearThreadDraft(agentId: string, threadKey: string) {
 }
 
 /**
- * Open the slack-mode thread companion. The thread renders as an overlay
- * drawer over the chat (see `cos-thread-drawer`) — this just makes sure the
- * drawer is visible. The actual thread to render is keyed off
- * `cosActiveThread`, which the caller sets before invoking this.
- *
- * `_position` is accepted for back-compat with older callers but ignored.
+ * Open the slack-mode thread companion as a right-edge companion drawer. If
+ * the tab is already open anywhere, just activate it; otherwise dock it to
+ * the popout's right edge as a side companion (a top-level horizontal split
+ * with the thread on the right at a narrow ratio).
  */
 export function cosOpenThreadTab(_position: PanePosition = 'right') {
   void _position;
-  setThreadDrawerVisible(true);
+  const existing = cosFindLeafWithTab(COS_POPOUT_THREAD_TAB);
+  if (existing) {
+    if (existing.activeTabId !== COS_POPOUT_THREAD_TAB) {
+      cosSetActiveTab(existing.id, COS_POPOUT_THREAD_TAB);
+    }
+    return;
+  }
+  cosDockTabToEdge(COS_POPOUT_THREAD_TAB, 'R');
 }
 
 export function cosCloseThreadTab() {
-  setThreadDrawerVisible(false);
+  const existing = cosFindLeafWithTab(COS_POPOUT_THREAD_TAB);
+  if (!existing) return;
+  cosRemoveTabFromLeaf(existing.id, COS_POPOUT_THREAD_TAB);
 }
 
-function pickAnchorLeafId(): string {
-  const tree = cosPopoutTree.value;
-  // Prefer the leaf that holds the chat tab — it's the "anchor" the user sees.
-  const chatLeaf = findLeafWithTabLocal(tree.root, COS_POPOUT_CHAT_TAB);
-  if (chatLeaf) return chatLeaf.id;
-  if (tree.focusedLeafId) {
-    const focused = findLeafLocal(tree.root, tree.focusedLeafId);
-    if (focused) return focused.id;
-  }
-  const anyLeaf = getAllLeavesLocal(tree.root)[0];
-  return anyLeaf?.id ?? COS_POPOUT_ROOT_LEAF;
+export function cosIsThreadOpen(): boolean {
+  return !!cosFindLeafWithTab(COS_POPOUT_THREAD_TAB);
 }
 
 export function cosResetPopoutTree() {
   commit(buildDefault());
+}
+
+const COMPANION_DRAWER_RATIO = 0.32;
+
+/**
+ * Dock a tab to a specific edge of the *popout itself* as a companion
+ * drawer. Reuses an existing root-level companion split on the same edge if
+ * one is already there; otherwise wraps the root in a fresh horizontal /
+ * vertical split with the new pane sized to a narrower ratio than a regular
+ * 50/50 split (`COMPANION_DRAWER_RATIO`).
+ *
+ * Edge → (split direction, child position):
+ *   'L' left  → horizontal, first
+ *   'R' right → horizontal, second
+ *   'T' top   → vertical,   first
+ *   'B' bottom→ vertical,   second
+ */
+export function cosDockTabToEdge(tabId: string, edge: 'L' | 'R' | 'T' | 'B', activate = true) {
+  const tree = clone(cosPopoutTree.value);
+
+  // Detach the tab from any leaf currently holding it.
+  for (const leaf of getAllLeavesLocal(tree.root)) {
+    if (leaf.tabs.includes(tabId)) {
+      leaf.tabs = leaf.tabs.filter((t) => t !== tabId);
+      if (leaf.activeTabId === tabId) leaf.activeTabId = leaf.tabs[0] ?? null;
+    }
+  }
+
+  const wantDir: SplitDirection = (edge === 'L' || edge === 'R') ? 'horizontal' : 'vertical';
+  const wantPos: 'first' | 'second' = (edge === 'L' || edge === 'T') ? 'first' : 'second';
+
+  // Try to reuse an existing root-level companion split on the same edge —
+  // when the user docks multiple tabs to the same edge they should land in
+  // the same companion pane.
+  if (tree.root.type === 'split' && tree.root.direction === wantDir) {
+    const idx = wantPos === 'first' ? 0 : 1;
+    const sideChild = tree.root.children[idx];
+    if (sideChild.type === 'leaf') {
+      if (!sideChild.tabs.includes(tabId)) sideChild.tabs.push(tabId);
+      if (activate) sideChild.activeTabId = tabId;
+      cleanupEmptyLeaves(tree);
+      commit(tree);
+      return;
+    }
+  }
+
+  // Otherwise, wrap the root in a new split with a fresh companion leaf on
+  // the chosen edge.
+  const newLeaf: LeafNode = {
+    type: 'leaf',
+    id: genId('cos-leaf'),
+    panelType: 'tabs',
+    tabs: [tabId],
+    activeTabId: tabId,
+  };
+  cleanupEmptyLeaves(tree);
+  const oldRoot = structuredClone(tree.root);
+  const ratio = wantPos === 'first' ? COMPANION_DRAWER_RATIO : 1 - COMPANION_DRAWER_RATIO;
+  const split: SplitNode = {
+    type: 'split',
+    id: genId('cos-split'),
+    direction: wantDir,
+    ratio,
+    children: wantPos === 'second' ? [oldRoot, newLeaf] : [newLeaf, oldRoot],
+  };
+  tree.root = split;
+  tree.focusedLeafId = newLeaf.id;
+  commit(tree);
+}
+
+// --- Collapsed-leaf / companion-drawer state ---
+//
+// `collapsed` is already on `LeafNode` (shared with the main pane tree).
+// When set, the leaf renders as a slim grab handle on the parent split's
+// adjacent edge — clicking expands it back. `collapseLeafToEdge` rotates the
+// parent split's direction + child order so the handle appears on the
+// requested edge regardless of where the leaf currently sits.
+
+export function cosToggleLeafCollapsed(leafId: string) {
+  const tree = clone(cosPopoutTree.value);
+  const leaf = findLeafLocal(tree.root, leafId);
+  if (!leaf) return;
+  leaf.collapsed = !leaf.collapsed;
+  if (!leaf.collapsed) leaf.collapsedOffset = 0;
+  commit(tree);
+}
+
+export function cosSetLeafCollapsed(leafId: string, collapsed: boolean) {
+  const tree = clone(cosPopoutTree.value);
+  const leaf = findLeafLocal(tree.root, leafId);
+  if (!leaf || leaf.collapsed === collapsed) return;
+  leaf.collapsed = collapsed;
+  if (!collapsed) leaf.collapsedOffset = 0;
+  commit(tree);
+}
+
+export function cosSetLeafCollapsedOffset(leafId: string, offset: number) {
+  const tree = clone(cosPopoutTree.value);
+  const leaf = findLeafLocal(tree.root, leafId);
+  if (!leaf) return;
+  leaf.collapsedOffset = offset;
+  commit(tree);
+}
+
+/**
+ * Collapse a leaf to a specific edge of its parent split. If the parent's
+ * direction doesn't already align with the chosen edge, the parent is rotated
+ * (direction swap + child re-order + ratio flip) so the handle ends up on the
+ * desired side without moving the leaf elsewhere in the tree.
+ *
+ * Edge → (parent direction, child position):
+ *   'W' left  → horizontal, first
+ *   'E' right → horizontal, second
+ *   'N' top   → vertical,   first
+ *   'S' bottom→ vertical,   second
+ */
+export function cosCollapseLeafToEdge(leafId: string, edge: 'N' | 'S' | 'E' | 'W') {
+  const tree = clone(cosPopoutTree.value);
+  const leaf = findLeafLocal(tree.root, leafId);
+  const parent = findParentLocal(tree.root, leafId);
+  if (!leaf) return;
+  leaf.collapsed = true;
+  leaf.collapsedOffset = 0;
+
+  if (parent) {
+    const wantDir: 'horizontal' | 'vertical' = (edge === 'E' || edge === 'W') ? 'horizontal' : 'vertical';
+    const wantFirst = (edge === 'W' || edge === 'N');
+    const currentIdx = parent.children[0].id === leafId ? 0 : 1;
+    const currentFirst = currentIdx === 0;
+
+    if (parent.direction !== wantDir) parent.direction = wantDir;
+    if (currentFirst !== wantFirst) {
+      const other = parent.children[currentIdx === 0 ? 1 : 0];
+      parent.children = wantFirst
+        ? [parent.children[currentIdx], other] as [PaneNode, PaneNode]
+        : [other, parent.children[currentIdx]] as [PaneNode, PaneNode];
+      parent.ratio = 1 - parent.ratio;
+    }
+  }
+
+  commit(tree);
 }

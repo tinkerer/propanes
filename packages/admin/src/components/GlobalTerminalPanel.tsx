@@ -430,9 +430,11 @@ function PaneTabBar({
         const isActive = sid === activeId;
         const sess = (isIsolate || isUrl || isArtifact) ? null : sessionMap.get(realSid);
         const isPlain = !isCompanion && sess?.permissionProfile === 'plain';
-        const plainLabel = sess?.paneCommand
-          ? `${sess.paneCommand}:${sess.panePath || ''} \u2014 ${sess?.paneTitle || realSid.slice(-6)}`
-          : (sess?.paneTitle || realSid.slice(-6));
+        const plainLabel = sess?.title
+          ? sess.title
+          : sess?.paneCommand
+            ? `${sess.paneCommand}:${sess.panePath || ''} \u2014 ${sess?.paneTitle || realSid.slice(-6)}`
+            : (sess?.paneTitle || realSid.slice(-6));
         const customLabel = getSessionLabel(sid);
         const companionLabel = isJsonl ? `JSONL: ${sess?.feedbackTitle || sess?.agentName || realSid.slice(-6)}`
           : isFeedback ? `FB: ${sess?.feedbackTitle || realSid.slice(-6)}`
@@ -443,7 +445,7 @@ function PaneTabBar({
           : isArtifact ? (() => { const art = cosArtifacts.value[realSid]; const prefix = art ? (art.kind === 'code' ? 'Code' : art.kind === 'table' ? 'Table' : 'List') : 'Artifact'; return `${prefix}: ${art?.label || realSid.slice(-6)}`; })()
           : '';
         const locationPrefix = !isCompanion && sess?.isHarness ? '\u{1F4E6}' : !isCompanion && sess?.isRemote ? '\u{1F310}' : '';
-        const raw = customLabel || (isCompanion ? companionLabel : isPlain ? `${locationPrefix || '\u{1F5A5}\uFE0F'} ${plainLabel}` : `${locationPrefix ? locationPrefix + ' ' : ''}${sess?.feedbackTitle || sess?.agentName || `Session ${sid.slice(-6)}`}`);
+        const raw = customLabel || (isCompanion ? companionLabel : isPlain ? `${locationPrefix || '\u{1F5A5}\uFE0F'} ${plainLabel}` : `${locationPrefix ? locationPrefix + ' ' : ''}${sess?.title || sess?.feedbackTitle || sess?.agentName || `Session ${sid.slice(-6)}`}`);
         const tabLabel = raw;
         const tabTooltipParts: string[] = [];
         if (!isCompanion && sess?.isHarness) tabTooltipParts.push(`Harness: ${sess.harnessName || 'unknown'}`);

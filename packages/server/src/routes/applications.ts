@@ -405,7 +405,11 @@ applicationRoutes.post('/:id/run-action', async (c) => {
   if (!action) return c.json({ error: 'Action not found' }, 404);
 
   try {
-    const { sessionId } = await dispatchTerminalSession({ cwd: app.projectDir, appId: id });
+    const { sessionId } = await dispatchTerminalSession({
+      cwd: app.projectDir,
+      appId: id,
+      titlePrefix: action.id,
+    });
 
     (async () => {
       try {

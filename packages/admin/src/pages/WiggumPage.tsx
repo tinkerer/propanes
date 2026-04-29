@@ -5,7 +5,7 @@ import { SwarmDashboard } from '../components/SwarmDashboard.js';
 import { launchFAFOAssistant } from '../lib/agent-constants.js';
 import { selectedAppId } from '../lib/state.js';
 import { openSession } from '../lib/sessions.js';
-import { toggleCompanion } from '../lib/companion-state.js';
+import { openSessionLogDrawer } from '../lib/companion-state.js';
 
 interface WiggumIteration {
   iteration: number;
@@ -440,7 +440,7 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
                 {iter.sessionId.slice(0, 10)}...
               </a>
               <button
-                onClick={() => { openSession(iter.sessionId); toggleCompanion(iter.sessionId, 'jsonl'); }}
+                onClick={() => { openSessionLogDrawer(iter.sessionId); }}
                 style={{
                   fontSize: 9, padding: '1px 4px', background: 'rgba(100,181,246,0.15)',
                   border: '1px solid rgba(100,181,246,0.3)', borderRadius: 3,

@@ -84,6 +84,7 @@ export function CosInputToolbar({
   // CosComposer uses this to slot its Save-draft icon (+ split-button menu)
   // into the same row as send, instead of a separate row above.
   beforeSend,
+  submitting,
 }: {
   cameraGroupRef: RefObject<HTMLDivElement>;
   pickerGroupRef: RefObject<HTMLDivElement>;
@@ -135,6 +136,11 @@ export function CosInputToolbar({
   streaming?: boolean;
   onStop?: () => void;
   beforeSend?: ComponentChildren;
+  /** Composer is mid-send: server hasn't acked the POST /chat yet (or, in the
+   *  thread panel, the user message hasn't surfaced in the rendered transcript
+   *  yet). Renders a visible "Sending…" pill + swaps the send glyph for a
+   *  spinner so the operator gets immediate feedback that the click landed. */
+  submitting?: boolean;
 }) {
   const selected = cosSelectedCollectors.value;
   return (
@@ -380,6 +386,12 @@ export function CosInputToolbar({
         </span>
       )}
       <div class="cos-input-toolbar-spacer" />
+      {submitting && (
+        <span class="cos-sending-pill" role="status" aria-live="polite">
+          <span class="cos-sending-spinner" aria-hidden="true" />
+          Sending…
+        </span>
+      )}
       {beforeSend}
       {streaming && onStop && (
         <button
@@ -395,14 +407,23 @@ export function CosInputToolbar({
         </button>
       )}
       <button
-        class="cos-send"
+        class={`cos-send${streaming ? ' cos-send-queue-mode' : ''}${submitting ? ' cos-send-submitting' : ''}`}
         onClick={onSubmit}
-        disabled={!canSend}
-        title="Send (Enter)"
+        disabled={!canSend || submitting}
+        title={submitting ? 'Sending…' : (streaming ? 'Queue (Enter) — fires when current turn finishes' : 'Send (Enter)')}
       >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M5 12l14-7-7 14-2-5z" />
-        </svg>
+        {submitting ? (
+          <span class="cos-send-spinner" aria-hidden="true" />
+        ) : streaming ? (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+        ) : (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12l14-7-7 14-2-5z" />
+          </svg>
+        )}
       </button>
     </div>
   );

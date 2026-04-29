@@ -7,6 +7,7 @@ import {
   type ChiefOfStaffVerbosity,
   type CosImageAttachment,
   type CosElementRef,
+  type ChiefOfStaffMsg,
 } from '../lib/chief-of-staff.js';
 import {
   cosFollowups,
@@ -117,6 +118,43 @@ export function ThreadPanel({
   const anchorTs = userMsg?.timestamp;
   const sessionId = getSessionIdForThread(threadServerId);
   const isAgentStreaming = replies.some((r) => r.msg.streaming);
+
+  // Lift the JSONL stream up here so we can dedupe optimistic user messages
+  // against what's already landed on disk. The body below renders `projected`
+  // — same content, no extra fetch.
+  const { messages: jsonlRaw } = useTranscriptStream(sessionId || '', {
+    pollMs: sessionId ? undefined : 0,
+  });
+  const projected = useMemo(() => jsonlToCosMessages(jsonlRaw), [jsonlRaw]);
+
+  // Pending in-flight messages: optimistic rows from `agent.messages` for this
+  // thread that haven't surfaced in the JSONL yet. Without these, the operator
+  // hits send, the composer clears (POST 202 ack arrived), but the panel body
+  // stays empty until the next JSONL poll cycle — leaving a confusing gap
+  // where it looks like nothing happened. Rendering them inline closes the
+  // gap so "press send → see the message → input clears" all happens together.
+  const pendingMessages = useMemo<ChiefOfStaffMsg[]>(() => {
+    if (!agent) return [];
+    const projectedTexts = new Set<string>();
+    for (const p of projected) {
+      if (p.role === 'user' && p.text) projectedTexts.add(p.text.trim());
+    }
+    return agent.messages.filter((m) => {
+      if (m.role !== 'user') return false;
+      // Only this thread: match by threadId when known, else by replyToTs ↔
+      // the anchor's timestamp (legacy/optimistic rows have no threadId yet).
+      const matchesThread = threadServerId
+        ? m.threadId === threadServerId
+        : (anchorTs != null && m.replyToTs === anchorTs);
+      if (!matchesThread) return false;
+      // Skip the anchor itself — it's already represented in JSONL as the
+      // first user_input.
+      if (anchorTs != null && m.timestamp === anchorTs) return false;
+      // Skip rows that JSONL already has by text match.
+      if (m.text && projectedTexts.has(m.text.trim())) return false;
+      return true;
+    });
+  }, [agent?.messages, projected, threadServerId, anchorTs]);
   // Title preview: first ~60 chars of the anchor user message, falls back to
   // the agent name. Helps the operator know which thread is in the panel
   // without needing to read message bodies.
@@ -207,6 +245,8 @@ export function ThreadPanel({
         verbosity={agent.verbosity || DEFAULT_VERBOSITY}
         showTools={showTools}
         onArtifactPopout={onArtifactPopout}
+        projected={projected}
+        pendingMessages={pendingMessages}
       />
       {threadDrafts.length > 0 && (
         <div class="cos-thread-panel-drafts">
@@ -261,12 +301,10 @@ export function ThreadPanel({
 }
 
 /**
- * Renders the thread's JSONL transcript as slack-style message rows. Polls
- * the session's JSONL via useTranscriptStream, projects ParsedMessage[] into
- * the bubble's ChiefOfStaffMsg[] shape via jsonlToCosMessages, and renders
- * each turn with MessageBubble — the same component the bubble's main chat
- * uses. So avatars, author headers, timestamps, and tool-call chips all
- * match the main bubble.
+ * Renders the thread's JSONL transcript as slack-style message rows. The
+ * parent panel owns the JSONL fetch + projection so it can also dedupe
+ * optimistic in-flight rows; this component just paints the projected list +
+ * any still-pending messages at the bottom with a "sending" visual.
  */
 function ThreadPanelBody({
   sessionId,
@@ -275,6 +313,8 @@ function ThreadPanelBody({
   verbosity,
   showTools,
   onArtifactPopout,
+  projected,
+  pendingMessages,
 }: {
   sessionId: string | null;
   agentId: string;
@@ -282,13 +322,11 @@ function ThreadPanelBody({
   verbosity: ChiefOfStaffVerbosity;
   showTools: boolean;
   onArtifactPopout: (artifactId: string) => void;
+  projected: ChiefOfStaffMsg[];
+  pendingMessages: ChiefOfStaffMsg[];
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
-  const { messages, loading, error } = useTranscriptStream(sessionId || '', {
-    pollMs: sessionId ? undefined : 0,
-  });
-  const projected = useMemo(() => jsonlToCosMessages(messages), [messages]);
 
   // Stick to bottom when new messages arrive while pinned. Scroll listener
   // updates the pinned flag so manual scroll-up disables auto-stick.
@@ -306,7 +344,7 @@ function ThreadPanelBody({
   useEffect(() => {
     const el = scrollRef.current;
     if (el && wasAtBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [projected.length]);
+  }, [projected.length, pendingMessages.length]);
 
   if (!sessionId) {
     return (
@@ -321,11 +359,8 @@ function ThreadPanelBody({
 
   return (
     <div class="cos-thread-panel-jsonl" ref={scrollRef}>
-      {loading && projected.length === 0 && (
+      {projected.length === 0 && pendingMessages.length === 0 && (
         <div class="cos-thread-panel-empty-msg">Loading transcript…</div>
-      )}
-      {error && projected.length === 0 && (
-        <div class="cos-thread-panel-empty-msg" style="color:#f87171">{error}</div>
       )}
       {projected.map((msg, idx) => (
         <MessageBubble
@@ -340,6 +375,25 @@ function ThreadPanelBody({
           verbosity={verbosity}
           searchHighlight={null}
         />
+      ))}
+      {pendingMessages.map((msg, idx) => (
+        <div class="cos-msg-pending-wrap" key={`pending-${msg.timestamp}-${idx}`}>
+          <MessageBubble
+            msg={msg}
+            msgIdx={projected.length + idx}
+            highlighted={false}
+            showTools={showTools}
+            onArtifactPopout={onArtifactPopout}
+            agentId={agentId}
+            agentName={agentName}
+            verbosity={verbosity}
+            searchHighlight={null}
+          />
+          <span class="cos-msg-pending-pill" aria-live="polite">
+            <span class="cos-sending-spinner" aria-hidden="true" />
+            Sending…
+          </span>
+        </div>
       ))}
     </div>
   );
