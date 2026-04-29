@@ -20,6 +20,12 @@ import { SessionBridge } from './session.js';
 import { startPicker, type SelectedElementInfo } from './element-picker.js';
 import { OverlayPanelManager, type PanelType } from './overlay-panels.js';
 import { VoiceRecorder, type VoiceRecordingResult, type TimelineItem } from './voice-recorder.js';
+import {
+  installWidgetConsoleBuffer,
+  snapshotWidgetConsole,
+  formatWidgetConsoleEntries,
+  type ConsoleEntry,
+} from './console-buffer.js';
 
 type EventHandler = (data: unknown) => void;
 
@@ -80,6 +86,14 @@ function copyTextDeferred(textPromise: Promise<string>): Promise<void> {
 const STORAGE_SCREENSHOTS_KEY = 'pw-widget-screenshots';
 const STORAGE_SELECTIONS_KEY = 'pw-widget-selections';
 
+// Draft text key. Scoped per (appId, sessionId) so the operator never loses an
+// in-progress draft when switching tabs or apps. The legacy unscoped key
+// 'pw-widget-draft' is migrated to the scoped slot on first read.
+const LEGACY_DRAFT_KEY = 'pw-widget-draft';
+function widgetDraftKey(appId: string, sessionId: string): string {
+  return `widget:${appId || '__default__'}:${sessionId || '__nosess__'}`;
+}
+
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -134,9 +148,12 @@ function restoreSelectionsFromStorage(): SelectedElementInfo[] {
   } catch { return []; }
 }
 
-function clearWidgetDraftStorage() {
+function clearWidgetDraftStorage(appId?: string, sessionId?: string) {
   try {
-    localStorage.removeItem('pw-widget-draft');
+    localStorage.removeItem(LEGACY_DRAFT_KEY);
+    if (appId !== undefined && sessionId !== undefined) {
+      localStorage.removeItem(widgetDraftKey(appId, sessionId));
+    }
     localStorage.removeItem(STORAGE_SCREENSHOTS_KEY);
     localStorage.removeItem(STORAGE_SELECTIONS_KEY);
   } catch {}
@@ -158,9 +175,12 @@ export class ProPanesElement {
   private pickerCleanup: (() => void) | null = null;
   private overlayManager: OverlayPanelManager;
   private appId: string;
-  private savedDraft = (() => {
-    try { return localStorage.getItem('pw-widget-draft') || ''; } catch { return ''; }
-  })();
+  // Hydrated in constructor once appId + sessionId are known. Reads from the
+  // (appId, sessionId)-scoped key first, then falls back to the legacy
+  // unscoped 'pw-widget-draft' key so existing drafts aren't lost on upgrade.
+  private savedDraft = '';
+  private draftSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private consoleCapture: ConsoleEntry[] | null = null;
   private savedCollectors = new Set<string>();
   private pickerMultiSelect = false;
   private pickerExcludeWidget = true;
@@ -254,9 +274,16 @@ export class ProPanesElement {
 
     this.appId = this.extractAppId(this.config.appKey) || '__default__';
 
+    // Patch console BEFORE installing collectors so the widget's own console
+    // buffer captures everything that happens after page load. (Collectors
+    // patch console too — order doesn't matter as long as both wrap the
+    // original.)
+    installWidgetConsoleBuffer();
+
     this.loadHistory();
     this.loadDispatchMode();
     this.loadAdminAlwaysShow();
+    this.loadDraftFromStorage();
     installCollectors(this.config.collectors);
     this.render();
     this.bindShortcut();
@@ -343,6 +370,54 @@ export class ProPanesElement {
     } catch { /* ignore */ }
   }
 
+  private loadDraftFromStorage() {
+    try {
+      const scopedKey = widgetDraftKey(this.appId, this.getSessionId());
+      const scoped = localStorage.getItem(scopedKey);
+      if (scoped !== null) {
+        this.savedDraft = scoped;
+        return;
+      }
+      // Migrate legacy unscoped draft into the scoped slot once.
+      const legacy = localStorage.getItem(LEGACY_DRAFT_KEY);
+      if (legacy) {
+        this.savedDraft = legacy;
+        try { localStorage.setItem(scopedKey, legacy); } catch {}
+        try { localStorage.removeItem(LEGACY_DRAFT_KEY); } catch {}
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 300ms-debounced save. Mirrors the admin composer's autosave cadence so
+  // tab-close / reload doesn't lose more than one keystroke worth of work.
+  // Empty values delete the row, matching the cosDrafts convention (presence
+  // of the key == "this scope has unsent text").
+  private scheduleDraftSave(text: string) {
+    if (this.draftSaveTimer) clearTimeout(this.draftSaveTimer);
+    this.draftSaveTimer = setTimeout(() => {
+      this.draftSaveTimer = null;
+      this.savedDraft = text;
+      try {
+        const key = widgetDraftKey(this.appId, this.getSessionId());
+        if (text.length === 0) localStorage.removeItem(key);
+        else localStorage.setItem(key, text);
+      } catch { /* storage full or unavailable */ }
+    }, 300);
+  }
+
+  private flushDraftSave(text: string) {
+    if (this.draftSaveTimer) {
+      clearTimeout(this.draftSaveTimer);
+      this.draftSaveTimer = null;
+    }
+    this.savedDraft = text;
+    try {
+      const key = widgetDraftKey(this.appId, this.getSessionId());
+      if (text.length === 0) localStorage.removeItem(key);
+      else localStorage.setItem(key, text);
+    } catch { /* ignore */ }
+  }
+
   private setAdminAlwaysShow(on: boolean) {
     this.adminAlwaysShow = on;
     try {
@@ -399,7 +474,7 @@ export class ProPanesElement {
     const group = this.shadow.querySelector('.pw-send-group');
     const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement | null;
     const description = (input?.value || '').trim();
-    const imageOnly = !description && this.pendingScreenshots.length > 0 && !this.voiceResult && this.timelineItems.length === 0;
+    const imageOnly = !description && !this.consoleCapture && this.pendingScreenshots.length > 0 && !this.voiceResult && this.timelineItems.length === 0;
     const imgCount = this.pendingScreenshots.length;
     if (this.dispatchMode === 'auto') {
       btn.title = 'Submit & dispatch (auto)';
@@ -760,6 +835,229 @@ export class ProPanesElement {
       }
     };
     setTimeout(() => this.shadow.addEventListener('click', closeHandler), 0);
+  }
+
+  // Unified expand-menu, modeled on the admin InterruptBar. The single
+  // left-arrow toggle reveals Screenshot / DOM-select / Console capture / Mic
+  // entries — each with the same per-action option toggles the old toolbar
+  // exposed via separate dropdowns.
+  private toggleExpandMenu() {
+    const existing = this.shadow.querySelector('.pw-expand-menu');
+    if (existing) {
+      existing.remove();
+      const tog = this.shadow.querySelector('#pw-expand-toggle');
+      tog?.classList.remove('pw-expand-toggle-open');
+      tog?.setAttribute('aria-expanded', 'false');
+      return;
+    }
+
+    const group = this.shadow.querySelector('.pw-expand-group');
+    if (!group) return;
+
+    const toggle = this.shadow.querySelector('#pw-expand-toggle');
+    toggle?.classList.add('pw-expand-toggle-open');
+    toggle?.setAttribute('aria-expanded', 'true');
+
+    const menu = document.createElement('div');
+    menu.className = 'pw-expand-menu';
+    menu.setAttribute('role', 'menu');
+
+    const closeMenuAndCleanup = () => {
+      menu.remove();
+      toggle?.classList.remove('pw-expand-toggle-open');
+      toggle?.setAttribute('aria-expanded', 'false');
+    };
+
+    const makeGroup = (
+      label: string,
+      iconSvg: string,
+      onClick: () => void,
+      opts: Array<{ label: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; title?: string }>,
+      itemDisabled?: boolean,
+      itemExtraClass?: string,
+    ) => {
+      const grp = document.createElement('div');
+      grp.className = 'pw-expand-section';
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'pw-expand-item' + (itemExtraClass ? ` ${itemExtraClass}` : '');
+      btn.setAttribute('role', 'menuitem');
+      if (itemDisabled) btn.disabled = true;
+      btn.innerHTML = `${iconSvg}<span>${label}</span>`;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeMenuAndCleanup();
+        onClick();
+      });
+      grp.appendChild(btn);
+
+      if (opts.length > 0) {
+        const optsRow = document.createElement('div');
+        optsRow.className = 'pw-expand-opts';
+        for (const opt of opts) {
+          const label = document.createElement('label');
+          label.className = 'pw-expand-opt';
+          if (opt.title) label.title = opt.title;
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.checked = opt.checked;
+          if (opt.disabled) cb.disabled = true;
+          cb.addEventListener('change', () => opt.onChange(cb.checked));
+          const span = document.createElement('span');
+          span.textContent = opt.label;
+          label.append(cb, span);
+          optsRow.appendChild(label);
+        }
+        grp.appendChild(optsRow);
+      }
+      menu.appendChild(grp);
+    };
+
+    // --- Screenshot ---
+    makeGroup(
+      'Screenshot',
+      `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>`,
+      () => this.captureScreen(),
+      [
+        {
+          label: 'html-to-image',
+          checked: this.screenshotMethod === 'html-to-image',
+          title: 'html-to-image is silent; display-media asks for screen-share permission',
+          onChange: (v) => {
+            this.screenshotMethod = v ? 'html-to-image' : 'display-media';
+            if (v) {
+              this.keepStream = false;
+              stopScreencastStream();
+            }
+          },
+        },
+        {
+          label: 'exclude cursor',
+          checked: this.excludeCursor,
+          onChange: (v) => { this.excludeCursor = v; },
+        },
+        {
+          label: 'exclude widget',
+          checked: this.excludeWidget,
+          onChange: (v) => { this.excludeWidget = v; },
+        },
+      ],
+    );
+
+    // --- DOM select ---
+    makeGroup(
+      'DOM select',
+      `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h4V1H1v6h2V3zm0 14H1v6h6v-2H3v-4zm14 4h-4v2h6v-6h-2v4zM17 3V1h6v6h-2V3h-4z"/><circle cx="12" cy="12" r="3"/></svg>`,
+      () => this.startElementPicker(),
+      [
+        {
+          label: 'multi-select',
+          checked: this.pickerMultiSelect,
+          onChange: (v) => { this.pickerMultiSelect = v; },
+        },
+        {
+          label: 'include children',
+          checked: this.pickerIncludeChildren,
+          onChange: (v) => { this.pickerIncludeChildren = v; },
+        },
+        {
+          label: 'exclude widget',
+          checked: this.pickerExcludeWidget,
+          onChange: (v) => { this.pickerExcludeWidget = v; },
+        },
+      ],
+    );
+
+    // --- Console capture (no options) ---
+    makeGroup(
+      'Console capture',
+      `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
+      () => {
+        this.consoleCapture = snapshotWidgetConsole();
+        this.renderConsoleChip();
+        this.updateSendButtonTitle();
+      },
+      [],
+    );
+
+    // --- Microphone ---
+    const micRecording = this.voiceRecorder.recording;
+    makeGroup(
+      micRecording ? 'Stop recording' : 'Microphone',
+      `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>`,
+      () => this.toggleVoiceRecording(),
+      [
+        {
+          label: 'screen captures',
+          checked: this.micScreenCaptures,
+          disabled: micRecording,
+          title: 'Capture screenshots triggered by click/drag gestures while recording',
+          onChange: (v) => {
+            this.micScreenCaptures = v;
+            if (this.voiceRecorder.recording || this.voiceRecorder.ambient) {
+              if (v) this.voiceRecorder.enableScreenCaptures();
+              else this.voiceRecorder.disableScreenCaptures();
+            }
+          },
+        },
+        {
+          label: 'hide transcript',
+          checked: this.micHideTranscript,
+          onChange: (v) => { this.micHideTranscript = v; },
+        },
+        {
+          label: 'hide widget',
+          checked: this.micHideWidget,
+          onChange: (v) => { this.micHideWidget = v; },
+        },
+      ],
+      false,
+      micRecording ? 'pw-expand-item-recording' : undefined,
+    );
+
+    group.appendChild(menu);
+
+    const closeHandler = (e: Event) => {
+      if (!menu.contains(e.target as Node) && (e.target as Element)?.id !== 'pw-expand-toggle') {
+        closeMenuAndCleanup();
+        this.shadow.removeEventListener('click', closeHandler);
+      }
+    };
+    setTimeout(() => this.shadow.addEventListener('click', closeHandler), 0);
+  }
+
+  private renderConsoleChip() {
+    const chips = this.shadow.querySelector('#pw-attach-chips') as HTMLElement | null;
+    if (!chips) return;
+    // Drop any existing console chip; render a fresh one if a capture is held.
+    chips.querySelector('.pw-console-chip')?.remove();
+    if (this.consoleCapture && this.consoleCapture.length > 0) {
+      const chip = document.createElement('div');
+      chip.className = 'pw-attach-chip pw-console-chip';
+      const count = this.consoleCapture.length;
+      chip.innerHTML = `
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        <code>console &middot; ${count} ${count === 1 ? 'entry' : 'entries'}</code>
+      `;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'pw-attach-chip-remove';
+      remove.title = 'Remove console capture';
+      remove.setAttribute('aria-label', 'Remove console capture');
+      remove.textContent = '×';
+      remove.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.consoleCapture = null;
+        this.renderConsoleChip();
+        this.updateSendButtonTitle();
+      });
+      chip.appendChild(remove);
+      chips.appendChild(chip);
+    }
+    // Show/hide chips strip based on what's inside.
+    const hasAny = chips.children.length > 0;
+    chips.classList.toggle('pw-hidden', !hasAny);
   }
 
   private toggleContextMenu() {
@@ -1156,63 +1454,36 @@ export class ProPanesElement {
       <div class="pw-screenshots pw-hidden" id="pw-screenshots"></div>
       <div id="pw-selected-elements" class="pw-selected-elements pw-hidden"></div>
       <div class="pw-input-area">
-        <textarea class="pw-textarea" id="pw-chat-input" placeholder="What's on your mind?" rows="3" autocomplete="off"></textarea>
-        <div class="pw-toolbar">
-          ${this.sessionBridge.screenshotIncludeWidget ? `
-          <div class="pw-camera-group">
-            <button class="pw-camera-btn" id="pw-capture-btn" title="Capture screenshot">
-              <svg viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>
-            </button>
-            <button class="pw-camera-dropdown-toggle" id="pw-camera-dropdown" title="Screenshot options">
-              <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
-            </button>
-          </div>
-          <span class="pw-camera-countdown pw-hidden" id="pw-camera-countdown"></span>` : `
-          <button class="pw-camera-btn" id="pw-capture-btn" title="Capture screenshot">
-            <svg viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>
-          </button>
-          <span class="pw-camera-countdown pw-hidden" id="pw-camera-countdown"></span>`}
-          <div class="pw-picker-group">
-            <button class="pw-picker-btn" id="pw-picker-btn" title="Select an element">
-              <svg viewBox="0 0 24 24"><path d="M3 3h4V1H1v6h2V3zm0 14H1v6h6v-2H3v-4zm14 4h-4v2h6v-6h-2v4zM17 3V1h6v6h-2V3h-4zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm0 6a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>
-            </button>
-            <button class="pw-picker-dropdown-toggle" id="pw-picker-dropdown" title="Picker options">
-              <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
-            </button>
-          </div>
-          <div class="pw-context-group">
-            <button class="pw-context-btn" id="pw-context-btn" title="Context options">
-              <svg viewBox="0 0 24 24"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
-            </button>
-            <button class="pw-context-dropdown-toggle" id="pw-context-dropdown" title="Context options">
-              <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
-            </button>
-          </div>
-          <div class="pw-mic-group">
-            <button class="pw-mic-btn" id="pw-mic-btn" title="Voice recording">
-              <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
-            </button>
-            <button class="pw-mic-dropdown-toggle" id="pw-mic-dropdown" title="Mic options">
-              <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
-            </button>
-          </div>
-          <div class="pw-admin-group">
-            <button class="pw-admin-btn" id="pw-admin-btn" title="Admin panels"><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg></button>
-            <button class="pw-admin-dropdown-toggle" id="pw-admin-dropdown" title="Admin options"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></button>
-          </div>
-          ${this.sessionBridge.autoDispatch ? `
-          <div class="pw-send-group">
+        <div class="pw-attach-chips pw-hidden" id="pw-attach-chips"></div>
+        <div class="pw-composer-row">
+          <textarea class="pw-textarea" id="pw-chat-input" placeholder="What's on your mind?" rows="1" autocomplete="off"></textarea>
+          <div class="pw-toolbar">
+            <span class="pw-camera-countdown pw-hidden" id="pw-camera-countdown"></span>
+            <div class="pw-expand-group">
+              <button class="pw-expand-toggle" id="pw-expand-toggle" title="Attach screenshot, DOM selection, console, or voice capture" aria-expanded="false" aria-label="Attach context">
+                <svg viewBox="0 0 24 24"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6z"/></svg>
+              </button>
+            </div>
+            <div class="pw-admin-group">
+              <button class="pw-admin-btn" id="pw-admin-btn" title="Admin panels"><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.31.06-.63.06-.94 0-.31-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg></button>
+              <button class="pw-admin-dropdown-toggle" id="pw-admin-dropdown" title="Admin options"><svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></button>
+            </div>
+            ${this.sessionBridge.autoDispatch ? `
+            <div class="pw-send-group">
+              <button class="pw-send-btn" id="pw-send-btn" title="Send feedback">
+                <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+              </button>
+              <button class="pw-send-dropdown-toggle" id="pw-send-dropdown" title="Dispatch options">
+                <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+              </button>
+            </div>` : `
             <button class="pw-send-btn" id="pw-send-btn" title="Send feedback">
               <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-            </button>
-            <button class="pw-send-dropdown-toggle" id="pw-send-dropdown" title="Dispatch options">
-              <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
-            </button>
-          </div>` : `
-          <button class="pw-send-btn" id="pw-send-btn" title="Send feedback">
-            <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-          </button>`}
+            </button>`}
+          </div>
         </div>
+        <button class="pw-capture-btn-hidden pw-hidden" id="pw-capture-btn" aria-hidden="true" tabindex="-1"></button>
+        <button class="pw-mic-btn-hidden pw-hidden" id="pw-mic-btn" aria-hidden="true" tabindex="-1"></button>
       </div>
       <div id="pw-error" class="pw-error pw-hidden"></div>
     `;
@@ -1237,34 +1508,17 @@ export class ProPanesElement {
     this.shadow.appendChild(panel);
 
     const input = panel.querySelector('#pw-chat-input') as HTMLTextAreaElement;
-    const captureBtn = panel.querySelector('#pw-capture-btn') as HTMLButtonElement;
     const sendBtn = panel.querySelector('#pw-send-btn') as HTMLButtonElement;
-
-    const pickerBtn = panel.querySelector('#pw-picker-btn') as HTMLButtonElement;
-    const pickerDropdownBtn = panel.querySelector('#pw-picker-dropdown') as HTMLButtonElement | null;
 
     const adminBtn = panel.querySelector('#pw-admin-btn') as HTMLButtonElement | null;
     const adminDropdownBtn = panel.querySelector('#pw-admin-dropdown') as HTMLButtonElement | null;
 
-    const cameraDropdownBtn = panel.querySelector('#pw-camera-dropdown') as HTMLButtonElement | null;
-
-    const contextBtn = panel.querySelector('#pw-context-btn') as HTMLButtonElement | null;
-    const contextDropdownBtn = panel.querySelector('#pw-context-dropdown') as HTMLButtonElement | null;
-
-    const micBtn = panel.querySelector('#pw-mic-btn') as HTMLButtonElement;
-    micBtn.addEventListener('click', () => this.toggleVoiceRecording());
-    const micDropdownBtn = panel.querySelector('#pw-mic-dropdown') as HTMLButtonElement | null;
-    micDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleMicMenu(); });
+    const expandToggle = panel.querySelector('#pw-expand-toggle') as HTMLButtonElement | null;
+    expandToggle?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleExpandMenu(); });
 
     const closeBtn = panel.querySelector('#pw-close-btn') as HTMLButtonElement | null;
     closeBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.close(); });
 
-    captureBtn.addEventListener('click', () => this.captureScreen());
-    pickerBtn.addEventListener('click', () => this.startElementPicker());
-    pickerDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.togglePickerMenu(); });
-    cameraDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleCameraMenu(); });
-    contextBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleContextMenu(); });
-    contextDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleContextMenu(); });
     adminBtn?.addEventListener('click', () => this.toggleAdminOptions());
     adminDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleAdminMenu(); });
     sendBtn.addEventListener('click', () => this.handleSubmit());
@@ -1277,12 +1531,15 @@ export class ProPanesElement {
     // Restore screenshots and selected elements
     this.renderScreenshotThumbs();
     this.renderSelectedElementChips();
+    this.renderConsoleChip();
 
     this.updateSendButtonTitle(sendBtn);
 
+    // Auto-resize textarea: capped at 140px (matching the admin InterruptBar)
+    // so the toolbar never scrolls out of view on short panels.
     const autoResize = () => {
       input.style.height = 'auto';
-      const next = Math.max(input.scrollHeight, 40);
+      const next = Math.min(Math.max(input.scrollHeight, 40), 140);
       input.style.height = `${next}px`;
     };
     requestAnimationFrame(autoResize);
@@ -1290,7 +1547,7 @@ export class ProPanesElement {
     input.addEventListener('input', () => {
       this.updateSendButtonTitle(sendBtn);
       autoResize();
-      try { localStorage.setItem('pw-widget-draft', input.value); } catch {}
+      this.scheduleDraftSave(input.value);
     });
 
     input.addEventListener('keydown', (e: KeyboardEvent) => {
@@ -1565,8 +1822,9 @@ export class ProPanesElement {
     this.pendingScreenshots = [];
     this.selectedElements = [];
     this.voiceResult = null;
+    this.consoleCapture = null;
     this.currentDraft = '';
-    this.savedDraft = '';
+    this.flushDraftSave('');
     this.historyIndex = -1;
     const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement | null;
     if (input) {
@@ -1575,10 +1833,11 @@ export class ProPanesElement {
     }
     persistScreenshots([]);
     persistSelections([]);
-    clearWidgetDraftStorage();
+    clearWidgetDraftStorage(this.appId, this.getSessionId());
     this.renderScreenshotThumbs();
     this.renderSelectedElementChips();
     this.renderVoiceIndicator();
+    this.renderConsoleChip();
     this.exitTimeline();
     this.updateSendButtonTitle();
   }
@@ -2838,10 +3097,21 @@ export class ProPanesElement {
   private async handleSubmit() {
     const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement;
     const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement;
-    const description = input.value.trim();
+    const rawDescription = input.value.trim();
 
-    if (!description && this.pendingScreenshots.length === 0 && !this.voiceResult && this.timelineItems.length === 0) {
+    if (!rawDescription && this.pendingScreenshots.length === 0 && !this.voiceResult && this.timelineItems.length === 0 && !this.consoleCapture) {
       return;
+    }
+
+    // Console capture rides along inside the description as a fenced code
+    // block so the agent gets it without needing a new server-side schema.
+    // Mirrors how the admin InterruptBar appends "Recent browser console
+    // output:" to the resume prompt.
+    let description = rawDescription;
+    if (this.consoleCapture && this.consoleCapture.length > 0) {
+      const body = formatWidgetConsoleEntries(this.consoleCapture).slice(-4000);
+      const block = `Recent browser console output:\n\`\`\`\n${body}\n\`\`\``;
+      description = description ? `${description}\n\n---\n${block}` : block;
     }
 
     errorEl.classList.add('pw-hidden');
@@ -2863,14 +3133,15 @@ export class ProPanesElement {
         const appendResult = await this.submitAppend(this.appendTargetId, description);
         this.pendingScreenshots = [];
         this.selectedElements = [];
+        this.consoleCapture = null;
         input.value = '';
-        this.savedDraft = '';
-        clearWidgetDraftStorage();
+        this.flushDraftSave('');
+        clearWidgetDraftStorage(this.appId, this.getSessionId());
         this.appendTargetId = null;
         const appendedPaths: string[] = Array.isArray(appendResult?.screenshots)
           ? appendResult.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
           : [];
-        if (!description && appendedPaths.length > 0) {
+        if (!rawDescription && appendedPaths.length > 0) {
           resolveClipboard(appendedPaths.join(' '));
           this.showFlash(undefined, `${appendedPaths.length} path${appendedPaths.length === 1 ? '' : 's'} copied`);
         } else {
@@ -2894,8 +3165,12 @@ export class ProPanesElement {
 
     // Screenshot-only submission (no description, no voice, no selected elements, no timeline):
     // upload directly to /api/v1/screenshots — no feedback item created.
+    // Tested against rawDescription: a console attachment alone shouldn't
+    // demote the submission to a screenshot-only upload (the agent needs the
+    // logs).
     const isScreenshotOnly =
-      !description &&
+      !rawDescription &&
+      !this.consoleCapture &&
       this.pendingScreenshots.length > 0 &&
       !this.voiceResult &&
       this.selectedElements.length === 0 &&
@@ -2906,7 +3181,8 @@ export class ProPanesElement {
         const result = await this.submitScreenshotsOnly();
         this.pendingScreenshots = [];
         input.value = '';
-        clearWidgetDraftStorage();
+        this.flushDraftSave('');
+        clearWidgetDraftStorage(this.appId, this.getSessionId());
         this.exitTimeline();
         const screenshotPaths: string[] = Array.isArray(result?.screenshots)
           ? result.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
@@ -2923,17 +3199,22 @@ export class ProPanesElement {
 
       const result = await this.submitFeedback({ type: 'manual', title: '', description, autoDispatch: shouldDispatch }, this.getCheckedCollectors());
 
-      if (description) {
-        this.history.push(description);
+      // Push the *raw* user-typed description into history — not the
+      // console-enriched payload — so up-arrow recall doesn't replay the
+      // attached log block.
+      if (rawDescription) {
+        this.history.push(rawDescription);
         this.saveHistory();
       }
       this.historyIndex = -1;
       this.currentDraft = '';
-      this.savedDraft = '';
+      this.flushDraftSave('');
       this.pendingScreenshots = [];
       this.selectedElements = [];
+      this.consoleCapture = null;
       input.value = '';
-      clearWidgetDraftStorage();
+      clearWidgetDraftStorage(this.appId, this.getSessionId());
+      this.renderConsoleChip();
       this.exitTimeline();
 
       this.emit('submit', { type: 'manual', title: '', description, id: result?.id, appId: result?.appId });
@@ -2943,7 +3224,7 @@ export class ProPanesElement {
       const screenshotPaths: string[] = Array.isArray(result?.screenshots)
         ? result.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
         : [];
-      if (!description && screenshotPaths.length > 0) {
+      if (!rawDescription && screenshotPaths.length > 0) {
         resolveClipboard(screenshotPaths.join(' '));
         this.showFlash(undefined, `${screenshotPaths.length} path${screenshotPaths.length === 1 ? '' : 's'} copied`);
       } else {
@@ -3242,12 +3523,10 @@ export class ProPanesElement {
       this.pickerCleanup();
       this.pickerCleanup = null;
     }
-    // Save state before removing panel
+    // Save state before removing panel — flush so a fast close right after a
+    // keystroke doesn't lose the unsaved tail of the draft.
     const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement;
-    if (input) {
-      this.savedDraft = input.value;
-      try { localStorage.setItem('pw-widget-draft', input.value); } catch {}
-    }
+    if (input) this.flushDraftSave(input.value);
     persistScreenshots(this.pendingScreenshots);
     persistSelections(this.selectedElements);
     const panel = this.shadow.querySelector('.pw-panel');
