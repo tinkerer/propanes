@@ -8,6 +8,7 @@ import {
   markThreadLeaving,
 } from '../lib/chief-of-staff.js';
 import { cosShowResolved, cosShowArchived } from '../lib/cos-popout-tree.js';
+import { openThreadAsInteractive } from '../lib/sessions.js';
 
 export type RailStatus =
   | 'streaming'
@@ -17,7 +18,8 @@ export type RailStatus =
   | 'idle'
   | 'gc'
   | 'resolved'
-  | 'archived';
+  | 'archived'
+  | 'interactive';
 
 const STATUS_LABEL: Record<RailStatus, string> = {
   streaming: 'thinking',
@@ -28,6 +30,7 @@ const STATUS_LABEL: Record<RailStatus, string> = {
   gc: 'no session',
   resolved: 'resolved',
   archived: 'archived',
+  interactive: 'interactive (live TTY)',
 };
 
 type PopupState = {
@@ -181,6 +184,17 @@ export function CosThreadRail({
             role="menuitem"
             class="cos-thread-rail-popup-btn"
             onClick={() => {
+              void openThreadAsInteractive(popup.tid);
+              closePopup();
+            }}
+          >
+            {popup.status === 'interactive' ? 'Focus interactive panel' : 'Open as interactive'}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="cos-thread-rail-popup-btn"
+            onClick={() => {
               if (isArchivedStatus) {
                 void setThreadArchived(popup.tid, false);
               } else {
@@ -217,3 +231,4 @@ export function CosThreadRail({
     </>
   );
 }
+

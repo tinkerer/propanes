@@ -381,6 +381,17 @@ export function ChiefOfStaffBubble({
     const s = meta?.sessionStatus;
     if (s === 'failed' || s === 'killed') return 'failed';
     if (s === null || s === undefined) return 'gc';
+    if (s === 'running' || s === 'pending') {
+      // A running session that's an interactive TTY ("Open as interactive
+      // panel" was clicked) gets a distinct dot color so the operator can
+      // see at a glance which threads are live driveable terminals vs
+      // headless background turns.
+      const profile = meta?.sessionPermissionProfile;
+      if (profile === 'interactive-yolo' || profile === 'interactive-require') {
+        return 'interactive';
+      }
+      return 'streaming';
+    }
     // Agent finished a turn and the operator hasn't resolved it yet — the
     // reply is sitting awaiting triage. Distinct from 'idle' (no reply yet
     // / nothing to look at) and from 'unread' (louder, blinking).
