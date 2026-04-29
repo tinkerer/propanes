@@ -62,7 +62,7 @@ export function runCosTurnConsumer(params: {
    *  Used as the WS replay boundary (everything > startSeq is "this turn")
    *  and as the seq emitted in `turn_status: started`. */
   startSeq: number;
-  onAssistantText: (text: string, toolCalls: Map<string, { id: string; name: string; input: unknown; result?: string; error?: string }>, toolOrder: string[]) => void;
+  onAssistantText: (text: string, toolCalls: Map<string, { id: string; name: string; input: unknown; result?: string; error?: string }>, toolOrder: string[], images: { dataUrl: string; name?: string; mimeType?: string }[]) => void;
   onCapturedSessionId: (id: string) => void;
   onDone?: () => void;
 }): Promise<void> {
@@ -83,6 +83,7 @@ export function runCosTurnConsumer(params: {
     let finalAssistantText = '';
     const finalToolCallsById = new Map<string, { id: string; name: string; input: unknown; result?: string; error?: string }>();
     const finalToolCallOrder: string[] = [];
+    const finalImages: { dataUrl: string; name?: string; mimeType?: string }[] = [];
     let capturedSessionId: string | null = null;
     let seqCursor = 0;
 
@@ -98,7 +99,7 @@ export function runCosTurnConsumer(params: {
     const finish = (exitCode: number, cancelled = false) => {
       if (finished) return;
       finished = true;
-      onAssistantText(finalAssistantText, finalToolCallsById, finalToolCallOrder);
+      onAssistantText(finalAssistantText, finalToolCallsById, finalToolCallOrder, finalImages);
       if (capturedSessionId) onCapturedSessionId(capturedSessionId);
       publishStatus({ kind: 'completed', threadId, turnId, exitCode, cancelled });
       // Hold the replay buffer briefly so a subscriber that connected just
@@ -153,7 +154,28 @@ export function runCosTurnConsumer(params: {
           const call = finalToolCallsById.get(String(block.tool_use_id || ''));
           if (!call) continue;
           const raw = block.content;
-          let content = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw.map((c: any) => c?.text || JSON.stringify(c)).join('\n') : JSON.stringify(raw);
+          let content: string;
+          if (typeof raw === 'string') {
+            content = raw;
+          } else if (Array.isArray(raw)) {
+            const textParts: string[] = [];
+            for (const c of raw) {
+              if (c?.type === 'image' && c?.source?.type === 'base64' && typeof c.source.data === 'string') {
+                const mime = String(c.source.media_type || 'image/png');
+                const filePath = (call.input as any)?.file_path;
+                const name = typeof filePath === 'string' ? filePath.split('/').pop() : undefined;
+                finalImages.push({ dataUrl: `data:${mime};base64,${c.source.data}`, name, mimeType: mime });
+                textParts.push('[image attached]');
+              } else if (typeof c?.text === 'string') {
+                textParts.push(c.text);
+              } else {
+                textParts.push(JSON.stringify(c));
+              }
+            }
+            content = textParts.join('\n');
+          } else {
+            content = JSON.stringify(raw);
+          }
           if (content.length > 4000) content = `${content.slice(0, 4000)}…`;
           if (block.is_error) call.error = content; else call.result = content;
         }
@@ -278,14 +300,15 @@ export async function recoverInFlightTurns(): Promise<void> {
       threadId: threadIdForCallbacks,
       agentId: agentIdForCallbacks,
       startSeq: thread.turnStartSeq,
-      onAssistantText: (finalText, toolCallsById, toolOrder) => {
+      onAssistantText: (finalText, toolCallsById, toolOrder, images) => {
         if (!finalText) return;
         const now2 = Date.now();
         const toolCallsArr = toolOrder.map((id) => toolCallsById.get(id)).filter(Boolean);
+        const attachmentsJson = images.length > 0 ? JSON.stringify({ images }) : null;
         db.insert(schema.cosMessages).values({
           id: ulid(), threadId: threadIdForCallbacks, role: 'assistant', text: finalText,
           toolCallsJson: toolCallsArr.length > 0 ? JSON.stringify(toolCallsArr) : null,
-          attachmentsJson: null, createdAt: now2,
+          attachmentsJson, createdAt: now2,
         }).run();
         db.update(schema.cosThreads).set({ updatedAt: now2 }).where(eq(schema.cosThreads.id, threadIdForCallbacks)).run();
       },

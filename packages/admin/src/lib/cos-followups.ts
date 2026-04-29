@@ -209,9 +209,12 @@ effect(() => {
     if (!agent) continue;
 
     // Find messages in this thread. If any assistant message in the
-    // thread is still streaming, hold off.
+    // thread is still streaming, hold off. An empty match (synthetic
+    // threadServerId from "queue without active context", or stale id
+    // from a thread that no longer exists in this agent) falls through
+    // and dispatches immediately — replyToTs is what determines whether
+    // the send inherits a thread or spawns a fresh one.
     const threadMessages = agent.messages.filter((m) => m.threadId === first.threadServerId);
-    if (threadMessages.length === 0) continue;
     const stillStreaming = threadMessages.some((m) => m.streaming);
     if (stillStreaming) continue;
 

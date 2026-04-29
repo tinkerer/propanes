@@ -79,10 +79,12 @@ export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
     return `${prefix}: ${art?.label || realSid.slice(-6)}`;
   }
   const isPlainSess = s?.permissionProfile === 'plain';
-  const plainLabel = s?.paneCommand
-    ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s?.paneTitle || sid.slice(-6)}`
-    : (s?.paneTitle || sid.slice(-6));
-  return isPlainSess ? `\u{1F5A5}\uFE0F ${plainLabel}` : (s?.feedbackTitle || s?.agentName || `Session ${sid.slice(-6)}`);
+  const plainLabel = s?.title
+    ? s.title
+    : s?.paneCommand
+      ? `${s.paneCommand}:${s.panePath || ''} \u2014 ${s?.paneTitle || sid.slice(-6)}`
+      : (s?.paneTitle || sid.slice(-6));
+  return isPlainSess ? `\u{1F5A5}\uFE0F ${plainLabel}` : (s?.title || s?.feedbackTitle || s?.agentName || `Session ${sid.slice(-6)}`);
 }
 
 export function companionCopyId(sid: string, sessionMap: Map<string, any>): string | null {

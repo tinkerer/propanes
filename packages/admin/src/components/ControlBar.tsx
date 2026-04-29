@@ -24,6 +24,7 @@ function getSessionMruLabel(sessionId: string, sessionMap: Map<string, any>): st
   const custom = getSessionLabel(sessionId);
   if (custom) return custom;
   const sess = sessionMap.get(sessionId);
+  if (sess?.title) return sess.title;
   if (sess?.feedbackTitle) return sess.feedbackTitle;
   if (sess?.agentName) return sess.agentName;
   return `Session ${sessionId.slice(-6)}`;

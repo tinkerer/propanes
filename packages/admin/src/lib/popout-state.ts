@@ -361,6 +361,54 @@ export function updatePanel(panelId: string, updates: Partial<PopoutPanelState>)
   );
 }
 
+/**
+ * Pull every popout panel back into the viewport. A floating rect with its
+ * top-left off-screen (or with so little of itself on-screen that the header
+ * can't be grabbed) becomes unrecoverable without triple-shift drag — Reset
+ * Layout should rescue it.
+ */
+export function reclampAllPanelsToViewport(): void {
+  if (typeof window === 'undefined') return;
+  const winW = window.innerWidth;
+  const winH = window.innerHeight;
+  const minVisible = 100;
+  const maxX = Math.max(0, winW - minVisible);
+  const maxY = Math.max(0, winH - 40);
+  let changed = false;
+  popoutPanels.value = popoutPanels.value.map((panel) => {
+    const updates: Partial<PopoutPanelState> = {};
+    if (panel.docked && (panel.dockedTopOffset || 0) > Math.max(0, winH - minVisible)) {
+      updates.dockedTopOffset = 0;
+    }
+    const fr = panel.floatingRect;
+    if (fr.x > maxX || fr.x + fr.w < minVisible || fr.y > maxY || fr.y < 0 || fr.w > winW || fr.h > winH) {
+      updates.floatingRect = {
+        x: Math.min(Math.max(0, fr.x), maxX),
+        y: Math.min(Math.max(0, fr.y), maxY),
+        w: Math.min(fr.w, Math.max(320, winW - 32)),
+        h: Math.min(fr.h, Math.max(300, winH - 80)),
+      };
+    }
+    if (panel.maximized && panel.preMaximizeRect) {
+      const pr = panel.preMaximizeRect;
+      if (pr.x > maxX || pr.x + pr.w < minVisible || pr.y > maxY || pr.y < 0) {
+        updates.preMaximizeRect = {
+          x: Math.min(Math.max(0, pr.x), maxX),
+          y: Math.min(Math.max(0, pr.y), maxY),
+          w: Math.min(pr.w, Math.max(320, winW - 32)),
+          h: Math.min(pr.h, Math.max(300, winH - 80)),
+        };
+      }
+    }
+    if (Object.keys(updates).length > 0) {
+      changed = true;
+      return { ...panel, ...updates };
+    }
+    return panel;
+  });
+  if (changed) persistPopoutState();
+}
+
 export function removePanel(panelId: string) {
   popoutPanels.value = popoutPanels.value.filter((p) => p.id !== panelId);
 }
