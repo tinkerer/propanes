@@ -9,6 +9,7 @@ import { cosChannelRoutes } from './cos-channels.js';
 import { cosChannelOrganizeRoutes } from './cos-channel-organize.js';
 import { cosApprovalRoutes } from './cos-approvals.js';
 import { sessionFollowupRoutes } from './session-followups.js';
+import { composerDraftsRoutes } from './composer-drafts.js';
 
 export const adminRoutes = new Hono();
 
@@ -22,3 +23,4 @@ adminRoutes.route('/', cosChannelRoutes);
 adminRoutes.route('/', cosChannelOrganizeRoutes);
 adminRoutes.route('/', cosApprovalRoutes);
 adminRoutes.route('/', sessionFollowupRoutes);
+adminRoutes.route('/', composerDraftsRoutes);
