@@ -202,6 +202,14 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_cos_threads_resolved ON cos_threads(resolved_at)`,
     `ALTER TABLE cos_threads ADD COLUMN archived_at INTEGER`,
     `CREATE INDEX IF NOT EXISTS idx_cos_threads_archived ON cos_threads(archived_at)`,
+    // Slack-style channels: per-app buckets of threads with a policyJson blob
+    // gating dispatch (allowed profiles, agent allowlist, approval gate). See
+    // cosChannels in schema.ts and the channel routes for shape.
+    `ALTER TABLE cos_threads ADD COLUMN channel_id TEXT REFERENCES cos_channels(id) ON DELETE SET NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_cos_threads_channel ON cos_threads(channel_id)`,
+    `ALTER TABLE cos_messages ADD COLUMN mentions_json TEXT`,
+    `ALTER TABLE cos_messages ADD COLUMN slash_command TEXT`,
+    `CREATE INDEX IF NOT EXISTS idx_cos_messages_slash ON cos_messages(slash_command)`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after
@@ -610,6 +618,52 @@ export function runMigrations() {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+  `);
+
+  // CoS channels (workspace-scoped thread buckets, with dispatch policy)
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS cos_channels (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      slug TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      kind TEXT NOT NULL DEFAULT 'staging',
+      policy_json TEXT NOT NULL DEFAULT '{}',
+      archived_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cos_channels_app_slug ON cos_channels(app_id, slug);
+    CREATE INDEX IF NOT EXISTS idx_cos_channels_app ON cos_channels(app_id);
+
+    CREATE TABLE IF NOT EXISTS cos_channel_members (
+      id TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL REFERENCES cos_channels(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      ref_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      joined_at INTEGER NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cos_channel_members_unique
+      ON cos_channel_members(channel_id, kind, ref_id);
+    CREATE INDEX IF NOT EXISTS idx_cos_channel_members_channel
+      ON cos_channel_members(channel_id);
+
+    CREATE TABLE IF NOT EXISTS cos_channel_org_proposals (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'pending',
+      proposal_json TEXT NOT NULL,
+      reasoning TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      applied_at INTEGER
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_cos_channel_org_proposals_app
+      ON cos_channel_org_proposals(app_id, status, created_at);
   `);
 
   // CoS threads and messages tables

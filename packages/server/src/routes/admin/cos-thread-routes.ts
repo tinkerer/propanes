@@ -39,6 +39,7 @@ export async function fetchThreadsWithSessionStatus(
       id: schema.cosThreads.id,
       agentId: schema.cosThreads.agentId,
       appId: schema.cosThreads.appId,
+      channelId: schema.cosThreads.channelId,
       name: schema.cosThreads.name,
       systemPrompt: schema.cosThreads.systemPrompt,
       model: schema.cosThreads.model,

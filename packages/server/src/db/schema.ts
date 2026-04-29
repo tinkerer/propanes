@@ -425,12 +425,66 @@ export const cosMetadata = sqliteTable('cos_metadata', {
   value: text('value').notNull(),
 });
 
+// Slack-style channel: a per-workspace (app) bucket of threads with a
+// `policyJson` blob that gates dispatch (allowed permission profiles, agent
+// allowlist, approval requirement, classification badge). Channels are the
+// primary navigation unit in the admin sidebar — `appId` selects workspace,
+// `slug` selects channel, threads live inside.
+//
+// `kind` is a coarse classification surfaced as a UI badge (red=prod,
+// yellow=staging, green=exploratory). The actual enforcement lives in
+// `policyJson` so operators can deviate from the defaults per channel.
+export const cosChannels = sqliteTable('cos_channels', {
+  id: text('id').primaryKey(),
+  appId: text('app_id').notNull().references(() => applications.id, { onDelete: 'cascade' }),
+  slug: text('slug').notNull(),
+  name: text('name').notNull(),
+  description: text('description').notNull().default(''),
+  kind: text('kind').notNull().default('staging'), // 'prod' | 'staging' | 'exploratory'
+  // ChannelPolicy: { classification, allowedProfiles[], allowedAgentIds|null,
+  //                  requireApproval, pathGuards[], powwow:{enabled,providers[]},
+  //                  retention:{archiveAfterDays?} }
+  policyJson: text('policy_json').notNull().default('{}'),
+  archivedAt: integer('archived_at'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+
+// Explicit channel membership. `kind` distinguishes operator users (refId =
+// user_id / email) from agent endpoints (refId = agent_endpoints.id). Used to
+// resolve @mentions and to render the right-rail member list.
+export const cosChannelMembers = sqliteTable('cos_channel_members', {
+  id: text('id').primaryKey(),
+  channelId: text('channel_id').notNull().references(() => cosChannels.id, { onDelete: 'cascade' }),
+  kind: text('kind').notNull(), // 'user' | 'agent'
+  refId: text('ref_id').notNull(),
+  role: text('role').notNull().default('member'), // 'owner' | 'member'
+  joinedAt: integer('joined_at').notNull(),
+});
+
+// Reviewable proposals from the auto-organize endpoint: the LLM produces a
+// channel structure (slugs/names/kinds) with thread assignments; the operator
+// previews and approves before commit. `proposalJson` shape:
+// { channels:[{slug,name,description,kind,threadIds:[]}], reasoning?:string }
+export const cosChannelOrgProposals = sqliteTable('cos_channel_org_proposals', {
+  id: text('id').primaryKey(),
+  appId: text('app_id').notNull().references(() => applications.id, { onDelete: 'cascade' }),
+  status: text('status').notNull().default('pending'), // 'pending' | 'applied' | 'rejected'
+  proposalJson: text('proposal_json').notNull(),
+  reasoning: text('reasoning').notNull().default(''),
+  createdAt: integer('created_at').notNull(),
+  appliedAt: integer('applied_at'),
+});
+
 // Scheduled dispatches that fire after a delay unless cancelled. Used by
 // voice-mode to give the user a 10s undo window before an agent spins up.
 export const cosThreads = sqliteTable('cos_threads', {
   id: text('id').primaryKey(),
   agentId: text('agent_id').notNull(),
   appId: text('app_id'),
+  // Channel binding. Nullable during the migration window — threads created
+  // before channels existed live in #general (back-fill on first run).
+  channelId: text('channel_id').references(() => cosChannels.id, { onDelete: 'set null' }),
   name: text('name').notNull(),
   systemPrompt: text('system_prompt'),
   model: text('model'),
@@ -467,6 +521,11 @@ export const cosMessages = sqliteTable('cos_messages', {
   toolCallsJson: text('tool_calls_json'),
   // JSON: { images?: [{dataUrl, name?, mimeType?}], elements?: [CosElementRef, ...] }
   attachmentsJson: text('attachments_json'),
+  // Parsed @mention list: [{kind:'user'|'agent'|'channel', refId, charStart, charEnd}]
+  mentionsJson: text('mentions_json'),
+  // Leading slash command if the message starts with one (e.g. '/dispatch',
+  // '/agent', '/powwow'). Null for plain chat messages.
+  slashCommand: text('slash_command'),
   createdAt: integer('created_at').notNull(),
 });
 

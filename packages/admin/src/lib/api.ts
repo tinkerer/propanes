@@ -907,4 +907,111 @@ export const api = {
   getWorkerDiff: (swarmId: string, gen: number, pathName: string) =>
     fetch(`/api/v1/admin/wiggum/swarms/${swarmId}/gen/${gen}/path/${pathName}/diff`)
       .then(r => r.ok ? r.text() : ''),
+
+  // CoS channels
+  getChannels: (appId: string, includeArchived = false) => {
+    const qs = new URLSearchParams({ appId });
+    if (includeArchived) qs.set('includeArchived', '1');
+    return request<{
+      channels: Array<{
+        id: string; appId: string; slug: string; name: string; description: string;
+        kind: 'prod' | 'staging' | 'exploratory';
+        policy: {
+          classification: 'prod' | 'staging' | 'exploratory';
+          allowedProfiles: string[];
+          allowedAgentIds: string[] | null;
+          requireApproval: boolean;
+          pathGuards: string[];
+          powwow: { enabled: boolean; providers: string[] };
+        };
+        archivedAt: number | null;
+        createdAt: number;
+        updatedAt: number;
+        threadCount: number;
+        openCount: number;
+      }>;
+      unsorted: { threadCount: number; openCount: number };
+    }>(`/admin/chief-of-staff/channels?${qs}`);
+  },
+
+  createChannel: (data: {
+    appId: string; name: string; slug?: string; description?: string;
+    kind?: 'prod' | 'staging' | 'exploratory';
+  }) =>
+    request<any>('/admin/chief-of-staff/channels', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  patchChannel: (id: string, data: {
+    name?: string; description?: string; slug?: string;
+    kind?: 'prod' | 'staging' | 'exploratory';
+    policy?: Record<string, unknown>;
+    archived?: boolean;
+  }) =>
+    request<any>(`/admin/chief-of-staff/channels/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  deleteChannel: (id: string) =>
+    request<{ ok: boolean }>(`/admin/chief-of-staff/channels/${id}`, { method: 'DELETE' }),
+
+  moveThreadToChannel: (channelId: string, threadId: string) =>
+    request<{ ok: boolean; threadId: string; channelId: string | null }>(
+      `/admin/chief-of-staff/channels/${channelId}/threads`,
+      { method: 'POST', body: JSON.stringify({ threadId }) },
+    ),
+
+  getChannelMembers: (channelId: string) =>
+    request<{ members: Array<{ id: string; channelId: string; kind: 'user' | 'agent'; refId: string; role: string; joinedAt: number }> }>(
+      `/admin/chief-of-staff/channels/${channelId}/members`,
+    ),
+
+  addChannelMember: (channelId: string, data: { kind: 'user' | 'agent'; refId: string; role?: 'owner' | 'member' }) =>
+    request<any>(`/admin/chief-of-staff/channels/${channelId}/members`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  removeChannelMember: (channelId: string, memberId: string) =>
+    request<{ ok: boolean }>(`/admin/chief-of-staff/channels/${channelId}/members/${memberId}`, {
+      method: 'DELETE',
+    }),
+
+  autoOrganizeChannels: (appId: string) =>
+    request<{
+      id: string; appId: string; status: string; createdAt: number;
+      proposal: {
+        channels: Array<{ slug: string; name: string; description: string; kind: string; threadIds: string[] }>;
+        reasoning?: string;
+      };
+    }>('/admin/chief-of-staff/channels/auto-organize', {
+      method: 'POST',
+      body: JSON.stringify({ appId }),
+    }),
+
+  listOrgProposals: (appId?: string) => {
+    const qs = appId ? `?appId=${encodeURIComponent(appId)}` : '';
+    return request<{
+      proposals: Array<{
+        id: string; appId: string; status: 'pending' | 'applied' | 'rejected';
+        reasoning: string;
+        proposal: {
+          channels: Array<{ slug: string; name: string; description: string; kind: string; threadIds: string[] }>;
+        };
+        createdAt: number;
+        appliedAt: number | null;
+      }>;
+    }>(`/admin/chief-of-staff/org-proposals${qs}`);
+  },
+
+  applyOrgProposal: (id: string) =>
+    request<{ ok: boolean; channels: Array<{ id: string; slug: string; threadCount: number }> }>(
+      `/admin/chief-of-staff/org-proposals/${id}/apply`,
+      { method: 'POST' },
+    ),
+
+  rejectOrgProposal: (id: string) =>
+    request<{ ok: boolean }>(`/admin/chief-of-staff/org-proposals/${id}/reject`, { method: 'POST' }),
 };
