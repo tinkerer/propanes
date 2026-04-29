@@ -462,6 +462,26 @@ export const cosChannelMembers = sqliteTable('cos_channel_members', {
   joinedAt: integer('joined_at').notNull(),
 });
 
+// Pending dispatches that hit a `requireApproval` channel policy. The dispatch
+// route inserts a row instead of spawning when policy.requireApproval is set;
+// operators triage these from the Approvals queue and either approve (replays
+// the saved payload via dispatchFeedbackToAgent) or deny.
+export const cosDispatchApprovals = sqliteTable('cos_dispatch_approvals', {
+  id: text('id').primaryKey(),
+  channelId: text('channel_id').notNull().references(() => cosChannels.id, { onDelete: 'cascade' }),
+  feedbackId: text('feedback_id').notNull(),
+  agentEndpointId: text('agent_endpoint_id').notNull(),
+  instructions: text('instructions'),
+  permissionProfile: text('permission_profile'),
+  requestedBy: text('requested_by'),
+  status: text('status').notNull().default('pending'), // 'pending' | 'approved' | 'denied' | 'expired'
+  denyReason: text('deny_reason'),
+  dispatchedSessionId: text('dispatched_session_id'),
+  createdAt: integer('created_at').notNull(),
+  resolvedAt: integer('resolved_at'),
+  resolvedBy: text('resolved_by'),
+});
+
 // Reviewable proposals from the auto-organize endpoint: the LLM produces a
 // channel structure (slugs/names/kinds) with thread assignments; the operator
 // previews and approves before commit. `proposalJson` shape:
@@ -485,6 +505,11 @@ export const cosThreads = sqliteTable('cos_threads', {
   // Channel binding. Nullable during the migration window — threads created
   // before channels existed live in #general (back-fill on first run).
   channelId: text('channel_id').references(() => cosChannels.id, { onDelete: 'set null' }),
+  // Bridge link from a widget/admin-submitted feedback item to its canonical
+  // thread in the per-app inbox channel. Set by mintFeedbackThread on feedback
+  // insert; null for organic CoS threads. ON DELETE SET NULL keeps the thread
+  // alive if the feedback row is purged so the conversation history survives.
+  feedbackId: text('feedback_id').references(() => feedbackItems.id, { onDelete: 'set null' }),
   name: text('name').notNull(),
   systemPrompt: text('system_prompt'),
   model: text('model'),

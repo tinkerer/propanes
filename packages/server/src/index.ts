@@ -33,6 +33,7 @@ import { detectAndStoreJsonlContinuations } from './jsonl-utils.js';
 import { registerAdminClient, unregisterAdminClient } from './admin-push.js';
 import { startAdminWatcher } from './admin-watcher.js';
 import { dispatchPendingFollowups } from './routes/admin/session-followups.js';
+import { startRetentionSweeper } from './routes/admin/cos-retention.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const LAUNCHER_AUTH_TOKEN = process.env.LAUNCHER_AUTH_TOKEN || '';
@@ -60,6 +61,10 @@ setInterval(() => {
     console.error('[session-followups] sweep failed:', err);
   });
 }, 5_000);
+
+// Channel retention: every 5 min, archive threads in channels whose
+// policy.retention.archiveAfterDays cutoff has passed.
+startRetentionSweeper();
 
 // Backfill JSONL continuation cache for completed sessions
 setTimeout(() => {

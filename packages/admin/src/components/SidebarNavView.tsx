@@ -4,6 +4,7 @@ import {
   currentRoute, clearToken, navigate, selectedAppId, applications, unlinkedCount,
   appFeedbackCounts, addAppModalOpen,
   channelsByApp, unsortedCountByApp, channelOrgProposalOpen, loadChannels,
+  pendingApprovalCountByApp, loadApprovals,
   type ChannelKind,
 } from '../lib/state.js';
 import { api } from '../lib/api.js';
@@ -194,6 +195,14 @@ export function SidebarNavView() {
     });
   }, []);
 
+  // Refresh approval-pending counts per app (sidebar badge) every 30s.
+  useEffect(() => {
+    const refresh = () => { for (const app of apps) loadApprovals(app.id); };
+    refresh();
+    const id = setInterval(() => { if (!document.hidden) refresh(); }, 30_000);
+    return () => clearInterval(id);
+  }, [apps.length]);
+
   return (
     <div class="sidebar-nav-view" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
       <div class="sidebar-header">
@@ -274,6 +283,16 @@ export function SidebarNavView() {
                     onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/wiggum`); openPageView('view:wiggum'); }}
                   >
                     {'\u{1F9EC}'} FAFO / Wiggum
+                  </a>
+                  <a
+                    href={`#/app/${app.id}/approvals`}
+                    class={route === `/app/${app.id}/approvals` ? 'active' : ''}
+                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/approvals`); openPageView('view:approvals'); }}
+                  >
+                    {'\u{1F512}'} Approvals
+                    {(pendingApprovalCountByApp.value[app.id] || 0) > 0 && (
+                      <span class="sidebar-count">{pendingApprovalCountByApp.value[app.id]}</span>
+                    )}
                   </a>
                   <ChannelSubsection appId={app.id} route={route} />
                   <a
