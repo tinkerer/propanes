@@ -97,7 +97,8 @@ import { cosFollowups, enqueueCosFollowup } from '../lib/cos-followups.js';
 import { CosSavedDraftsList } from './CosSavedDraftsList.js';
 import { CosEnqueuedList } from './CosEnqueuedList.js';
 import { CosPopoutTreeView } from './CosPopoutTreeView.js';
-import { openArtifactDrawerTab, isArtifactDrawerOpen } from '../lib/cos-artifact-drawer.js';
+import { cosOpenArtifactTab, artifactTabId } from '../lib/cos-popout-tree.js';
+import { runSlashCommandIfAny } from '../lib/cos-slash-commands.js';
 import { cosLearnings, loadCosLearnings } from '../lib/cos-learnings.js';
 import {
   cosDrafts,
@@ -887,12 +888,21 @@ export function ChiefOfStaffBubble({
   // packaged attachments + element refs, cleared its internal state, and
   // cleared the active draft scope by the time this fires; the bubble only
   // attaches replyToTs from its own pill state and dispatches.
-  function handleSend(
+  async function handleSend(
     text: string,
     attachments: CosImageAttachment[],
     elementRefs: CosElementRef[],
   ): Promise<void> {
-    if (!text.trim() && attachments.length === 0 && elementRefs.length === 0) return Promise.resolve();
+    if (!text.trim() && attachments.length === 0 && elementRefs.length === 0) return;
+    // Slash commands: intercept locally, never send to the model.
+    if (text.trim().startsWith('/') && attachments.length === 0 && elementRefs.length === 0) {
+      const result = await runSlashCommandIfAny(text);
+      if (result.handled) {
+        if (result.error) chiefOfStaffError.value = result.error;
+        else if (result.toast) chiefOfStaffError.value = result.toast;
+        return;
+      }
+    }
     const replyToTs = replyTo?.anchorTs;
     setReplyTo(null);
     return sendChiefOfStaffMessage(text, selectedAppId.value, { attachments, elementRefs, replyToTs });
@@ -1011,11 +1021,12 @@ export function ChiefOfStaffBubble({
       openArtifactCompanion(artifactId);
       return;
     }
-    // Popout mode: open the artifact in the drawer overlay rather than
-    // splitting the cos popout tree — splitting forced the chat to remount
-    // under a new SplitPane parent and lost its scroll position.
-    const wasEmpty = !isArtifactDrawerOpen() && !hasAnyArtifactLeaf(cosPopoutTree.value.root);
-    openArtifactDrawerTab(artifactId);
+    // Popout mode: open the artifact as a first-class tab in the cos popout
+    // tree. ChiefOfStaffBubble's chat scroll is preserved across leaf
+    // re-mounts via lastScrollTopRef (see scroll-restore effect below).
+    const wasEmpty = !hasAnyArtifactLeaf(cosPopoutTree.value.root);
+    cosOpenArtifactTab(artifactId);
+    void artifactTabId;
     // When opening the first artifact, widen the floating panel so the chat
     // and the drawer both have room. Skip when docked — docked width is part
     // of the user's layout and shouldn't jump.
@@ -1592,6 +1603,41 @@ export function ChiefOfStaffBubble({
                         </button>
                       </div>
                     )}
+                    {/* Pending lists rendered right above the composer so the
+                        operator gets immediate visual feedback after enqueue /
+                        save-draft actions — in slack mode the inline-below-
+                        thread copies are suppressed for non-empty threads,
+                        leaving this as the only on-bubble surface that shows
+                        them. Always renders if the agent has any queued items
+                        (regardless of whether a reply pill is set), so a
+                        top-level "send when current finishes" still gives the
+                        operator a visible row to confirm the enqueue. */}
+                    {(() => {
+                      const tid = replyTo?.threadServerId ?? null;
+                      const drafts = tid
+                        ? getThreadSavedDrafts(activeAgent.id, selectedAppId.value, tid)
+                        : [];
+                      const followups = cosFollowups.value.filter(
+                        (f) => f.agentId === activeAgent.id
+                          && (tid ? f.threadServerId === tid : true),
+                      );
+                      if (drafts.length === 0 && followups.length === 0) return null;
+                      return (
+                        <div class="cos-composer-pending">
+                          {drafts.length > 0 && (
+                            <CosSavedDraftsList
+                              drafts={drafts}
+                              onLoad={handleLoadSavedDraft}
+                              onDelete={(d) => { deleteCosDraft(d.id); }}
+                              scope="thread"
+                            />
+                          )}
+                          {followups.length > 0 && (
+                            <CosEnqueuedList followups={followups} scope="thread" />
+                          )}
+                        </div>
+                      );
+                    })()}
                     <CosComposer
                       ref={composerRef}
                       className="cos-input-row"
@@ -1610,16 +1656,45 @@ export function ChiefOfStaffBubble({
                       onAttachmentClick={(id, dataUrl) => setEditingAttachment({ id, dataUrl })}
                       rows={1}
                       streaming={(() => {
+                        // Reply-pill scope wins: if the operator is replying
+                        // in a specific thread, that's the turn they want to
+                        // wait on. Otherwise fall back to any thread in this
+                        // agent that has a streaming assistant message — so a
+                        // top-level send + a fresh "Send when current
+                        // finishes" enqueue both stay coherent.
                         const tid = replyTo?.threadServerId;
-                        if (!tid) return false;
-                        return activeAgent.messages.some((m) => m.threadId === tid && m.streaming);
+                        if (tid) return activeAgent.messages.some((m) => m.threadId === tid && m.streaming);
+                        return activeAgent.messages.some((m) => m.streaming);
                       })()}
                       onStop={() => {
-                        const tid = replyTo?.threadServerId;
+                        const tid = replyTo?.threadServerId
+                          ?? activeAgent.messages.findLast?.((m) => m.streaming)?.threadId
+                          ?? activeAgent.messages.slice().reverse().find((m) => m.streaming)?.threadId;
                         if (tid) void interruptThread(tid);
                       }}
-                      onEnqueueAfterCurrent={replyTo?.threadServerId ? (text, attachments, elementRefs) => {
-                        const tid = replyTo!.threadServerId!;
+                      onEnqueueAfterCurrent={(text, attachments, elementRefs) => {
+                        // Pick a thread to scope the followup to:
+                        //   1. Active reply pill — operator's explicit target.
+                        //   2. Any thread with a streaming message — the
+                        //      "current" turn the queued item should follow.
+                        //   3. Most recent thread the agent has — keeps
+                        //      grouping consistent with the conversation.
+                        // If none of those exist (fresh agent), enqueue with
+                        // a synthetic key — the dispatcher will fire it
+                        // immediately as a top-level send (replyToTs is unset
+                        // so sendChiefOfStaffMessage spawns a new thread).
+                        const streamingMsg = activeAgent.messages
+                          .slice()
+                          .reverse()
+                          .find((m) => m.streaming && m.threadId);
+                        const recentThreadMsg = activeAgent.messages
+                          .slice()
+                          .reverse()
+                          .find((m) => m.threadId);
+                        const tid = replyTo?.threadServerId
+                          ?? streamingMsg?.threadId
+                          ?? recentThreadMsg?.threadId
+                          ?? `__pending:${activeId}`;
                         enqueueCosFollowup({
                           agentId: activeId,
                           appId: selectedAppId.value,
@@ -1629,14 +1704,18 @@ export function ChiefOfStaffBubble({
                           attachments,
                           elementRefs,
                         });
-                      } : undefined}
-                      onSendAndInterrupt={replyTo?.threadServerId ? async (text, attachments, elementRefs) => {
-                        const tid = replyTo!.threadServerId!;
-                        const replyToTs = replyTo?.anchorTs;
-                        setReplyTo(null);
-                        await interruptThread(tid);
-                        await sendChiefOfStaffMessage(text, selectedAppId.value, { attachments, elementRefs, replyToTs });
-                      } : undefined}
+                      }}
+                      onSendAndInterrupt={(() => {
+                        const tid = replyTo?.threadServerId
+                          ?? (activeAgent.messages.slice().reverse().find((m) => m.streaming)?.threadId);
+                        if (!tid) return undefined;
+                        return async (text: string, attachments: CosImageAttachment[], elementRefs: CosElementRef[]) => {
+                          const replyToTs = replyTo?.anchorTs;
+                          setReplyTo(null);
+                          await interruptThread(tid);
+                          await sendChiefOfStaffMessage(text, selectedAppId.value, { attachments, elementRefs, replyToTs });
+                        };
+                      })()}
                       fanOutAgents={chiefOfStaffAgents.value.map((a) => ({ id: a.id, name: a.name, current: a.id === activeId }))}
                       onSaveDraftToAgents={(agentIds, text, attachments, elementRefs) => {
                         for (const aid of agentIds) {

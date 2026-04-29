@@ -11,6 +11,7 @@ import { FileViewerOverlay } from './FileViewerPanel.js';
 import { ShortcutHelpModal } from './ShortcutHelpModal.js';
 import { SpotlightSearch } from './SpotlightSearch.js';
 import { AddAppModal } from './AddAppModal.js';
+import { ChannelOrgProposalModal } from './ChannelOrgProposalModal.js';
 import { HintToast } from './HintToast.js';
 import { AutoFixToast } from './AutoFixToast.js';
 import { NotificationCenter } from './NotificationCenter.js';
@@ -631,6 +632,7 @@ export function Layout() {
       {showShortcutHelp && <ShortcutHelpModal onClose={() => setShowShortcutHelp(false)} />}
       {showSpotlight && <SpotlightSearch onClose={() => closeSpotlight()} />}
       {addAppModalOpen.value && <AddAppModal onClose={() => { addAppModalOpen.value = false; }} />}
+      <ChannelOrgProposalModal />
       {actionToast.value && (
         <div class="action-toast">
           <span class="action-toast-key" style={{ background: actionToast.value.color }}>{actionToast.value.key}</span>

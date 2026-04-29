@@ -214,6 +214,9 @@ export const dispatchSchema = z.object({
   launcherId: z.string().optional(),
   harnessConfigId: z.string().optional(),
   permissionProfile: z.enum(PERMISSION_PROFILES).optional(),
+  // Channel context for the policy gate. When set, dispatch is checked
+  // against the channel's policyJson (allowed profiles / agents / approval).
+  channelId: z.string().nullable().optional(),
 });
 
 export const powwowSchema = z.object({
