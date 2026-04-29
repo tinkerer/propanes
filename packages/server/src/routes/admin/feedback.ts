@@ -243,6 +243,74 @@ feedbackRoutes.get('/feedback', async (c) => {
     }
   }
 
+  // Fetch the linked CoS thread + last few messages so the list can render
+  // tickets as draft threads (showing the latest assistant/user reply preview
+  // and a draft/running/completed badge derived from the thread's
+  // agentSessionId / session status).
+  const threadMap = new Map<string, {
+    threadId: string;
+    agentSessionId: string | null;
+    threadSessionStatus: string | null;
+    lastMessages: Array<{ role: string; text: string; createdAt: number }>;
+    messageCount: number;
+  }>();
+  if (feedbackIds.length > 0) {
+    const threadRows = db
+      .select({
+        id: schema.cosThreads.id,
+        feedbackId: schema.cosThreads.feedbackId,
+        agentSessionId: schema.cosThreads.agentSessionId,
+        sessionStatus: schema.agentSessions.status,
+      })
+      .from(schema.cosThreads)
+      .leftJoin(schema.agentSessions, eq(schema.cosThreads.agentSessionId, schema.agentSessions.id))
+      .where(inArray(schema.cosThreads.feedbackId, feedbackIds))
+      .all();
+    const threadIdsByFb = new Map<string, string>();
+    for (const t of threadRows) {
+      if (!t.feedbackId) continue;
+      threadMap.set(t.feedbackId, {
+        threadId: t.id,
+        agentSessionId: t.agentSessionId ?? null,
+        threadSessionStatus: t.sessionStatus ?? null,
+        lastMessages: [],
+        messageCount: 0,
+      });
+      threadIdsByFb.set(t.feedbackId, t.id);
+    }
+    if (threadIdsByFb.size > 0) {
+      const allMsgs = db
+        .select({
+          threadId: schema.cosMessages.threadId,
+          role: schema.cosMessages.role,
+          text: schema.cosMessages.text,
+          createdAt: schema.cosMessages.createdAt,
+        })
+        .from(schema.cosMessages)
+        .where(inArray(schema.cosMessages.threadId, Array.from(threadIdsByFb.values())))
+        .orderBy(desc(schema.cosMessages.createdAt))
+        .all();
+      const threadCounts = new Map<string, number>();
+      const lastByThread = new Map<string, Array<{ role: string; text: string; createdAt: number }>>();
+      for (const m of allMsgs) {
+        threadCounts.set(m.threadId, (threadCounts.get(m.threadId) || 0) + 1);
+        const arr = lastByThread.get(m.threadId) || [];
+        if (arr.length < 2) {
+          arr.push({ role: m.role, text: m.text, createdAt: m.createdAt });
+          lastByThread.set(m.threadId, arr);
+        }
+      }
+      for (const [fbId, threadId] of threadIdsByFb) {
+        const entry = threadMap.get(fbId);
+        if (!entry) continue;
+        // Stored newest-first; flip to oldest→newest so the UI renders the
+        // freshest one at the bottom.
+        entry.lastMessages = (lastByThread.get(threadId) || []).slice().reverse();
+        entry.messageCount = threadCounts.get(threadId) || 0;
+      }
+    }
+  }
+
   const hydrated = items.map((item) => {
     const tags = db
       .select()
@@ -262,7 +330,13 @@ feedbackRoutes.get('/feedback', async (c) => {
       .all();
     const fb = hydrateFeedback(item, tags, screenshots, audioFiles);
     const si = sessionMap.get(item.id);
-    return si ? { ...fb, latestSessionId: si.latestSessionId, latestSessionStatus: si.latestSessionStatus, sessionCount: si.sessionCount } : fb;
+    const ti = threadMap.get(item.id);
+    const withSession = si
+      ? { ...fb, latestSessionId: si.latestSessionId, latestSessionStatus: si.latestSessionStatus, sessionCount: si.sessionCount }
+      : fb;
+    return ti
+      ? { ...withSession, threadId: ti.threadId, threadAgentSessionId: ti.agentSessionId, threadSessionStatus: ti.threadSessionStatus, threadLastMessages: ti.lastMessages, threadMessageCount: ti.messageCount }
+      : withSession;
   });
 
   return c.json({

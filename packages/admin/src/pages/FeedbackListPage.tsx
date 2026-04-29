@@ -111,6 +111,57 @@ function StatusCell({ item }: { item: any }) {
   );
 }
 
+// "Tickets are draft threads." Derive the lifecycle badge a ticket should
+// surface in the list, based on its linked CoS thread + session state:
+//   draft     → thread exists with no agent run yet (or no thread at all)
+//   running   → thread's backing agent session is currently running
+//   completed → thread had at least one agent run, now in a terminal state
+//   (null)    → no thread linked AND no dispatch info — fall back to status
+function ThreadStateBadge({ item }: { item: any }) {
+  const sessStatus = item.threadSessionStatus as string | null | undefined;
+  const hasThread = !!item.threadId;
+  const msgCount = (item.threadMessageCount as number | undefined) ?? 0;
+  const lastMsgs = (item.threadLastMessages as Array<{ role: string }> | undefined) ?? [];
+  const hasAssistantReply = lastMsgs.some((m) => m.role === 'assistant');
+
+  if (!hasThread) return null;
+  if (sessStatus === 'running') {
+    return <span class="badge badge-dispatched" style="font-size:10px;text-transform:uppercase;letter-spacing:0.04em">Running</span>;
+  }
+  // Session exists in a non-running state and at least one assistant turn
+  // landed → completed. Otherwise we're still a draft (no agent run yet).
+  if (hasAssistantReply || (sessStatus && sessStatus !== 'idle' && sessStatus !== 'pending')) {
+    return <span class="badge badge-resolved" style="font-size:10px;text-transform:uppercase;letter-spacing:0.04em">Completed</span>;
+  }
+  return <span class="badge badge-new" style={`font-size:10px;text-transform:uppercase;letter-spacing:0.04em${msgCount > 0 ? '' : ''}`}>Draft</span>;
+}
+
+// Render the last 1-2 thread messages as a compact preview under the title.
+// Strips <cos-reply> wrappers and clamps long lines so the row stays tidy.
+function ThreadPreview({ item }: { item: any }) {
+  const msgs = (item.threadLastMessages as Array<{ role: string; text: string }> | undefined) ?? [];
+  if (msgs.length === 0) return null;
+  const clean = (s: string) => (s || '').replace(/<\/?cos-reply>/g, '').replace(/\s+/g, ' ').trim();
+  // Show up to two messages, newest last.
+  const show = msgs.slice(-2);
+  return (
+    <div style="font-size:11px;color:var(--pw-text-muted);margin-top:2px;display:flex;flex-direction:column;gap:1px">
+      {show.map((m, i) => {
+        const text = clean(m.text);
+        if (!text) return null;
+        const author = m.role === 'user' ? 'op' : m.role === 'assistant' ? 'agent' : 'sys';
+        const truncated = text.length > 110 ? text.slice(0, 108) + '…' : text;
+        return (
+          <div key={i} style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            <span style={`font-weight:600;margin-right:4px;color:${m.role === 'assistant' ? 'var(--pw-accent)' : 'var(--pw-text-faint)'}`}>{author}:</span>
+            <span>{truncated}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ColResizeHandle() {
   const handleRef = useRef<HTMLDivElement>(null);
 
@@ -678,32 +729,38 @@ export function FeedbackListPage({ appId }: { appId: string }) {
                       {item.id.slice(-6)}
                     </code>
                   </td>
-                  <td style="max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                  <td style="max-width:0;overflow:hidden">
                     {opts.indent && <span class="feedback-brainstorm-indent" aria-hidden="true" />}
-                    <a
-                      href={`#${basePath}/${item.id}`}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        if (item.title) {
-                          feedbackTitleCache.value = { ...feedbackTitleCache.value, [item.id]: item.title };
-                        }
-                        if (isMobile.value) {
-                          navigate(`${basePath}/${item.id}`);
-                        } else {
-                          openFeedbackItem(item.id);
-                        }
-                      }}
-                      style="color:var(--pw-primary-text);text-decoration:none;font-weight:500"
-                      title={item.title}
-                    >
-                      {item.title}
-                    </a>
+                    <div style="overflow:hidden">
+                      <a
+                        href={`#${basePath}/${item.id}`}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (item.title) {
+                            feedbackTitleCache.value = { ...feedbackTitleCache.value, [item.id]: item.title };
+                          }
+                          if (isMobile.value) {
+                            navigate(`${basePath}/${item.id}`);
+                          } else {
+                            openFeedbackItem(item.id);
+                          }
+                        }}
+                        style="color:var(--pw-primary-text);text-decoration:none;font-weight:500;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                        title={item.title}
+                      >
+                        {item.title}
+                      </a>
+                      <ThreadPreview item={item} />
+                    </div>
                   </td>
                   <td>
                     <span class={`badge badge-${item.type}`}>{item.type.replace(/_/g, ' ')}</span>
                   </td>
                   <td>
-                    <StatusCell item={item} />
+                    <div style="display:flex;flex-direction:column;gap:3px;align-items:flex-start">
+                      <StatusCell item={item} />
+                      <ThreadStateBadge item={item} />
+                    </div>
                   </td>
                   <td>
                     <div class="tags">

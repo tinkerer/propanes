@@ -532,6 +532,12 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
 
       <div class="detail-grid">
         <div>
+          {/* Primary surface: the linked CoS thread rendered inline. The
+              ticket and its thread are the same artifact viewed two ways —
+              this composer appends user notes to cos_messages so they show
+              up in the CoS bubble too. */}
+          <FeedbackConversation feedbackId={fb.id} appId={fb.appId || appId} />
+
           <div class="detail-card" style="margin-bottom:16px">
             <h3>Details</h3>
 

@@ -16,6 +16,7 @@ import { resolve as pathResolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { ulid } from 'ulidx';
 import { db, schema } from '../../db/index.js';
+import { mintFeedbackThread } from '../../cos-inbox.js';
 
 export function resolveRepoRoot(): string {
   const envDir = process.env.CHIEF_OF_STAFF_CWD;
@@ -349,4 +350,84 @@ cosThreadRoutes.get('/chief-of-staff/history/:agentId', async (c) => {
   // `thread` retained for backward-compat — points at the most-recently
   // updated thread. New clients read `threads` + per-message threadId.
   return c.json({ threads, thread: threads[0], messages });
+});
+
+// Look up a thread by feedbackId — returns { thread, messages } so the
+// FeedbackDetailPage can render the linked CoS thread inline. If no thread
+// exists yet (legacy feedback rows from before mintFeedbackThread was wired
+// up), a `mint=1` query string flag opts in to creating one on the fly.
+cosThreadRoutes.get('/chief-of-staff/threads/by-feedback/:feedbackId', async (c) => {
+  const feedbackId = c.req.param('feedbackId');
+  const wantMint = c.req.query('mint') === '1';
+
+  let thread = await db.query.cosThreads.findFirst({
+    where: eq(schema.cosThreads.feedbackId, feedbackId),
+  });
+
+  if (!thread && wantMint) {
+    const fb = await db.query.feedbackItems.findFirst({
+      where: eq(schema.feedbackItems.id, feedbackId),
+    });
+    if (!fb) return c.json({ error: 'Feedback not found' }, 404);
+    if (!fb.appId) return c.json({ error: 'Feedback has no appId; cannot mint thread' }, 400);
+    const newThreadId = await mintFeedbackThread({
+      feedbackId: fb.id,
+      appId: fb.appId,
+      title: fb.title || `Ticket ${fb.id.slice(-6)}`,
+      description: fb.description || '',
+    });
+    if (!newThreadId) return c.json({ error: 'Failed to mint thread' }, 500);
+    thread = await db.query.cosThreads.findFirst({
+      where: eq(schema.cosThreads.id, newThreadId),
+    });
+  }
+
+  if (!thread) {
+    return c.json({ thread: null, messages: [] });
+  }
+
+  const messages = await db
+    .select()
+    .from(schema.cosMessages)
+    .where(eq(schema.cosMessages.threadId, thread.id))
+    .orderBy(schema.cosMessages.createdAt);
+
+  return c.json({ thread, messages });
+});
+
+// Append a plain user note to a thread without firing an agent turn. Used by
+// the FeedbackDetailPage composer so operators can capture clarifying context
+// on a draft thread (no running session yet) or after a session has wrapped.
+// Hitting POST /chat would also work but always spawns/queues an agent turn,
+// which is the wrong default for "add some triage notes".
+cosThreadRoutes.post('/chief-of-staff/threads/:id/note', async (c) => {
+  const threadId = c.req.param('id');
+  let body: { text?: string };
+  try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON body' }, 400); }
+  const text = (body.text || '').trim();
+  if (!text) return c.json({ error: 'text is required' }, 400);
+
+  const thread = await db.query.cosThreads.findFirst({
+    where: eq(schema.cosThreads.id, threadId),
+  });
+  if (!thread) return c.json({ error: 'Thread not found' }, 404);
+
+  const id = ulid();
+  const now = Date.now();
+  await db.insert(schema.cosMessages).values({
+    id,
+    threadId,
+    role: 'user',
+    text,
+    toolCallsJson: null,
+    attachmentsJson: null,
+    mentionsJson: null,
+    slashCommand: null,
+    createdAt: now,
+  });
+  await db.update(schema.cosThreads)
+    .set({ updatedAt: now })
+    .where(eq(schema.cosThreads.id, threadId));
+
+  return c.json({ id, threadId, role: 'user' as const, text, createdAt: now });
 });
