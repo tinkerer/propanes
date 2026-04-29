@@ -28,6 +28,7 @@ import { GettingStartedPage } from '../pages/GettingStartedPage.js';
 import { SettingsPage } from '../pages/SettingsPage.js';
 import { WiggumPage } from '../pages/WiggumPage.js';
 import { ChannelPage } from '../pages/ChannelPage.js';
+import { ApprovalQueuePage } from '../pages/ApprovalQueuePage.js';
 import {
   getTerminalCompanion,
   getViewMode,
@@ -64,6 +65,8 @@ export function renderTabContent(
           <WiggumPage />
         ) : sid === 'view:channel' ? (
           <ChannelPage />
+        ) : sid === 'view:approvals' ? (
+          <ApprovalQueuePage />
         ) : sid === 'view:app-settings' ? (
           (() => { const aid = selectedAppId.value || applications.value[0]?.id; return aid ? <AppSettingsPage appId={aid} /> : <div style={{ padding: 16, color: 'var(--pw-text-muted)' }}>No apps configured</div>; })()
         ) : sid === 'view:sessions-list' ? (

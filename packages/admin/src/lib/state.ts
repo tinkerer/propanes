@@ -71,6 +71,7 @@ export type ChannelRow = {
     requireApproval: boolean;
     pathGuards: string[];
     powwow: { enabled: boolean; providers: string[] };
+    retention?: { archiveAfterDays?: number };
   };
   archivedAt: number | null;
   createdAt: number;
@@ -86,6 +87,10 @@ export const unsortedCountByApp = signal<Record<string, { threadCount: number; o
 export const activeChannelSlug = signal<string | null>(initialChannelSlug);
 export const channelOrgProposalOpen = signal(false);
 
+// Pending approvals per workspace. Populated by loadApprovals(appId), polled
+// by ApprovalQueuePage every 15s while visible. Used for the sidebar badge.
+export const pendingApprovalCountByApp = signal<Record<string, number>>({});
+
 export const activeChannel = computed(() => {
   const appId = selectedAppId.value;
   const slug = activeChannelSlug.value;
@@ -100,6 +105,16 @@ export async function loadChannels(appId: string): Promise<void> {
     unsortedCountByApp.value = { ...unsortedCountByApp.value, [appId]: res.unsorted };
   } catch {
     // ignore — caller can retry
+  }
+}
+
+export async function loadApprovals(appId: string): Promise<typeof api.getApprovals extends (...args: any[]) => Promise<infer R> ? R : never> {
+  try {
+    const res = await api.getApprovals(appId, 'pending');
+    pendingApprovalCountByApp.value = { ...pendingApprovalCountByApp.value, [appId]: res.approvals.length };
+    return res as any;
+  } catch {
+    return { approvals: [] } as any;
   }
 }
 
@@ -190,6 +205,7 @@ function routeToViewId(route: string): string | null {
     feedback: 'view:feedback',
     sessions: 'view:sessions-page',
     live: 'view:live',
+    approvals: 'view:approvals',
     settings: 'view:app-settings',
   };
   return map[m[1]] || null;

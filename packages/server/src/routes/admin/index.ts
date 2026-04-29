@@ -7,6 +7,7 @@ import { chiefOfStaffRoutes } from './chief-of-staff.js';
 import { cosLearningsRoutes } from './cos-learnings.js';
 import { cosChannelRoutes } from './cos-channels.js';
 import { cosChannelOrganizeRoutes } from './cos-channel-organize.js';
+import { cosApprovalRoutes } from './cos-approvals.js';
 import { sessionFollowupRoutes } from './session-followups.js';
 
 export const adminRoutes = new Hono();
@@ -19,4 +20,5 @@ adminRoutes.route('/', chiefOfStaffRoutes);
 adminRoutes.route('/', cosLearningsRoutes);
 adminRoutes.route('/', cosChannelRoutes);
 adminRoutes.route('/', cosChannelOrganizeRoutes);
+adminRoutes.route('/', cosApprovalRoutes);
 adminRoutes.route('/', sessionFollowupRoutes);
