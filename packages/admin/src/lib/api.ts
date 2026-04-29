@@ -390,6 +390,15 @@ export const api = {
       body: opts ? JSON.stringify(opts) : undefined,
     }),
 
+  // Promote a CoS thread to a live interactive (TTY + interactive-yolo) session.
+  // Returns the new agentSession id; admin should `openSession(sessionId)` to
+  // surface it in the active pane.
+  spawnInteractiveForThread: (threadId: string) =>
+    request<{ sessionId: string; mode: 'resumed' | 'fresh' }>(
+      `/admin/chief-of-staff/threads/${encodeURIComponent(threadId)}/spawn-interactive`,
+      { method: 'POST' },
+    ),
+
   archiveAgentSession: (id: string) =>
     request<{ id: string; archived: boolean }>(`/admin/agent-sessions/${id}/archive`, {
       method: 'POST',

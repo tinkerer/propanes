@@ -12676,6 +12676,39 @@ body.pw-isolate {
   font-weight: 600;
   font-size: 12px;
   color: var(--pw-text-primary);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cos-thread-panel-interactive {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--pw-bg-hover);
+  border: 1px solid var(--pw-terminal-border);
+  color: var(--pw-text-primary);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.cos-thread-panel-interactive:hover:not(:disabled) {
+  background: var(--pw-accent, #2563eb);
+  color: #fff;
+  border-color: var(--pw-accent, #2563eb);
+}
+.cos-thread-panel-interactive:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.cos-thread-panel-interactive svg {
+  flex-shrink: 0;
 }
 .cos-thread-panel-count {
   font-size: 11px;
@@ -13362,6 +13395,46 @@ body.pw-isolate {
 }
 .cos-thread-rail-btn-failed {
   border-color: rgba(229, 72, 77, 0.6);
+}
+/* Interactive (live TTY) — distinct cyan dot with a soft glow so the operator
+   can spot driveable threads at a glance, separate from headless 'streaming'. */
+.cos-thread-rail-btn-interactive .cos-thread-rail-status {
+  background: #22d3ee;
+  box-shadow:
+    0 0 0 1.5px var(--pw-bg-surface),
+    0 0 6px rgba(34, 211, 238, 0.75);
+}
+.cos-thread-rail-btn-interactive {
+  border-color: rgba(34, 211, 238, 0.45);
+}
+
+/* Per-row "open as interactive" hover-action — same footprint as the
+   resolve/archive twins so the action column stays uniform. */
+.cos-thread-rail-interactive {
+  width: 18px;
+  height: 14px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--pw-border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--pw-secondary-text, #888);
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
+}
+.cos-thread-rail-interactive:hover,
+.cos-thread-rail-interactive:focus-visible {
+  opacity: 1;
+  color: #22d3ee;
+  border-color: #22d3ee;
+  outline: none;
+}
+.cos-thread-rail-interactive:disabled {
+  opacity: 0.3;
+  cursor: progress;
 }
 
 @keyframes cos-rail-spinner {
