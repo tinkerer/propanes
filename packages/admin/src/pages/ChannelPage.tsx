@@ -8,6 +8,7 @@ import {
   selectedAppId,
   unsortedCountByApp,
   type ChannelKind,
+  type ChannelRow,
 } from '../lib/state.js';
 import { cosActiveThread } from '../lib/cos-popout-tree.js';
 import { chiefOfStaffOpen, chiefOfStaffActiveId } from '../lib/chief-of-staff.js';
@@ -143,7 +144,7 @@ export function ChannelPage() {
 function ChannelHeader({
   ch, unsorted, unsortedCount, onAutoOrganize, organizing, orgError,
 }: {
-  ch: ReturnType<typeof activeChannel.value> | null;
+  ch: ChannelRow | null;
   unsorted: boolean;
   unsortedCount: number;
   onAutoOrganize: () => void;
@@ -185,7 +186,7 @@ function ChannelHeader({
   return <ChannelSettingsHeader ch={ch} />;
 }
 
-function ChannelSettingsHeader({ ch }: { ch: NonNullable<ReturnType<typeof activeChannel.value>> }) {
+function ChannelSettingsHeader({ ch }: { ch: ChannelRow }) {
   const [editing, setEditing] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [name, setName] = useState(ch.name);
@@ -385,7 +386,7 @@ function ThreadList({
 function ChannelMemberRail({
   channel, members, onChange,
 }: {
-  channel: NonNullable<ReturnType<typeof activeChannel.value>>;
+  channel: ChannelRow;
   members: Member[];
   onChange: () => void;
 }) {

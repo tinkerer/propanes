@@ -13,6 +13,7 @@ import { ElementCard } from '../components/ElementCard.js';
 import { SpecView, SpecToolbar } from '../components/SpecView.js';
 import { fetchParent, fetchChildren, fetchSiblings, fetchComputedStyles } from '../lib/dom-traversal.js';
 import { VoiceTracePanel } from '../components/VoiceTracePanel.js';
+import { FeedbackConversation } from '../components/FeedbackConversation.js';
 
 import type { Signal } from '@preact/signals';
 
@@ -442,8 +443,8 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
         }
       }
     };
-    document.addEventListener('paste', handler as EventListener);
-    return () => document.removeEventListener('paste', handler as EventListener);
+    document.addEventListener('paste', handler as unknown as EventListener);
+    return () => document.removeEventListener('paste', handler as unknown as EventListener);
   });
 
   useEffect(() => {
@@ -609,6 +610,8 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
               <span>Updated {formatDate(fb.updatedAt)}</span>
             </div>
           </div>
+
+          <FeedbackConversation feedbackId={fb.id} appId={fb.appId ?? null} />
 
           {fb.data && (
             <div class="detail-card" style="margin-bottom:16px">

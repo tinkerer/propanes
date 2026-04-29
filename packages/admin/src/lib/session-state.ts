@@ -272,7 +272,7 @@ export const sessionsInitialized = signal(false);
 
 // --- Session Status Filters ---
 
-export type SessionStatusFilter = 'running' | 'pending' | 'completed' | 'failed' | 'killed';
+export type SessionStatusFilter = 'running' | 'idle' | 'pending' | 'completed' | 'failed' | 'killed';
 const DEFAULT_STATUS_FILTERS: SessionStatusFilter[] = ['running', 'pending'];
 export const sessionStatusFilters = signal<Set<SessionStatusFilter>>(
   new Set(loadJson<SessionStatusFilter[]>('pw-session-status-filters', DEFAULT_STATUS_FILTERS))
@@ -294,15 +294,8 @@ export function toggleSessionFiltersOpen() {
 
 export function sessionPassesFilters(s: any, _tabSet: Set<string>): boolean {
   if (s.status === 'deleted') return false;
-  // CoS chat turns complete in seconds, so the default running/pending filter
-  // would hide them almost immediately and they'd never persist as chat
-  // history. Bypass the status filter for CoS rows — the CoS thread group in
-  // the sidebar is the user's message log, and every turn belongs there.
-  const isCosChat = !!s.cosThreadId;
-  if (!isCosChat) {
-    const statusFilters = sessionStatusFilters.value;
-    if (!statusFilters.has(s.status)) return false;
-  }
+  const statusFilters = sessionStatusFilters.value;
+  if (!statusFilters.has(s.status)) return false;
   // App filter
   const appFilter = sessionAppFilters.value;
   if (appFilter.size > 0) {
