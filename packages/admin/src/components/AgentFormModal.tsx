@@ -34,8 +34,8 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
 
   function addToolPreset(value: string) {
     const current = formAllowedTools.trim();
-    const existing = current.split(',').map(s => s.trim()).filter(Boolean);
-    const adding = value.split(',').map(s => s.trim()).filter(Boolean);
+    const existing = current.split(',').map((s: string) => s.trim()).filter(Boolean);
+    const adding = value.split(',').map((s: string) => s.trim()).filter(Boolean);
     const merged = [...existing];
     for (const tool of adding) {
       if (!merged.includes(tool)) merged.push(tool);

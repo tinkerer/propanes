@@ -75,6 +75,12 @@ import {
 } from './popout-state.js';
 
 import { setOpenSessionCallback } from './terminal-state.js';
+import { trackSessionOpen, handleSessionExit } from './autofix.js';
+
+// Last error from resumeSession(). InterruptBar reads this when resumeSession
+// returns null so it can surface the real server-side reason in the toast
+// instead of the generic "Resume failed".
+export const lastResumeError = signal<{ sessionId: string; message: string } | null>(null);
 
 // --- Focus Session Terminal ---
 
@@ -111,7 +117,7 @@ export function focusSessionTerminal(sessionId: string) {
 
 export function openSession(sessionId: string) {
   autoJumpLogs.value && console.log(`[auto-jump] openSession: ${sessionId.slice(-6)}, currentActive=${activeTabId.value?.slice(-6) ?? 'null'}, alreadyOpen=${openTabs.value.includes(sessionId)}`);
-  import('./autofix.js').then(({ trackSessionOpen }) => trackSessionOpen(sessionId));
+  trackSessionOpen(sessionId);
 
   // Mobile: skip pane-tree and push a dedicated route that renders StandaloneSessionPage.
   if (isMobile.value) {
@@ -366,14 +372,13 @@ export function markSessionExited(sessionId: string, exitCode?: number, terminal
   exitedSessions.value = next;
   persistTabs();
   if (exitCode !== undefined && exitCode !== 0 && terminalText) {
-    import('./autofix.js').then(({ handleSessionExit }) => {
-      handleSessionExit(sessionId, exitCode, terminalText);
-    });
+    handleSessionExit(sessionId, exitCode, terminalText);
   }
 }
 
 export async function resumeSession(sessionId: string, opts?: { permissionProfile?: string; runtime?: 'claude' | 'codex'; additionalPrompt?: string }): Promise<string | null> {
   try {
+    lastResumeError.value = null;
     // Kill running session first before resuming with new profile
     const sess = allSessions.value.find((s) => s.id === sessionId);
     if (sess && (sess.status === 'running' || sess.status === 'pending')) {
@@ -444,6 +449,7 @@ export async function resumeSession(sessionId: string, opts?: { permissionProfil
     return newId;
   } catch (err: any) {
     console.error('Resume failed:', err.message);
+    lastResumeError.value = { sessionId, message: err?.message || String(err) };
     return null;
   }
 }
