@@ -97,7 +97,7 @@ import { cosFollowups, enqueueCosFollowup } from '../lib/cos-followups.js';
 import { CosSavedDraftsList } from './CosSavedDraftsList.js';
 import { CosEnqueuedList } from './CosEnqueuedList.js';
 import { CosPopoutTreeView } from './CosPopoutTreeView.js';
-import { cosOpenArtifactTab, artifactTabId } from '../lib/cos-popout-tree.js';
+import { cosOpenArtifactTab } from '../lib/cos-popout-tree.js';
 import { runSlashCommandIfAny } from '../lib/cos-slash-commands.js';
 import { cosLearnings, loadCosLearnings } from '../lib/cos-learnings.js';
 import {
@@ -1026,7 +1026,6 @@ export function ChiefOfStaffBubble({
     // re-mounts via lastScrollTopRef (see scroll-restore effect below).
     const wasEmpty = !hasAnyArtifactLeaf(cosPopoutTree.value.root);
     cosOpenArtifactTab(artifactId);
-    void artifactTabId;
     // When opening the first artifact, widen the floating panel so the chat
     // and the drawer both have room. Skip when docked — docked width is part
     // of the user's layout and shouldn't jump.
