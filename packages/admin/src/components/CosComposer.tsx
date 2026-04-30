@@ -197,6 +197,13 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
   // composer is fully frozen — operator can see exactly what they sent
   // until the server acks. Cleared after the onSend promise resolves.
   const [submitting, setSubmitting] = useState(false);
+  // Synchronous mirror of `submitting` for re-entry guards. State updates are
+  // queued, so two click/keydown events firing in the same tick (iOS often
+  // double-fires; some Bluetooth keyboards repeat Enter) both close over the
+  // pre-render `submitting=false` and slip past the state guard, producing
+  // duplicate optimistic rows + duplicate POST /chat calls. The ref flips
+  // synchronously so the second call returns immediately.
+  const submittingRef = useRef(false);
   const [pendingAttachments, setPendingAttachments] = useState<Array<CosImageAttachment & { id: string }>>([]);
   const [pendingElementRefs, setPendingElementRefs] = useState<CosElementRef[]>([]);
   const [pendingContext, setPendingContext] = useState<CosBrowserContext | null>(null);
@@ -401,7 +408,8 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
   }
 
   async function submit() {
-    if (!canSend || disabled || submitting) return;
+    if (!canSend || disabled || submittingRef.current) return;
+    submittingRef.current = true;
     const finalText = buildFinalText();
     const atts = pendingAttachments.map(({ id: _id, ...att }) => att);
     const refs = pendingElementRefs;
@@ -409,6 +417,7 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
     if (!(result instanceof Promise)) {
       // Sync caller — preserve historical "clear immediately" behavior.
       clearAfterSend();
+      submittingRef.current = false;
       return;
     }
     setSubmitting(true);
@@ -420,6 +429,7 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
       // unfreeze and leave the operator's text intact.
     } finally {
       setSubmitting(false);
+      submittingRef.current = false;
     }
   }
 
@@ -445,7 +455,8 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
   }
 
   async function sendAndInterrupt() {
-    if (!onSendAndInterrupt || !canSend || disabled || submitting) return;
+    if (!onSendAndInterrupt || !canSend || disabled || submittingRef.current) return;
+    submittingRef.current = true;
     const finalText = buildFinalText();
     const atts = pendingAttachments.map(({ id: _id, ...att }) => att);
     const refs = pendingElementRefs;
@@ -453,6 +464,7 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
     const result = onSendAndInterrupt(finalText, atts, refs);
     if (!(result instanceof Promise)) {
       clearAfterSend();
+      submittingRef.current = false;
       return;
     }
     setSubmitting(true);
@@ -463,6 +475,7 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
       /* see submit() */
     } finally {
       setSubmitting(false);
+      submittingRef.current = false;
     }
   }
 
