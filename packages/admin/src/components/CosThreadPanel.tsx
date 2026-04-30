@@ -138,9 +138,20 @@ export function ThreadPanel({
   // gap so "press send → see the message → input clears" all happens together.
   const pendingMessages = useMemo<ChiefOfStaffMsg[]>(() => {
     if (!agent) return [];
+    // Whitespace-insensitive match: the optimistic row stores the operator's
+    // typed text trimmed; the projected row comes from stripTurnPreamble over
+    // the JSONL user_input, which can drift in newline / context-block
+    // joiners. Collapsing any run of whitespace to a single space dedupes
+    // through that drift instead of getting stuck on `\n\n---\n` vs
+    // `\n\n---\n\n` boundaries.
+    const norm = (s: string) => s.trim().replace(/\s+/g, ' ');
     const projectedTexts = new Set<string>();
+    let projectedHasUserInThread = false;
     for (const p of projected) {
-      if (p.role === 'user' && p.text) projectedTexts.add(p.text.trim());
+      if (p.role === 'user' && p.text) {
+        projectedTexts.add(norm(p.text));
+        projectedHasUserInThread = true;
+      }
     }
     return agent.messages.filter((m) => {
       if (m.role !== 'user') return false;
@@ -154,7 +165,22 @@ export function ThreadPanel({
       // first user_input.
       if (anchorTs != null && m.timestamp === anchorTs) return false;
       // Skip rows that JSONL already has by text match.
-      if (m.text && projectedTexts.has(m.text.trim())) return false;
+      if (m.text && projectedTexts.has(norm(m.text))) return false;
+      // Belt-and-braces fallback: once an assistant reply *after* this user
+      // row has finished streaming AND projected has at least one user msg
+      // in the thread, the optimistic row is stale — drop it even if the
+      // text-match missed. Without this fallback the row sticks on
+      // "Sending…" until the operator refreshes the page.
+      if (projectedHasUserInThread) {
+        const assistantSettled = agent.messages.some(
+          (a) => a.role === 'assistant'
+            && a.threadId === (m.threadId ?? threadServerId)
+            && a.timestamp > m.timestamp
+            && a.streaming !== true
+            && a.sending !== true,
+        );
+        if (assistantSettled) return false;
+      }
       return true;
     });
   }, [agent?.messages, projected, threadServerId, anchorTs]);

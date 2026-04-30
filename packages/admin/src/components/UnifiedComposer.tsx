@@ -115,6 +115,11 @@ export function UnifiedComposer({
 }: UnifiedComposerProps) {
   const [text, setText] = useState<string>(initialText ?? '');
   const [submitting, setSubmitting] = useState(false);
+  // Synchronous mirror of `submitting` — guards against rapid re-entry from
+  // double-fired touch/click + keydown events (iOS) before React has applied
+  // the state update. Without this, two calls in the same tick both close
+  // over `submitting=false` and slip past the state guard.
+  const submittingRef = useRef(false);
   const [internalError, setInternalError] = useState<string | null>(null);
   const [images, setImages] = useState<PendingImage[]>([]);
   const [elements, setElements] = useState<SelectedElementInfo[]>([]);
@@ -371,7 +376,8 @@ export function UnifiedComposer({
 
   async function submit() {
     if (!hasContent) return;
-    if (submitting) return;
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setInternalError(null);
     try {
@@ -401,6 +407,7 @@ export function UnifiedComposer({
       setInternalError(err?.message || String(err));
     } finally {
       setSubmitting(false);
+      submittingRef.current = false;
     }
   }
 
