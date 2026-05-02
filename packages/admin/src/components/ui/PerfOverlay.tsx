@@ -1,4 +1,4 @@
-import { perfEntries, perfOverlayEnabled, clearPerfEntries } from '../lib/perf.js';
+import { perfEntries, perfOverlayEnabled, clearPerfEntries } from '../../lib/perf.js';
 
 function durationClass(ms: number): string {
   if (ms >= 500) return 'perf-overlay-duration slow';

@@ -1,9 +1,9 @@
 import { useRef, useCallback, useEffect, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
-import { type ViewMode } from './SessionViewToggle.js';
-import type { LeafNode } from '../lib/pane-tree.js';
-import { PopupMenu } from './PopupMenu.js';
-import { SessionIdMenu } from './SessionIdMenu.js';
+import { type ViewMode } from '../terminal/SessionViewToggle.js';
+import type { LeafNode } from '../../lib/pane-tree.js';
+import { PopupMenu } from '../pickers/PopupMenu.js';
+import { SessionIdMenu } from '../sessions/SessionIdMenu.js';
 import {
   setActiveTab,
   setFocusedLeaf,
@@ -21,7 +21,7 @@ import {
   SIDEBAR_LEAF_ID,
   PAGE_LEAF_ID,
   SESSIONS_LEAF_ID,
-} from '../lib/pane-tree.js';
+} from '../../lib/pane-tree.js';
 import { renderTabContent } from './PaneContent.js';
 import {
   allSessions,
@@ -69,13 +69,13 @@ import {
   getSettingsLabel,
   openFeedbackItem,
   openLocalTerminal,
-} from '../lib/sessions.js';
-import { startTabDrag, startLeafDrag, dragOverLeafZone } from '../lib/tab-drag.js';
-import { ctrlShiftHeld } from '../lib/shortcuts.js';
-import { showHotkeyHints, popoutMode, type PopoutMode } from '../lib/settings.js';
-import { selectedAppId, applications, appFeedbackCounts } from '../lib/state.js';
-import { copyWithTooltip } from '../lib/clipboard.js';
-import { cosArtifacts } from '../lib/cos-artifacts.js';
+} from '../../lib/sessions.js';
+import { startTabDrag, startLeafDrag, dragOverLeafZone } from '../../lib/tab-drag.js';
+import { ctrlShiftHeld } from '../../lib/shortcuts.js';
+import { showHotkeyHints, popoutMode, type PopoutMode } from '../../lib/settings.js';
+import { selectedAppId, applications, appFeedbackCounts } from '../../lib/state.js';
+import { copyWithTooltip } from '../../lib/clipboard.js';
+import { cosArtifacts } from '../../lib/cos-artifacts.js';
 
 // --- Shared signals (also used by Layout.tsx for keyboard shortcuts) ---
 export const statusMenuOpen = signal<{ sessionId: string; x: number; y: number } | null>(null);

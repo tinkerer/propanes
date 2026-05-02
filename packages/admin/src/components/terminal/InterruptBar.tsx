@@ -1,8 +1,8 @@
 import { useState } from 'preact/hooks';
-import { resumeSession, allSessions, exitedSessions, lastResumeError } from '../lib/sessions.js';
-import { api } from '../lib/api.js';
-import { formatConsoleEntries } from '../lib/console-buffer.js';
-import { UnifiedComposer, type UnifiedComposerData } from './UnifiedComposer.js';
+import { resumeSession, allSessions, exitedSessions, lastResumeError } from '../../lib/sessions.js';
+import { api } from '../../lib/api.js';
+import { formatConsoleEntries } from '../../lib/console-buffer.js';
+import { UnifiedComposer, type UnifiedComposerData } from '../feedback/UnifiedComposer.js';
 
 interface Props {
   sessionId: string;

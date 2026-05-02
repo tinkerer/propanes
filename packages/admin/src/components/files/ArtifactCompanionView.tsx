@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { marked } from 'marked';
 import hljs from 'highlight.js/lib/common';
-import { cosArtifacts } from '../lib/cos-artifacts.js';
-import { cosRemoveTab, artifactTabId } from '../lib/cos-popout-tree.js';
-import { closeTab } from '../lib/sessions.js';
+import { cosArtifacts } from '../../lib/cos-artifacts.js';
+import { cosRemoveTab, artifactTabId } from '../../lib/cos-popout-tree.js';
+import { closeTab } from '../../lib/sessions.js';
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

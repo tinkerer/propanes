@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback } from 'preact/hooks';
 import { api } from '../lib/api.js';
 import { applications, loadApplications, navigate } from '../lib/state.js';
 import { copyText, copyWithTooltip } from '../lib/clipboard.js';
-import { AiAssistButton } from '../components/AiAssistButton.js';
-import { AgentCard } from '../components/AgentCard.js';
-import { AgentFormModal } from '../components/AgentFormModal.js';
+import { AiAssistButton } from '../components/ai-assist/AiAssistButton.js';
+import { AgentCard } from '../components/sessions/AgentCard.js';
+import { AgentFormModal } from '../components/modals/AgentFormModal.js';
 import { TOOL_PRESETS } from '../lib/agent-constants.js';
-import { trackDeletion } from '../components/DeletedItemsPanel.js';
+import { trackDeletion } from '../components/ui/DeletedItemsPanel.js';
 
 interface SuggestionDraft {
   label: string;

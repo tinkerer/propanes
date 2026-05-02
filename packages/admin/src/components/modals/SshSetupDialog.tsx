@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks';
-import { sshSetupDialog, completeSshSetup } from '../lib/sessions.js';
-import { localBridgeUrl } from '../lib/settings.js';
+import { sshSetupDialog, completeSshSetup } from '../../lib/sessions.js';
+import { localBridgeUrl } from '../../lib/settings.js';
 
 export function SshSetupDialog() {
   const state = sshSetupDialog.value;

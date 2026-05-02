@@ -1,10 +1,10 @@
 import { useSignal } from '@preact/signals';
 import { useState, useEffect } from 'preact/hooks';
 import { api } from '../lib/api.js';
-import { SetupAssistButton } from '../components/SetupAssistButton.js';
-import { DeletedItemsPanel, trackDeletion } from '../components/DeletedItemsPanel.js';
-import { AgentCard } from '../components/AgentCard.js';
-import { AgentFormModal } from '../components/AgentFormModal.js';
+import { SetupAssistButton } from '../components/dispatch/SetupAssistButton.js';
+import { DeletedItemsPanel, trackDeletion } from '../components/ui/DeletedItemsPanel.js';
+import { AgentCard } from '../components/sessions/AgentCard.js';
+import { AgentFormModal } from '../components/modals/AgentFormModal.js';
 
 export function AgentsPage() {
   const agents = useSignal<any[]>([]);

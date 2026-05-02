@@ -3,8 +3,8 @@ import { useEffect, useRef } from 'preact/hooks';
 import { api } from '../lib/api.js';
 import { isEmbedded, applications } from '../lib/state.js';
 import { allSessions, openSession, deleteSession, permanentlyDeleteSession, spawnTerminal, sessionInputStates, includeDeletedInPolling, termPickerOpen, openFeedbackItem } from '../lib/sessions.js';
-import { DeletedItemsPanel, trackDeletion } from '../components/DeletedItemsPanel.js';
-import { cachedTargets, ensureTargetsLoaded } from '../components/DispatchTargetSelect.js';
+import { DeletedItemsPanel, trackDeletion } from '../components/ui/DeletedItemsPanel.js';
+import { cachedTargets, ensureTargetsLoaded } from '../components/dispatch/DispatchTargetSelect.js';
 import { isMobile } from '../lib/viewport.js';
 import { loadCosDispatches, cosGroupForSession } from '../lib/cos-dispatches.js';
 

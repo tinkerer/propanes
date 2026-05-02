@@ -20,8 +20,8 @@ import {
   sidebarStatusMenu,
   sidebarItemMenu,
   sessionPassesFilters,
-} from '../lib/sessions.js';
-import { selectedAppId } from '../lib/state.js';
+} from '../../lib/sessions.js';
+import { selectedAppId } from '../../lib/state.js';
 
 export function TerminalsListView() {
   const sessions = allSessions.value;

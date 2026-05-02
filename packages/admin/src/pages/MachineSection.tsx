@@ -1,8 +1,8 @@
 import { signal } from '@preact/signals';
 import { api } from '../lib/api.js';
-import { SetupAssistButton } from '../components/SetupAssistButton.js';
-import { trackDeletion } from '../components/DeletedItemsPanel.js';
-import { cachedTargets } from '../components/DispatchTargetSelect.js';
+import { SetupAssistButton } from '../components/dispatch/SetupAssistButton.js';
+import { trackDeletion } from '../components/ui/DeletedItemsPanel.js';
+import { cachedTargets } from '../components/dispatch/DispatchTargetSelect.js';
 import { spawnTerminal } from '../lib/sessions.js';
 import { selectedAppId } from '../lib/state.js';
 import {

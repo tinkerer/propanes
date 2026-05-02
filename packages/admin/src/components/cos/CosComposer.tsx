@@ -5,12 +5,12 @@ import {
   chiefOfStaffAgents,
   type CosImageAttachment,
   type CosElementRef,
-} from '../lib/chief-of-staff.js';
-import { activeChannel } from '../lib/state.js';
-import { api } from '../lib/api.js';
-import { useCosVoice } from '../lib/use-cos-voice.js';
-import { useCosScreenshot } from '../lib/use-cos-screenshot.js';
-import { useCosElementPicker } from '../lib/use-cos-element-picker.js';
+} from '../../lib/chief-of-staff.js';
+import { activeChannel } from '../../lib/state.js';
+import { api } from '../../lib/api.js';
+import { useCosVoice } from '../../lib/use-cos-voice.js';
+import { useCosScreenshot } from '../../lib/use-cos-screenshot.js';
+import { useCosElementPicker } from '../../lib/use-cos-element-picker.js';
 import { CosInputToolbar } from './CosInputToolbar.js';
 import {
   snapshotBrowserContext,
@@ -18,7 +18,7 @@ import {
   formatBrowserContext,
   cosSelectedCollectors,
   type CosBrowserContext,
-} from '../lib/console-buffer.js';
+} from '../../lib/console-buffer.js';
 
 let attachmentIdCounter = 0;
 function nextAttachmentId(): string {

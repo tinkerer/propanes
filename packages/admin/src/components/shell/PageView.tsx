@@ -1,17 +1,17 @@
-import { currentRoute, navigate, selectedAppId, applications } from '../lib/state.js';
-import { openSettingsPanel } from '../lib/companion-state.js';
-import { RequestPanel } from './RequestPanel.js';
-import { FeedbackListPage } from '../pages/FeedbackListPage.js';
-import { FeedbackDetailPage } from '../pages/FeedbackDetailPage.js';
-import { GettingStartedPage } from '../pages/GettingStartedPage.js';
-import { SessionsPage } from '../pages/SessionsPage.js';
-import { AggregatePage } from '../pages/AggregatePage.js';
-import { LiveConnectionsPage } from '../pages/LiveConnectionsPage.js';
-import { SettingsPage } from '../pages/SettingsPage.js';
-import { AppSettingsPage } from '../pages/AppSettingsPage.js';
-import { InfrastructurePage } from '../pages/InfrastructurePage.js';
-import { UserGuidePage } from '../pages/UserGuidePage.js';
-import { WiggumPage } from '../pages/WiggumPage.js';
+import { currentRoute, navigate, selectedAppId, applications } from '../../lib/state.js';
+import { openSettingsPanel } from '../../lib/companion-state.js';
+import { RequestPanel } from '../ui/RequestPanel.js';
+import { FeedbackListPage } from '../../pages/FeedbackListPage.js';
+import { FeedbackDetailPage } from '../../pages/FeedbackDetailPage.js';
+import { GettingStartedPage } from '../../pages/GettingStartedPage.js';
+import { SessionsPage } from '../../pages/SessionsPage.js';
+import { AggregatePage } from '../../pages/AggregatePage.js';
+import { LiveConnectionsPage } from '../../pages/LiveConnectionsPage.js';
+import { SettingsPage } from '../../pages/SettingsPage.js';
+import { AppSettingsPage } from '../../pages/AppSettingsPage.js';
+import { InfrastructurePage } from '../../pages/InfrastructurePage.js';
+import { UserGuidePage } from '../../pages/UserGuidePage.js';
+import { WiggumPage } from '../../pages/WiggumPage.js';
 
 function parseAppRoute(route: string): { appId: string; sub: string; param?: string } | null {
   const m = route.match(/^\/app\/([^/]+)\/(.+)$/);

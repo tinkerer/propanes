@@ -10,8 +10,8 @@
 import { useSignal } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import { marked } from 'marked';
-import { api } from '../lib/api.js';
-import { formatDate } from '../lib/date-utils.js';
+import { api } from '../../lib/api.js';
+import { formatDate } from '../../lib/date-utils.js';
 
 type ThreadMessage = {
   id: string;

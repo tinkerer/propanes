@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { allSessions, paneMruHistory, spawnTerminal, setTerminalCompanionAndOpen, setTerminalCompanion, togglePanelCompanion, loadAllSessions, openSession, openIsolateCompanion, openUrlCompanion } from '../lib/sessions.js';
-import { selectedAppId, applications } from '../lib/state.js';
-import { getIsolateNames, getIsolateEntry } from '../lib/isolate.js';
-import { cachedTargets, ensureTargetsLoaded, refreshTargets } from './DispatchTargetSelect.js';
-import { api } from '../lib/api.js';
-import { addTabToLeaf, focusedLeafId, resetLayout, findLeafWithTab } from '../lib/pane-tree.js';
-import { cosResetPopoutTree, cosActiveThread } from '../lib/cos-popout-tree.js';
-import { reclampAllPanelsToViewport } from '../lib/popout-state.js';
+import { allSessions, paneMruHistory, spawnTerminal, setTerminalCompanionAndOpen, setTerminalCompanion, togglePanelCompanion, loadAllSessions, openSession, openIsolateCompanion, openUrlCompanion } from '../../lib/sessions.js';
+import { selectedAppId, applications } from '../../lib/state.js';
+import { getIsolateNames, getIsolateEntry } from '../../lib/isolate.js';
+import { cachedTargets, ensureTargetsLoaded, refreshTargets } from '../dispatch/DispatchTargetSelect.js';
+import { api } from '../../lib/api.js';
+import { addTabToLeaf, focusedLeafId, resetLayout, findLeafWithTab } from '../../lib/pane-tree.js';
+import { cosResetPopoutTree, cosActiveThread } from '../../lib/cos-popout-tree.js';
+import { reclampAllPanelsToViewport } from '../../lib/popout-state.js';
 
 export type TerminalPickerMode =
   | { kind: 'companion'; sessionId: string; panelId?: string }

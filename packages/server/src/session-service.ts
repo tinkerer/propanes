@@ -462,6 +462,11 @@ function spawnSession(params: {
       status: 'running',
       pid: ptyProcess.pid,
       startedAt: now,
+      completedAt: null,
+      exitCode: null,
+      lastOutputSeq: 0,
+      lastInputSeq: 0,
+      outputBytes: 0,
     })
     .where(eq(schema.agentSessions.id, sessionId))
     .run();

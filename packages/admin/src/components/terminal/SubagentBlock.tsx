@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks';
 import { MessageRenderer } from './MessageRenderer.js';
 import { groupMessages, AssistantGroupHeader } from './StructuredView.js';
-import type { ParsedMessage } from '../lib/output-parser.js';
+import type { ParsedMessage } from '../../lib/output-parser.js';
 
 interface Props {
   agentId: string;

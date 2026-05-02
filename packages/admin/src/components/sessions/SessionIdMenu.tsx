@@ -1,9 +1,9 @@
 import { type RefObject } from 'preact';
 import { useState, useLayoutEffect } from 'preact/hooks';
-import { PopupMenu } from './PopupMenu.js';
-import { copyWithTooltip } from '../lib/clipboard.js';
-import { RUNTIME_INFO } from '../lib/agent-constants.js';
-import { PROFILE_MATRIX, DISPATCHABLE_PROFILES } from '../lib/agent-matrix.js';
+import { PopupMenu } from '../pickers/PopupMenu.js';
+import { copyWithTooltip } from '../../lib/clipboard.js';
+import { RUNTIME_INFO } from '../../lib/agent-constants.js';
+import { PROFILE_MATRIX, DISPATCHABLE_PROFILES } from '../../lib/agent-matrix.js';
 import {
   getCompanions,
   toggleCompanion,
@@ -18,7 +18,7 @@ import {
   termPickerOpen,
   type CompanionType,
   type PopoutPanelState,
-} from '../lib/sessions.js';
+} from '../../lib/sessions.js';
 
 const RUNTIME_OPTIONS = ['claude', 'codex'] as const;
 

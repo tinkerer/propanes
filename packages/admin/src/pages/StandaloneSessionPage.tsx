@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
-import { SessionViewToggle, type ViewMode } from '../components/SessionViewToggle.js';
-import { renderTabContent } from '../components/PaneContent.js';
-import { SessionIdMenu } from '../components/SessionIdMenu.js';
-import { SshSetupDialog } from '../components/SshSetupDialog.js';
+import { SessionViewToggle, type ViewMode } from '../components/terminal/SessionViewToggle.js';
+import { renderTabContent } from '../components/panes/PaneContent.js';
+import { SessionIdMenu } from '../components/sessions/SessionIdMenu.js';
+import { SshSetupDialog } from '../components/modals/SshSetupDialog.js';
 import { allSessions, sessionMapComputed, startSessionPolling, getViewMode, setViewMode, markSessionExited, setSessionInputState, exitedSessions, getSessionLabel, feedbackTitleCache } from '../lib/sessions.js';
 import { applyTheme } from '../lib/settings.js';
 import { isMobile } from '../lib/viewport.js';

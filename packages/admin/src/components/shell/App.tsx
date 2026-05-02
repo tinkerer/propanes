@@ -1,20 +1,20 @@
 import { useEffect } from 'preact/hooks';
 import { ComponentChildren } from 'preact';
-import { isAuthenticated, currentRoute, loadApplications, isEmbedded, isCompanion, isWorkbench, isCosEmbed, clearToken } from '../lib/state.js';
-import { setChiefOfStaffOpen } from '../lib/chief-of-staff.js';
-import { connectAdminWs } from '../lib/admin-ws.js';
-import { initNotifications } from '../lib/notifications.js';
-import { isolatedComponent, getIsolateEntry, getIsolateParams } from '../lib/isolate.js';
+import { isAuthenticated, currentRoute, loadApplications, isEmbedded, isCompanion, isWorkbench, isCosEmbed, clearToken } from '../../lib/state.js';
+import { setChiefOfStaffOpen } from '../../lib/chief-of-staff.js';
+import { connectAdminWs } from '../../lib/admin-ws.js';
+import { initNotifications } from '../../lib/notifications.js';
+import { isolatedComponent, getIsolateEntry, getIsolateParams } from '../../lib/isolate.js';
 import { Layout } from './Layout.js';
-import { GlobalTerminalPanel } from './GlobalTerminalPanel.js';
-import { LoginPage } from '../pages/LoginPage.js';
-import { StandaloneSessionPage } from '../pages/StandaloneSessionPage.js';
-import { StandalonePanelPage, parsePanelRoute } from '../pages/StandalonePanelPage.js';
-import { StandaloneFeedbackPage } from '../pages/StandaloneFeedbackPage.js';
-import { DispatchDialog } from './DispatchDialog.js';
-import { SetupAssistantDialog } from './SetupAssistantDialog.js';
+import { GlobalTerminalPanel } from '../panes/GlobalTerminalPanel.js';
+import { LoginPage } from '../../pages/LoginPage.js';
+import { StandaloneSessionPage } from '../../pages/StandaloneSessionPage.js';
+import { StandalonePanelPage, parsePanelRoute } from '../../pages/StandalonePanelPage.js';
+import { StandaloneFeedbackPage } from '../../pages/StandaloneFeedbackPage.js';
+import { DispatchDialog } from '../dispatch/DispatchDialog.js';
+import { SetupAssistantDialog } from '../dispatch/SetupAssistantDialog.js';
 import { PageView } from './PageView.js';
-import { ChiefOfStaffBubble } from './ChiefOfStaffBubble.js';
+import { ChiefOfStaffBubble } from '../cos/ChiefOfStaffBubble.js';
 
 function CosEmbedRoot() {
   // Force the Ops chat open and load apps so dispatch / app context resolves.

@@ -23,15 +23,15 @@ import {
   getPanelZIndex,
   panelZOrders,
   focusSessionTerminal,
-} from '../lib/sessions.js';
-import { detectExternalZone, openPanelExternally, applyExternalGhostHint } from '../lib/tab-drag.js';
-import { ctrlShiftHeld, stickyModeActive } from '../lib/shortcuts.js';
-import { selectedAppId } from '../lib/state.js';
+} from '../../lib/sessions.js';
+import { detectExternalZone, openPanelExternally, applyExternalGhostHint } from '../../lib/tab-drag.js';
+import { ctrlShiftHeld, stickyModeActive } from '../../lib/shortcuts.js';
+import { selectedAppId } from '../../lib/state.js';
 import { renderTabContent } from './PaneContent.js';
-import { setFocusedLeaf } from '../lib/pane-tree.js';
+import { setFocusedLeaf } from '../../lib/pane-tree.js';
 import {
   handleDragMove, handleResizeMove, handleSplitDividerMove,
-} from '../lib/popout-physics.js';
+} from '../../lib/popout-physics.js';
 import { PanelTabBadge, tabLabel, companionCopyId } from './PopoutPanelContent.js';
 import { DockedPanelGrabHandle } from './PopoutGrabHandle.js';
 import { PopoutResizeHandles } from './PopoutResizeHandles.js';

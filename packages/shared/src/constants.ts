@@ -52,6 +52,26 @@ export const PERMISSION_PROFILES = [
   'plain',
 ] as const;
 
+// Stream profiles keep stdin open as long-running JSON channels — they don't
+// render a TUI, so the PTY width is uncoupled from the human terminal. Wider
+// cols reduce the chance that long stream-json frames get split across line
+// boundaries and fail to parse downstream.
+export const STREAM_PERMISSION_PROFILES: readonly string[] = [
+  'headless-stream-yolo',
+  'headless-stream-require',
+];
+
+export const STREAM_PROFILE_PTY_COLS = 10000;
+export const DEFAULT_PTY_COLS = 120;
+
+export function isStreamProfile(profile: string): boolean {
+  return STREAM_PERMISSION_PROFILES.includes(profile);
+}
+
+export function ptyColsForProfile(profile: string): number {
+  return isStreamProfile(profile) ? STREAM_PROFILE_PTY_COLS : DEFAULT_PTY_COLS;
+}
+
 export const AGENT_SESSION_STATUSES = [
   'pending',
   'running',

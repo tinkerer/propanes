@@ -3,12 +3,12 @@ import { MessageRenderer } from './MessageRenderer.js';
 import { groupMessages, AssistantGroupHeader, partitionMergedMessages } from './StructuredView.js';
 import { SubagentBlock } from './SubagentBlock.js';
 import { InterruptBar } from './InterruptBar.js';
-import { type ParsedMessage } from '../lib/output-parser.js';
-import { useTranscriptStream } from '../lib/transcript-stream.js';
-import { getJsonlSelectedFile, jsonlSelectedFile } from '../lib/sessions.js';
-import { allSessions } from '../lib/sessions.js';
-import { isMobile, NarrowContext, useContainerNarrow } from '../lib/viewport.js';
-import { buildSummary, TaskItem, FileReadItem, FileEditItem } from './SessionSummaryView.js';
+import { type ParsedMessage } from '../../lib/output-parser.js';
+import { useTranscriptStream } from '../../lib/transcript-stream.js';
+import { getJsonlSelectedFile, jsonlSelectedFile } from '../../lib/sessions.js';
+import { allSessions } from '../../lib/sessions.js';
+import { isMobile, NarrowContext, useContainerNarrow } from '../../lib/viewport.js';
+import { buildSummary, TaskItem, FileReadItem, FileEditItem } from '../sessions/SessionSummaryView.js';
 
 interface Props {
   sessionId: string;

@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'preact/hooks';
-import { api } from '../lib/api.js';
-import { openSession, loadAllSessions } from '../lib/sessions.js';
+import { api } from '../../lib/api.js';
+import { openSession, loadAllSessions } from '../../lib/sessions.js';
 
 interface SetupAssistButtonProps {
   entityType: 'machine' | 'harness' | 'agent' | 'sprite';

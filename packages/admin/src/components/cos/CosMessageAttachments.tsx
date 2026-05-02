@@ -7,7 +7,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type {
   CosImageAttachment,
   CosElementRef,
-} from '../lib/chief-of-staff.js';
+} from '../../lib/chief-of-staff.js';
 
 function MessageImageThumb({ src, name }: { src: string; name?: string }) {
   const [lightbox, setLightbox] = useState(false);

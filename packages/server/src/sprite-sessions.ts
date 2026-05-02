@@ -37,7 +37,15 @@ export function launchSpriteSession(params: {
   ws.on('open', () => {
     const now = new Date().toISOString();
     db.update(schema.agentSessions)
-      .set({ status: 'running', startedAt: now })
+      .set({
+        status: 'running',
+        startedAt: now,
+        completedAt: null,
+        exitCode: null,
+        lastOutputSeq: 0,
+        lastInputSeq: 0,
+        outputBytes: 0,
+      })
       .where(eq(schema.agentSessions.id, sessionId))
       .run();
     console.log(`[sprite] Session ${sessionId} connected to sprite ${spriteName}`);

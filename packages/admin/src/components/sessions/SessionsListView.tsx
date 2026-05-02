@@ -47,16 +47,16 @@ import {
   sessionCollapsedAppGroups,
   toggleCollapsedAppGroup,
   loadAllSessions,
-} from '../lib/sessions.js';
-import { api } from '../lib/api.js';
-import { setFocusedLeaf } from '../lib/pane-tree.js';
-import { ctrlShiftHeld } from '../lib/shortcuts.js';
-import { autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce } from '../lib/settings.js';
-import { selectedAppId, applications, navigate } from '../lib/state.js';
-import { PopupMenu } from './PopupMenu.js';
-import { QuickDispatchPopup, type DispatchType } from './QuickDispatchPopup.js';
-import { loadCosDispatches, cosGroupForSession } from '../lib/cos-dispatches.js';
-import { chiefOfStaffAgents } from '../lib/chief-of-staff.js';
+} from '../../lib/sessions.js';
+import { api } from '../../lib/api.js';
+import { setFocusedLeaf } from '../../lib/pane-tree.js';
+import { ctrlShiftHeld } from '../../lib/shortcuts.js';
+import { autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce } from '../../lib/settings.js';
+import { selectedAppId, applications, navigate } from '../../lib/state.js';
+import { PopupMenu } from '../pickers/PopupMenu.js';
+import { QuickDispatchPopup, type DispatchType } from '../dispatch/QuickDispatchPopup.js';
+import { loadCosDispatches, cosGroupForSession } from '../../lib/cos-dispatches.js';
+import { chiefOfStaffAgents } from '../../lib/chief-of-staff.js';
 
 const autoJumpMenuOpen = signal(false);
 const quickDispatchAppKey = signal<string | null>(null);

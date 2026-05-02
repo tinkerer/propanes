@@ -11,7 +11,7 @@ import {
   updateActiveAgentStyle,
   clearActiveAgentHistory,
   removeActiveAgent,
-} from '../lib/chief-of-staff.js';
+} from '../../lib/chief-of-staff.js';
 
 /**
  * Settings pane shown in place of the chat when the operator opens the gear

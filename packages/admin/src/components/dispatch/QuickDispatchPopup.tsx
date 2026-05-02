@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import { createPortal } from 'preact/compat';
-import { api } from '../lib/api.js';
-import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../lib/agent-constants.js';
-import { formatAgentOption, agentSortCmp } from '../lib/agent-matrix.js';
-import { openSession, loadAllSessions, ensureAgentsLoaded } from '../lib/sessions.js';
+import { api } from '../../lib/api.js';
+import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../../lib/agent-constants.js';
+import { formatAgentOption, agentSortCmp } from '../../lib/agent-matrix.js';
+import { openSession, loadAllSessions, ensureAgentsLoaded } from '../../lib/sessions.js';
 
 export type DispatchType = 'agent' | 'yolo' | 'wiggum' | 'fafo' | 'structured' | 'powwow';
 

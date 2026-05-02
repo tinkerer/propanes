@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'preact/hooks';
-import { FileTree } from '../components/FileTree.js';
-import { GitChangesView } from '../components/GitChangesView.js';
+import { FileTree } from '../components/files/FileTree.js';
+import { GitChangesView } from '../components/files/GitChangesView.js';
 import { api } from '../lib/api.js';
 
 interface Props {

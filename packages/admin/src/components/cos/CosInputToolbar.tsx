@@ -3,7 +3,7 @@ import {
   cosSelectedCollectors,
   setCollectorSelected,
   type CosCollector,
-} from '../lib/console-buffer.js';
+} from '../../lib/console-buffer.js';
 
 export type ScreenshotMethod = 'display-media' | 'html-to-image';
 

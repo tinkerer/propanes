@@ -11,14 +11,14 @@
 
 import { marked } from 'marked';
 import { useEffect, useMemo, useRef } from 'preact/hooks';
-import { openSession } from '../lib/sessions.js';
-import { openUrlCompanion } from '../lib/companion-state.js';
-import { registerCosArtifact, artifactIdFor } from '../lib/cos-artifacts.js';
+import { openSession } from '../../lib/sessions.js';
+import { openUrlCompanion } from '../../lib/companion-state.js';
+import { registerCosArtifact, artifactIdFor } from '../../lib/cos-artifacts.js';
 import {
   linkifyHtml,
   parseAssistantContent,
   type ContentSegment,
-} from '../lib/cos-markdown.js';
+} from '../../lib/cos-markdown.js';
 
 function handleCosProseClick(e: MouseEvent) {
   const target = e.target as HTMLElement | null;

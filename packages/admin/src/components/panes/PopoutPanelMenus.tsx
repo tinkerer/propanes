@@ -11,8 +11,8 @@ import {
   SESSION_COLOR_PRESETS,
   exitedSessions,
   allSessions,
-} from '../lib/sessions.js';
-import { showHotkeyHints } from '../lib/settings.js';
+} from '../../lib/sessions.js';
+import { showHotkeyHints } from '../../lib/settings.js';
 import {
   popoutStatusMenuOpen,
   popoutHotkeyMenuOpen,

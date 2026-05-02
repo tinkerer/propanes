@@ -1,7 +1,7 @@
 import type { RefObject, JSX } from 'preact';
-import { WindowMenu } from './PopoutPanelContent.js';
-import { openCosExternally } from '../lib/tab-drag.js';
-import { COS_PANE_TAB_ID } from '../lib/chief-of-staff.js';
+import { WindowMenu } from '../panes/PopoutPanelContent.js';
+import { openCosExternally } from '../../lib/tab-drag.js';
+import { COS_PANE_TAB_ID } from '../../lib/chief-of-staff.js';
 
 /**
  * Drag-to-popout hamburger + close-panel + WindowMenu for the popout-mode

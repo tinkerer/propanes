@@ -1,7 +1,7 @@
 import { useCallback } from 'preact/hooks';
-import type { PaneNode } from '../lib/pane-tree.js';
-import { setSplitRatio, SIDEBAR_LEAF_ID, SESSIONS_LEAF_ID } from '../lib/pane-tree.js';
-import { sidebarWidth, persistPanelState } from '../lib/sessions.js';
+import type { PaneNode } from '../../lib/pane-tree.js';
+import { setSplitRatio, SIDEBAR_LEAF_ID, SESSIONS_LEAF_ID } from '../../lib/pane-tree.js';
+import { sidebarWidth, persistPanelState } from '../../lib/sessions.js';
 import { SplitPane } from './SplitPane.js';
 import { LeafPane } from './LeafPane.js';
 

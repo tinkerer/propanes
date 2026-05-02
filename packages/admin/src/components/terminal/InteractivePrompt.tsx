@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { api } from '../lib/api.js';
+import { api } from '../../lib/api.js';
 
 export interface QuestionOption {
   label: string;

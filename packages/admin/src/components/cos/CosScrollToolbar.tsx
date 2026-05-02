@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { type RefObject } from 'preact';
-import { cosLearnings, loadCosLearnings } from '../lib/cos-learnings.js';
+import { cosLearnings, loadCosLearnings } from '../../lib/cos-learnings.js';
 import {
   cosToggleLearningsTab,
   setCosSlackMode,
@@ -8,7 +8,7 @@ import {
   setCosShowArchived,
   setCosThreadFilter,
   type CosThreadFilter,
-} from '../lib/cos-popout-tree.js';
+} from '../../lib/cos-popout-tree.js';
 
 export type CosSearchRole = 'all' | 'user' | 'assistant';
 export type CosSearchScope = 'text' | 'tools' | 'both';

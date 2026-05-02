@@ -1,7 +1,7 @@
 import { signal, computed } from '@preact/signals';
 import { applications } from './state.js';
-import type { ViewMode } from '../components/SessionViewToggle.js';
-import type { TerminalPickerMode } from '../components/TerminalPicker.js';
+import type { ViewMode } from '../components/terminal/SessionViewToggle.js';
+import type { TerminalPickerMode } from '../components/pickers/TerminalPicker.js';
 import {
   layoutTree,
   findLeaf,

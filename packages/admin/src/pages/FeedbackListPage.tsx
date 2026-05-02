@@ -3,11 +3,11 @@ import { useEffect, useRef, useCallback } from 'preact/hooks';
 import { api } from '../lib/api.js';
 import { currentRoute, navigate } from '../lib/state.js';
 import { openSession, sessionInputStates, openFeedbackItem, feedbackTitleCache } from '../lib/sessions.js';
-import { openDispatchDialog, dispatchDialogResult } from '../components/DispatchDialog.js';
+import { openDispatchDialog, dispatchDialogResult } from '../components/dispatch/DispatchDialog.js';
 import { copyWithTooltip } from '../lib/clipboard.js';
-import { DeletedItemsPanel, trackDeletion } from '../components/DeletedItemsPanel.js';
+import { DeletedItemsPanel, trackDeletion } from '../components/ui/DeletedItemsPanel.js';
 import { formatDate } from '../lib/date-utils.js';
-import { AggregateWizard, openAggregateWizard } from '../components/AggregateWizard.js';
+import { AggregateWizard, openAggregateWizard } from '../components/feedback/AggregateWizard.js';
 import { isMobile } from '../lib/viewport.js';
 
 const TYPES = ['', 'manual', 'ab_test', 'analytics', 'error_report', 'programmatic'];

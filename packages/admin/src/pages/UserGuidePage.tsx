@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { Guide, GUIDES, resetGuide } from '../components/Guide.js';
+import { Guide, GUIDES, resetGuide } from '../components/ui/Guide.js';
 
 interface Section {
   id: string;

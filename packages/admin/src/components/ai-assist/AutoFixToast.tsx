@@ -1,4 +1,4 @@
-import { autoFixState, launchAutoFix, dismissAutoFix } from '../lib/autofix.js';
+import { autoFixState, launchAutoFix, dismissAutoFix } from '../../lib/autofix.js';
 
 export function AutoFixToast() {
   const state = autoFixState.value;

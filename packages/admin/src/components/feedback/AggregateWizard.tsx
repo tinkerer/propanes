@@ -1,6 +1,6 @@
 import { signal } from '@preact/signals';
 import { useState } from 'preact/hooks';
-import { api } from '../lib/api.js';
+import { api } from '../../lib/api.js';
 
 export const aggregateWizardOpen = signal<string | null>(null);
 
