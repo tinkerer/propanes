@@ -1,4 +1,4 @@
-import { MODE_INFO, PROFILE_DESCRIPTIONS, RUNTIME_INFO } from '../lib/agent-constants.js';
+import { MODE_INFO, PROFILE_DESCRIPTIONS, RUNTIME_INFO } from '../../lib/agent-constants.js';
 
 interface AgentCardProps {
   agent: any;

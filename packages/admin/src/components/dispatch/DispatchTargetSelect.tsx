@@ -1,5 +1,5 @@
 import { signal } from '@preact/signals';
-import { api } from '../lib/api.js';
+import { api } from '../../lib/api.js';
 
 export interface DispatchTarget {
   launcherId: string;

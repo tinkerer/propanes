@@ -1,5 +1,5 @@
 import { useState, useRef } from 'preact/hooks';
-import { api } from '../lib/api.js';
+import { api } from '../../lib/api.js';
 import { PopupMenu } from './PopupMenu.js';
 
 interface DirPickerProps {

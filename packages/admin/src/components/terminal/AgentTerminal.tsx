@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import { lastTerminalInput } from '../lib/sessions.js';
-import { copyText } from '../lib/clipboard.js';
-import { openUrlCompanion } from '../lib/companion-state.js';
-import type { InputState } from '../lib/sessions.js';
+import { lastTerminalInput } from '../../lib/sessions.js';
+import { copyText } from '../../lib/clipboard.js';
+import { openUrlCompanion } from '../../lib/companion-state.js';
+import type { InputState } from '../../lib/sessions.js';
 
 const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_BACKOFF_CAP_MS = 30_000;

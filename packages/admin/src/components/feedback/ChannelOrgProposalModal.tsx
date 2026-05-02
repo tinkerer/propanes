@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
-import { api } from '../lib/api.js';
-import { channelOrgProposalOpen, loadChannels, selectedAppId, type ChannelKind } from '../lib/state.js';
+import { api } from '../../lib/api.js';
+import { channelOrgProposalOpen, loadChannels, selectedAppId, type ChannelKind } from '../../lib/state.js';
 
 // Modal showing the most recent pending auto-organize proposal for the
 // selected workspace. Operator can apply (creates the channels and binds

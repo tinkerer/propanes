@@ -2,11 +2,11 @@ import { useState, useEffect } from 'preact/hooks';
 import { theme, setTheme, shortcutsEnabled, tooltipsEnabled, showTabs, arrowTabSwitching, multiDigitTabs, autoNavigateToFeedback, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoOpenChildCompanions, popoutMode, localBridgeUrl, sshConfigs, type Theme, type PopoutMode, type SshConfig } from '../lib/settings.js';
 import { perfOverlayEnabled, perfServerEnabled } from '../lib/perf.js';
 import { getAllShortcuts } from '../lib/shortcuts.js';
-import { Guide, GUIDES, resetGuide } from '../components/Guide.js';
+import { Guide, GUIDES, resetGuide } from '../components/ui/Guide.js';
 import { hintsEnabled, resetAllHints } from '../lib/hints.js';
 import { autoFixEnabled, setAutoFixEnabled } from '../lib/autofix.js';
 import { panelPresets, savePreset, restorePreset, deletePreset } from '../lib/sessions.js';
-import { DeletedItemsPanel } from '../components/DeletedItemsPanel.js';
+import { DeletedItemsPanel } from '../components/ui/DeletedItemsPanel.js';
 import { api } from '../lib/api.js';
 
 function formatKey(s: ReturnType<typeof getAllShortcuts>[0]): string {

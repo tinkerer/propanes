@@ -1,4 +1,4 @@
-import { AgentTerminal } from './AgentTerminal.js';
+import { AgentTerminal } from '../terminal/AgentTerminal.js';
 
 interface TerminalCompanionViewProps {
   companionSessionId: string;

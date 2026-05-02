@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
-import { api } from '../lib/api.js';
-import { subscribeAdmin } from '../lib/admin-ws.js';
+import { api } from '../../lib/api.js';
+import { subscribeAdmin } from '../../lib/admin-ws.js';
 
 interface WiggumIteration {
   iteration: number;

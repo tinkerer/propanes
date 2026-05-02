@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { MessageRenderer, type ChatRenderOpts } from './MessageRenderer.js';
-import { type ParsedMessage } from '../lib/output-parser.js';
-import { useTranscriptStream } from '../lib/transcript-stream.js';
-import { api } from '../lib/api.js';
-import { sessionInputStates } from '../lib/session-state.js';
-import { isMobile, NarrowContext, useContainerNarrow, useNarrow } from '../lib/viewport.js';
+import { type ParsedMessage } from '../../lib/output-parser.js';
+import { useTranscriptStream } from '../../lib/transcript-stream.js';
+import { api } from '../../lib/api.js';
+import { sessionInputStates } from '../../lib/session-state.js';
+import { isMobile, NarrowContext, useContainerNarrow, useNarrow } from '../../lib/viewport.js';
 import { ChoicePrompt, type ChoiceOption } from './InteractivePrompt.js';
 import { SubagentBlock } from './SubagentBlock.js';
 

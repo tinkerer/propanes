@@ -5,15 +5,15 @@ import { api } from '../lib/api.js';
 import { navigate } from '../lib/state.js';
 import { openSession, resumeSession, feedbackTitleCache } from '../lib/sessions.js';
 import { copyText, copyWithTooltip } from '../lib/clipboard.js';
-import { CropEditor } from '../components/CropEditor.js';
-import { openDispatchDialog, dispatchDialogResult } from '../components/DispatchDialog.js';
-import { VoicePlayback } from '../components/VoicePlayback.js';
+import { CropEditor } from '../components/ui/CropEditor.js';
+import { openDispatchDialog, dispatchDialogResult } from '../components/dispatch/DispatchDialog.js';
+import { VoicePlayback } from '../components/voice/VoicePlayback.js';
 import { formatDate } from '../lib/date-utils.js';
-import { ElementCard } from '../components/ElementCard.js';
-import { SpecView, SpecToolbar } from '../components/SpecView.js';
+import { ElementCard } from '../components/ui/ElementCard.js';
+import { SpecView, SpecToolbar } from '../components/ui/SpecView.js';
 import { fetchParent, fetchChildren, fetchSiblings, fetchComputedStyles } from '../lib/dom-traversal.js';
-import { VoiceTracePanel } from '../components/VoiceTracePanel.js';
-import { FeedbackConversation } from '../components/FeedbackConversation.js';
+import { VoiceTracePanel } from '../components/voice/VoiceTracePanel.js';
+import { FeedbackConversation } from '../components/feedback/FeedbackConversation.js';
 
 import type { Signal } from '@preact/signals';
 

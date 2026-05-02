@@ -1,6 +1,6 @@
 import { signal } from '@preact/signals';
 import type { ComponentChildren } from 'preact';
-import { MessageFixturesIsolate } from '../components/MessageFixturesIsolate.js';
+import { MessageFixturesIsolate } from '../components/ui/MessageFixturesIsolate.js';
 
 const params = new URLSearchParams(window.location.search);
 

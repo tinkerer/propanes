@@ -6,9 +6,9 @@ import {
   leavingThreadIds,
   isThreadLeaving,
   markThreadLeaving,
-} from '../lib/chief-of-staff.js';
-import { cosShowResolved, cosShowArchived } from '../lib/cos-popout-tree.js';
-import { openThreadAsInteractive } from '../lib/sessions.js';
+} from '../../lib/chief-of-staff.js';
+import { cosShowResolved, cosShowArchived } from '../../lib/cos-popout-tree.js';
+import { openThreadAsInteractive } from '../../lib/sessions.js';
 
 export type RailStatus =
   | 'streaming'

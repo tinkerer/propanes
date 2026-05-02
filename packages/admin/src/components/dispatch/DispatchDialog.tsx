@@ -1,10 +1,10 @@
 import { signal } from '@preact/signals';
 import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
-import { api } from '../lib/api.js';
-import { openSession, loadAllSessions } from '../lib/sessions.js';
+import { api } from '../../lib/api.js';
+import { openSession, loadAllSessions } from '../../lib/sessions.js';
 import { cachedTargets, ensureTargetsLoaded, targetKey, findTargetByKey, parseTargetKey } from './DispatchTargetSelect.js';
-import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../lib/agent-constants.js';
-import { formatAgentOption, agentSortCmp, PROFILE_MATRIX } from '../lib/agent-matrix.js';
+import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../../lib/agent-constants.js';
+import { formatAgentOption, agentSortCmp, PROFILE_MATRIX } from '../../lib/agent-matrix.js';
 import { openSetupAssistant } from './SetupAssistantDialog.js';
 
 export interface DispatchDialogRequest {

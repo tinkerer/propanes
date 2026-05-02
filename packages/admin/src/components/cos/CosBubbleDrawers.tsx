@@ -1,7 +1,7 @@
-import { LearningsPanel } from './LearningsDrawer.js';
+import { LearningsPanel } from '../learnings/LearningsDrawer.js';
 import { ThreadPanel } from './CosThreadPanel.js';
-import { DEFAULT_VERBOSITY, type ChiefOfStaffVerbosity } from '../lib/chief-of-staff.js';
-import { cosActiveThread } from '../lib/cos-popout-tree.js';
+import { DEFAULT_VERBOSITY, type ChiefOfStaffVerbosity } from '../../lib/chief-of-staff.js';
+import { cosActiveThread } from '../../lib/cos-popout-tree.js';
 
 /**
  * Fixed-position side drawers that hover over the CoS pane in `mode='pane'`.

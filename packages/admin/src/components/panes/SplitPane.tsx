@@ -1,6 +1,6 @@
 import { useRef, useCallback } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
-import type { SplitDirection } from '../lib/pane-tree.js';
+import type { SplitDirection } from '../../lib/pane-tree.js';
 
 interface SplitPaneProps {
   direction: SplitDirection;

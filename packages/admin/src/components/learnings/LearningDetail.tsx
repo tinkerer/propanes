@@ -11,12 +11,12 @@ import {
   createCosLearningLink,
   deleteCosLearningLink,
   updateCosLearning,
-} from '../lib/cos-learnings.js';
+} from '../../lib/cos-learnings.js';
 import {
   LEARNING_TYPE_COLOR,
   REL_TYPE_LABELS,
   REL_TYPE_COLOR,
-} from '../lib/cos-learnings-constants.js';
+} from '../../lib/cos-learnings-constants.js';
 
 export function LearningDetailView({
   id,

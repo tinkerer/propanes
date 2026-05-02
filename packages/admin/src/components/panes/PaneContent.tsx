@@ -1,42 +1,42 @@
-import { SessionViewToggle } from './SessionViewToggle.js';
-import { ChiefOfStaffBubble } from './ChiefOfStaffBubble.js';
-import { JsonlView } from './JsonlView.js';
-import { SessionSummaryView } from './SessionSummaryView.js';
-import { FeedbackCompanionView } from './FeedbackCompanionView.js';
-import { IframeCompanion } from './IframeCompanion.js';
-import { getIsolateEntry } from '../lib/isolate.js';
-import { TerminalCompanionView } from './TerminalCompanionView.js';
-import { FileCompanionView } from './FileCompanionView.js';
-import { ArtifactCompanionView } from './ArtifactCompanionView.js';
-import { WiggumRunsPanel } from './WiggumRunsPanel.js';
-import { SessionsListView } from './SessionsListView.js';
-import { TerminalsListView } from './TerminalsListView.js';
-import { FilesView } from './FilesView.js';
-import { SidebarNavView } from './SidebarNavView.js';
-import { SidebarFilesDrawer } from './SidebarFilesDrawer.js';
-import { GitChangesView } from './GitChangesView.js';
-import { PageView } from './PageView.js';
-import { FeedbackListPage } from '../pages/FeedbackListPage.js';
-import { FeedbackDetailPage } from '../pages/FeedbackDetailPage.js';
-import { SessionsPage } from '../pages/SessionsPage.js';
-import { LiveConnectionsPage } from '../pages/LiveConnectionsPage.js';
-import { AppSettingsPage } from '../pages/AppSettingsPage.js';
-import { AgentsPage } from '../pages/AgentsPage.js';
-import { InfrastructurePage } from '../pages/InfrastructurePage.js';
-import { UserGuidePage } from '../pages/UserGuidePage.js';
-import { GettingStartedPage } from '../pages/GettingStartedPage.js';
-import { SettingsPage } from '../pages/SettingsPage.js';
-import { WiggumPage } from '../pages/WiggumPage.js';
-import { ChannelPage } from '../pages/ChannelPage.js';
-import { ApprovalQueuePage } from '../pages/ApprovalQueuePage.js';
+import { SessionViewToggle } from '../terminal/SessionViewToggle.js';
+import { ChiefOfStaffBubble } from '../cos/ChiefOfStaffBubble.js';
+import { JsonlView } from '../terminal/JsonlView.js';
+import { SessionSummaryView } from '../sessions/SessionSummaryView.js';
+import { FeedbackCompanionView } from '../feedback/FeedbackCompanionView.js';
+import { IframeCompanion } from '../files/IframeCompanion.js';
+import { getIsolateEntry } from '../../lib/isolate.js';
+import { TerminalCompanionView } from '../files/TerminalCompanionView.js';
+import { FileCompanionView } from '../files/FileCompanionView.js';
+import { ArtifactCompanionView } from '../files/ArtifactCompanionView.js';
+import { WiggumRunsPanel } from '../sessions/WiggumRunsPanel.js';
+import { SessionsListView } from '../sessions/SessionsListView.js';
+import { TerminalsListView } from '../sessions/TerminalsListView.js';
+import { FilesView } from '../files/FilesView.js';
+import { SidebarNavView } from '../sidebar/SidebarNavView.js';
+import { SidebarFilesDrawer } from '../files/SidebarFilesDrawer.js';
+import { GitChangesView } from '../files/GitChangesView.js';
+import { PageView } from '../shell/PageView.js';
+import { FeedbackListPage } from '../../pages/FeedbackListPage.js';
+import { FeedbackDetailPage } from '../../pages/FeedbackDetailPage.js';
+import { SessionsPage } from '../../pages/SessionsPage.js';
+import { LiveConnectionsPage } from '../../pages/LiveConnectionsPage.js';
+import { AppSettingsPage } from '../../pages/AppSettingsPage.js';
+import { AgentsPage } from '../../pages/AgentsPage.js';
+import { InfrastructurePage } from '../../pages/InfrastructurePage.js';
+import { UserGuidePage } from '../../pages/UserGuidePage.js';
+import { GettingStartedPage } from '../../pages/GettingStartedPage.js';
+import { SettingsPage } from '../../pages/SettingsPage.js';
+import { WiggumPage } from '../../pages/WiggumPage.js';
+import { ChannelPage } from '../../pages/ChannelPage.js';
+import { ApprovalQueuePage } from '../../pages/ApprovalQueuePage.js';
 import {
   getTerminalCompanion,
   getViewMode,
   setSessionInputState,
   markSessionExited,
-} from '../lib/sessions.js';
-import { sessionsInitialized } from '../lib/session-state.js';
-import { applications, selectedAppId } from '../lib/state.js';
+} from '../../lib/sessions.js';
+import { sessionsInitialized } from '../../lib/session-state.js';
+import { applications, selectedAppId } from '../../lib/state.js';
 
 export function renderTabContent(
   sid: string,

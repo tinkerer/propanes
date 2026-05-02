@@ -1,5 +1,5 @@
 import { useState } from 'preact/hooks';
-import { copyText } from '../lib/clipboard.js';
+import { copyText } from '../../lib/clipboard.js';
 
 interface Props {
   text: string;

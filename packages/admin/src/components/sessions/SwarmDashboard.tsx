@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'preact/hooks';
 import { marked } from 'marked';
-import { api } from '../lib/api.js';
-import { launchFAFOAssistant } from '../lib/agent-constants.js';
-import { selectedAppId } from '../lib/state.js';
-import { openSession } from '../lib/sessions.js';
-import { openSessionLogDrawer } from '../lib/companion-state.js';
+import { api } from '../../lib/api.js';
+import { launchFAFOAssistant } from '../../lib/agent-constants.js';
+import { selectedAppId } from '../../lib/state.js';
+import { openSession } from '../../lib/sessions.js';
+import { openSessionLogDrawer } from '../../lib/companion-state.js';
 
 interface SwarmSummary {
   id: string;

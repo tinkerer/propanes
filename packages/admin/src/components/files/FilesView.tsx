@@ -1,4 +1,4 @@
-import { selectedAppId } from '../lib/state.js';
+import { selectedAppId } from '../../lib/state.js';
 import { SidebarFilesDrawer } from './SidebarFilesDrawer.js';
 
 export function FilesView() {

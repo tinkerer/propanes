@@ -1,4 +1,4 @@
-import { selectedAppId } from '../lib/state.js';
+import { selectedAppId } from '../../lib/state.js';
 
 export function FeedbackCompanionView({ feedbackId }: { feedbackId: string }) {
   const appId = selectedAppId.value;

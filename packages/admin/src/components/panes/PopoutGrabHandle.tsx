@@ -14,9 +14,9 @@ import {
   panelZOrders,
   autoJumpDismissed,
   handleBounceCounter,
-} from '../lib/sessions.js';
-import { ctrlShiftHeld } from '../lib/shortcuts.js';
-import { GRAB_HANDLE_H, handleGrabMove } from '../lib/popout-physics.js';
+} from '../../lib/sessions.js';
+import { ctrlShiftHeld } from '../../lib/shortcuts.js';
+import { GRAB_HANDLE_H, handleGrabMove } from '../../lib/popout-physics.js';
 import { PanelTabBadge } from './PopoutPanelContent.js';
 
 export function DockedPanelGrabHandle({ panel }: { panel: PopoutPanelState }) {

@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
-import { api } from '../lib/api.js';
-import { loadApplications, navigate } from '../lib/state.js';
-import { openSession, loadAllSessions } from '../lib/sessions.js';
-import { DirPicker } from './DirPicker.js';
-import { copyText } from '../lib/clipboard.js';
+import { api } from '../../lib/api.js';
+import { loadApplications, navigate } from '../../lib/state.js';
+import { openSession, loadAllSessions } from '../../lib/sessions.js';
+import { DirPicker } from '../pickers/DirPicker.js';
+import { copyText } from '../../lib/clipboard.js';
 
 type Mode = null | 'create' | 'existing' | 'clone';
 

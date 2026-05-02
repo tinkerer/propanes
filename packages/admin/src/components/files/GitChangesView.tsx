@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'preact/hooks';
-import { api } from '../lib/api.js';
-import { openFileCompanion } from '../lib/sessions.js';
+import { api } from '../../lib/api.js';
+import { openFileCompanion } from '../../lib/sessions.js';
 
 interface GitFile {
   path: string;

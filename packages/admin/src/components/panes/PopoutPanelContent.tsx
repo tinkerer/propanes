@@ -1,6 +1,6 @@
 import { type RefObject } from 'preact';
-import { PopupMenu } from './PopupMenu.js';
-import { SessionIdMenu } from './SessionIdMenu.js';
+import { PopupMenu } from '../pickers/PopupMenu.js';
+import { SessionIdMenu } from '../sessions/SessionIdMenu.js';
 import {
   type PopoutPanelState,
   pendingFirstDigit,
@@ -14,9 +14,9 @@ import {
   updatePanel,
   persistPopoutState,
   toggleAlwaysOnTop,
-} from '../lib/sessions.js';
-import { type PopoutMode } from '../lib/settings.js';
-import { cosArtifacts } from '../lib/cos-artifacts.js';
+} from '../../lib/sessions.js';
+import { type PopoutMode } from '../../lib/settings.js';
+import { cosArtifacts } from '../../lib/cos-artifacts.js';
 
 export function PanelTabBadge({ tabNum }: { tabNum: number }) {
   const pending = pendingFirstDigit.value;

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { currentRoute } from '../lib/state.js';
-import { getHintsForRoute, dismissHint, hintsEnabled, type Hint } from '../lib/hints.js';
-import { navigate } from '../lib/state.js';
+import { currentRoute } from '../../lib/state.js';
+import { getHintsForRoute, dismissHint, hintsEnabled, type Hint } from '../../lib/hints.js';
+import { navigate } from '../../lib/state.js';
 
 export function HintToast() {
   const [hint, setHint] = useState<Hint | null>(null);

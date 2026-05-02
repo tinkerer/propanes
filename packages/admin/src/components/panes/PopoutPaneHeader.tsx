@@ -1,6 +1,6 @@
 import { useRef } from 'preact/hooks';
-import { copyWithTooltip } from '../lib/clipboard.js';
-import { type ViewMode } from './SessionViewToggle.js';
+import { copyWithTooltip } from '../../lib/clipboard.js';
+import { type ViewMode } from '../terminal/SessionViewToggle.js';
 import {
   type PopoutPanelState,
   exitedSessions,
@@ -11,9 +11,9 @@ import {
   resolveSession,
   togglePanelCompanion,
   getTerminalCompanion,
-} from '../lib/sessions.js';
-import { selectedAppId } from '../lib/state.js';
-import { SessionIdMenu } from './SessionIdMenu.js';
+} from '../../lib/sessions.js';
+import { selectedAppId } from '../../lib/state.js';
+import { SessionIdMenu } from '../sessions/SessionIdMenu.js';
 import { popoutIdMenuOpen, companionMenuOpen } from './popout-signals.js';
 
 export function PopoutPaneHeader({

@@ -1,7 +1,7 @@
 import { useEffect } from 'preact/hooks';
 import { useSignal } from '@preact/signals';
-import { api } from '../lib/api.js';
-import { formatDate } from '../lib/date-utils.js';
+import { api } from '../../lib/api.js';
+import { formatDate } from '../../lib/date-utils.js';
 
 interface Props {
   feedbackId: string;

@@ -3,7 +3,7 @@ import { api } from '../lib/api.js';
 import { loadApplications as refreshSidebarApps } from '../lib/state.js';
 import { spawnTerminal } from '../lib/sessions.js';
 import { copyText, copyWithTooltip } from '../lib/clipboard.js';
-import { DeletedItemsPanel, trackDeletion } from '../components/DeletedItemsPanel.js';
+import { DeletedItemsPanel, trackDeletion } from '../components/ui/DeletedItemsPanel.js';
 
 const apps = signal<any[]>([]);
 const loading = signal(true);

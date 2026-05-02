@@ -3,7 +3,7 @@ import { useState } from 'preact/hooks';
 import { api } from '../lib/api.js';
 import { navigate } from '../lib/state.js';
 import { openSession } from '../lib/sessions.js';
-import { DeletedItemsPanel, trackDeletion } from '../components/DeletedItemsPanel.js';
+import { DeletedItemsPanel, trackDeletion } from '../components/ui/DeletedItemsPanel.js';
 import { formatDateShort } from '../lib/date-utils.js';
 
 interface ClusterItem {

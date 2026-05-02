@@ -1,13 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
-import { applications, navigate } from '../lib/state.js';
-import { allSessions, openSession, getSessionLabel, loadAllSessions } from '../lib/sessions.js';
-import { recentResults, type RecentResult } from '../lib/settings.js';
-import { api } from '../lib/api.js';
+import { applications, navigate } from '../../lib/state.js';
+import { allSessions, openSession, getSessionLabel, loadAllSessions } from '../../lib/sessions.js';
+import { recentResults, type RecentResult } from '../../lib/settings.js';
+import { api } from '../../lib/api.js';
 import {
   chiefOfStaffAgents,
   chiefOfStaffActiveId,
   chiefOfStaffOpen,
-} from '../lib/chief-of-staff.js';
+} from '../../lib/chief-of-staff.js';
 
 interface SearchResult {
   type: 'application' | 'feedback' | 'session' | 'cos-message';

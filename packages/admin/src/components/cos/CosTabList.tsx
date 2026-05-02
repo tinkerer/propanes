@@ -1,6 +1,6 @@
 import { type RefObject } from 'preact';
-import { type ChiefOfStaffAgent } from '../lib/chief-of-staff.js';
-import { hasAnyCosDraftForAgent, getCosDraft } from '../lib/cos-drafts.js';
+import { type ChiefOfStaffAgent } from '../../lib/chief-of-staff.js';
+import { hasAnyCosDraftForAgent, getCosDraft } from '../../lib/cos-drafts.js';
 
 /**
  * Tab strip across the top of the bubble: one tab per agent + a "+" button

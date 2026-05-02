@@ -1,4 +1,4 @@
-import { getAllShortcuts } from '../lib/shortcuts.js';
+import { getAllShortcuts } from '../../lib/shortcuts.js';
 
 interface Props {
   onClose: () => void;

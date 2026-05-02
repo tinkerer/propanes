@@ -1,5 +1,5 @@
 import { useRef } from 'preact/hooks';
-import { type ViewMode } from './SessionViewToggle.js';
+import { type ViewMode } from '../terminal/SessionViewToggle.js';
 import {
   type PopoutPanelState,
   updatePanel,
@@ -16,9 +16,9 @@ import {
   getSessionLabel,
   setSessionLabel,
   getSessionColor,
-} from '../lib/sessions.js';
-import { startTabDrag, startPanelDrag } from '../lib/tab-drag.js';
-import { ctrlShiftHeld } from '../lib/shortcuts.js';
+} from '../../lib/sessions.js';
+import { startTabDrag, startPanelDrag } from '../../lib/tab-drag.js';
+import { ctrlShiftHeld } from '../../lib/shortcuts.js';
 import { PanelTabBadge, IdDropdownMenu, WindowMenu } from './PopoutPanelContent.js';
 import {
   popoutIdMenuOpen,

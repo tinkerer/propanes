@@ -1,10 +1,10 @@
 import { useEffect, useState, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
-import { renderTabContent } from '../components/PaneContent.js';
-import { SessionIdMenu } from '../components/SessionIdMenu.js';
-import { SshSetupDialog } from '../components/SshSetupDialog.js';
-import { tabLabel } from '../components/PopoutPanelContent.js';
-import { type ViewMode } from '../components/SessionViewToggle.js';
+import { renderTabContent } from '../components/panes/PaneContent.js';
+import { SessionIdMenu } from '../components/sessions/SessionIdMenu.js';
+import { SshSetupDialog } from '../components/modals/SshSetupDialog.js';
+import { tabLabel } from '../components/panes/PopoutPanelContent.js';
+import { type ViewMode } from '../components/terminal/SessionViewToggle.js';
 import {
   allSessions,
   sessionMapComputed,
