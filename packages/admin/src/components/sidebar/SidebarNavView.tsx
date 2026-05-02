@@ -6,12 +6,12 @@ import {
   channelsByApp, unsortedCountByApp, channelOrgProposalOpen, loadChannels,
   pendingApprovalCountByApp, loadApprovals,
   type ChannelKind,
-} from '../lib/state.js';
-import { api } from '../lib/api.js';
-import { subscribeAdmin } from '../lib/admin-ws.js';
-import { sidebarCollapsed, sidebarAnimating, toggleSidebar, sidebarWidth, openSettingsPanel, openPageView } from '../lib/sessions.js';
-import { loadChannelThreads } from '../pages/ChannelPage.js';
-import { Tooltip } from './Tooltip.js';
+} from '../../lib/state.js';
+import { api } from '../../lib/api.js';
+import { subscribeAdmin } from '../../lib/admin-ws.js';
+import { sidebarCollapsed, sidebarAnimating, toggleSidebar, sidebarWidth, openSettingsPanel, openPageView } from '../../lib/sessions.js';
+import { loadChannelThreads } from '../../pages/ChannelPage.js';
+import { Tooltip } from '../ui/Tooltip.js';
 
 const KIND_DOT: Record<ChannelKind, string> = {
   prod: '#ef4444',

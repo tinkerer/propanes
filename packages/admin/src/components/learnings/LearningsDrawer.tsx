@@ -10,7 +10,7 @@ import {
   cosLearningGraphLoading,
   loadCosLearningGraph,
   wiggumAnnouncement,
-} from '../lib/cos-learnings.js';
+} from '../../lib/cos-learnings.js';
 import {
   type LearningsView,
   LEARNING_TYPE_LABELS,
@@ -18,7 +18,7 @@ import {
   LEARNING_TYPE_COLOR,
   REL_TYPE_LABELS,
   REL_TYPE_COLOR,
-} from '../lib/cos-learnings-constants.js';
+} from '../../lib/cos-learnings-constants.js';
 import { LearningDetailView } from './LearningDetail.js';
 
 

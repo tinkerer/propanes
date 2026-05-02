@@ -1,6 +1,6 @@
 import { useRef, useCallback, useEffect, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
-import { type ViewMode } from './SessionViewToggle.js';
+import { type ViewMode } from '../terminal/SessionViewToggle.js';
 import {
   openTabs,
   activeTabId,
@@ -72,17 +72,17 @@ import {
   type JsonlFileInfo,
   openFeedbackItem,
   openLocalTerminal,
-} from '../lib/sessions.js';
+} from '../../lib/sessions.js';
 import { renderTabContent } from './PaneContent.js';
-import { cosArtifacts } from '../lib/cos-artifacts.js';
-import { AdminAssistChat } from './AdminAssistChat.js';
-import { startTabDrag, type TabDragSource } from '../lib/tab-drag.js';
-import { selectedAppId } from '../lib/state.js';
-import { showTabs, showHotkeyHints, popoutMode, type PopoutMode } from '../lib/settings.js';
-import { ctrlShiftHeld } from '../lib/shortcuts.js';
-import { copyText, copyWithTooltip } from '../lib/clipboard.js';
-import { TerminalPicker } from './TerminalPicker.js';
-import { SessionIdMenu } from './SessionIdMenu.js';
+import { cosArtifacts } from '../../lib/cos-artifacts.js';
+import { AdminAssistChat } from '../ai-assist/AdminAssistChat.js';
+import { startTabDrag, type TabDragSource } from '../../lib/tab-drag.js';
+import { selectedAppId } from '../../lib/state.js';
+import { showTabs, showHotkeyHints, popoutMode, type PopoutMode } from '../../lib/settings.js';
+import { ctrlShiftHeld } from '../../lib/shortcuts.js';
+import { copyText, copyWithTooltip } from '../../lib/clipboard.js';
+import { TerminalPicker } from '../pickers/TerminalPicker.js';
+import { SessionIdMenu } from '../sessions/SessionIdMenu.js';
 
 const statusMenuOpen = signal<{ sessionId: string; x: number; y: number } | null>(null);
 const renamingSessionId = signal<string | null>(null);

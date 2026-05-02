@@ -1,4 +1,4 @@
-import { type CosSavedDraft } from '../lib/cos-saved-drafts.js';
+import { type CosSavedDraft } from '../../lib/cos-saved-drafts.js';
 
 /**
  * Pending-message list rendered at the bottom of a thread (or the chat root

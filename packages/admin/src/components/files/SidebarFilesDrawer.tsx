@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
-import { api } from '../lib/api.js';
-import { openFileCompanion } from '../lib/sessions.js';
+import { api } from '../../lib/api.js';
+import { openFileCompanion } from '../../lib/sessions.js';
 
 type Entry = { name: string; type: 'file' | 'dir'; size?: number; ext?: string };
 type GitFile = { path: string; status: string; staged: string; unstaged: string };

@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks';
-import { api } from '../lib/api.js';
-import { DEFAULT_PROMPT_TEMPLATE, TOOL_PRESETS, PROFILE_DESCRIPTIONS, TEMPLATE_PRESETS } from '../lib/agent-constants.js';
+import { api } from '../../lib/api.js';
+import { DEFAULT_PROMPT_TEMPLATE, TOOL_PRESETS, PROFILE_DESCRIPTIONS, TEMPLATE_PRESETS } from '../../lib/agent-constants.js';
 
 interface AgentFormModalProps {
   visible: boolean;

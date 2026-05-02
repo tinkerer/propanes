@@ -1,8 +1,8 @@
 import { signal } from '@preact/signals';
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { api } from '../lib/api.js';
-import { openSession, loadAllSessions } from '../lib/sessions.js';
-import { selectedAppId, applications } from '../lib/state.js';
+import { api } from '../../lib/api.js';
+import { openSession, loadAllSessions } from '../../lib/sessions.js';
+import { selectedAppId, applications } from '../../lib/state.js';
 
 const panelOpen = signal(false);
 

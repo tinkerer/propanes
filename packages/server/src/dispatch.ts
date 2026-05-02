@@ -1181,6 +1181,11 @@ export async function dispatchHarnessSession(params: {
         status: 'running',
         pid: startedMsg.pid,
         startedAt: new Date().toISOString(),
+        completedAt: null,
+        exitCode: null,
+        lastOutputSeq: 0,
+        lastInputSeq: 0,
+        outputBytes: 0,
       })
       .where(eq(schema.agentSessions.id, sessionId))
       .run();

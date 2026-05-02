@@ -8,23 +8,23 @@ import {
   type CosImageAttachment,
   type CosElementRef,
   type ChiefOfStaffMsg,
-} from '../lib/chief-of-staff.js';
+} from '../../lib/chief-of-staff.js';
 import {
   cosFollowups,
   enqueueCosFollowup,
-} from '../lib/cos-followups.js';
+} from '../../lib/cos-followups.js';
 import { CosEnqueuedList } from './CosEnqueuedList.js';
-import { selectedAppId } from '../lib/state.js';
-import { getSessionIdForThread, getThreadMeta } from '../lib/cos-thread-meta.js';
-import { openSession, openThreadAsInteractive } from '../lib/sessions.js';
+import { selectedAppId } from '../../lib/state.js';
+import { getSessionIdForThread, getThreadMeta } from '../../lib/cos-thread-meta.js';
+import { openSession, openThreadAsInteractive } from '../../lib/sessions.js';
 import {
   cosActiveThread,
   getThreadDraft,
   setThreadDraft,
   clearThreadDraft,
-} from '../lib/cos-popout-tree.js';
-import { useTranscriptStream } from '../lib/transcript-stream.js';
-import { jsonlToCosMessages } from '../lib/jsonl-to-cos.js';
+} from '../../lib/cos-popout-tree.js';
+import { useTranscriptStream } from '../../lib/transcript-stream.js';
+import { jsonlToCosMessages } from '../../lib/jsonl-to-cos.js';
 import { groupIntoThreads, threadKeyOf } from './CosThread.js';
 import { MessageBubble } from './CosMessage.js';
 import { CosComposer, type CosComposerHandle } from './CosComposer.js';
@@ -34,7 +34,7 @@ import {
   deleteCosDraft,
   getThreadSavedDrafts,
   type CosSavedDraft,
-} from '../lib/cos-saved-drafts.js';
+} from '../../lib/cos-saved-drafts.js';
 import { CosSavedDraftsList } from './CosSavedDraftsList.js';
 
 /**

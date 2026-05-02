@@ -5,19 +5,19 @@ import {
   dismissFailedAssistantMessage,
   type ChiefOfStaffMsg,
   type ChiefOfStaffVerbosity,
-} from '../lib/chief-of-staff.js';
-import { stripCosReplyMarkers } from '../lib/cos-reply-tags.js';
-import { openSession, toggleCompanion, openSessionLogDrawer } from '../lib/sessions.js';
-import { MessageRenderer } from './MessageRenderer.js';
+} from '../../lib/chief-of-staff.js';
+import { stripCosReplyMarkers } from '../../lib/cos-reply-tags.js';
+import { openSession, toggleCompanion, openSessionLogDrawer } from '../../lib/sessions.js';
+import { MessageRenderer } from '../terminal/MessageRenderer.js';
 import { MessageAttachments } from './CosMessageAttachments.js';
 import { AssistantContent } from './CosAssistantContent.js';
-import { Tooltip } from './Tooltip.js';
+import { Tooltip } from '../ui/Tooltip.js';
 
 // Re-export pure helpers/types so existing imports of CosMessage continue to
 // resolve while keeping the heavy parsing logic in lib/cos-markdown.ts and
 // the artifact / prose rendering in CosAssistantContent.tsx.
-export { linkifyHtml, parseAssistantContent } from '../lib/cos-markdown.js';
-export type { ArtifactKind, ContentSegment } from '../lib/cos-markdown.js';
+export { linkifyHtml, parseAssistantContent } from '../../lib/cos-markdown.js';
+export type { ArtifactKind, ContentSegment } from '../../lib/cos-markdown.js';
 export { MessageAttachments };
 
 // Splits `text` on (case-insensitive) occurrences of `highlight` and wraps the

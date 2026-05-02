@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'preact/hooks';
-import { selectedAppId } from '../lib/state.js';
+import { selectedAppId } from '../../lib/state.js';
 import {
   type ChiefOfStaffMsg,
   type ChiefOfStaffVerbosity,
@@ -14,14 +14,14 @@ import {
   leavingThreadIds,
   isThreadLeaving,
   markThreadLeaving,
-} from '../lib/chief-of-staff.js';
-import { cosShowResolved, cosShowArchived } from '../lib/cos-popout-tree.js';
+} from '../../lib/chief-of-staff.js';
+import { cosShowResolved, cosShowArchived } from '../../lib/cos-popout-tree.js';
 import {
   getCachedFeedbackTitle,
   fetchFeedbackTitle,
   feedbackTitlesVersion,
-} from '../lib/cos-feedback-titles.js';
-import { openSession, openFeedbackItem, toggleCompanion, openSessionLogDrawer } from '../lib/sessions.js';
+} from '../../lib/cos-feedback-titles.js';
+import { openSession, openFeedbackItem, toggleCompanion, openSessionLogDrawer } from '../../lib/sessions.js';
 import {
   MessageAvatar,
   MessageAttachments,

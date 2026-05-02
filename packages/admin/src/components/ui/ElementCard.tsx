@@ -1,4 +1,4 @@
-import { copyWithTooltip } from '../lib/clipboard.js';
+import { copyWithTooltip } from '../../lib/clipboard.js';
 
 interface ElementInfo {
   tagName: string;

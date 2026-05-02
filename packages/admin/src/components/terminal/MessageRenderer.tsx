@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo } from 'preact/hooks';
 import { marked } from 'marked';
 import hljs from 'highlight.js/lib/common';
-import type { ParsedMessage } from '../lib/output-parser.js';
-import { openFileViewer } from '../lib/file-viewer.js';
-import { isMobile, useNarrow } from '../lib/viewport.js';
-import { CopyCommand } from './CopyCommand.js';
+import type { ParsedMessage } from '../../lib/output-parser.js';
+import { openFileViewer } from '../../lib/file-viewer.js';
+import { isMobile, useNarrow } from '../../lib/viewport.js';
+import { CopyCommand } from '../ui/CopyCommand.js';
 import { AskUserQuestionPrompt, type Question } from './InteractivePrompt.js';
 
 marked.setOptions({ gfm: true, breaks: false });

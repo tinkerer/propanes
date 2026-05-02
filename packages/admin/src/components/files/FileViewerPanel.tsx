@@ -1,9 +1,9 @@
 import { useEffect, useRef, useCallback } from 'preact/hooks';
-import { fileViewerPanels, closeFileViewer, updateFileViewer, bringFileViewerToFront, getFileViewerZIndex, fileViewerZOrders } from '../lib/file-viewer.js';
-import { api } from '../lib/api.js';
+import { fileViewerPanels, closeFileViewer, updateFileViewer, bringFileViewerToFront, getFileViewerZIndex, fileViewerZOrders } from '../../lib/file-viewer.js';
+import { api } from '../../lib/api.js';
 import hljs from 'highlight.js/lib/common';
 import { marked } from 'marked';
-import { IMAGE_EXTS, MARKDOWN_EXTS, getExt, getLanguage, shortenPath } from '../lib/file-utils.js';
+import { IMAGE_EXTS, MARKDOWN_EXTS, getExt, getLanguage, shortenPath } from '../../lib/file-utils.js';
 
 function SingleFileViewer({ path, offset }: { path: string; offset: number }) {
   const panelRef = useRef<HTMLDivElement>(null);

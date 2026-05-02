@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'preact/hooks';
-import { api } from '../lib/api.js';
-import { getExt, getLanguage, IMAGE_EXTS, MARKDOWN_EXTS } from '../lib/file-utils.js';
+import { api } from '../../lib/api.js';
+import { getExt, getLanguage, IMAGE_EXTS, MARKDOWN_EXTS } from '../../lib/file-utils.js';
 import hljs from 'highlight.js/lib/common';
 import { marked } from 'marked';
 

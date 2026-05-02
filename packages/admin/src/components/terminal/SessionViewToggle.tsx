@@ -1,8 +1,8 @@
 import { AgentTerminal } from './AgentTerminal.js';
 import { JsonlView } from './JsonlView.js';
 import { InterruptBar } from './InterruptBar.js';
-import type { InputState } from '../lib/sessions.js';
-import { isMobile } from '../lib/viewport.js';
+import type { InputState } from '../../lib/sessions.js';
+import { isMobile } from '../../lib/viewport.js';
 
 export type ViewMode = 'terminal' | 'structured' | 'split';
 

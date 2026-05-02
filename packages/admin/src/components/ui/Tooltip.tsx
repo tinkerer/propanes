@@ -1,6 +1,6 @@
 import { ComponentChildren } from 'preact';
 import { useState, useRef, useCallback } from 'preact/hooks';
-import { tooltipsEnabled } from '../lib/settings.js';
+import { tooltipsEnabled } from '../../lib/settings.js';
 
 interface TooltipProps {
   text: string;

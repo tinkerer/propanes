@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { cachedTargets, ensureTargetsLoaded, targetKey, findTargetByKey, type DispatchTarget } from './DispatchTargetSelect.js';
-import { navigate } from '../lib/state.js';
+import { navigate } from '../../lib/state.js';
 
 export const dispatchPickerOpen = signal(false);
 export const dispatchPickerResult = signal<string>('');

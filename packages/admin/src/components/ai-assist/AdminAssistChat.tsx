@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
-import { api } from '../lib/api.js';
-import { openSession, loadAllSessions, panelHeight, sidebarWidth, sidebarCollapsed, sidebarAnimating } from '../lib/sessions.js';
-import { selectedAppId } from '../lib/state.js';
+import { api } from '../../lib/api.js';
+import { openSession, loadAllSessions, panelHeight, sidebarWidth, sidebarCollapsed, sidebarAnimating } from '../../lib/sessions.js';
+import { selectedAppId } from '../../lib/state.js';
 
 const PRESETS = [
   { label: 'Feedback summary', prompt: 'Show a summary of recent feedback' },

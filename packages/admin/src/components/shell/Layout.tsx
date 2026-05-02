@@ -1,29 +1,29 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { currentRoute, navigate, selectedAppId, applications, addAppModalOpen, spotlightOpen, closeSpotlight, toggleSpotlight } from '../lib/state.js';
-import { api } from '../lib/api.js';
-import { idMenuOpen } from './LeafPane.js';
-import { PopoutPanel, popoutIdMenuOpen, popoutWindowMenuOpen } from './PopoutPanel.js';
-import { PaneTree } from './PaneTree.js';
-import { layoutTree, focusedLeafId, splitLeaf, mergeLeaf, getAllLeaves, setFocusedLeaf, findLeaf, findLeafWithTab, SESSIONS_LEAF_ID } from '../lib/pane-tree.js';
-import { PerfOverlay } from './PerfOverlay.js';
-import { copyText } from '../lib/clipboard.js';
-import { FileViewerOverlay } from './FileViewerPanel.js';
-import { ShortcutHelpModal } from './ShortcutHelpModal.js';
-import { SpotlightSearch } from './SpotlightSearch.js';
-import { AddAppModal } from './AddAppModal.js';
-import { ChannelOrgProposalModal } from './ChannelOrgProposalModal.js';
-import { HintToast } from './HintToast.js';
-import { AutoFixToast } from './AutoFixToast.js';
-import { NotificationCenter } from './NotificationCenter.js';
-import { SshSetupDialog } from './SshSetupDialog.js';
-import { TerminalPicker } from './TerminalPicker.js';
+import { currentRoute, navigate, selectedAppId, applications, addAppModalOpen, spotlightOpen, closeSpotlight, toggleSpotlight } from '../../lib/state.js';
+import { api } from '../../lib/api.js';
+import { idMenuOpen } from '../panes/LeafPane.js';
+import { PopoutPanel, popoutIdMenuOpen, popoutWindowMenuOpen } from '../panes/PopoutPanel.js';
+import { PaneTree } from '../panes/PaneTree.js';
+import { layoutTree, focusedLeafId, splitLeaf, mergeLeaf, getAllLeaves, setFocusedLeaf, findLeaf, findLeafWithTab, SESSIONS_LEAF_ID } from '../../lib/pane-tree.js';
+import { PerfOverlay } from '../ui/PerfOverlay.js';
+import { copyText } from '../../lib/clipboard.js';
+import { FileViewerOverlay } from '../files/FileViewerPanel.js';
+import { ShortcutHelpModal } from '../modals/ShortcutHelpModal.js';
+import { SpotlightSearch } from '../sidebar/SpotlightSearch.js';
+import { AddAppModal } from '../modals/AddAppModal.js';
+import { ChannelOrgProposalModal } from '../feedback/ChannelOrgProposalModal.js';
+import { HintToast } from '../ai-assist/HintToast.js';
+import { AutoFixToast } from '../ai-assist/AutoFixToast.js';
+import { NotificationCenter } from '../ui/NotificationCenter.js';
+import { SshSetupDialog } from '../modals/SshSetupDialog.js';
+import { TerminalPicker } from '../pickers/TerminalPicker.js';
 import { ControlBar } from './ControlBar.js';
 import { MobileNav } from './MobileNav.js';
 import { MobilePageView } from './MobilePageView.js';
-import { isMobile } from '../lib/viewport.js';
-import { registerShortcut, ctrlShiftHeld } from '../lib/shortcuts.js';
-import { toggleTheme, arrowTabSwitching, showHotkeyHints } from '../lib/settings.js';
-import { openPageView, openSettingsPanel } from '../lib/companion-state.js';
+import { isMobile } from '../../lib/viewport.js';
+import { registerShortcut, ctrlShiftHeld } from '../../lib/shortcuts.js';
+import { toggleTheme, arrowTabSwitching, showHotkeyHints } from '../../lib/settings.js';
+import { openPageView, openSettingsPanel } from '../../lib/companion-state.js';
 import {
   openTabs,
   activeTabId,
@@ -78,7 +78,7 @@ import {
   bringAllPanelsToFront,
   openFeedbackItem,
   feedbackTitleCache,
-} from '../lib/sessions.js';
+} from '../../lib/sessions.js';
 
 export function Layout() {
   const route = currentRoute.value;

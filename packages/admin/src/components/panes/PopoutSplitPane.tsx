@@ -1,6 +1,6 @@
 import { useRef } from 'preact/hooks';
-import { copyWithTooltip } from '../lib/clipboard.js';
-import { PopupMenu } from './PopupMenu.js';
+import { copyWithTooltip } from '../../lib/clipboard.js';
+import { PopupMenu } from '../pickers/PopupMenu.js';
 import {
   type PopoutPanelState,
   updatePanel,
@@ -8,7 +8,7 @@ import {
   switchAutoJumpActiveSession,
   disablePanelSplit,
   getSessionColor,
-} from '../lib/sessions.js';
+} from '../../lib/sessions.js';
 import { renderTabContent } from './PaneContent.js';
 import { PopoutPaneHeader } from './PopoutPaneHeader.js';
 import { companionMenuOpen } from './popout-signals.js';

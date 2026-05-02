@@ -1,5 +1,5 @@
 import { useRef } from 'preact/hooks';
-import { type ViewMode } from './SessionViewToggle.js';
+import { type ViewMode } from '../terminal/SessionViewToggle.js';
 import {
   type PopoutPanelState,
   updatePanel,
@@ -10,8 +10,8 @@ import {
   resolveSession,
   togglePanelCompanion,
   sessionInputStates,
-} from '../lib/sessions.js';
-import { startPanelDrag } from '../lib/tab-drag.js';
+} from '../../lib/sessions.js';
+import { startPanelDrag } from '../../lib/tab-drag.js';
 import { IdDropdownMenu, WindowMenu } from './PopoutPanelContent.js';
 import { popoutIdMenuOpen, popoutWindowMenuOpen, popoutStatusMenuOpen } from './popout-signals.js';
 

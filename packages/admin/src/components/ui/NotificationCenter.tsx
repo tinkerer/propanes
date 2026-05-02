@@ -7,10 +7,10 @@ import {
   deleteNotification,
   clearResolvedNotifications,
   resolveNotification,
-} from '../lib/notifications.js';
-import { openSession } from '../lib/sessions.js';
-import { api } from '../lib/api.js';
-import type { Notification, PlanReviewPayload, QnaPayload, QnaQuestion, ApprovalPayload, VoiceDispatchPayload } from '../lib/notification-types.js';
+} from '../../lib/notifications.js';
+import { openSession } from '../../lib/sessions.js';
+import { api } from '../../lib/api.js';
+import type { Notification, PlanReviewPayload, QnaPayload, QnaQuestion, ApprovalPayload, VoiceDispatchPayload } from '../../lib/notification-types.js';
 
 const SEVERITY_ICONS: Record<string, string> = {
   info: '\u{2139}\uFE0F',

@@ -1,6 +1,6 @@
 import { useState, useRef, useMemo } from 'preact/hooks';
-import { selectedAppId, applications, navigate, addAppModalOpen, openSpotlight } from '../lib/state.js';
-import { api } from '../lib/api.js';
+import { selectedAppId, applications, navigate, addAppModalOpen, openSpotlight } from '../../lib/state.js';
+import { api } from '../../lib/api.js';
 import {
   focusOrDockSession,
   spawnTerminal,
@@ -13,12 +13,12 @@ import {
   getSessionLabel,
   openSession,
   openPageView,
-} from '../lib/sessions.js';
-import type { PaneMruEntry } from '../lib/sessions.js';
-import { PopupMenu } from './PopupMenu.js';
-import { unreadNotificationCount, openNotificationCenter } from '../lib/notifications.js';
-import { ChiefOfStaffToggle } from './ChiefOfStaffBubble.js';
-import { isMobile } from '../lib/viewport.js';
+} from '../../lib/sessions.js';
+import type { PaneMruEntry } from '../../lib/sessions.js';
+import { PopupMenu } from '../pickers/PopupMenu.js';
+import { unreadNotificationCount, openNotificationCenter } from '../../lib/notifications.js';
+import { ChiefOfStaffToggle } from '../cos/ChiefOfStaffBubble.js';
+import { isMobile } from '../../lib/viewport.js';
 
 function getSessionMruLabel(sessionId: string, sessionMap: Map<string, any>): string {
   const custom = getSessionLabel(sessionId);

@@ -1,16 +1,16 @@
-import { currentRoute, selectedAppId, applications } from '../lib/state.js';
-import { FeedbackListPage } from '../pages/FeedbackListPage.js';
-import { FeedbackDetailPage } from '../pages/FeedbackDetailPage.js';
-import { SessionsPage } from '../pages/SessionsPage.js';
-import { LiveConnectionsPage } from '../pages/LiveConnectionsPage.js';
-import { AppSettingsPage } from '../pages/AppSettingsPage.js';
-import { AgentsPage } from '../pages/AgentsPage.js';
-import { InfrastructurePage } from '../pages/InfrastructurePage.js';
-import { UserGuidePage } from '../pages/UserGuidePage.js';
-import { GettingStartedPage } from '../pages/GettingStartedPage.js';
-import { SettingsPage } from '../pages/SettingsPage.js';
-import { WiggumPage } from '../pages/WiggumPage.js';
-import { StandaloneSessionPage } from '../pages/StandaloneSessionPage.js';
+import { currentRoute, selectedAppId, applications } from '../../lib/state.js';
+import { FeedbackListPage } from '../../pages/FeedbackListPage.js';
+import { FeedbackDetailPage } from '../../pages/FeedbackDetailPage.js';
+import { SessionsPage } from '../../pages/SessionsPage.js';
+import { LiveConnectionsPage } from '../../pages/LiveConnectionsPage.js';
+import { AppSettingsPage } from '../../pages/AppSettingsPage.js';
+import { AgentsPage } from '../../pages/AgentsPage.js';
+import { InfrastructurePage } from '../../pages/InfrastructurePage.js';
+import { UserGuidePage } from '../../pages/UserGuidePage.js';
+import { GettingStartedPage } from '../../pages/GettingStartedPage.js';
+import { SettingsPage } from '../../pages/SettingsPage.js';
+import { WiggumPage } from '../../pages/WiggumPage.js';
+import { StandaloneSessionPage } from '../../pages/StandaloneSessionPage.js';
 
 function NoApp() {
   return (

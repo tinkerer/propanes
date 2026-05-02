@@ -10,10 +10,10 @@ import {
   companionTabId,
   termPickerOpen,
   activePanelId,
-} from '../lib/sessions.js';
-import { copyText } from '../lib/clipboard.js';
-import { ctrlShiftHeld } from '../lib/shortcuts.js';
-import { showHotkeyHints } from '../lib/settings.js';
+} from '../../lib/sessions.js';
+import { copyText } from '../../lib/clipboard.js';
+import { ctrlShiftHeld } from '../../lib/shortcuts.js';
+import { showHotkeyHints } from '../../lib/settings.js';
 import {
   popoutIdMenuOpen,
   popoutWindowMenuOpen,

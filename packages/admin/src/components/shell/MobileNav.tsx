@@ -1,4 +1,4 @@
-import { currentRoute, navigate, selectedAppId } from '../lib/state.js';
+import { currentRoute, navigate, selectedAppId } from '../../lib/state.js';
 
 type TabKey = 'tickets' | 'sessions' | 'live' | 'settings';
 

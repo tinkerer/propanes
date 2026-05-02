@@ -1,5 +1,5 @@
 import { render } from 'preact';
-import { App } from './components/App.js';
+import { App } from './components/shell/App.js';
 import './lib/settings.js';
 import { installConsoleBuffer, installNetworkCollector } from './lib/console-buffer.js';
 import '@xterm/xterm/css/xterm.css';

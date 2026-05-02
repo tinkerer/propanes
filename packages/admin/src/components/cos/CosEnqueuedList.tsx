@@ -4,7 +4,7 @@ import {
   cancelCosFollowup,
   updateCosFollowup,
   setCosFollowupStatus,
-} from '../lib/cos-followups.js';
+} from '../../lib/cos-followups.js';
 
 /**
  * Pending-message list for client-side "send when current finishes" follow-ups.

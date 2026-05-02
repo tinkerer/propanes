@@ -3,7 +3,7 @@ import { createPortal } from 'preact/compat';
 import { captureScreenshot, type ScreenshotMethod } from '@propanes/widget/screenshot';
 import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-picker';
 import { VoiceRecorder, type VoiceRecordingResult } from '@propanes/widget/voice-recorder';
-import { snapshotConsole, type ConsoleEntry } from '../lib/console-buffer.js';
+import { snapshotConsole, type ConsoleEntry } from '../../lib/console-buffer.js';
 
 // Single composer used by InterruptBar (resume/interrupt session) and
 // CosComposer (CoS thread reply). Owns:

@@ -1,6 +1,6 @@
 import { useRef, useEffect } from 'preact/hooks';
 import { ImageEditor } from '@propanes/widget/image-editor';
-import { api } from '../lib/api.js';
+import { api } from '../../lib/api.js';
 
 interface Props {
   src: string;

@@ -14,7 +14,6 @@ import {
   cosSplitLeaf,
   cosGetAllLeaves,
   cosDockTabToEdge,
-  cosDockAsFloatingCompanion,
   cosAddTabToLeaf,
 } from './cos-popout-tree.js';
 import {
@@ -114,16 +113,18 @@ function applyEdgeSplit(targetLeafId: string, zone: CosLeafDropZone, tabIds: str
     case 'top-edge':
     case 'bottom-edge': {
       // In-leaf edge zones promote to a popout-level floating companion drawer:
-      // the drawer overlays the whole popout edge instead of resizing the
-      // existing content. Uses cosDockAsFloatingCompanion so a drag-over an
-      // already-open drawer lands the new tab as a sibling pane (not as a
-      // tab merged into the existing leaf).
+      // the drawer overlays the popout edge instead of resizing the existing
+      // content. The user's chosen edge is authoritative — drop on the right
+      // edge with an existing right drawer merges as a tab; drop on the left
+      // edge creates a fresh left drawer overlay. cosDockAsFloatingCompanion's
+      // sibling-split behavior is reserved for the artifact picker (where the
+      // caller doesn't pick an edge).
       const edge: CosPopoutEdge =
         zone === 'left-edge' ? 'L' :
         zone === 'right-edge' ? 'R' :
         zone === 'top-edge' ? 'T' : 'B';
       if (tabIds.length === 0) break;
-      cosDockAsFloatingCompanion(tabIds[0], edge);
+      cosDockTabToEdge(tabIds[0], edge, true, { floating: true });
       const dockedLeaf = cosFindLeafWithTab(tabIds[0]);
       if (dockedLeaf) {
         for (let i = 1; i < tabIds.length; i++) cosAddTabToLeaf(dockedLeaf.id, tabIds[i], false);
@@ -358,7 +359,7 @@ export function startCosTabDrag(e: MouseEvent, config: CosTabDragConfig): void {
 
     if (dropTarget.kind === 'popout-edge') {
       cosRemoveTabFromLeaf(config.leafId, config.tabId);
-      cosDockAsFloatingCompanion(config.tabId, dropTarget.edge);
+      cosDockTabToEdge(config.tabId, dropTarget.edge, true, { floating: true });
       return;
     }
 
@@ -498,11 +499,10 @@ export function startCosLeafDrag(e: MouseEvent, config: CosLeafDragConfig): void
 
     if (dropTarget.kind === 'popout-edge') {
       // Dock the whole pane as a floating companion at the chosen popout edge.
-      // The first tab opens (or splits) the drawer area; subsequent tabs from
-      // the same source leaf are merged into the new floating leaf as
-      // additional tabs (not split further).
+      // The first tab opens (or merges into) the drawer at that edge;
+      // subsequent tabs from the same source leaf join as additional tabs.
       for (const t of tabs) cosRemoveTabFromLeaf(config.leafId, t);
-      cosDockAsFloatingCompanion(tabs[0], dropTarget.edge);
+      cosDockTabToEdge(tabs[0], dropTarget.edge, true, { floating: true });
       const dockedLeaf = cosFindLeafWithTab(tabs[0]);
       if (dockedLeaf) {
         for (let i = 1; i < tabs.length; i++) cosAddTabToLeaf(dockedLeaf.id, tabs[i], false);

@@ -12104,6 +12104,48 @@ body.pw-isolate {
 }
 .cos-tree-tab-close:hover { opacity: 1; background: var(--pw-bg-active); }
 .cos-tree-leaf { position: relative; }
+/* Floating-companion split: non-floating sibling fills 100%, the floating leaf
+   floats over it as an "companion drawer". See FloatingCompanionSplit in
+   CosPopoutTreeView.tsx. */
+.cos-tree-floating-host {
+  position: relative;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.cos-tree-floating-base {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+.cos-tree-floating-overlay {
+  z-index: 5;
+  display: flex;
+  background: var(--pw-terminal-bg);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--pw-border);
+}
+.cos-tree-floating-host-horizontal.cos-tree-floating-host-second .cos-tree-floating-overlay { border-right: none; border-top: none; border-bottom: none; }
+.cos-tree-floating-host-horizontal.cos-tree-floating-host-first  .cos-tree-floating-overlay { border-left: none;  border-top: none; border-bottom: none; }
+.cos-tree-floating-host-vertical.cos-tree-floating-host-second   .cos-tree-floating-overlay { border-bottom: none; border-left: none; border-right: none; }
+.cos-tree-floating-host-vertical.cos-tree-floating-host-first    .cos-tree-floating-overlay { border-top: none;    border-left: none; border-right: none; }
+.cos-tree-floating-grab {
+  position: absolute;
+  background: transparent;
+  z-index: 6;
+}
+.cos-tree-floating-grab:hover { background: rgba(96, 165, 250, 0.25); }
+.cos-tree-floating-grab-left   { left: 0;  top: 0; bottom: 0; width: 5px;  cursor: ew-resize; }
+.cos-tree-floating-grab-right  { right: 0; top: 0; bottom: 0; width: 5px;  cursor: ew-resize; }
+.cos-tree-floating-grab-top    { top: 0;   left: 0; right: 0; height: 5px; cursor: ns-resize; }
+.cos-tree-floating-grab-bottom { bottom: 0; left: 0; right: 0; height: 5px; cursor: ns-resize; }
 .cos-tree-leaf.drop-target {
   outline: 2px solid var(--pw-primary, #4a90e2);
   outline-offset: -2px;

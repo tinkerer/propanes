@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import { api } from '../lib/api.js';
 import { subscribeAdmin } from '../lib/admin-ws.js';
-import { SwarmDashboard } from '../components/SwarmDashboard.js';
+import { SwarmDashboard } from '../components/sessions/SwarmDashboard.js';
 import { launchFAFOAssistant } from '../lib/agent-constants.js';
 import { selectedAppId } from '../lib/state.js';
 import { openSession } from '../lib/sessions.js';

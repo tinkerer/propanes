@@ -1,5 +1,5 @@
-import { MessageRenderer } from './MessageRenderer.js';
-import type { ParsedMessage } from '../lib/output-parser.js';
+import { MessageRenderer } from '../terminal/MessageRenderer.js';
+import type { ParsedMessage } from '../../lib/output-parser.js';
 
 const LONG_OUTPUT = Array.from({ length: 80 }, (_, i) => `line ${i + 1}: lorem ipsum dolor sit amet`).join('\n');
 

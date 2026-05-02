@@ -1,7 +1,7 @@
 import { signal } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { api } from '../lib/api.js';
-import { openSession, loadAllSessions } from '../lib/sessions.js';
+import { api } from '../../lib/api.js';
+import { openSession, loadAllSessions } from '../../lib/sessions.js';
 import { cachedTargets, ensureTargetsLoaded, findTargetByKey, parseTargetKey, targetKey } from './DispatchTargetSelect.js';
 import {
   buildSetupAssistantInstructions,
@@ -10,7 +10,7 @@ import {
   type RunModeChoice,
   type SetupAssistantAnswers,
   type TestStrategyChoice,
-} from '../lib/agent-constants.js';
+} from '../../lib/agent-constants.js';
 
 export interface SetupAssistantRequest {
   feedbackIds: string[];

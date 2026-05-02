@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { marked } from 'marked';
-import { selectedAppId } from '../lib/state.js';
+import { selectedAppId } from '../../lib/state.js';
 import {
   chiefOfStaffOpen,
   chiefOfStaffAgents,
@@ -35,9 +35,9 @@ import {
   setThreadArchived,
   leavingThreadIds,
   isThreadLeaving,
-} from '../lib/chief-of-staff.js';
-import { MessageRenderer } from './MessageRenderer.js';
-import { layoutTree as layoutTreeSignal, findLeafWithTab, setFocusedLeaf } from '../lib/pane-tree.js';
+} from '../../lib/chief-of-staff.js';
+import { MessageRenderer } from '../terminal/MessageRenderer.js';
+import { layoutTree as layoutTreeSignal, findLeafWithTab, setFocusedLeaf } from '../../lib/pane-tree.js';
 import { ImageEditor } from '@propanes/widget/image-editor';
 import {
   popoutPanels,
@@ -57,18 +57,18 @@ import {
   toggleCompanion,
   activePanelId,
   focusedPanelId,
-} from '../lib/sessions.js';
-import { handleDragMove, handleResizeMove } from '../lib/popout-physics.js';
-import { detectExternalZone, openCosExternally, applyExternalGhostHint } from '../lib/tab-drag.js';
-import { isMobile } from '../lib/viewport.js';
+} from '../../lib/sessions.js';
+import { handleDragMove, handleResizeMove } from '../../lib/popout-physics.js';
+import { detectExternalZone, openCosExternally, applyExternalGhostHint } from '../../lib/tab-drag.js';
+import { isMobile } from '../../lib/viewport.js';
 import {
   registerCosArtifact,
   artifactIdFor,
   cosArtifacts,
-} from '../lib/cos-artifacts.js';
-import { openArtifactCompanion, openUrlCompanion } from '../lib/companion-state.js';
-import { ArtifactCompanionView } from './ArtifactCompanionView.js';
-import { PopupMenu } from './PopupMenu.js';
+} from '../../lib/cos-artifacts.js';
+import { openArtifactCompanion, openUrlCompanion } from '../../lib/companion-state.js';
+import { ArtifactCompanionView } from '../files/ArtifactCompanionView.js';
+import { PopupMenu } from '../pickers/PopupMenu.js';
 import {
   cosPopoutTree,
   cosToggleLearningsTab,
@@ -83,7 +83,7 @@ import {
   cosActiveThread,
   cosOpenThreadTab,
   cosCloseThreadTab,
-} from '../lib/cos-popout-tree.js';
+} from '../../lib/cos-popout-tree.js';
 import {
   cosSavedDrafts,
   saveCosDraft,
@@ -92,16 +92,16 @@ import {
   getRootSavedDrafts,
   getThreadIdsWithDrafts,
   type CosSavedDraft,
-} from '../lib/cos-saved-drafts.js';
-import { cosFollowups, enqueueCosFollowup } from '../lib/cos-followups.js';
+} from '../../lib/cos-saved-drafts.js';
+import { cosFollowups, enqueueCosFollowup } from '../../lib/cos-followups.js';
 import { CosSavedDraftsList } from './CosSavedDraftsList.js';
 import { CosEnqueuedList } from './CosEnqueuedList.js';
 import { CosPopoutTreeView } from './CosPopoutTreeView.js';
-import { cosOpenArtifactTab } from '../lib/cos-popout-tree.js';
-import { runSlashCommandIfAny, parseAgentMentions } from '../lib/cos-slash-commands.js';
-import { api } from '../lib/api.js';
-import { activeChannel } from '../lib/state.js';
-import { cosLearnings, loadCosLearnings } from '../lib/cos-learnings.js';
+import { cosOpenArtifactTab } from '../../lib/cos-popout-tree.js';
+import { runSlashCommandIfAny, parseAgentMentions } from '../../lib/cos-slash-commands.js';
+import { api } from '../../lib/api.js';
+import { activeChannel } from '../../lib/state.js';
+import { cosLearnings, loadCosLearnings } from '../../lib/cos-learnings.js';
 import {
   cosDrafts,
   getCosDraft,
@@ -109,15 +109,15 @@ import {
   clearCosDraft,
   loadCosDrafts,
   hasAnyCosDraftForAgent,
-} from '../lib/cos-drafts.js';
-import { extractCosReply, stripCosReplyMarkers } from '../lib/cos-reply-tags.js';
-import { useCosSearch } from '../lib/use-cos-search.js';
+} from '../../lib/cos-drafts.js';
+import { extractCosReply, stripCosReplyMarkers } from '../../lib/cos-reply-tags.js';
+import { useCosSearch } from '../../lib/use-cos-search.js';
 import {
   fetchFeedbackTitle,
   getCachedFeedbackTitle,
   feedbackTitlesVersion,
-} from '../lib/cos-feedback-titles.js';
-import { LearningsPanel } from './LearningsDrawer.js';
+} from '../../lib/cos-feedback-titles.js';
+import { LearningsPanel } from '../learnings/LearningsDrawer.js';
 import {
   MessageAvatar,
   MessageAttachments,
@@ -142,7 +142,7 @@ import { CosBubbleWindowControls } from './CosBubbleHeader.js';
 
 marked.setOptions({ gfm: true, breaks: false });
 
-function hasAnyArtifactLeaf(node: import('../lib/pane-tree.js').PaneNode): boolean {
+function hasAnyArtifactLeaf(node: import('../../lib/pane-tree.js').PaneNode): boolean {
   if (node.type === 'leaf') return node.tabs.some((t) => t.startsWith('artifact:'));
   return hasAnyArtifactLeaf(node.children[0]) || hasAnyArtifactLeaf(node.children[1]);
 }
@@ -340,10 +340,40 @@ export function ChiefOfStaffBubble({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAppId.value]);
 
+  const {
+    searchOpen,
+    setSearchOpen,
+    searchQuery,
+    setSearchQuery,
+    searchMatchPos,
+    setSearchMatchPos,
+    searchRole,
+    setSearchRole,
+    searchScope,
+    setSearchScope,
+    searchInputRef,
+    searchMatches,
+  } = useCosSearch(activeAgent?.messages);
   const threads = useMemo(
     () => groupIntoThreads(activeAgent?.messages || []),
     [activeAgent?.messages],
   );
+  // Thread keys whose user message or any reply matches the active search
+  // query. Threads in this set bypass the archived/resolved/draft visibility
+  // filters so a hit inside an otherwise-hidden thread can never get swallowed
+  // by the chip filters — the operator searched for it, they want to see it.
+  const searchedThreadKeys = useMemo(() => {
+    if (searchMatches.length === 0) return null;
+    const matchSet = new Set(searchMatches);
+    const out = new Set<string>();
+    for (const t of threads) {
+      const hit =
+        (t.userIdx !== null && matchSet.has(t.userIdx)) ||
+        t.replies.some((r) => matchSet.has(r.idx));
+      if (hit) out.add(threadKeyOf(t));
+    }
+    return out;
+  }, [threads, searchMatches]);
   const collapsibleThreads = threads.filter((t) => t.userIdx !== null);
   const anyExpanded = collapsibleThreads.some((t) => !collapsedThreads.has(t.userIdx!));
   const isAgentStreaming = (activeAgent?.messages || []).some((m) => m.streaming);
@@ -414,6 +444,9 @@ export function ChiefOfStaffBubble({
     // Keep threads currently animating out mounted regardless of meta — the
     // CSS collapse transition needs the row in the DOM until it finishes.
     if (tid && isThreadLeaving(tid)) return true;
+    // Search overrides chip filters: if the operator searched and a hit
+    // landed in this thread, show it even if archived/resolved/non-draft.
+    if (searchedThreadKeys && searchedThreadKeys.has(threadKeyOf(t))) return true;
     if (threadFilter === 'archived') {
       if (!tid) return false;
       const meta = getThreadMeta(tid);
@@ -498,20 +531,6 @@ export function ChiefOfStaffBubble({
   const [replyNotifs, setReplyNotifs] = useState<ReplyNotification[]>([]);
   const [highlightMsgIdx, setHighlightMsgIdx] = useState<number | null>(null);
   const [showScrollDown, setShowScrollDown] = useState(false);
-  const {
-    searchOpen,
-    setSearchOpen,
-    searchQuery,
-    setSearchQuery,
-    searchMatchPos,
-    setSearchMatchPos,
-    searchRole,
-    setSearchRole,
-    searchScope,
-    setSearchScope,
-    searchInputRef,
-    searchMatches,
-  } = useCosSearch(activeAgent?.messages);
   const [optionsMenuOpen, setOptionsMenuOpen] = useState(false);
   const optionsMenuRef = useRef<HTMLDivElement>(null);
   const wasAtBottomRef = useRef(true);
@@ -1725,22 +1744,18 @@ export function ChiefOfStaffBubble({
                       onAttachmentClick={(id, dataUrl) => setEditingAttachment({ id, dataUrl })}
                       rows={1}
                       streaming={(() => {
-                        // Reply-pill scope wins: if the operator is replying
-                        // in a specific thread, that's the turn they want to
-                        // wait on. Otherwise fall back to any thread in this
-                        // agent that has a streaming assistant message — so a
-                        // top-level send + a fresh "Send when current
-                        // finishes" enqueue both stay coherent.
+                        // Stop only makes sense when scoped to a specific
+                        // thread — top-level sends spawn fresh threads, so a
+                        // composer-level Stop with no reply pill would
+                        // interrupt some unrelated in-flight thread. Limit
+                        // streaming/onStop to the active reply target.
                         const tid = replyTo?.threadServerId;
-                        if (tid) return activeAgent.messages.some((m) => m.threadId === tid && m.streaming);
-                        return activeAgent.messages.some((m) => m.streaming);
+                        if (!tid) return false;
+                        return activeAgent.messages.some((m) => m.threadId === tid && m.streaming);
                       })()}
-                      onStop={() => {
-                        const tid = replyTo?.threadServerId
-                          ?? activeAgent.messages.findLast?.((m) => m.streaming)?.threadId
-                          ?? activeAgent.messages.slice().reverse().find((m) => m.streaming)?.threadId;
-                        if (tid) void interruptThread(tid);
-                      }}
+                      onStop={replyTo?.threadServerId ? () => {
+                        void interruptThread(replyTo.threadServerId!);
+                      } : undefined}
                       onEnqueueAfterCurrent={(text, attachments, elementRefs) => {
                         // Pick a thread to scope the followup to:
                         //   1. Active reply pill — operator's explicit target.
