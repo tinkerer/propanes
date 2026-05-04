@@ -171,11 +171,82 @@ export function renderPromptTemplate(
     customData = `Custom data: ${JSON.stringify(fb.data, null, 2)}`;
   }
 
+  // Screenshots live on disk under uploads/ and are symlinked from /tmp at
+  // submit time (see routes/feedback.ts::linkToTmp). For local-machine agents
+  // the /tmp/<filename> path is directly readable; for remote launchers the
+  // path won't resolve but the filename is still recognisable.
+  const screenshotPaths = (fb.screenshots || []).map((s) => `/tmp/${s.filename}`);
   let screenshotText = '';
-  if (fb.screenshots?.length) {
-    screenshotText = fb.screenshots.map(
-      (s) => `Screenshot: /api/v1/images/${s.id}`
-    ).join('\n');
+  if (screenshotPaths.length) {
+    screenshotText = screenshotPaths
+      .map((p, i) => `Image ${i + 1}: ${p}`)
+      .join('\n');
+  }
+
+  // Replace [Image N] markers anywhere in description / instructions with the
+  // matching /tmp path, so users can author "look at [Image 1] then check
+  // [Image 2]" in the widget composer and the agent receives concrete file
+  // paths it can Read directly.
+  const MARKER_RE = /\[Image\s+(\d+)\]/gi;
+  const inlineScreenshotMarkers = (text: string): string => {
+    if (!text || screenshotPaths.length === 0) return text;
+    return text.replace(MARKER_RE, (match, n) => {
+      const idx = Number(n) - 1;
+      if (idx < 0 || idx >= screenshotPaths.length) return match;
+      return screenshotPaths[idx];
+    });
+  };
+
+  // Likewise for [Element N] markers — substitute with the matching CSS
+  // selector (back-tick quoted) so the prompt reads "click `button.submit`
+  // then verify [Element 2]" inline instead of forcing the agent to
+  // cross-reference Custom data.
+  type SelectedElement = { selector?: string; tagName?: string; id?: string; classes?: string[] };
+  const selectedElements: SelectedElement[] = Array.isArray(
+    (fb.data as { selectedElements?: unknown })?.selectedElements,
+  )
+    ? ((fb.data as { selectedElements: SelectedElement[] }).selectedElements)
+    : [];
+  const elementRefs = selectedElements.map((el) => {
+    if (el?.selector) return `\`${el.selector}\``;
+    let s = el?.tagName || 'element';
+    if (el?.id) s += `#${el.id}`;
+    if (el?.classes?.length) s += '.' + el.classes.slice(0, 2).join('.');
+    return `\`${s}\``;
+  });
+  const ELEMENT_MARKER_RE = /\[Element\s+(\d+)\]/gi;
+  const inlineElementMarkers = (text: string): string => {
+    if (!text || elementRefs.length === 0) return text;
+    return text.replace(ELEMENT_MARKER_RE, (match, n) => {
+      const idx = Number(n) - 1;
+      if (idx < 0 || idx >= elementRefs.length) return match;
+      return elementRefs[idx];
+    });
+  };
+  const inlineMarkers = (text: string) => inlineElementMarkers(inlineScreenshotMarkers(text));
+
+  // If a screenshot exists but isn't referenced by any [Image N] marker in
+  // the description / title / instructions, append the path block to the
+  // description so the agent still sees it. Markers are the ergonomic path;
+  // the block is a safety net for older widget builds that don't inline.
+  const allText = `${fb.title || ''}\n${fb.description || ''}\n${instructions || ''}`;
+  const referencedIdxs = new Set<number>();
+  for (const m of allText.matchAll(MARKER_RE)) {
+    const idx = Number(m[1]) - 1;
+    if (idx >= 0 && idx < screenshotPaths.length) referencedIdxs.add(idx);
+  }
+  const orphanPaths = screenshotPaths.filter((_, i) => !referencedIdxs.has(i));
+  let descriptionWithFallback = fb.description || '';
+  if (orphanPaths.length) {
+    const block = orphanPaths
+      .map((p, i) => {
+        const realIdx = screenshotPaths.indexOf(p);
+        return `[Image ${realIdx + 1}]: ${p}`;
+      })
+      .join('\n');
+    descriptionWithFallback = descriptionWithFallback
+      ? `${descriptionWithFallback}\n\nAttachments:\n${block}`
+      : `Attachments:\n${block}`;
   }
 
   // Look up live widget session for real-time URL/viewport
@@ -186,8 +257,8 @@ export function renderPromptTemplate(
   const vars: Record<string, string> = {
     'feedback.id': fb.id,
     'feedback.url': `${publicBaseUrl}/api/v1/admin/feedback/${fb.id}`,
-    'feedback.title': fb.title || '',
-    'feedback.description': fb.description || '',
+    'feedback.title': inlineMarkers(fb.title || ''),
+    'feedback.description': inlineMarkers(descriptionWithFallback),
     'feedback.sourceUrl': fb.sourceUrl || '',
     'feedback.tags': fb.tags?.join(', ') || '',
     'feedback.consoleLogs': consoleLogs,
@@ -201,7 +272,7 @@ export function renderPromptTemplate(
     'app.hooks': app?.hooks ? (typeof app.hooks === 'string' ? app.hooks : JSON.stringify(app.hooks)) : '',
     'session.url': liveSession?.url || fb.sourceUrl || '',
     'session.viewport': liveSession?.viewport || fb.viewport || '',
-    'instructions': instructions || '',
+    'instructions': inlineMarkers(instructions || ''),
   };
 
   let result = template;

@@ -3,6 +3,7 @@ import { type ViewMode } from '../terminal/SessionViewToggle.js';
 import {
   type PopoutPanelState,
   updatePanel,
+  removePanel,
   persistPopoutState,
   killSession,
   resumeSession,
@@ -239,7 +240,7 @@ export function PopoutMultiTabBar({
           {popoutWindowMenuOpen.value === panel.id && (
             <WindowMenu panel={panel} activeId={activeId} docked={docked} isLeftDocked={isLeftDocked} isMinimized={isMinimized} anchorRef={windowMenuBtnRef2} onClose={() => { popoutWindowMenuOpen.value = null; }} />
           )}
-          <button class="btn-close-panel" onClick={() => { updatePanel(panel.id, { visible: false }); persistPopoutState(); }} title="Hide panel">&times;</button>
+          <button class="btn-close-panel" onClick={() => { removePanel(panel.id); persistPopoutState(); }} title="Close panel (use the side handle to toggle the drawer)">&times;</button>
         </div>
       </div>
     </>

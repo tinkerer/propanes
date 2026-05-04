@@ -33,13 +33,27 @@ import {
 import { cosArtifacts } from '../../lib/cos-artifacts.js';
 import { ArtifactCompanionView } from '../files/ArtifactCompanionView.js';
 import { startCosTabDrag, startCosLeafDrag } from '../../lib/cos-tab-drag.js';
-import { dragOverLeafZone, openCosExternally } from '../../lib/tab-drag.js';
+import { dragOverLeafZone, openCosExternally, openCosTabExternally } from '../../lib/tab-drag.js';
 
 interface ResolvedTab {
   label: string;
   icon?: string;
   content: ComponentChildren;
   closable: boolean;
+}
+
+/**
+ * Pop the given tab out into a dedicated browser window via `?embed=cos&focus=...`.
+ * For thread tabs, propagate the active thread coords so the focused window
+ * resolves the right thread regardless of what the parent later selects.
+ */
+function popOutCosTab(tabId: string) {
+  if (tabId === COS_POPOUT_THREAD_TAB) {
+    const at = cosActiveThread.value;
+    openCosTabExternally(tabId, 'new-window', at ? { agentId: at.agentId, threadKey: at.threadKey } : undefined);
+    return;
+  }
+  openCosTabExternally(tabId, 'new-window');
 }
 
 export function CosPopoutTreeView({
@@ -292,6 +306,29 @@ function CosLeafView({
                   <span class="cos-tree-tab-icon" aria-hidden="true">{info.icon}</span>
                 )}
                 <span class="cos-tree-tab-label">{info.label}</span>
+                <span
+                  class="cos-tree-tab-popout"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Pop out ${info.label} into a new window`}
+                  title={`Pop out ${info.label}`}
+                  onMouseDown={(e) => {
+                    // Block the parent's drag handler; pop-out is a click, not a drag.
+                    e.stopPropagation();
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    popOutCosTab(sid);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.stopPropagation();
+                      popOutCosTab(sid);
+                    }
+                  }}
+                >
+                  {'⇱'}
+                </span>
                 {info.closable && (
                   <span
                     class="cos-tree-tab-close"

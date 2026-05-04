@@ -824,6 +824,22 @@ export function runMigrations() {
       UPDATE agent_endpoints SET permission_profile = 'interactive-yolo'
         WHERE name IN ('yolo', 'codex-yolo')
           AND permission_profile = 'headless-yolo';
+
+      -- Step 4: drop the legacy "consider screenshots if available in
+      -- feedback." trailing line from any agent prompt template that still
+      -- has it. Screenshots are now inlined as /tmp paths via [Image N]
+      -- markers in the feedback description, so the boilerplate prefix is
+      -- pure noise. We only strip the suffix; if a user has further
+      -- customised the template the rest is preserved.
+      UPDATE agent_endpoints
+         SET prompt_template = TRIM(
+               SUBSTR(prompt_template, 1,
+                      LENGTH(prompt_template)
+                        - LENGTH(char(10) || char(10)
+                                 || 'consider screenshots if available in feedback.'))
+             )
+       WHERE prompt_template LIKE '%' || char(10) || char(10)
+                                || 'consider screenshots if available in feedback.';
     `);
   } catch {
     // Tables/columns may not all exist on very fresh DBs; alter statements

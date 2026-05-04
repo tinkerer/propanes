@@ -902,6 +902,15 @@ export function GlobalTerminalPanel() {
             <button onClick={() => { closeTab(menuSid); statusMenuOpen.value = null; }}>
               Close tab {showHotkeyHints.value && <kbd>⌃⇧W</kbd>}
             </button>
+            {tabs.length > 1 && (
+              <button onClick={() => {
+                statusMenuOpen.value = null;
+                const others = tabs.filter((t) => t !== menuSid);
+                for (const sid of others) closeTab(sid);
+              }}>
+                Close other tabs
+              </button>
+            )}
             <div style="display:flex;gap:4px;padding:4px 8px;align-items:center">
               {SESSION_COLOR_PRESETS.map((c) => (
                 <span
