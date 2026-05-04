@@ -110,6 +110,38 @@ export function openCosExternally(zone: ExternalDragZone) {
   }
 }
 
+/**
+ * Open a single CoS tab (Thread / Artifact / Learnings / Chat) in a new
+ * browser tab/window. Adds `&focus=<tabId>` so the popped window renders just
+ * that tab fullscreen instead of mirroring the parent's multi-pane layout.
+ *
+ * For thread tabs the caller passes `agentId`+`threadKey` so the focused
+ * window resolves the right thread regardless of what the parent currently
+ * has selected.
+ */
+export function openCosTabExternally(
+  tabId: string,
+  zone: ExternalDragZone,
+  opts?: { agentId?: string | null; threadKey?: string | null },
+) {
+  const params = new URLSearchParams();
+  params.set('embed', 'cos');
+  params.set('focus', tabId);
+  if (opts?.agentId) params.set('agentId', opts.agentId);
+  if (opts?.threadKey) params.set('threadKey', opts.threadKey);
+  const url = `${location.origin}${location.pathname}?${params.toString()}`;
+  if (zone === 'new-tab') {
+    window.open(url, '_blank');
+  } else {
+    const w = Math.min(720, Math.max(480, Math.floor(window.innerWidth * 0.45)));
+    const h = Math.min(900, Math.max(520, Math.floor(window.innerHeight * 0.75)));
+    // Distinct window name per tab so popping out the same tab twice reuses
+    // the same popup, but Thread vs Artifact vs Chat each get their own.
+    const winName = `pw-cos-tab-${tabId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 60)}`;
+    window.open(url, winName, `popup=yes,width=${w},height=${h}`);
+  }
+}
+
 // Show a ghost hint when dragging outside the viewport. Keeps the ghost visible
 // at the viewport edge and changes its text to describe the external action.
 export function applyExternalGhostHint(

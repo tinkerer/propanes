@@ -83,6 +83,8 @@ import {
   cosActiveThread,
   cosOpenThreadTab,
   cosCloseThreadTab,
+  cosFocusTabId,
+  buildCosFocusTree,
 } from '../../lib/cos-popout-tree.js';
 import {
   cosSavedDrafts,
@@ -1281,7 +1283,11 @@ export function ChiefOfStaffBubble({
   // tree root happens to share node ids with a previously-rendered snapshot.
   // Subscribe to the popout-local tree so the CoS panel re-renders when
   // artifact/learnings leaves are added or split ratios change.
-  const _cosTree = cosPopoutTree.value;
+  // In focus-mode (popped-out single-tab window), substitute a synthetic
+  // single-leaf tree so the popped window renders just the focused tab
+  // fullscreen rather than mirroring the parent's persisted multi-pane layout.
+  const _focusTabId = cosFocusTabId.value;
+  const _cosTree = _focusTabId ? buildCosFocusTree(_focusTabId) : cosPopoutTree.value;
   // In popout mode the learnings panel is a tab in the popout-local tree, so
   // the toolbar button's "open" state is derived from the tree — not from the
   // local `showLearnings` state (which only drives the pane-mode side drawer).
@@ -1840,7 +1846,10 @@ export function ChiefOfStaffBubble({
                     />
                   </div>
                 );
-                if (inPane) return chatPane;
+                // Focus mode (popped-out single-tab window) ignores inPane —
+                // we want CosPopoutTreeView with the synthetic single-leaf tree
+                // even when CoS embed mode would normally render in pane mode.
+                if (inPane && !_focusTabId) return chatPane;
                 return (
                   <CosPopoutTreeView
                     tree={_cosTree}

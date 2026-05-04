@@ -837,196 +837,6 @@ export class ProPanesElement {
     setTimeout(() => this.shadow.addEventListener('click', closeHandler), 0);
   }
 
-  // Unified expand-menu, modeled on the admin InterruptBar. The single
-  // left-arrow toggle reveals Screenshot / DOM-select / Console capture / Mic
-  // entries — each with the same per-action option toggles the old toolbar
-  // exposed via separate dropdowns.
-  private toggleExpandMenu() {
-    const existing = this.shadow.querySelector('.pw-expand-menu');
-    if (existing) {
-      existing.remove();
-      const tog = this.shadow.querySelector('#pw-expand-toggle');
-      tog?.classList.remove('pw-expand-toggle-open');
-      tog?.setAttribute('aria-expanded', 'false');
-      return;
-    }
-
-    const group = this.shadow.querySelector('.pw-expand-group');
-    if (!group) return;
-
-    const toggle = this.shadow.querySelector('#pw-expand-toggle');
-    toggle?.classList.add('pw-expand-toggle-open');
-    toggle?.setAttribute('aria-expanded', 'true');
-
-    const menu = document.createElement('div');
-    menu.className = 'pw-expand-menu';
-    menu.setAttribute('role', 'menu');
-
-    const closeMenuAndCleanup = () => {
-      menu.remove();
-      toggle?.classList.remove('pw-expand-toggle-open');
-      toggle?.setAttribute('aria-expanded', 'false');
-    };
-
-    const makeGroup = (
-      label: string,
-      iconSvg: string,
-      onClick: () => void,
-      opts: Array<{ label: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; title?: string }>,
-      itemDisabled?: boolean,
-      itemExtraClass?: string,
-    ) => {
-      const grp = document.createElement('div');
-      grp.className = 'pw-expand-section';
-
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'pw-expand-item' + (itemExtraClass ? ` ${itemExtraClass}` : '');
-      btn.setAttribute('role', 'menuitem');
-      if (itemDisabled) btn.disabled = true;
-      btn.innerHTML = `${iconSvg}<span>${label}</span>`;
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        closeMenuAndCleanup();
-        onClick();
-      });
-      grp.appendChild(btn);
-
-      if (opts.length > 0) {
-        const optsRow = document.createElement('div');
-        optsRow.className = 'pw-expand-opts';
-        for (const opt of opts) {
-          const label = document.createElement('label');
-          label.className = 'pw-expand-opt';
-          if (opt.title) label.title = opt.title;
-          const cb = document.createElement('input');
-          cb.type = 'checkbox';
-          cb.checked = opt.checked;
-          if (opt.disabled) cb.disabled = true;
-          cb.addEventListener('change', () => opt.onChange(cb.checked));
-          const span = document.createElement('span');
-          span.textContent = opt.label;
-          label.append(cb, span);
-          optsRow.appendChild(label);
-        }
-        grp.appendChild(optsRow);
-      }
-      menu.appendChild(grp);
-    };
-
-    // --- Screenshot ---
-    makeGroup(
-      'Screenshot',
-      `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>`,
-      () => this.captureScreen(),
-      [
-        {
-          label: 'html-to-image',
-          checked: this.screenshotMethod === 'html-to-image',
-          title: 'html-to-image is silent; display-media asks for screen-share permission',
-          onChange: (v) => {
-            this.screenshotMethod = v ? 'html-to-image' : 'display-media';
-            if (v) {
-              this.keepStream = false;
-              stopScreencastStream();
-            }
-          },
-        },
-        {
-          label: 'exclude cursor',
-          checked: this.excludeCursor,
-          onChange: (v) => { this.excludeCursor = v; },
-        },
-        {
-          label: 'exclude widget',
-          checked: this.excludeWidget,
-          onChange: (v) => { this.excludeWidget = v; },
-        },
-      ],
-    );
-
-    // --- DOM select ---
-    makeGroup(
-      'DOM select',
-      `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h4V1H1v6h2V3zm0 14H1v6h6v-2H3v-4zm14 4h-4v2h6v-6h-2v4zM17 3V1h6v6h-2V3h-4z"/><circle cx="12" cy="12" r="3"/></svg>`,
-      () => this.startElementPicker(),
-      [
-        {
-          label: 'multi-select',
-          checked: this.pickerMultiSelect,
-          onChange: (v) => { this.pickerMultiSelect = v; },
-        },
-        {
-          label: 'include children',
-          checked: this.pickerIncludeChildren,
-          onChange: (v) => { this.pickerIncludeChildren = v; },
-        },
-        {
-          label: 'exclude widget',
-          checked: this.pickerExcludeWidget,
-          onChange: (v) => { this.pickerExcludeWidget = v; },
-        },
-      ],
-    );
-
-    // --- Console capture (no options) ---
-    makeGroup(
-      'Console capture',
-      `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
-      () => {
-        this.consoleCapture = snapshotWidgetConsole();
-        this.renderConsoleChip();
-        this.updateSendButtonTitle();
-      },
-      [],
-    );
-
-    // --- Microphone ---
-    const micRecording = this.voiceRecorder.recording;
-    makeGroup(
-      micRecording ? 'Stop recording' : 'Microphone',
-      `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/></svg>`,
-      () => this.toggleVoiceRecording(),
-      [
-        {
-          label: 'screen captures',
-          checked: this.micScreenCaptures,
-          disabled: micRecording,
-          title: 'Capture screenshots triggered by click/drag gestures while recording',
-          onChange: (v) => {
-            this.micScreenCaptures = v;
-            if (this.voiceRecorder.recording || this.voiceRecorder.ambient) {
-              if (v) this.voiceRecorder.enableScreenCaptures();
-              else this.voiceRecorder.disableScreenCaptures();
-            }
-          },
-        },
-        {
-          label: 'hide transcript',
-          checked: this.micHideTranscript,
-          onChange: (v) => { this.micHideTranscript = v; },
-        },
-        {
-          label: 'hide widget',
-          checked: this.micHideWidget,
-          onChange: (v) => { this.micHideWidget = v; },
-        },
-      ],
-      false,
-      micRecording ? 'pw-expand-item-recording' : undefined,
-    );
-
-    group.appendChild(menu);
-
-    const closeHandler = (e: Event) => {
-      if (!menu.contains(e.target as Node) && (e.target as Element)?.id !== 'pw-expand-toggle') {
-        closeMenuAndCleanup();
-        this.shadow.removeEventListener('click', closeHandler);
-      }
-    };
-    setTimeout(() => this.shadow.addEventListener('click', closeHandler), 0);
-  }
-
   private renderConsoleChip() {
     const chips = this.shadow.querySelector('#pw-attach-chips') as HTMLElement | null;
     if (!chips) return;
@@ -1069,6 +879,23 @@ export class ProPanesElement {
 
     const menu = document.createElement('div');
     menu.className = 'pw-context-menu';
+
+    const snapshotBtn = document.createElement('button');
+    snapshotBtn.type = 'button';
+    snapshotBtn.className = 'pw-context-menu-item pw-context-menu-btn';
+    snapshotBtn.textContent = 'Capture console now';
+    snapshotBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.consoleCapture = snapshotWidgetConsole();
+      this.renderConsoleChip();
+      this.updateSendButtonTitle();
+      menu.remove();
+    });
+    menu.appendChild(snapshotBtn);
+
+    const divider = document.createElement('div');
+    divider.className = 'pw-context-menu-divider';
+    menu.appendChild(divider);
 
     const items: Array<{ value: string; label: string }> = [
       { value: 'console', label: 'Console' },
@@ -1403,9 +1230,12 @@ export class ProPanesElement {
     });
     options.appendChild(sidRow);
 
-    // Dispatch target selector
+    // Dispatch target selector — hidden until the fetch resolves with at
+    // least one launcher. Showing it then collapsing on empty caused the
+    // panel to flicker height when admin options first opened.
     const targetRow = document.createElement('div');
     targetRow.className = 'pw-session-id-row';
+    targetRow.style.display = 'none';
     targetRow.innerHTML = `<span class="pw-session-id-label">Target:</span><select class="pw-dispatch-target-select" style="flex:1;font-size:11px;padding:1px 2px;background:#333;color:#ccc;border:1px solid #555;border-radius:3px"><option value="">Local</option></select>`;
     const sel = targetRow.querySelector('select') as HTMLSelectElement;
     sel.value = localStorage.getItem('pw-dispatch-target') || '';
@@ -1413,12 +1243,11 @@ export class ProPanesElement {
       if (sel.value) localStorage.setItem('pw-dispatch-target', sel.value);
       else localStorage.removeItem('pw-dispatch-target');
     });
-    // Populate from API
     const origin = new URL(this.config.endpoint, window.location.origin).origin;
     fetch(`${origin}/api/v1/admin/dispatch-targets`)
       .then(r => r.json())
       .then((data: any) => {
-        if (!data.targets?.length) { targetRow.style.display = 'none'; return; }
+        if (!data.targets?.length) return;
         for (const t of data.targets) {
           const opt = document.createElement('option');
           opt.value = t.launcherId;
@@ -1426,8 +1255,9 @@ export class ProPanesElement {
           sel.appendChild(opt);
         }
         sel.value = localStorage.getItem('pw-dispatch-target') || '';
+        targetRow.style.display = '';
       })
-      .catch(() => { targetRow.style.display = 'none'; });
+      .catch(() => { /* leave hidden */ });
     options.appendChild(targetRow);
 
     // Insert before the error div at the bottom
@@ -1459,9 +1289,40 @@ export class ProPanesElement {
           <textarea class="pw-textarea" id="pw-chat-input" placeholder="What's on your mind?" rows="1" autocomplete="off"></textarea>
           <div class="pw-toolbar">
             <span class="pw-camera-countdown pw-hidden" id="pw-camera-countdown"></span>
-            <div class="pw-expand-group">
-              <button class="pw-expand-toggle" id="pw-expand-toggle" title="Attach screenshot, DOM selection, console, or voice capture" aria-expanded="false" aria-label="Attach context">
-                <svg viewBox="0 0 24 24"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6z"/></svg>
+            ${this.sessionBridge.screenshotIncludeWidget ? `
+            <div class="pw-camera-group">
+              <button class="pw-camera-btn" id="pw-capture-btn" title="Capture screenshot">
+                <svg viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>
+              </button>
+              <button class="pw-camera-dropdown-toggle" id="pw-camera-dropdown" title="Screenshot options">
+                <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+              </button>
+            </div>` : `
+            <button class="pw-camera-btn" id="pw-capture-btn" title="Capture screenshot">
+              <svg viewBox="0 0 24 24"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>
+            </button>`}
+            <div class="pw-picker-group">
+              <button class="pw-picker-btn" id="pw-picker-btn" title="Select an element">
+                <svg viewBox="0 0 24 24"><path d="M3 3h4V1H1v6h2V3zm0 14H1v6h6v-2H3v-4zm14 4h-4v2h6v-6h-2v4zM17 3V1h6v6h-2V3h-4zM12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm0 6a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>
+              </button>
+              <button class="pw-picker-dropdown-toggle" id="pw-picker-dropdown" title="Picker options">
+                <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+              </button>
+            </div>
+            <div class="pw-context-group">
+              <button class="pw-context-btn" id="pw-context-btn" title="Context options">
+                <svg viewBox="0 0 24 24"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>
+              </button>
+              <button class="pw-context-dropdown-toggle" id="pw-context-dropdown" title="Context options">
+                <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+              </button>
+            </div>
+            <div class="pw-mic-group">
+              <button class="pw-mic-btn" id="pw-mic-btn" title="Voice recording">
+                <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5zm6 6c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+              </button>
+              <button class="pw-mic-dropdown-toggle" id="pw-mic-dropdown" title="Mic options">
+                <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
               </button>
             </div>
             <div class="pw-admin-group">
@@ -1482,8 +1343,6 @@ export class ProPanesElement {
             </button>`}
           </div>
         </div>
-        <button class="pw-capture-btn-hidden pw-hidden" id="pw-capture-btn" aria-hidden="true" tabindex="-1"></button>
-        <button class="pw-mic-btn-hidden pw-hidden" id="pw-mic-btn" aria-hidden="true" tabindex="-1"></button>
       </div>
       <div id="pw-error" class="pw-error pw-hidden"></div>
     `;
@@ -1509,15 +1368,36 @@ export class ProPanesElement {
 
     const input = panel.querySelector('#pw-chat-input') as HTMLTextAreaElement;
     const sendBtn = panel.querySelector('#pw-send-btn') as HTMLButtonElement;
+    const captureBtn = panel.querySelector('#pw-capture-btn') as HTMLButtonElement;
+
+    const pickerBtn = panel.querySelector('#pw-picker-btn') as HTMLButtonElement;
+    const pickerDropdownBtn = panel.querySelector('#pw-picker-dropdown') as HTMLButtonElement | null;
+
+    const cameraDropdownBtn = panel.querySelector('#pw-camera-dropdown') as HTMLButtonElement | null;
+
+    const contextBtn = panel.querySelector('#pw-context-btn') as HTMLButtonElement | null;
+    const contextDropdownBtn = panel.querySelector('#pw-context-dropdown') as HTMLButtonElement | null;
+
+    const micBtn = panel.querySelector('#pw-mic-btn') as HTMLButtonElement | null;
+    const micDropdownBtn = panel.querySelector('#pw-mic-dropdown') as HTMLButtonElement | null;
 
     const adminBtn = panel.querySelector('#pw-admin-btn') as HTMLButtonElement | null;
     const adminDropdownBtn = panel.querySelector('#pw-admin-dropdown') as HTMLButtonElement | null;
 
-    const expandToggle = panel.querySelector('#pw-expand-toggle') as HTMLButtonElement | null;
-    expandToggle?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleExpandMenu(); });
-
     const closeBtn = panel.querySelector('#pw-close-btn') as HTMLButtonElement | null;
     closeBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.close(); });
+
+    captureBtn?.addEventListener('click', () => this.captureScreen());
+    cameraDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleCameraMenu(); });
+
+    pickerBtn?.addEventListener('click', () => this.startElementPicker());
+    pickerDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.togglePickerMenu(); });
+
+    contextBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleContextMenu(); });
+    contextDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleContextMenu(); });
+
+    micBtn?.addEventListener('click', () => this.toggleVoiceRecording());
+    micDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleMicMenu(); });
 
     adminBtn?.addEventListener('click', () => this.toggleAdminOptions());
     adminDropdownBtn?.addEventListener('click', (e) => { e.stopPropagation(); this.toggleAdminMenu(); });
@@ -1755,8 +1635,49 @@ export class ProPanesElement {
   private addScreenshot(blob: Blob) {
     this.pendingScreenshots.push(blob);
     persistScreenshots(this.pendingScreenshots);
+    // Inject "[Image N]" at the textarea's cursor position so the user can
+    // reference attachments inline ("look at [Image 1] then [Image 2]").
+    // The server replaces these markers with the matching /tmp path on
+    // dispatch; clicking the chip opens the crop/highlight editor.
+    this.insertScreenshotMarkerInDraft(this.pendingScreenshots.length);
     this.renderScreenshotThumbs();
     this.updateSendButtonTitle();
+  }
+
+  private insertScreenshotMarkerInDraft(n: number) {
+    const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement | null;
+    if (!input) return;
+    const marker = `[Image ${n}]`;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    const before = input.value.slice(0, start);
+    const after = input.value.slice(end);
+    const lead = before && !/\s$/.test(before) ? ' ' : '';
+    const trail = after && !/^\s/.test(after) ? ' ' : '';
+    input.value = `${before}${lead}${marker}${trail}${after}`;
+    const cursor = before.length + lead.length + marker.length;
+    input.setSelectionRange(cursor, cursor);
+    input.focus();
+    // `input` event re-runs autoResize + scheduleDraftSave wired in renderPanel.
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  private renumberScreenshotMarkersInDraft(removedIndex: number) {
+    const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement | null;
+    if (!input) return;
+    const removedNum = removedIndex + 1;
+    // Strip the removed marker (and one optional leading space).
+    const removeRe = new RegExp(`\\s?\\[Image\\s+${removedNum}\\]`, 'gi');
+    let next = input.value.replace(removeRe, '');
+    // Decrement any markers numbered higher than the removed one.
+    next = next.replace(/\[Image\s+(\d+)\]/gi, (m, raw) => {
+      const num = Number(raw);
+      return num > removedNum ? `[Image ${num - 1}]` : m;
+    });
+    if (next !== input.value) {
+      input.value = next;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
   }
 
   private renderScreenshotThumbs() {
@@ -1773,18 +1694,27 @@ export class ProPanesElement {
     this.pendingScreenshots.forEach((blob, i) => {
       const wrap = document.createElement('div');
       wrap.className = 'pw-screenshot-wrap';
+      wrap.title = 'Click to annotate';
+      wrap.addEventListener('click', (e) => {
+        if ((e.target as HTMLElement).closest('.pw-screenshot-remove')) return;
+        this.openAnnotator(i);
+      });
 
       const img = document.createElement('img');
       img.className = 'pw-screenshot-thumb';
       img.src = URL.createObjectURL(blob);
-      img.title = 'Click to annotate';
-      img.addEventListener('click', () => this.openAnnotator(i));
+
+      const label = document.createElement('span');
+      label.className = 'pw-screenshot-marker';
+      label.textContent = `[${i + 1}]`;
 
       const removeBtn = document.createElement('button');
       removeBtn.className = 'pw-screenshot-remove';
       removeBtn.textContent = '\u00d7';
       removeBtn.title = 'Remove screenshot';
-      removeBtn.addEventListener('click', () => {
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.renumberScreenshotMarkersInDraft(i);
         this.pendingScreenshots.splice(i, 1);
         persistScreenshots(this.pendingScreenshots);
         this.renderScreenshotThumbs();
@@ -1792,6 +1722,7 @@ export class ProPanesElement {
       });
 
       wrap.appendChild(img);
+      wrap.appendChild(label);
       wrap.appendChild(removeBtn);
       container.appendChild(wrap);
     });
@@ -2989,11 +2920,19 @@ export class ProPanesElement {
 
     const liveUpdate = this.pickerMultiSelect;
     const previousElements = [...this.selectedElements];
+    const baseCount = previousElements.length;
     this.pickerCleanup = startPicker((infos) => {
       if (panel) panel.style.opacity = '1';
       this.pickerCleanup = null;
       if (infos.length > 0) {
         this.selectedElements = [...previousElements, ...infos];
+        // Inject [Element N] markers at the textarea cursor for each newly
+        // picked element. The server replaces these with the matching
+        // selector on dispatch (see renderPromptTemplate); clicking the
+        // chip's × strips the marker and renumbers the rest.
+        for (let i = 0; i < infos.length; i++) {
+          this.insertElementMarkerInDraft(baseCount + i + 1);
+        }
       }
       persistSelections(this.selectedElements);
       this.renderSelectedElementChips();
@@ -3007,6 +2946,39 @@ export class ProPanesElement {
         this.renderSelectedElementChips();
       } : undefined,
     });
+  }
+
+  private insertElementMarkerInDraft(n: number) {
+    const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement | null;
+    if (!input) return;
+    const marker = `[Element ${n}]`;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    const before = input.value.slice(0, start);
+    const after = input.value.slice(end);
+    const lead = before && !/\s$/.test(before) ? ' ' : '';
+    const trail = after && !/^\s/.test(after) ? ' ' : '';
+    input.value = `${before}${lead}${marker}${trail}${after}`;
+    const cursor = before.length + lead.length + marker.length;
+    input.setSelectionRange(cursor, cursor);
+    input.focus();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  private renumberElementMarkersInDraft(removedIndex: number) {
+    const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement | null;
+    if (!input) return;
+    const removedNum = removedIndex + 1;
+    const removeRe = new RegExp(`\\s?\\[Element\\s+${removedNum}\\]`, 'gi');
+    let next = input.value.replace(removeRe, '');
+    next = next.replace(/\[Element\s+(\d+)\]/gi, (m, raw) => {
+      const num = Number(raw);
+      return num > removedNum ? `[Element ${num - 1}]` : m;
+    });
+    if (next !== input.value) {
+      input.value = next;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
   }
 
   private renderSelectedElementChips() {
@@ -3033,10 +3005,12 @@ export class ProPanesElement {
 
       const chip = document.createElement('div');
       chip.className = 'pw-selected-element';
-      chip.innerHTML = `<code title="${fullPath.replace(/"/g, '&quot;')}">${display}</code><button class="pw-selected-element-remove" title="Remove">\u00d7</button>`;
+      const markerText = `[${i + 1}]`;
+      chip.innerHTML = `<span class="pw-selected-element-marker">${markerText}</span><code title="${fullPath.replace(/"/g, '&quot;')}">${display}</code><button class="pw-selected-element-remove" title="Remove">\u00d7</button>`;
 
       const idx = i;
       chip.querySelector('.pw-selected-element-remove')!.addEventListener('click', () => {
+        this.renumberElementMarkersInDraft(idx);
         this.selectedElements.splice(idx, 1);
         persistSelections(this.selectedElements);
         this.renderSelectedElementChips();

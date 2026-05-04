@@ -173,8 +173,34 @@ export function getThreadFollowups(threadServerId: string): CosFollowup[] {
 // call and the queue-prune setValue.
 const dispatching = new Set<string>();
 
+// Pure-timer wakeup signal. The dispatcher effect normally re-runs when
+// `cosFollowups` or `chiefOfStaffAgents` changes, but the 30s belt-and-
+// braces fallback below needs to fire even if neither changes (e.g. the
+// server dropped the assistant row, no new SSE events arrive, no new
+// followups get queued). When we'd otherwise hold on a streaming flag,
+// schedule a tick at the deadline so the effect re-evaluates and the
+// fallback can dispatch.
+const wakeTick = signal(0);
+let pendingWakeAt = Infinity;
+let pendingWakeTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleWake(at: number): void {
+  if (typeof setTimeout === 'undefined') return;
+  if (at >= pendingWakeAt) return;
+  if (pendingWakeTimer != null) clearTimeout(pendingWakeTimer);
+  pendingWakeAt = at;
+  const delay = Math.max(0, at - Date.now());
+  pendingWakeTimer = setTimeout(() => {
+    pendingWakeTimer = null;
+    pendingWakeAt = Infinity;
+    wakeTick.value = wakeTick.value + 1;
+  }, delay);
+}
+
 effect(() => {
   const queue = cosFollowups.value;
+  // Subscribe to wakeTick so timer-driven re-evaluations fire the effect
+  // even when neither cosFollowups nor chiefOfStaffAgents changed.
+  wakeTick.value;
   if (queue.length === 0) return;
 
   const agents = chiefOfStaffAgents.value;
@@ -216,7 +242,25 @@ effect(() => {
     // the send inherits a thread or spawns a fresh one.
     const threadMessages = agent.messages.filter((m) => m.threadId === first.threadServerId);
     const stillStreaming = threadMessages.some((m) => m.streaming);
-    if (stillStreaming) continue;
+    if (stillStreaming) {
+      // Belt-and-braces: if the persistent backend never lands an assistant
+      // row (long-reply drop / stream-json fragmentation / tool-only turn
+      // that didn't surface), the optimistic assistant placeholder stays
+      // `streaming: true` forever and the queued operator messages never
+      // fire. After 30s with the streaming flag still set, treat the turn
+      // as effectively done and fall through to dispatch. The server-side
+      // fix (always-insert empty assistant row in cos-turn-consumer) is
+      // the primary path; this is the safety net for queue rows persisted
+      // in localStorage that pre-date the server fix.
+      const oldestEnqueue = Math.min(...queued.map((f) => f.enqueuedAt));
+      if (Date.now() - oldestEnqueue <= 30_000) {
+        // Wake the effect at the 30s deadline so the fallback can fire
+        // even if no other signal changes between now and then.
+        scheduleWake(oldestEnqueue + 30_000);
+        continue;
+      }
+      // > 30s elapsed → fall through and dispatch.
+    }
 
     dispatching.add(key);
 

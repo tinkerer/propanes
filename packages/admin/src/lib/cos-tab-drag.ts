@@ -21,7 +21,9 @@ import {
   detectExternalZone,
   applyExternalGhostHint,
   openCosExternally,
+  openCosTabExternally,
 } from './tab-drag.js';
+import { cosActiveThread, COS_POPOUT_THREAD_TAB } from './cos-popout-tree.js';
 
 /**
  * Cos-popout-specific drop zone set. Same shape semantics as the main tree's
@@ -346,7 +348,18 @@ export function startCosTabDrag(e: MouseEvent, config: CosTabDragConfig): void {
 
     const ext = detectExternalZone(ev.clientX, ev.clientY);
     if (ext) {
-      openCosExternally(ext);
+      // Per-tab external drop: pop the dragged tab out into its own focused
+      // window rather than the entire CoS panel (which is what the legacy
+      // `openCosExternally` did and what the user reported as missing).
+      // For thread tabs, also propagate the active thread coords so the
+      // popped window resolves the right thread regardless of what the parent
+      // selects after the drop.
+      const isThread = config.tabId === COS_POPOUT_THREAD_TAB;
+      const at = isThread ? cosActiveThread.value : null;
+      openCosTabExternally(config.tabId, ext, at ? { agentId: at.agentId, threadKey: at.threadKey } : undefined);
+      // Detach the tab from the source leaf so the parent window doesn't keep
+      // a stale duplicate alongside the new pop-out.
+      cosRemoveTabFromLeaf(config.leafId, config.tabId);
       return;
     }
 

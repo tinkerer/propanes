@@ -1357,6 +1357,15 @@ export function LeafPane({ leaf }: LeafPaneProps) {
             <button onClick={() => { handleClose(menuSid); statusMenuOpen.value = null; }}>
               Close tab {showHotkeyHints.value && <kbd>{'\u2303\u21E7'}W</kbd>}
             </button>
+            {leaf.tabs.length > 1 && (
+              <button onClick={() => {
+                statusMenuOpen.value = null;
+                const others = leaf.tabs.filter((t) => t !== menuSid);
+                for (const sid of others) handleClose(sid);
+              }}>
+                Close other tabs
+              </button>
+            )}
             <div style="display:flex;gap:4px;padding:4px 8px;align-items:center">
               {SESSION_COLOR_PRESETS.map((c) => (
                 <span
