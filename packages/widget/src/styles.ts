@@ -233,19 +233,35 @@ export const WIDGET_CSS = `
   position: relative;
   width: 40px;
   height: 40px;
+  border-radius: 4px;
+  border: 1px solid #334155;
+  cursor: pointer;
+  overflow: hidden;
+}
+.pw-screenshot-wrap:hover {
+  border-color: #1d9bf0;
 }
 
 .pw-screenshot-thumb {
-  width: 40px;
-  height: 40px;
-  border-radius: 4px;
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-  border: 1px solid #334155;
-  cursor: pointer;
+  display: block;
+  pointer-events: none;
 }
 
-.pw-screenshot-thumb:hover {
-  border-color: #1d9bf0;
+.pw-screenshot-marker {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(15, 23, 42, 0.85);
+  color: #e2e8f0;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  line-height: 14px;
+  pointer-events: none;
 }
 
 .pw-screenshot-remove {
@@ -598,6 +614,16 @@ export const WIDGET_CSS = `
   border: 1px solid #1d9bf0;
   border-radius: 6px;
   font-size: 12px;
+}
+
+.pw-selected-element-marker {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10px;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.85);
+  padding: 0 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
 }
 
 .pw-selected-element code {
@@ -2248,22 +2274,20 @@ export const WIDGET_CSS = `
 
 /* ===== Composer (InterruptBar-style) ===== */
 
-/* The textarea + toolbar live on a single row so the composer reads as a
-   chat-style input instead of a stacked form. The textarea grows up to
-   140px (matching admin/InterruptBar) before scrolling internally. */
+/* Textarea on top, toolbar on its own row below — keeps the six icon
+   groups (camera/picker/context/mic/admin/send) reachable at panel widths
+   down to ~320px without overflowing past the panel edge. */
 .pw-composer-row {
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .pw-composer-row .pw-textarea {
-  flex: 1 1 auto;
-  min-width: 0;
+  width: 100%;
   min-height: 36px;
   max-height: 140px;
   padding: 8px 10px;
-  rows: 1;
 }
 
 /* Strip of dismissable attachment chips (console capture, future bits) that
@@ -2317,171 +2341,25 @@ export const WIDGET_CSS = `
   color: #e2e8f0;
 }
 
-/* Hidden compatibility shims — old code paths still call
-   getElementById('pw-capture-btn')/('pw-mic-btn') to flip recording state.
-   We keep tiny zero-size buttons in the DOM so those queries succeed
-   without resurrecting the visible icon-row. */
-.pw-capture-btn-hidden,
-.pw-mic-btn-hidden {
-  position: absolute !important;
-  width: 0 !important;
-  height: 0 !important;
-  padding: 0 !important;
-  border: 0 !important;
-  opacity: 0 !important;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-/* Left-arrow expand toggle. Mirrors .interrupt-bar-expand-toggle in admin
-   InterruptBar — the icon rotates 90° when the menu opens. */
-.pw-expand-group {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.pw-expand-toggle {
-  flex-shrink: 0;
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  border: none;
-  background: #334155;
-  color: #94a3b8;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  transition: background 0.15s, color 0.15s, transform 0.15s;
-}
-
-.pw-expand-toggle:hover {
-  background: #475569;
-  color: #e2e8f0;
-}
-
-.pw-expand-toggle svg {
-  width: 14px;
-  height: 14px;
-  fill: currentColor;
-  transition: transform 0.15s;
-}
-
-.pw-expand-toggle.pw-expand-toggle-open svg {
-  transform: rotate(-90deg);
-}
-
-/* The menu sits above the toggle and floats over panel content. Uses an
-   opaque background so it never bleeds the chat thread through.
-   (See "Floating overlays must be opaque" rule.) */
-.pw-expand-menu {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  right: 0;
-  background: #1e293b;
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-  z-index: 100;
-  min-width: 220px;
-  padding: 4px 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.pw-expand-section {
-  padding: 4px 0;
-}
-
-.pw-expand-section + .pw-expand-section {
-  border-top: 1px solid rgba(255,255,255,0.06);
-}
-
-.pw-expand-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* Capture-now button at the top of the context dropdown. */
+.pw-context-menu-btn {
   width: 100%;
-  padding: 8px 12px;
   border: none;
   background: none;
-  color: #e2e8f0;
-  cursor: pointer;
-  font-size: 12px;
-  font-family: inherit;
   text-align: left;
+  font-family: inherit;
+  font-size: 12px;
+  color: #e2e8f0;
 }
 
-.pw-expand-item:hover:not(:disabled) {
-  background: rgba(29, 155, 240, 0.15);
+.pw-context-menu-btn:hover {
+  background: rgba(29, 155, 240, 0.2);
 }
 
-.pw-expand-item:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.pw-expand-item svg {
-  flex-shrink: 0;
-}
-
-.pw-expand-item-recording {
-  color: #f87171;
-}
-
-.pw-expand-opts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  padding: 0 12px 6px 32px;
-}
-
-.pw-expand-opt {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: #94a3b8;
-  cursor: pointer;
-  user-select: none;
-}
-
-.pw-expand-opt input[type="checkbox"] {
-  appearance: none;
-  -webkit-appearance: none;
-  width: 12px;
-  height: 12px;
-  border: 1px solid #475569;
-  border-radius: 3px;
-  background: #0f172a;
-  cursor: pointer;
-  position: relative;
-  flex-shrink: 0;
-  margin: 0;
-}
-
-.pw-expand-opt input[type="checkbox"]:checked {
-  background: #1d9bf0;
-  border-color: #1d9bf0;
-}
-
-.pw-expand-opt input[type="checkbox"]:checked::after {
-  content: '';
-  position: absolute;
-  top: 0px;
-  left: 3px;
-  width: 4px;
-  height: 7px;
-  border: solid white;
-  border-width: 0 1.5px 1.5px 0;
-  transform: rotate(45deg);
-}
-
-.pw-expand-opt input[type="checkbox"]:disabled {
-  opacity: 0.5;
-  cursor: default;
+.pw-context-menu-divider {
+  height: 1px;
+  background: rgba(255,255,255,0.08);
+  margin: 4px 0;
 }
 
 `;

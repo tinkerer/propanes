@@ -12103,6 +12103,27 @@ body.pw-isolate {
   flex: 0 0 auto;
 }
 .cos-tree-tab-close:hover { opacity: 1; background: var(--pw-bg-active); }
+.cos-tree-tab-popout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0;
+  cursor: pointer;
+  flex: 0 0 auto;
+  color: var(--pw-secondary-text);
+  transition: opacity 0.12s ease;
+}
+/* Reveal the pop-out chip on hover/focus of the tab, or when the tab is
+   active. Keeps the bar visually quiet until the user reaches for it. */
+.cos-tree-tab:hover .cos-tree-tab-popout,
+.cos-tree-tab-active .cos-tree-tab-popout,
+.cos-tree-tab-popout:focus-visible { opacity: 0.65; }
+.cos-tree-tab-popout:hover { opacity: 1; background: var(--pw-bg-active); color: var(--pw-primary-text); }
 .cos-tree-leaf { position: relative; }
 /* Floating-companion split: non-floating sibling fills 100%, the floating leaf
    floats over it as an "companion drawer". See FloatingCompanionSplit in

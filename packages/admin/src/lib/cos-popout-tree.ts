@@ -38,6 +38,50 @@ const THREAD_DRAWER_WIDTH_MIN = 220;
 const THREAD_DRAWER_WIDTH_MAX = 1200;
 const THREAD_DRAWER_WIDTH_DEFAULT = 380;
 
+// --- Focus mode (per-tab pop-out into its own browser window) ---
+//
+// When a CoS tab is popped out via `?embed=cos&focus=<tabId>[&agentId&threadKey]`
+// the popped window must NOT share the parent's persisted popout-tree state —
+// the user just wants that one tab, full-bleed. Detect the URL params at
+// module load and expose them as window-local signals. Persistence effects
+// below gate themselves on `cosFocusTabId` so a focused window never writes
+// back to localStorage (which would clobber the parent's active-thread /
+// drawer layout).
+const focusParams: { focus: string; agentId: string | null; threadKey: string | null } | null = (() => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const sp = new URLSearchParams(window.location.search);
+    const focus = sp.get('focus');
+    if (!focus) return null;
+    return {
+      focus,
+      agentId: sp.get('agentId'),
+      threadKey: sp.get('threadKey'),
+    };
+  } catch { return null; }
+})();
+
+export const cosFocusTabId = signal<string | null>(focusParams?.focus ?? null);
+export function isCosFocusMode(): boolean { return cosFocusTabId.value !== null; }
+
+/**
+ * Synthetic single-leaf tree for focus mode: the popout window renders the
+ * focused tab fullscreen with a minimal close-only tab strip, rather than the
+ * inherited multi-pane layout from localStorage.
+ */
+export function buildCosFocusTree(tabId: string): LayoutTree {
+  return {
+    root: {
+      type: 'leaf',
+      id: 'cos-focus-leaf',
+      panelType: 'tabs',
+      tabs: [tabId],
+      activeTabId: tabId,
+    },
+    focusedLeafId: 'cos-focus-leaf',
+  };
+}
+
 function loadThreadDrawerWidth(): number {
   try {
     if (typeof localStorage === 'undefined') return THREAD_DRAWER_WIDTH_DEFAULT;
@@ -170,6 +214,9 @@ function stripLegacyTabs(tree: LayoutTree) {
 }
 
 function persist() {
+  // In focus mode the tree is window-local; the parent window owns the
+  // canonical persisted layout.
+  if (focusParams) return;
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(cosPopoutTree.value));
@@ -777,10 +824,20 @@ function loadActiveThread(): CosActiveThread | null {
   } catch { return null; }
 }
 
-export const cosActiveThread = signal<CosActiveThread | null>(loadActiveThread());
+export const cosActiveThread = signal<CosActiveThread | null>(
+  // In a focused popout window the URL is authoritative — the user's parent
+  // window may be sitting on a different active thread that we don't want to
+  // override. Seed from URL params when present.
+  focusParams && focusParams.agentId && focusParams.threadKey
+    ? { agentId: focusParams.agentId, threadKey: focusParams.threadKey }
+    : loadActiveThread(),
+);
 
 effect(() => {
   const v = cosActiveThread.value;
+  // Don't write back to localStorage in a focused popout window — it'd clobber
+  // the parent window's active-thread selection.
+  if (cosFocusTabId.value) return;
   try {
     if (typeof localStorage === 'undefined') return;
     if (v) localStorage.setItem(ACTIVE_THREAD_STORAGE_KEY, JSON.stringify(v));
@@ -790,9 +847,12 @@ effect(() => {
 
 // Close any open artifact panes when the active thread changes. Artifacts are
 // scoped to a thread; carrying them across switches confuses the operator.
+// Skip in focus mode — we render a synthetic single-tab tree, not the
+// persisted one, so there are no artifact panes to clean up here.
 let prevActiveThreadKey: string | null | undefined = undefined;
 effect(() => {
   const v = cosActiveThread.value;
+  if (cosFocusTabId.value) return;
   const key = v ? `${v.agentId}::${v.threadKey}` : null;
   if (prevActiveThreadKey !== undefined && prevActiveThreadKey !== key) {
     cosCloseAllArtifactTabs();

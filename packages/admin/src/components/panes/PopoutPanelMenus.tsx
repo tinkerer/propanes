@@ -12,6 +12,7 @@ import {
   exitedSessions,
   allSessions,
 } from '../../lib/sessions.js';
+import { findPanelForSession } from '../../lib/popout-state.js';
 import { showHotkeyHints } from '../../lib/settings.js';
 import {
   popoutStatusMenuOpen,
@@ -31,6 +32,7 @@ export function PopoutStatusMenu() {
   const menuSid = statusMenu.sessionId;
   const menuSess = sessions.find((s: any) => s.id === menuSid);
   const menuExited = exited.has(menuSid);
+  const menuPanel = findPanelForSession(menuSid);
   return (
     <div
       class="status-dot-menu"
@@ -70,6 +72,15 @@ export function PopoutStatusMenu() {
       <button onClick={() => { closeTab(menuSid); popoutStatusMenuOpen.value = null; }}>
         Close tab {showHotkeyHints.value && <kbd>{'\u2303\u21E7'}W</kbd>}
       </button>
+      {menuPanel && menuPanel.sessionIds.length > 1 && (
+        <button onClick={() => {
+          popoutStatusMenuOpen.value = null;
+          const others = menuPanel.sessionIds.filter((id) => id !== menuSid);
+          for (const sid of others) closeTab(sid);
+        }}>
+          Close other tabs
+        </button>
+      )}
       <div style="display:flex;gap:4px;padding:4px 8px;align-items:center">
         {SESSION_COLOR_PRESETS.map((c) => (
           <span

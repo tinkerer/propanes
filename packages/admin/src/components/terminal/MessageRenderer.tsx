@@ -965,8 +965,7 @@ function AssistantMessage({ message }: { message: ParsedMessage }) {
   const longChars = narrow ? 360 : 1200;
   const longLines = narrow ? 6 : 20;
   const long = content.length > longChars || lines.length > longLines;
-  const [expanded, setExpanded] = useState(!long);
-  useEffect(() => { if (!long) setExpanded(true); }, [long]);
+  const [expanded, setExpanded] = useState(true);
 
   if (!long) {
     return (
@@ -983,7 +982,7 @@ function AssistantMessage({ message }: { message: ParsedMessage }) {
         {expanded ? renderMarkdown(content) : renderMarkdown(preview + '\n\n…')}
       </div>
       <button class="sm-msg-toggle" onClick={() => setExpanded((e) => !e)}>
-        {expanded ? '▾ Show less' : `▸ Show full message (${lines.length} lines)`}
+        {expanded ? `▾ Show less (${lines.length} lines)` : `▸ Show full message (${lines.length} lines)`}
       </button>
     </div>
   );
@@ -1031,8 +1030,7 @@ function UserInputMessage({ message }: { message: ParsedMessage }) {
   const longChars = narrow ? 280 : 800;
   const longLines = narrow ? 5 : 14;
   const long = content.length > longChars || lines.length > longLines;
-  const [expanded, setExpanded] = useState(!long);
-  useEffect(() => { if (!long) setExpanded(true); }, [long]);
+  const [expanded, setExpanded] = useState(true);
 
   if (!long) {
     return (
@@ -1049,7 +1047,7 @@ function UserInputMessage({ message }: { message: ParsedMessage }) {
         {expanded ? content : previewLines.join('\n') + (lines.length > previewLines.length ? ' …' : '')}
       </div>
       <button class="sm-msg-toggle" onClick={() => setExpanded((e) => !e)}>
-        {expanded ? '▾ Show less' : `▸ Show full prompt (${lines.length} lines)`}
+        {expanded ? `▾ Show less (${lines.length} lines)` : `▸ Show full prompt (${lines.length} lines)`}
       </button>
     </div>
   );

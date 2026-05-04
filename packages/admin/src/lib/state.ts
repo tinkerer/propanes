@@ -30,6 +30,12 @@ if (isolatedComponent.value) {
 }
 
 export const isAuthenticated = signal(!!localStorage.getItem('pw-admin-token'));
+// api.ts dispatches `pw-admin-401` on any 401 response. Flip the signal here
+// so the App shell re-renders LoginPage immediately (no manual refresh).
+window.addEventListener('pw-admin-401', () => {
+  isAuthenticated.value = false;
+  localStorage.removeItem('pw-selected-app-id');
+});
 export const currentRoute = signal(window.location.hash.slice(1) || '/');
 bindRouteSignal(currentRoute);
 
@@ -138,6 +144,16 @@ export async function loadApplications() {
   try {
     const apps = await timed('apps:list', () => api.getApplications());
     applications.value = apps;
+
+    // The widget passes its public apiKey (pw_…) as the appId when it opens
+    // an embedded admin overlay (Settings, Feedback, etc.). Translate that
+    // to the real app id once we've loaded applications, so AppSettingsPage
+    // and friends can find the matching row instead of rendering blank.
+    const cur = selectedAppId.value;
+    if (cur && cur.startsWith('pw_')) {
+      const match = apps.find((a: any) => a.apiKey === cur);
+      if (match) selectedAppId.value = match.id;
+    }
 
     // Auto-select first app if none selected
     if (!selectedAppId.value && apps.length > 0) {

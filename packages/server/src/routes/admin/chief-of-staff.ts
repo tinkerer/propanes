@@ -672,7 +672,15 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
       agentId: agentIdForCallbacks,
       startSeq,
       onAssistantText: (finalText, toolCallsById, toolOrder, images) => {
-        if (!finalText) return;
+        // Always insert an assistant row when the consumer finishes — even
+        // if `finalText` is empty. The row's mere existence is what unsticks
+        // the optimistic dedupe in CosThreadPanel (`assistantSettled`) and
+        // the followup dispatcher's `stillStreaming` gate. Without a row,
+        // the UI can't tell "turn finished with nothing" apart from "turn
+        // never finished" — which leaves the operator's queued followups
+        // permanently parked. Empty text + tools/images is a valid state
+        // (tool-only turn); empty text + nothing is the recovered/dropped
+        // turn case (PTY width fragmentation, WS close before result, etc).
         const now2 = Date.now();
         const toolCallsArr = toolOrder.map((id) => toolCallsById.get(id)).filter(Boolean);
         const attachmentsJson = images.length > 0 ? JSON.stringify({ images }) : null;

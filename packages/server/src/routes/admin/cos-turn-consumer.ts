@@ -125,6 +125,14 @@ export function runCosTurnConsumer(params: {
     // drops the assistant reply and surfaces as "No response from Claude"
     // on the frontend even though the turn completed normally. Strip any
     // ANSI sequences + CRs before parsing.
+    //
+    // KNOWN ISSUE (followup): tmux wraps stream-json at the PTY's `cols`
+    // (default 120), so long assistant replies arrive split across multiple
+    // hard-wrapped lines that each fail JSON.parse. The empty-finalText
+    // path now persists a recovered row downstream, but the actual content
+    // is still lost. The proper fix is to widen / disable wrap in the
+    // session-service PTY buffering layer. See memory note
+    // `project_cos_long_reply_drop.md` for the investigation trail.
     const ANSI_RE = /\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x20-\x2f]*[\x30-\x7e])/g;
     const processJsonLine = (line: string, seq: number): boolean => {
       const cleaned = line.replace(ANSI_RE, '').replace(/\r/g, '').trim();
@@ -301,7 +309,10 @@ export async function recoverInFlightTurns(): Promise<void> {
       agentId: agentIdForCallbacks,
       startSeq: thread.turnStartSeq,
       onAssistantText: (finalText, toolCallsById, toolOrder, images) => {
-        if (!finalText) return;
+        // Always insert — see chief-of-staff.ts onAssistantText for rationale.
+        // Empty-text rows are how we signal "turn finished" to the UI when
+        // the parser dropped the assistant content (PTY width fragmentation,
+        // tool-only turn, WS close before result).
         const now2 = Date.now();
         const toolCallsArr = toolOrder.map((id) => toolCallsById.get(id)).filter(Boolean);
         const attachmentsJson = images.length > 0 ? JSON.stringify({ images }) : null;

@@ -17,6 +17,11 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { ...opts, headers });
   if (res.status === 401) {
     localStorage.removeItem('pw-admin-token');
+    // state.ts listens for this and flips the isAuthenticated signal so the
+    // shell re-renders LoginPage immediately, instead of leaving a stale
+    // authenticated view (e.g. a half-loaded terminal) on screen until the
+    // user manually refreshes. Custom event avoids a circular import.
+    window.dispatchEvent(new CustomEvent('pw-admin-401'));
     window.location.hash = '#/login';
     throw new Error('Unauthorized');
   }
