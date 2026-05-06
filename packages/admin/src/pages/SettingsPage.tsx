@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'preact/hooks';
-import { theme, setTheme, shortcutsEnabled, tooltipsEnabled, showTabs, arrowTabSwitching, multiDigitTabs, autoNavigateToFeedback, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoOpenChildCompanions, popoutMode, localBridgeUrl, sshConfigs, type Theme, type PopoutMode, type SshConfig } from '../lib/settings.js';
+import { theme, setTheme, shortcutsEnabled, tooltipsEnabled, showTabs, arrowTabSwitching, multiDigitTabs, autoNavigateToFeedback, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoOpenChildCompanions, inlineElementChipsEnabled, popoutMode, localBridgeUrl, sshConfigs, type Theme, type PopoutMode, type SshConfig } from '../lib/settings.js';
 import { perfOverlayEnabled, perfServerEnabled } from '../lib/perf.js';
 import { getAllShortcuts } from '../lib/shortcuts.js';
 import { Guide, GUIDES, resetGuide } from '../components/ui/Guide.js';
@@ -506,6 +506,24 @@ export function SettingsPage() {
             Save and restore panel arrangements (tab layout, docked panels, sizes).
           </div>
           <PanelPresetManager />
+        </div>
+
+        <div class="settings-section">
+          <h3>Chief of Staff Composer</h3>
+          <div class="settings-toggle-row">
+            <div>
+              <div class="settings-toggle-label">Inline element chips (experimental)</div>
+              <div class="settings-toggle-desc">Picked DOM elements appear as inline chips inside the composer text instead of in a separate strip above. Click a chip to expand selector/rect/classes/text.</div>
+            </div>
+            <label class="toggle-switch">
+              <input
+                type="checkbox"
+                checked={inlineElementChipsEnabled.value}
+                onChange={(e) => (inlineElementChipsEnabled.value = (e.target as HTMLInputElement).checked)}
+              />
+              <span class="toggle-slider" />
+            </label>
+          </div>
         </div>
 
         <div class="settings-section">

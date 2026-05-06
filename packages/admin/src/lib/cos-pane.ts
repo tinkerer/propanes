@@ -180,6 +180,38 @@ export function isCosInPane(): boolean {
   return !!findLeafWithTab(COS_PANE_TAB_ID);
 }
 
+/**
+ * Dock the CoS surface into a specific leaf in the layout tree, used by the
+ * hamburger drag-to-dock gesture. `zone === 'tab'` joins the leaf as another
+ * tab; `'h-split'` / `'v-split'` split off a sibling leaf hosting cos:main.
+ * If a stale cos:main tab exists elsewhere, it's removed first so the move
+ * looks like the panel "snapped" into place.
+ */
+export function dockCosToLeaf(leafId: string, zone: 'tab' | 'h-split' | 'v-split'): void {
+  if (isMobile.value) {
+    setChiefOfStaffOpen(true);
+    return;
+  }
+  const target = findLeaf(layoutTree.value.root, leafId);
+  if (!target) return;
+
+  const stale = findLeafWithTab(COS_PANE_TAB_ID);
+  if (stale) removeTabFromLeaf(stale.id, COS_PANE_TAB_ID);
+
+  if (zone === 'tab') {
+    addTabToLeaf(leafId, COS_PANE_TAB_ID, true);
+    setFocusedLeaf(leafId);
+  } else {
+    const direction = zone === 'h-split' ? 'horizontal' : 'vertical';
+    const newLeaf = splitLeaf(leafId, direction, 'second', [COS_PANE_TAB_ID], 0.5);
+    if (newLeaf) setFocusedLeaf(newLeaf.id);
+  }
+
+  chiefOfStaffOpen.value = false;
+  updatePanel(COS_PANEL_ID, { visible: false });
+  persistPopoutState();
+}
+
 export function closeCosPane(): void {
   // On mobile the pane-mode surface is the popout (see openCosInPane), so the
   // "close pane" toggle means "hide the popout." Still sweep any stale pane

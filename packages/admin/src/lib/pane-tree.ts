@@ -40,6 +40,11 @@ export interface LeafNode {
   // ("companion drawer") on its parent split's edge instead of a flex sibling.
   // The non-floating sibling fills 100% — the drawer floats over it.
   floating?: boolean;
+  // CoS popout only: when both `floating` and `external` are true, the drawer
+  // renders as a fixed-position panel anchored *outside* the popout (extending
+  // into page space) rather than overlaying the popout's content. Set by the
+  // "Dock as Drawer → Edge" path that drops on the popout's outer resizer.
+  external?: boolean;
 }
 
 export type PaneNode = SplitNode | LeafNode;
