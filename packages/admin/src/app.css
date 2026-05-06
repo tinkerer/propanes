@@ -12203,10 +12203,144 @@ body.pw-isolate {
   z-index: 6;
 }
 .cos-tree-floating-grab:hover { background: rgba(96, 165, 250, 0.25); }
-.cos-tree-floating-grab-left   { left: 0;  top: 0; bottom: 0; width: 5px;  cursor: ew-resize; }
-.cos-tree-floating-grab-right  { right: 0; top: 0; bottom: 0; width: 5px;  cursor: ew-resize; }
-.cos-tree-floating-grab-top    { top: 0;   left: 0; right: 0; height: 5px; cursor: ns-resize; }
-.cos-tree-floating-grab-bottom { bottom: 0; left: 0; right: 0; height: 5px; cursor: ns-resize; }
+.cos-tree-floating-grab-left   { left: 0;  top: 0; bottom: 0; width: 14px; cursor: ew-resize; }
+.cos-tree-floating-grab-right  { right: 0; top: 0; bottom: 0; width: 14px; cursor: ew-resize; }
+.cos-tree-floating-grab-top    { top: 0;   left: 0; right: 0; height: 14px; cursor: ns-resize; }
+.cos-tree-floating-grab-bottom { bottom: 0; left: 0; right: 0; height: 14px; cursor: ns-resize; }
+
+/* External floating drawer — portaled to body, fixed-positioned against the
+   cos popout's bounding rect. The handle gets a wider grip + a hamburger
+   popup button anchored at center. */
+.cos-tree-floating-overlay-external {
+  border-radius: 8px;
+  border: 2px solid #1d9bf0;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  background: var(--pw-terminal-bg, #0b1220);
+  flex-direction: column;
+  overflow: hidden;
+  z-index: 1000;
+}
+.cos-tree-floating-overlay-external .cos-tree-floating-grab {
+  background: rgba(29, 155, 240, 0.15);
+}
+.cos-tree-floating-overlay-external .cos-tree-floating-grab:hover {
+  background: rgba(29, 155, 240, 0.35);
+}
+/* The class suffix names the *grip side* (the edge with the resize strip),
+   which is the inner edge of the drawer (the one facing the popout). Drop
+   the border there and round the opposite (outer) corners so the drawer
+   reads as docked-and-extending-out. */
+.cos-tree-floating-overlay-external.cos-tree-floating-overlay-left   { border-left: none;  border-radius: 0 8px 8px 0; }
+.cos-tree-floating-overlay-external.cos-tree-floating-overlay-right  { border-right: none; border-radius: 8px 0 0 8px; }
+.cos-tree-floating-overlay-external.cos-tree-floating-overlay-top    { border-top: none;    border-radius: 0 0 8px 8px; }
+.cos-tree-floating-overlay-external.cos-tree-floating-overlay-bottom { border-bottom: none; border-radius: 8px 8px 0 0; }
+
+/* Hamburger-popup button at the center of the resize grip. The grip itself
+   stays draggable for resize; the button stops the drag on its own
+   mousedown via the JS handler (closest-button check). */
+.cos-tree-floating-handle-btn {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1e3a8a;
+  border: 1px solid #1d9bf0;
+  border-radius: 4px;
+  color: #93c5fd;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  z-index: 7;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+}
+.cos-tree-floating-handle-btn:hover {
+  background: #1e40af;
+  border-color: #60a5fa;
+  color: #fff;
+}
+.cos-tree-floating-grab-left   .cos-tree-floating-handle-btn,
+.cos-tree-floating-grab-right  .cos-tree-floating-handle-btn { top: 50%; left: 50%; transform: translate(-50%, -50%); }
+.cos-tree-floating-grab-top    .cos-tree-floating-handle-btn,
+.cos-tree-floating-grab-bottom .cos-tree-floating-handle-btn { left: 50%; top: 50%; transform: translate(-50%, -50%); }
+/* Widen the grip a touch when it carries the popup button so the button
+   isn't visually clipped. The hamburger sits at the center, the rest of
+   the strip is the resize affordance + click-to-hide hot zone. */
+.cos-tree-floating-grab-left,
+.cos-tree-floating-grab-right { width: 18px; }
+.cos-tree-floating-grab-top,
+.cos-tree-floating-grab-bottom { height: 18px; }
+.cos-tree-floating-overlay-external .cos-tree-floating-grab-left,
+.cos-tree-floating-overlay-external .cos-tree-floating-grab-right { width: 22px; }
+.cos-tree-floating-overlay-external .cos-tree-floating-grab-top,
+.cos-tree-floating-overlay-external .cos-tree-floating-grab-bottom { height: 22px; }
+
+/* Unified DrawerPullHandle — the line + hamburger combo shared by both the
+   pane-mode companion drawer and the cos popout's floating drawer. The line
+   is a thin colored bar along the host's external edge; the hamburger is a
+   small button slightly inset toward the host interior. */
+.drawer-pull-line {
+  background: rgba(29, 155, 240, 0.6);
+  border-radius: 2px;
+  transition: background 120ms;
+}
+.drawer-pull-line:hover {
+  background: #1d9bf0;
+}
+.drawer-pull-line-collapsed {
+  background: rgba(29, 155, 240, 0.4);
+}
+.drawer-pull-hamburger {
+  background: #1e3a8a;
+  border: 1px solid #1d9bf0;
+  border-radius: 4px;
+  color: #93c5fd;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  user-select: none;
+}
+.drawer-pull-hamburger:hover {
+  background: #1e40af;
+  border-color: #60a5fa;
+  color: #fff;
+}
+.drawer-pull-hamburger:active {
+  cursor: grabbing;
+}
+
+/* Hidden drawer — the overlay shrinks to handle width and shows only the
+   resize strip + hamburger button. Click the strip to bring the drawer
+   back. The reduced footprint stays anchored to the same edge. */
+.cos-tree-floating-overlay-collapsed {
+  background: rgba(15, 23, 42, 0.92);
+  cursor: pointer;
+}
+.cos-tree-floating-overlay-external.cos-tree-floating-overlay-collapsed {
+  border-radius: 8px;
+}
+
+/* Popup-menu items used by the drawer hamburger menu (and any other place
+   that uses the shared PopupMenu shell). */
+.popup-menu-separator {
+  height: 1px;
+  background: var(--pw-border, #334155);
+  margin: 4px 0;
+}
+.popup-menu-item-danger {
+  color: #f87171;
+}
+.popup-menu-item-danger:hover {
+  background: rgba(248, 113, 113, 0.12);
+  color: #fca5a5;
+}
 .cos-tree-leaf.drop-target {
   outline: 2px solid var(--pw-primary, #4a90e2);
   outline-offset: -2px;
@@ -12993,6 +13127,166 @@ body.pw-isolate {
   flex: 0 0 auto;
   background: rgba(0, 0, 0, 0.25);
 }
+
+/* Inner-edge popout-style tab — mirrors .popout-grab-tab. Rendered as a
+   fixed-position sibling of the drawer (drawer wraps content in
+   `overflow: hidden`, so a child tab would be clipped). Geometry comes from
+   inline styles set by CosDrawerHandle. The attached-side border is dropped
+   so the tab reads as a pulled-out edge of the drawer. */
+.cos-drawer-tab {
+  background: #1e3a8a;
+  border: 2px solid #1d9bf0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  cursor: ew-resize;
+  user-select: none;
+  box-sizing: border-box;
+}
+.cos-drawer-tab:hover {
+  background: #1e40af;
+  border-color: #60a5fa;
+}
+.cos-drawer-tab-left {
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+}
+.cos-drawer-tab-right {
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+}
+/* Embedded tab — sits *inside* the drawer body in split mode. Drop the
+   shadow + outer border-radius so it reads as a flush separator rather than
+   a popped-out tab. */
+.cos-drawer-tab.cos-drawer-tab-embedded {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+.cos-drawer-tab.cos-drawer-tab-embedded.cos-drawer-tab-left {
+  border-right: 1px solid #1d9bf0;
+}
+.cos-drawer-tab.cos-drawer-tab-embedded.cos-drawer-tab-right {
+  border-left: 1px solid #1d9bf0;
+}
+.cos-drawer-tab-grip {
+  color: #1d9bf0;
+  opacity: 0.7;
+  font-size: 14px;
+  line-height: 1;
+  pointer-events: none;
+}
+.cos-drawer-tab-btn {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #93c5fd;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  border-radius: 3px;
+  padding: 0;
+}
+.cos-drawer-tab-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+/* When the drawer overlays *inside* the pane (overlay or split mode),
+   restore the side border that the attached-to-pane variants drop, so the
+   drawer reads as a standalone floating surface instead of a flush
+   extension. */
+.cos-drawer-inside.cos-thread-side-left,
+.cos-drawer-inside.cos-learnings-side-left,
+.cos-drawer-inside.cos-artifact-side-left {
+  border-right: 2px solid #475569;
+  border-radius: 8px;
+}
+.cos-drawer-inside.cos-thread-side-right,
+.cos-drawer-inside.cos-learnings-side-right,
+.cos-drawer-inside.cos-artifact-side-right {
+  border-left: 2px solid #475569;
+  border-radius: 8px;
+}
+
+/* Split mode: cos-pane content gets horizontal padding equal to the slot
+   reserved by each split drawer, so chat content doesn't render under the
+   drawer overlay. Padding is set inline via --cos-split-pad-{left,right}. */
+.cos-pane.cos-pane-split {
+  padding-left: var(--cos-split-pad-left, 0px);
+  padding-right: var(--cos-split-pad-right, 0px);
+  box-sizing: border-box;
+}
+
+/* Artifact drawer — same surface look as thread/learnings, with a tiny
+   close-button strip at the top. */
+.cos-artifact-side {
+  color: #e2e8f0;
+  --pw-text-primary: #e2e8f0;
+  --pw-text-secondary: #94a3b8;
+  --pw-text-muted: #64748b;
+  --pw-bg-body: transparent;
+  --pw-bg-surface: rgba(255, 255, 255, 0.04);
+  --pw-bg-raised: rgba(255, 255, 255, 0.06);
+  --pw-bg-sunken: rgba(0, 0, 0, 0.25);
+  --pw-bg-inset: rgba(0, 0, 0, 0.2);
+  --pw-bg-hover: rgba(255, 255, 255, 0.06);
+  --pw-border: #334155;
+  --pw-border-light: #1e293b;
+  background: var(--pw-terminal-bg, #0b1220);
+  border: 2px solid #475569;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  pointer-events: auto;
+}
+.cos-artifact-side-left {
+  border-radius: 8px 0 0 8px;
+  border-right: none;
+}
+.cos-artifact-side-right {
+  border-radius: 0 8px 8px 0;
+  border-left: none;
+}
+.cos-artifact-drawer-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--pw-border);
+  flex: 0 0 auto;
+  background: rgba(0, 0, 0, 0.25);
+}
+.cos-artifact-drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* N/S vertical-resize strips — styled like .popout-resize-n / -s. Hover
+   tints to give the operator a visible affordance. */
+.cos-drawer-resize-n,
+.cos-drawer-resize-s {
+  background: transparent;
+  transition: background 120ms;
+}
+.cos-drawer-resize-n:hover,
+.cos-drawer-resize-s:hover {
+  background: rgba(29, 155, 240, 0.4);
+}
+
+/* Mode-cycle button highlight by current mode so the operator can tell at a
+   glance what state the drawer is in. */
+.cos-drawer-tab-outside .cos-drawer-tab-btn:first-child { color: #93c5fd; }
+.cos-drawer-tab-overlay .cos-drawer-tab-btn:first-child { color: #fde68a; }
+.cos-drawer-tab-split   .cos-drawer-tab-btn:first-child { color: #6ee7b7; }
 .cos-learnings-panel {
   background: var(--pw-bg-surface);
   padding: 8px 12px 12px 12px;
@@ -15033,6 +15327,143 @@ body.pw-mobile .cos-thread-reply-btn {
 .cos-element-chip .cos-attach-remove:hover {
   background: rgba(220, 53, 69, 0.15);
   color: #dc3545;
+}
+
+/* ── Inline-element-chip composer (experimental) ─────────────────────
+   Mirrors `.cos-input` sizing so the contenteditable shell looks the
+   same as the textarea it replaces. Chips are rendered as
+   contenteditable=false inline-flex spans inside the text flow. */
+.cos-inline-editor {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 60px;
+  max-height: 180px;
+  padding: 8px 10px;
+  border: 1px solid var(--pw-terminal-border);
+  border-radius: 6px;
+  background: var(--pw-bg-inset);
+  color: var(--pw-text-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-y: auto;
+  outline: none;
+  transition: border-color 0.15s;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.cos-panel-expanded .cos-inline-editor { max-height: 320px; }
+.cos-inline-editor:focus { border-color: var(--pw-primary); }
+.cos-inline-editor[aria-disabled="true"] {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.cos-inline-editor[data-empty]::before {
+  content: attr(data-placeholder);
+  color: var(--pw-text-faint);
+  pointer-events: none;
+}
+
+.cos-inline-el-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 4px 1px 6px;
+  margin: 0 2px;
+  border: 1px solid var(--pw-border);
+  border-radius: 4px;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--pw-text-primary);
+  font-size: 11px;
+  line-height: 1.2;
+  vertical-align: baseline;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.cos-inline-el-chip-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.cos-inline-el-chip-header svg {
+  flex: 0 0 auto;
+  color: var(--pw-primary);
+}
+.cos-inline-el-chip-header code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--pw-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+.cos-inline-el-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin-left: 2px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--pw-text-secondary, var(--pw-text-primary));
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.cos-inline-el-chip-remove:hover {
+  background: rgba(220, 53, 69, 0.15);
+  color: #dc3545;
+}
+.cos-inline-el-chip-open {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 6px;
+  background: rgba(59, 130, 246, 0.18);
+  align-items: flex-start;
+}
+.cos-inline-el-chip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px 6px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 3px;
+  font-size: 11px;
+}
+.cos-inline-el-chip-row {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 6px;
+  align-items: baseline;
+}
+.cos-inline-el-chip-label {
+  color: var(--pw-text-faint);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.cos-inline-el-chip-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--pw-text-primary);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+.cos-inline-el-chip-value-multiline {
+  max-height: 80px;
+  overflow-y: auto;
+  display: block;
 }
 
 /* ── Inline attachment previews inside CoS message rows ────────────── */

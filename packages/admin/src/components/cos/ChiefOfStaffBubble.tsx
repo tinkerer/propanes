@@ -139,7 +139,17 @@ import { CosThreadRail, type RailStatus } from './CosThreadRail.js';
 import { CosComposer, type CosComposerHandle } from './CosComposer.js';
 import { CosTabList } from './CosTabList.js';
 import { CosResizeHandles } from './CosResizeHandles.js';
-import { CosLearningsDrawer, CosThreadDrawer, type CosDrawerStyle } from './CosBubbleDrawers.js';
+import {
+  CosLearningsDrawer,
+  CosThreadDrawer,
+  CosArtifactDrawer,
+  MIN_DRAWER_WIDTH,
+  MAX_DRAWER_WIDTH,
+  MIN_DRAWER_HEIGHT,
+  TAB_WIDTH,
+  type CosDrawerStyle,
+  type DrawerMode,
+} from './CosBubbleDrawers.js';
 import { CosBubbleWindowControls } from './CosBubbleHeader.js';
 
 marked.setOptions({ gfm: true, breaks: false });
@@ -283,7 +293,244 @@ export function ChiefOfStaffBubble({
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-learnings-side') : null;
     return v === 'right' ? 'right' : 'left';
   });
+  const [threadSide, setThreadSide] = useState<'left' | 'right'>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-thread-side') : null;
+    return v === 'left' ? 'left' : 'right';
+  });
+  const [learningsMode, setLearningsMode] = useState<DrawerMode>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-learnings-mode') : null;
+    if (v === 'overlay' || v === 'split' || v === 'outside') return v;
+    // Migration: legacy `pw-cos-learnings-inside` boolean → 'overlay' if 1.
+    const legacy = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-learnings-inside') : null;
+    return legacy === '1' ? 'overlay' : 'outside';
+  });
+  const [threadMode, setThreadMode] = useState<DrawerMode>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-thread-mode') : null;
+    if (v === 'overlay' || v === 'split' || v === 'outside') return v;
+    const legacy = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-thread-inside') : null;
+    return legacy === '1' ? 'overlay' : 'outside';
+  });
+  const [learningsWidth, setLearningsWidth] = useState<number>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-learnings-width') : null;
+    const n = v ? parseInt(v, 10) : NaN;
+    return Number.isFinite(n) && n >= MIN_DRAWER_WIDTH && n <= MAX_DRAWER_WIDTH ? n : 340;
+  });
+  const [threadWidth, setThreadWidth] = useState<number>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-thread-width') : null;
+    const n = v ? parseInt(v, 10) : NaN;
+    return Number.isFinite(n) && n >= MIN_DRAWER_WIDTH && n <= MAX_DRAWER_WIDTH ? n : 380;
+  });
+  // Vertical state — `topOffset` is delta from shellRect.top (negative pushes
+  // drawer above the pane); `heightOverride` is an explicit pixel height (null
+  // means "match pane height"). Both flip to explicit values once the operator
+  // drags an N/S resize handle, after which the drawer no longer auto-tracks
+  // pane height changes.
+  const [learningsTopOffset, setLearningsTopOffset] = useState<number>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-learnings-top-offset') : null;
+    const n = v ? parseInt(v, 10) : 0;
+    return Number.isFinite(n) ? n : 0;
+  });
+  const [learningsHeightOverride, setLearningsHeightOverride] = useState<number | null>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-learnings-height') : null;
+    if (v == null) return null;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n >= MIN_DRAWER_HEIGHT ? n : null;
+  });
+  const [threadTopOffset, setThreadTopOffset] = useState<number>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-thread-top-offset') : null;
+    const n = v ? parseInt(v, 10) : 0;
+    return Number.isFinite(n) ? n : 0;
+  });
+  const [threadHeightOverride, setThreadHeightOverride] = useState<number | null>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-thread-height') : null;
+    if (v == null) return null;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n >= MIN_DRAWER_HEIGHT ? n : null;
+  });
+  // Artifact drawer — opens when handleArtifactPopout fires in pane mode
+  // instead of routing to the main-tree companion. Single-artifact slot:
+  // clicking another artifact swaps the active id; clicking the same artifact
+  // toggles the drawer closed.
+  const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null);
+  const [artifactSide, setArtifactSide] = useState<'left' | 'right'>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-artifact-side') : null;
+    return v === 'left' ? 'left' : 'right';
+  });
+  const [artifactMode, setArtifactMode] = useState<DrawerMode>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-artifact-mode') : null;
+    if (v === 'overlay' || v === 'split' || v === 'outside') return v;
+    return 'outside';
+  });
+  const [artifactWidth, setArtifactWidth] = useState<number>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-artifact-width') : null;
+    const n = v ? parseInt(v, 10) : NaN;
+    return Number.isFinite(n) && n >= MIN_DRAWER_WIDTH && n <= MAX_DRAWER_WIDTH ? n : 480;
+  });
+  const [artifactTopOffset, setArtifactTopOffset] = useState<number>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-artifact-top-offset') : null;
+    const n = v ? parseInt(v, 10) : 0;
+    return Number.isFinite(n) ? n : 0;
+  });
+  const [artifactHeightOverride, setArtifactHeightOverride] = useState<number | null>(() => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-artifact-height') : null;
+    if (v == null) return null;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) && n >= MIN_DRAWER_HEIGHT ? n : null;
+  });
+  // Hamburger slide position (0..1) along the cos pane's edge for each
+  // drawer. Persisted so the operator's preferred location sticks.
+  const readPos = (key: string, def: number) => {
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
+    const n = v ? parseFloat(v) : NaN;
+    return Number.isFinite(n) && n >= 0 && n <= 1 ? n : def;
+  };
+  const [learningsHamburgerPos, setLearningsHamburgerPosState] = useState<number>(() => readPos('pw-cos-learnings-ham-pos', 0.5));
+  const [threadHamburgerPos, setThreadHamburgerPosState] = useState<number>(() => readPos('pw-cos-thread-ham-pos', 0.5));
+  const [artifactHamburgerPos, setArtifactHamburgerPosState] = useState<number>(() => readPos('pw-cos-artifact-ham-pos', 0.5));
+  const setLearningsHamburgerPos = useCallback((pos: number) => {
+    setLearningsHamburgerPosState(pos);
+    try { localStorage.setItem('pw-cos-learnings-ham-pos', String(pos)); } catch { /* ignore */ }
+  }, []);
+  const setThreadHamburgerPos = useCallback((pos: number) => {
+    setThreadHamburgerPosState(pos);
+    try { localStorage.setItem('pw-cos-thread-ham-pos', String(pos)); } catch { /* ignore */ }
+  }, []);
+  const setArtifactHamburgerPos = useCallback((pos: number) => {
+    setArtifactHamburgerPosState(pos);
+    try { localStorage.setItem('pw-cos-artifact-ham-pos', String(pos)); } catch { /* ignore */ }
+  }, []);
+  // Live refs for the clamping math inside the resize callbacks. The
+  // mousemove handler runs at ~60Hz; reading from refs keeps the callback
+  // stable (no re-bind on every state change) and always uses fresh values.
+  const learningsSideRef = useRef(learningsSide);
+  const threadSideRef = useRef(threadSide);
+  const learningsModeRef = useRef(learningsMode);
+  const threadModeRef = useRef(threadMode);
+  useEffect(() => { learningsSideRef.current = learningsSide; }, [learningsSide]);
+  useEffect(() => { threadSideRef.current = threadSide; }, [threadSide]);
+  useEffect(() => { learningsModeRef.current = learningsMode; }, [learningsMode]);
+  useEffect(() => { threadModeRef.current = threadMode; }, [threadMode]);
+  useEffect(() => {
+    try { localStorage.setItem('pw-cos-thread-side', threadSide); } catch { /* ignore */ }
+  }, [threadSide]);
+  useEffect(() => {
+    try { localStorage.setItem('pw-cos-learnings-mode', learningsMode); } catch { /* ignore */ }
+  }, [learningsMode]);
+  useEffect(() => {
+    try { localStorage.setItem('pw-cos-thread-mode', threadMode); } catch { /* ignore */ }
+  }, [threadMode]);
+  useEffect(() => {
+    try { localStorage.setItem('pw-cos-learnings-width', String(learningsWidth)); } catch { /* ignore */ }
+  }, [learningsWidth]);
+  useEffect(() => {
+    try { localStorage.setItem('pw-cos-thread-width', String(threadWidth)); } catch { /* ignore */ }
+  }, [threadWidth]);
+  useEffect(() => {
+    try { localStorage.setItem('pw-cos-learnings-top-offset', String(learningsTopOffset)); } catch { /* ignore */ }
+  }, [learningsTopOffset]);
+  useEffect(() => {
+    try {
+      if (learningsHeightOverride == null) localStorage.removeItem('pw-cos-learnings-height');
+      else localStorage.setItem('pw-cos-learnings-height', String(learningsHeightOverride));
+    } catch { /* ignore */ }
+  }, [learningsHeightOverride]);
+  useEffect(() => {
+    try { localStorage.setItem('pw-cos-thread-top-offset', String(threadTopOffset)); } catch { /* ignore */ }
+  }, [threadTopOffset]);
+  useEffect(() => {
+    try {
+      if (threadHeightOverride == null) localStorage.removeItem('pw-cos-thread-height');
+      else localStorage.setItem('pw-cos-thread-height', String(threadHeightOverride));
+    } catch { /* ignore */ }
+  }, [threadHeightOverride]);
+  // Max width depends on side+mode+the live shellRect. Outside-mode is capped
+  // to the viewport gap on the chosen side so the drawer never tries to spill
+  // past the edge (used to trigger an auto-flip jump mid-drag). Overlay/split
+  // are capped to pane width.
+  function clampWidth(px: number, side: 'left' | 'right', mode: DrawerMode): number {
+    const rect = shellRectRef.current;
+    if (!rect) return Math.max(MIN_DRAWER_WIDTH, Math.min(MAX_DRAWER_WIDTH, px));
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
+    let max: number;
+    if (mode === 'outside') {
+      max = side === 'right'
+        ? Math.max(MIN_DRAWER_WIDTH, vw - (rect.left + rect.width))
+        : Math.max(MIN_DRAWER_WIDTH, rect.left);
+    } else {
+      max = Math.max(MIN_DRAWER_WIDTH, rect.width);
+    }
+    return Math.max(MIN_DRAWER_WIDTH, Math.min(Math.min(MAX_DRAWER_WIDTH, max), px));
+  }
+  const setLearningsWidthClamped = useCallback((px: number) => {
+    setLearningsWidth(clampWidth(px, learningsSideRef.current, learningsModeRef.current));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const setThreadWidthClamped = useCallback((px: number) => {
+    setThreadWidth(clampWidth(px, threadSideRef.current, threadModeRef.current));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Vertical resize: the handle passes us the absolute (top, height) it wants
+  // post-drag; we clamp to viewport bounds and convert back to (offset,
+  // override) for state. Mirrors the horizontal `setWidth` pattern.
+  const setLearningsBounds = useCallback((top: number, height: number) => {
+    const rect = shellRectRef.current;
+    if (!rect) return;
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
+    const h = Math.max(MIN_DRAWER_HEIGHT, Math.min(vh - 4, height));
+    const t = Math.max(0, Math.min(vh - h, top));
+    setLearningsTopOffset(t - rect.top);
+    setLearningsHeightOverride(h);
+  }, []);
+  const setThreadBounds = useCallback((top: number, height: number) => {
+    const rect = shellRectRef.current;
+    if (!rect) return;
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
+    const h = Math.max(MIN_DRAWER_HEIGHT, Math.min(vh - 4, height));
+    const t = Math.max(0, Math.min(vh - h, top));
+    setThreadTopOffset(t - rect.top);
+    setThreadHeightOverride(h);
+  }, []);
+  // Cycle mode: outside → overlay → split → outside.
+  const cycleMode = (m: DrawerMode): DrawerMode =>
+    m === 'outside' ? 'overlay' : m === 'overlay' ? 'split' : 'outside';
+  const artifactSideRef = useRef(artifactSide);
+  const artifactModeRef = useRef(artifactMode);
+  useEffect(() => { artifactSideRef.current = artifactSide; }, [artifactSide]);
+  useEffect(() => { artifactModeRef.current = artifactMode; }, [artifactMode]);
+  useEffect(() => {
+    try { localStorage.setItem('pw-cos-artifact-side', artifactSide); } catch { /* ignore */ }
+  }, [artifactSide]);
+  useEffect(() => {
+    try { localStorage.setItem('pw-cos-artifact-mode', artifactMode); } catch { /* ignore */ }
+  }, [artifactMode]);
+  useEffect(() => {
+    try { localStorage.setItem('pw-cos-artifact-width', String(artifactWidth)); } catch { /* ignore */ }
+  }, [artifactWidth]);
+  useEffect(() => {
+    try { localStorage.setItem('pw-cos-artifact-top-offset', String(artifactTopOffset)); } catch { /* ignore */ }
+  }, [artifactTopOffset]);
+  useEffect(() => {
+    try {
+      if (artifactHeightOverride == null) localStorage.removeItem('pw-cos-artifact-height');
+      else localStorage.setItem('pw-cos-artifact-height', String(artifactHeightOverride));
+    } catch { /* ignore */ }
+  }, [artifactHeightOverride]);
+  const setArtifactWidthClamped = useCallback((px: number) => {
+    setArtifactWidth(clampWidth(px, artifactSideRef.current, artifactModeRef.current));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const setArtifactBounds = useCallback((top: number, height: number) => {
+    const rect = shellRectRef.current;
+    if (!rect) return;
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
+    const h = Math.max(MIN_DRAWER_HEIGHT, Math.min(vh - 4, height));
+    const t = Math.max(0, Math.min(vh - h, top));
+    setArtifactTopOffset(t - rect.top);
+    setArtifactHeightOverride(h);
+  }, []);
   const [shellRect, setShellRect] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
+  const shellRectRef = useRef<{ top: number; left: number; width: number; height: number } | null>(null);
+  useEffect(() => { shellRectRef.current = shellRect; }, [shellRect]);
   const [inputHeight, setInputHeight] = useState<number | null>(null);
   useEffect(() => {
     try { localStorage.setItem('pw-cos-show-tools', showTools ? '1' : '0'); } catch { /* ignore */ }
@@ -296,7 +543,7 @@ export function ChiefOfStaffBubble({
     try { localStorage.setItem('pw-cos-learnings-side', learningsSide); } catch { /* ignore */ }
   }, [learningsSide]);
   useEffect(() => {
-    if (!showLearnings && !showThreadPanel) { setShellRect(null); return; }
+    if (!showLearnings && !showThreadPanel && !activeArtifactId) { setShellRect(null); return; }
     const el = wrapperRef.current;
     if (!el) return;
     let raf: number | null = null;
@@ -310,7 +557,7 @@ export function ChiefOfStaffBubble({
     const tick = () => { update(); raf = requestAnimationFrame(tick); };
     raf = requestAnimationFrame(tick);
     return () => { if (raf !== null) cancelAnimationFrame(raf); };
-  }, [showLearnings, showThreadPanel, inPane]);
+  }, [showLearnings, showThreadPanel, activeArtifactId, inPane]);
 
   const [newAgentName, setNewAgentName] = useState<string | null>(null);
 
@@ -1101,15 +1348,12 @@ export function ChiefOfStaffBubble({
   }
 
   function handleArtifactPopout(artifactId: string) {
-    // In pane mode the CoS is already a leaf in the main layout tree, so the
-    // existing companion splitter gives the user the familiar left/right/
-    // top/bottom pane placement.
+    // In pane mode artifacts open as a *drawer* attached to the cos pane —
+    // matching the thread/learnings drawer surface so the operator can
+    // resize/dock it the same way. Toggle off if the same artifact is
+    // already showing; otherwise swap the active id.
     if (inPane) {
-      // Anchor the split to the CoS leaf so the artifact becomes a companion
-      // of the chat, no matter which leaf currently holds focus.
-      const cosLeaf = findLeafWithTab(COS_PANE_TAB_ID);
-      if (cosLeaf) setFocusedLeaf(cosLeaf.id);
-      openArtifactCompanion(artifactId);
+      setActiveArtifactId((prev) => (prev === artifactId ? null : artifactId));
       return;
     }
     // Popout mode: open the artifact as a first-class tab in the cos popout
@@ -1298,54 +1542,149 @@ export function ChiefOfStaffBubble({
     ? !!activeAgent
     : !!(open && activeAgent && panel && panel.visible && !hasCosTabInTree);
 
-  const learningsDrawerWidth = 340;
+  // overlay/split: drawer occupies a slot inside the pane bounds (split also
+  // pushes cos content over via padding so it doesn't sit *under* the
+  // drawer). outside: drawer is adjacent to the pane on the chosen side.
+  // We only flip sides if the chosen side has *zero* room left — relaxing
+  // the old "flip if desired width doesn't fit" rule that caused jumpy
+  // mid-drag flips.
+  function placeDrawer(
+    desiredSide: 'left' | 'right',
+    desiredWidth: number,
+    mode: DrawerMode,
+    rect: { top: number; left: number; width: number; height: number },
+  ): { side: 'left' | 'right'; width: number; left: number } {
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
+    if (mode !== 'outside') {
+      const width = Math.min(desiredWidth, Math.max(MIN_DRAWER_WIDTH, rect.width));
+      const left = desiredSide === 'left' ? rect.left : rect.left + rect.width - width;
+      return { side: desiredSide, width, left };
+    }
+    const leftRoom = Math.max(0, rect.left);
+    const rightRoom = Math.max(0, vw - (rect.left + rect.width));
+    let side: 'left' | 'right' = desiredSide;
+    if (side === 'left' && leftRoom < MIN_DRAWER_WIDTH && rightRoom >= MIN_DRAWER_WIDTH) side = 'right';
+    if (side === 'right' && rightRoom < MIN_DRAWER_WIDTH && leftRoom >= MIN_DRAWER_WIDTH) side = 'left';
+    const room = side === 'left' ? leftRoom : rightRoom;
+    const width = Math.max(MIN_DRAWER_WIDTH, Math.min(desiredWidth, Math.max(MIN_DRAWER_WIDTH, room)));
+    const left = side === 'left' ? rect.left - width : rect.left + rect.width;
+    return { side, width, left };
+  }
+
+  // Compute drawer top+height from the live pane rect plus the operator's
+  // vertical resize state. heightOverride=null means "auto-track pane height";
+  // any explicit drag flips it to a pixel value.
+  function placeVertical(rect: { top: number; height: number }, topOffset: number, heightOverride: number | null) {
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 1080;
+    const h = Math.max(MIN_DRAWER_HEIGHT, Math.min(vh - 4, heightOverride ?? rect.height));
+    const t = Math.max(0, Math.min(vh - h, rect.top + topOffset));
+    return { top: t, height: h };
+  }
+
   let learningsDrawerStyle: CosDrawerStyle | null = null;
   if (showLearnings && shellRect) {
-    const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
-    let side: 'left' | 'right' = learningsSide;
-    const leftSpot = shellRect.left - learningsDrawerWidth;
-    const rightSpot = shellRect.left + shellRect.width;
-    if (side === 'left' && leftSpot < 0 && rightSpot + learningsDrawerWidth <= vw) side = 'right';
-    if (side === 'right' && rightSpot + learningsDrawerWidth > vw && leftSpot >= 0) side = 'left';
-    const leftPx = side === 'left'
-      ? Math.max(0, leftSpot)
-      : Math.min(vw - learningsDrawerWidth, rightSpot);
+    const placed = placeDrawer(learningsSide, learningsWidth, learningsMode, shellRect);
+    const v = placeVertical(shellRect, learningsTopOffset, learningsHeightOverride);
     const zIdx = !inPane && panel ? getPanelZIndex(panel) + 1 : 900;
     learningsDrawerStyle = {
       position: 'fixed',
-      top: shellRect.top,
-      height: shellRect.height,
-      left: leftPx,
-      width: learningsDrawerWidth,
+      top: v.top,
+      height: v.height,
+      left: placed.left,
+      width: placed.width,
       zIndex: zIdx,
-      side,
+      side: placed.side,
+      mode: learningsMode,
     };
   }
 
-  const threadDrawerWidth = 380;
   let threadDrawerStyle: CosDrawerStyle | null = null;
   if (showThreadPanel && shellRect) {
-    const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
-    // Default to right; if learnings is open on right, slide thread to left.
-    let side: 'left' | 'right' = 'right';
-    if (learningsDrawerStyle && learningsDrawerStyle.side === 'right') side = 'left';
-    const leftSpot = shellRect.left - threadDrawerWidth;
-    const rightSpot = shellRect.left + shellRect.width;
-    if (side === 'right' && rightSpot + threadDrawerWidth > vw && leftSpot >= 0) side = 'left';
-    if (side === 'left' && leftSpot < 0 && rightSpot + threadDrawerWidth <= vw) side = 'right';
-    const leftPx = side === 'left'
-      ? Math.max(0, leftSpot)
-      : Math.min(vw - threadDrawerWidth, rightSpot);
+    // If learnings is open on the same side and outside, prefer the opposite
+    // side for the thread drawer so they don't stack on each other.
+    let desiredSide: 'left' | 'right' = threadSide;
+    if (
+      learningsDrawerStyle &&
+      learningsDrawerStyle.mode === 'outside' &&
+      threadMode === 'outside' &&
+      learningsDrawerStyle.side === desiredSide
+    ) {
+      desiredSide = desiredSide === 'left' ? 'right' : 'left';
+    }
+    const placed = placeDrawer(desiredSide, threadWidth, threadMode, shellRect);
+    const v = placeVertical(shellRect, threadTopOffset, threadHeightOverride);
     const zIdx = !inPane && panel ? getPanelZIndex(panel) + 1 : 900;
     threadDrawerStyle = {
       position: 'fixed',
-      top: shellRect.top,
-      height: shellRect.height,
-      left: leftPx,
-      width: threadDrawerWidth,
+      top: v.top,
+      height: v.height,
+      left: placed.left,
+      width: placed.width,
       zIndex: zIdx,
-      side,
+      side: placed.side,
+      mode: threadMode,
     };
+  }
+
+  let artifactDrawerStyle: CosDrawerStyle | null = null;
+  if (activeArtifactId && inPane && shellRect) {
+    // Artifacts are companions of the *thread*, not the pane — when the
+    // thread drawer is open in outside mode, the artifact anchors to
+    // thread's outer edge (one column further out). Otherwise it anchors to
+    // the cos pane like any other drawer. Vertical extent matches thread
+    // when present so the two read as a stacked column.
+    const anchor = (threadDrawerStyle && threadDrawerStyle.mode === 'outside')
+      ? threadDrawerStyle
+      : null;
+    let placed: { side: 'left' | 'right'; width: number; left: number };
+    let v: { top: number; height: number };
+    if (anchor) {
+      const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
+      const side = anchor.side;
+      // Available room past the thread drawer's outer edge:
+      //   side='right': from anchor.right to viewport right
+      //   side='left':  from 0 to anchor.left
+      const room = side === 'right' ? Math.max(0, vw - (anchor.left + anchor.width)) : Math.max(0, anchor.left);
+      const width = Math.max(MIN_DRAWER_WIDTH, Math.min(artifactWidth, Math.max(MIN_DRAWER_WIDTH, room)));
+      const left = side === 'right' ? anchor.left + anchor.width : anchor.left - width;
+      placed = { side, width, left };
+      v = { top: anchor.top, height: anchor.height };
+    } else {
+      // Prefer the side opposite any drawer already on `artifactSide` to
+      // keep them from overlapping when both are outside.
+      let desiredSide: 'left' | 'right' = artifactSide;
+      if (artifactMode === 'outside') {
+        const occupied = [learningsDrawerStyle, threadDrawerStyle].filter(
+          (d) => d && d.mode === 'outside' && d.side === desiredSide,
+        );
+        if (occupied.length > 0) desiredSide = desiredSide === 'left' ? 'right' : 'left';
+      }
+      placed = placeDrawer(desiredSide, artifactWidth, artifactMode, shellRect);
+      v = placeVertical(shellRect, artifactTopOffset, artifactHeightOverride);
+    }
+    const zIdx = !inPane && panel ? getPanelZIndex(panel) + 2 : 901;
+    artifactDrawerStyle = {
+      position: 'fixed',
+      top: v.top,
+      height: v.height,
+      left: placed.left,
+      width: placed.width,
+      zIndex: zIdx,
+      side: placed.side,
+      mode: anchor ? 'outside' : artifactMode,
+    };
+  }
+
+  // Split-mode drawers reserve horizontal space inside the cos-pane so the
+  // chat content doesn't render *under* the drawer. Sum widths-per-side of
+  // every drawer in `split` mode and apply as padding.
+  let splitPadLeft = 0;
+  let splitPadRight = 0;
+  for (const ds of [learningsDrawerStyle, threadDrawerStyle, artifactDrawerStyle]) {
+    if (!ds || ds.mode !== 'split') continue;
+    const slot = ds.width + TAB_WIDTH;
+    if (ds.side === 'left') splitPadLeft = Math.max(splitPadLeft, slot);
+    else splitPadRight = Math.max(splitPadRight, slot);
   }
 
   return (
@@ -1369,23 +1708,53 @@ export function ChiefOfStaffBubble({
         </button>
       )}
 
-      {shouldRenderShell && activeAgent && inPane && showLearnings && learningsDrawerStyle && (
+      {shouldRenderShell && activeAgent && inPane && showLearnings && learningsDrawerStyle && shellRect && (
         <CosLearningsDrawer
           style={learningsDrawerStyle}
+          paneRect={shellRect}
+          hamburgerPos={learningsHamburgerPos}
+          setHamburgerPos={setLearningsHamburgerPos}
           setLearningsSide={setLearningsSide}
+          setLearningsMode={(m) => setLearningsMode(m)}
+          cycleLearningsMode={() => setLearningsMode(cycleMode(learningsMode))}
+          setLearningsWidthClamped={setLearningsWidthClamped}
+          setLearningsBounds={setLearningsBounds}
           onClose={() => setShowLearnings(false)}
         />
       )}
 
-      {shouldRenderShell && activeAgent && inPane && showThreadPanel && threadDrawerStyle && (
+      {shouldRenderShell && activeAgent && inPane && showThreadPanel && threadDrawerStyle && shellRect && (
         <CosThreadDrawer
           style={threadDrawerStyle}
           agentId={activeAgent.id}
           showTools={showTools}
           verbosity={activeAgent.verbosity || DEFAULT_VERBOSITY}
+          paneRect={shellRect}
+          hamburgerPos={threadHamburgerPos}
+          setHamburgerPos={setThreadHamburgerPos}
           onArtifactPopout={handleArtifactPopout}
           onReply={handleReply}
           onClose={() => setShowThreadPanel(false)}
+          setThreadSide={setThreadSide}
+          setThreadMode={(m) => setThreadMode(m)}
+          cycleThreadMode={() => setThreadMode(cycleMode(threadMode))}
+          setThreadWidthClamped={setThreadWidthClamped}
+          setThreadBounds={setThreadBounds}
+        />
+      )}
+
+      {shouldRenderShell && activeAgent && inPane && activeArtifactId && artifactDrawerStyle && shellRect && (
+        <CosArtifactDrawer
+          style={artifactDrawerStyle}
+          artifactId={activeArtifactId}
+          paneRect={shellRect}
+          hamburgerPos={artifactHamburgerPos}
+          setHamburgerPos={setArtifactHamburgerPos}
+          setArtifactSide={setArtifactSide}
+          cycleArtifactMode={() => setArtifactMode(cycleMode(artifactMode))}
+          setArtifactWidthClamped={setArtifactWidthClamped}
+          setArtifactBounds={setArtifactBounds}
+          onClose={() => setActiveArtifactId(null)}
         />
       )}
 
@@ -1393,9 +1762,13 @@ export function ChiefOfStaffBubble({
         <div
           ref={wrapperRef}
           class={inPane
-            ? 'cos-popout cos-pane'
+            ? `cos-popout cos-pane${(splitPadLeft || splitPadRight) ? ' cos-pane-split' : ''}`
             : `${isDocked ? `popout-docked${isLeftDocked ? ' docked-left' : ''}` : 'popout-floating'}${isMinimized ? ' minimized' : ''}${isCosFocused ? ' panel-focused' : ''}${isCosActive ? ' panel-active' : ''}${panel!.alwaysOnTop ? ' always-on-top' : ''} cos-popout`}
-          style={inPane ? undefined : (panelStyle as any)}
+          style={inPane
+            ? (splitPadLeft || splitPadRight)
+              ? ({ '--cos-split-pad-left': `${splitPadLeft}px`, '--cos-split-pad-right': `${splitPadRight}px` } as any)
+              : undefined
+            : (panelStyle as any)}
           data-panel-id={COS_PANEL_ID}
           onMouseDown={inPane ? undefined : (() => {
             activePanelId.value = COS_PANEL_ID;

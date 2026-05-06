@@ -27,6 +27,11 @@ export const autoJumpLogs = signal<boolean>(loadSetting('pw-auto-jump-logs', fal
 export const autoCloseWaitingPanel = signal<boolean>(loadSetting('pw-auto-close-waiting-panel', false));
 export const autoJumpHandleBounce = signal<boolean>(loadSetting('pw-auto-jump-handle-bounce', true));
 export const autoOpenChildCompanions = signal<boolean>(loadSetting('pw-auto-open-child-companions', true));
+// Experimental: render picked DOM elements as inline chips inside the CoS
+// composer's text input (contenteditable mode) instead of as a separate
+// chip strip above the textarea. Chips can be expanded in-place to inspect
+// the captured selector/rect/classes/text.
+export const inlineElementChipsEnabled = signal<boolean>(loadSetting('pw-cos-inline-element-chips', false));
 
 export interface RecentResult {
   type: 'application' | 'feedback' | 'session';
@@ -142,6 +147,10 @@ effect(() => {
 
 effect(() => {
   localStorage.setItem('pw-auto-open-child-companions', JSON.stringify(autoOpenChildCompanions.value));
+});
+
+effect(() => {
+  localStorage.setItem('pw-cos-inline-element-chips', JSON.stringify(inlineElementChipsEnabled.value));
 });
 
 effect(() => {

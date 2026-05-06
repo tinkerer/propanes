@@ -29,10 +29,14 @@ export interface ParsedMessage {
   subagentLink?: string;
 }
 
-let nextId = 0;
-function genId(): string {
-  return `msg-${++nextId}`;
-}
+// IDs are issued per-parser-instance, not from a module-level counter. The
+// transcript stream re-creates a fresh parser on every poll and feeds the
+// entire JSONL again, so a shared counter would assign a different ID to
+// the same line each round (msg-1 → msg-101 → msg-201). React would then
+// see all keys change, unmount every group + tool chip, and reset their
+// `useState` (expanded / collapsed). Per-instance counters mean the same
+// ordinal position in the JSONL always yields the same ID — keys stay
+// stable across polls so component state survives.
 
 // Flatten an Anthropic content block (inside a tool_result's array content) to
 // a renderable string. Image blocks must be emitted as `data:<mime>;base64,...`
@@ -80,6 +84,8 @@ export class JsonOutputParser {
   private messages: ParsedMessage[] = [];
   private currentModel = '';
   private currentUsage: TokenUsage = {};
+  private idCounter = 0;
+  private genId(): string { return `msg-${++this.idCounter}`; }
 
   // Track in-progress streaming blocks by index
   private activeBlocks: Map<number, { id: string; type: string; toolName?: string; toolUseId?: string; textAccum: string; jsonAccum: string; thinkingAccum: string }> = new Map();
@@ -139,7 +145,7 @@ export class JsonOutputParser {
       if (obj.session_id) parts.push(`Session: ${obj.session_id}`);
       if (obj.tools?.length) parts.push(`Tools: ${obj.tools.length}`);
       if (parts.length > 0) {
-        return [{ id: genId(), role: 'system', timestamp: Date.now(), content: parts.join(' | '), model: obj.model }];
+        return [{ id: this.genId(), role: 'system', timestamp: Date.now(), content: parts.join(' | '), model: obj.model }];
       }
       return [];
     }
@@ -153,17 +159,17 @@ export class JsonOutputParser {
       // attach the subagent's transcript inline at this Task call.
       const subagentLink: string | undefined = obj.toolUseResult?.agentId || undefined;
       if (typeof content === 'string') {
-        if (content) results.push({ id: genId(), role: 'user_input', timestamp: Date.now(), content });
+        if (content) results.push({ id: this.genId(), role: 'user_input', timestamp: Date.now(), content });
       } else if (Array.isArray(content)) {
         const text = content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n');
-        if (text) results.push({ id: genId(), role: 'user_input', timestamp: Date.now(), content: text });
+        if (text) results.push({ id: this.genId(), role: 'user_input', timestamp: Date.now(), content: text });
         for (const block of content) {
           if (block.type === 'tool_result') {
             const rc = typeof block.content === 'string' ? block.content
               : Array.isArray(block.content) ? block.content.map(formatInnerContentBlock).join('\n')
               : JSON.stringify(block.content);
             results.push({
-              id: genId(), role: 'tool_result', timestamp: Date.now(),
+              id: this.genId(), role: 'tool_result', timestamp: Date.now(),
               content: rc, isError: block.is_error || false,
               toolUseResultId: block.tool_use_id || undefined,
               subagentLink,
@@ -202,10 +208,10 @@ export class JsonOutputParser {
 
       for (const block of obj.message.content) {
         if (block.type === 'text') {
-          results.push({ id: genId(), role: 'assistant', timestamp: Date.now(), content: block.text, model, usage });
+          results.push({ id: this.genId(), role: 'assistant', timestamp: Date.now(), content: block.text, model, usage });
         } else if (block.type === 'tool_use') {
           results.push({
-            id: genId(), role: 'tool_use', timestamp: Date.now(),
+            id: this.genId(), role: 'tool_use', timestamp: Date.now(),
             toolName: block.name, toolInput: block.input,
             content: JSON.stringify(block.input, null, 2), model,
             toolUseId: block.id || undefined,
@@ -217,12 +223,12 @@ export class JsonOutputParser {
               ? block.content.map(formatInnerContentBlock).join('\n')
               : JSON.stringify(block.content);
           results.push({
-            id: genId(), role: 'tool_result', timestamp: Date.now(),
+            id: this.genId(), role: 'tool_result', timestamp: Date.now(),
             content: resultContent, isError: block.is_error || false,
             toolUseResultId: block.tool_use_id || undefined,
           });
         } else if (block.type === 'thinking') {
-          results.push({ id: genId(), role: 'thinking', timestamp: Date.now(), content: block.thinking || '', model });
+          results.push({ id: this.genId(), role: 'thinking', timestamp: Date.now(), content: block.thinking || '', model });
         }
       }
       return results;
@@ -232,7 +238,7 @@ export class JsonOutputParser {
     if (type === 'content_block_start' && obj.content_block) {
       const block = obj.content_block;
       const idx = obj.index ?? this.activeBlocks.size;
-      const id = genId();
+      const id = this.genId();
 
       if (block.type === 'tool_use') {
         this.activeBlocks.set(idx, { id, type: 'tool_use', toolName: block.name, toolUseId: block.id, textAccum: '', jsonAccum: '', thinkingAccum: '' });
@@ -314,14 +320,14 @@ export class JsonOutputParser {
             parts.push(`Tokens: ${(u.input_tokens || 0).toLocaleString()}↓ ${(u.output_tokens || 0).toLocaleString()}↑`);
           }
         }
-        return [{ id: genId(), role: 'system', timestamp: Date.now(), content: parts.join(' | ') }];
+        return [{ id: this.genId(), role: 'system', timestamp: Date.now(), content: parts.join(' | ') }];
       }
       // Error result
       if (obj.subtype === 'error_message' || obj.is_error) {
-        return [{ id: genId(), role: 'tool_result', timestamp: Date.now(), content: obj.result || obj.error || 'Error', isError: true }];
+        return [{ id: this.genId(), role: 'tool_result', timestamp: Date.now(), content: obj.result || obj.error || 'Error', isError: true }];
       }
       if (obj.result) {
-        return [{ id: genId(), role: 'tool_result', timestamp: Date.now(), content: obj.result }];
+        return [{ id: this.genId(), role: 'tool_result', timestamp: Date.now(), content: obj.result }];
       }
     }
 
@@ -351,6 +357,8 @@ export class TerminalOutputParser {
   private currentToolName = '';
   private currentToolInput: Record<string, unknown> = {};
   private pendingLines: string[] = [];
+  private idCounter = 0;
+  private genId(): string { return `msg-${++this.idCounter}`; }
 
   feed(chunk: string): ParsedMessage[] {
     const clean = stripAnsi(chunk);
@@ -437,7 +445,7 @@ export class TerminalOutputParser {
       results.push(...this.flush());
       const content = line.replace(/^\s*[❯>]\s*/, '');
       if (content.trim()) {
-        const msg: ParsedMessage = { id: genId(), role: 'user_input', timestamp: Date.now(), content: content.trim() };
+        const msg: ParsedMessage = { id: this.genId(), role: 'user_input', timestamp: Date.now(), content: content.trim() };
         this.messages.push(msg);
         results.push(msg);
       }
@@ -509,7 +517,7 @@ export class TerminalOutputParser {
   private flushToolUse(): ParsedMessage[] {
     if (this.state !== 'tool_use') return [];
     const msg: ParsedMessage = {
-      id: genId(),
+      id: this.genId(),
       role: 'tool_use',
       timestamp: Date.now(),
       toolName: this.currentToolName,
@@ -536,7 +544,7 @@ export class TerminalOutputParser {
         const content = this.accum.trim();
         if (content) {
           const isError = content.includes('Error') || content.includes('error:') || content.includes('FAILED') || content.includes('Permission denied');
-          const msg: ParsedMessage = { id: genId(), role: 'tool_result', timestamp: Date.now(), content, isError };
+          const msg: ParsedMessage = { id: this.genId(), role: 'tool_result', timestamp: Date.now(), content, isError };
           this.messages.push(msg);
           results.push(msg);
         }
@@ -546,7 +554,7 @@ export class TerminalOutputParser {
       case 'assistant_text': {
         const content = this.accum.trim();
         if (content) {
-          const msg: ParsedMessage = { id: genId(), role: 'assistant', timestamp: Date.now(), content };
+          const msg: ParsedMessage = { id: this.genId(), role: 'assistant', timestamp: Date.now(), content };
           this.messages.push(msg);
           results.push(msg);
         }
@@ -556,7 +564,7 @@ export class TerminalOutputParser {
       case 'thinking': {
         const content = this.accum.trim();
         if (content) {
-          const msg: ParsedMessage = { id: genId(), role: 'thinking', timestamp: Date.now(), content };
+          const msg: ParsedMessage = { id: this.genId(), role: 'thinking', timestamp: Date.now(), content };
           this.messages.push(msg);
           results.push(msg);
         }
@@ -601,6 +609,8 @@ export function createOutputParser(permissionProfile: string): JsonOutputParser 
 export class CodexOutputParser {
   private buffer = '';
   private messages: ParsedMessage[] = [];
+  private idCounter = 0;
+  private genId(): string { return `msg-${++this.idCounter}`; }
   // Track exec items started via `item.started` so we can emit a tool_use
   // immediately and then attach the result on `item.completed`.
   private startedItems: Map<string, { toolName: string; toolInput: Record<string, unknown>; toolUseId: string }> = new Map();
@@ -644,7 +654,7 @@ export class CodexOutputParser {
       if (p.id) parts.push(`ID: ${p.id.slice(0, 8)}`);
       if (p.cwd) parts.push(`cwd: ${p.cwd}`);
       if (p.cli_version) parts.push(`v${p.cli_version}`);
-      return [{ id: genId(), role: 'system', timestamp: tsOf(obj), content: parts.join(' | ') }];
+      return [{ id: this.genId(), role: 'system', timestamp: tsOf(obj), content: parts.join(' | ') }];
     }
 
     // --- Rollout file: turn_context (model + sandbox info per turn) ---
@@ -655,7 +665,7 @@ export class CodexOutputParser {
       if (p.sandbox_policy?.type) parts.push(`Sandbox: ${p.sandbox_policy.type}`);
       if (p.approval_policy) parts.push(`Approvals: ${p.approval_policy}`);
       if (parts.length === 0) return [];
-      return [{ id: genId(), role: 'system', timestamp: tsOf(obj), content: parts.join(' | '), model: p.model }];
+      return [{ id: this.genId(), role: 'system', timestamp: tsOf(obj), content: parts.join(' | '), model: p.model }];
     }
 
     // --- Rollout file: event_msg ---
@@ -671,7 +681,7 @@ export class CodexOutputParser {
     // --- exec --json: thread.started ---
     if (type === 'thread.started') {
       return [{
-        id: genId(), role: 'system', timestamp: Date.now(),
+        id: this.genId(), role: 'system', timestamp: Date.now(),
         content: `Codex thread started${obj.thread_id ? ` (${obj.thread_id.slice(0, 8)})` : ''}`,
       }];
     }
@@ -694,13 +704,13 @@ export class CodexOutputParser {
         output_tokens: u.output_tokens,
         cache_read_input_tokens: u.cached_input_tokens,
       };
-      return [{ id: genId(), role: 'system', timestamp: Date.now(), content: parts.join(' | '), usage }];
+      return [{ id: this.genId(), role: 'system', timestamp: Date.now(), content: parts.join(' | '), usage }];
     }
 
     // --- exec --json: turn.failed ---
     if (type === 'turn.failed') {
       const msg = obj.error?.message || 'Turn failed';
-      return [{ id: genId(), role: 'tool_result', timestamp: Date.now(), content: msg, isError: true }];
+      return [{ id: this.genId(), role: 'tool_result', timestamp: Date.now(), content: msg, isError: true }];
     }
 
     // --- exec --json: item.started / item.updated / item.completed ---
@@ -716,7 +726,7 @@ export class CodexOutputParser {
 
     // --- exec --json: error ---
     if (type === 'error') {
-      return [{ id: genId(), role: 'tool_result', timestamp: Date.now(), content: obj.message || 'Codex error', isError: true }];
+      return [{ id: this.genId(), role: 'tool_result', timestamp: Date.now(), content: obj.message || 'Codex error', isError: true }];
     }
 
     return [];
@@ -731,13 +741,13 @@ export class CodexOutputParser {
       const sig = p.message.slice(0, 200);
       if (this.emittedUserMessages.has(sig)) return [];
       this.emittedUserMessages.add(sig);
-      return [{ id: genId(), role: 'user_input', timestamp: ts, content: p.message }];
+      return [{ id: this.genId(), role: 'user_input', timestamp: ts, content: p.message }];
     }
 
     if (sub === 'agent_message' && p.message) {
       const sig = p.message.slice(0, 200);
       this.emittedAssistantTexts.add(sig);
-      return [{ id: genId(), role: 'assistant', timestamp: ts, content: p.message }];
+      return [{ id: this.genId(), role: 'assistant', timestamp: ts, content: p.message }];
     }
 
     if (sub === 'task_complete') {
@@ -746,14 +756,14 @@ export class CodexOutputParser {
       // otherwise show it as the assistant's wrap-up.
       const msg = p.last_agent_message;
       if (msg && !this.emittedAssistantTexts.has(msg.slice(0, 200))) {
-        return [{ id: genId(), role: 'assistant', timestamp: ts, content: msg }];
+        return [{ id: this.genId(), role: 'assistant', timestamp: ts, content: msg }];
       }
       return [];
     }
 
     if (sub === 'view_image_tool_call' && p.path) {
       return [{
-        id: genId(), role: 'tool_use', timestamp: ts,
+        id: this.genId(), role: 'tool_use', timestamp: ts,
         toolName: 'Read', toolInput: { file_path: p.path },
         content: JSON.stringify({ file_path: p.path }, null, 2),
         toolUseId: p.call_id,
@@ -782,13 +792,13 @@ export class CodexOutputParser {
         const sig = text.slice(0, 200);
         if (this.emittedUserMessages.has(sig)) return [];
         this.emittedUserMessages.add(sig);
-        return [{ id: genId(), role: 'user_input', timestamp: ts, content: text }];
+        return [{ id: this.genId(), role: 'user_input', timestamp: ts, content: text }];
       }
       if (role === 'assistant') {
         const sig = text.slice(0, 200);
         if (this.emittedAssistantTexts.has(sig)) return [];
         this.emittedAssistantTexts.add(sig);
-        return [{ id: genId(), role: 'assistant', timestamp: ts, content: text }];
+        return [{ id: this.genId(), role: 'assistant', timestamp: ts, content: text }];
       }
       return [];
     }
@@ -804,7 +814,7 @@ export class CodexOutputParser {
         : '';
       const text = (summary || content).trim();
       if (!text) return [];
-      return [{ id: genId(), role: 'thinking', timestamp: ts, content: text }];
+      return [{ id: this.genId(), role: 'thinking', timestamp: ts, content: text }];
     }
 
     if (sub === 'function_call') {
@@ -817,7 +827,7 @@ export class CodexOutputParser {
       }
       const { toolName, toolInput } = mapCodexToolCall(name, args);
       return [{
-        id: genId(), role: 'tool_use', timestamp: ts,
+        id: this.genId(), role: 'tool_use', timestamp: ts,
         toolName, toolInput,
         content: JSON.stringify(toolInput, null, 2),
         toolUseId: p.call_id,
@@ -827,7 +837,7 @@ export class CodexOutputParser {
     if (sub === 'function_call_output') {
       const out = parseFunctionCallOutput(p.output);
       return [{
-        id: genId(), role: 'tool_result', timestamp: ts,
+        id: this.genId(), role: 'tool_result', timestamp: ts,
         content: out.content,
         isError: out.isError,
         toolUseResultId: p.call_id,
@@ -839,7 +849,7 @@ export class CodexOutputParser {
       const input = typeof p.input === 'string' ? p.input : JSON.stringify(p.input || {}, null, 2);
       const { toolName, toolInput } = mapCodexCustomToolCall(name, p.input);
       return [{
-        id: genId(), role: 'tool_use', timestamp: ts,
+        id: this.genId(), role: 'tool_use', timestamp: ts,
         toolName, toolInput,
         content: input,
         toolUseId: p.call_id,
@@ -849,7 +859,7 @@ export class CodexOutputParser {
     if (sub === 'custom_tool_call_output') {
       const out = parseCustomToolOutput(p.output);
       return [{
-        id: genId(), role: 'tool_result', timestamp: ts,
+        id: this.genId(), role: 'tool_result', timestamp: ts,
         content: out.content,
         isError: out.isError,
         toolUseResultId: p.call_id,
@@ -864,13 +874,13 @@ export class CodexOutputParser {
   // UI shows "Running …", then attach the tool_result when it completes.
   private parseItemStarted(item: any): ParsedMessage[] {
     const itemType = item.type;
-    const id = item.id || genId();
+    const id = item.id || this.genId();
 
     if (itemType === 'command_execution') {
       const toolInput = { command: item.command || '' };
       this.startedItems.set(id, { toolName: 'Bash', toolInput, toolUseId: id });
       return [{
-        id: genId(), role: 'tool_use', timestamp: Date.now(),
+        id: this.genId(), role: 'tool_use', timestamp: Date.now(),
         toolName: 'Bash', toolInput,
         content: JSON.stringify(toolInput, null, 2),
         toolUseId: id,
@@ -882,7 +892,7 @@ export class CodexOutputParser {
       const toolName = `mcp:${item.server || ''}/${item.tool || ''}`;
       this.startedItems.set(id, { toolName, toolInput, toolUseId: id });
       return [{
-        id: genId(), role: 'tool_use', timestamp: Date.now(),
+        id: this.genId(), role: 'tool_use', timestamp: Date.now(),
         toolName, toolInput,
         content: JSON.stringify(toolInput, null, 2),
         toolUseId: id,
@@ -900,11 +910,11 @@ export class CodexOutputParser {
       const sig = item.text.slice(0, 200);
       if (this.emittedAssistantTexts.has(sig)) return [];
       this.emittedAssistantTexts.add(sig);
-      return [{ id: genId(), role: 'assistant', timestamp: Date.now(), content: item.text }];
+      return [{ id: this.genId(), role: 'assistant', timestamp: Date.now(), content: item.text }];
     }
 
     if (itemType === 'reasoning' && item.text) {
-      return [{ id: genId(), role: 'thinking', timestamp: Date.now(), content: item.text }];
+      return [{ id: this.genId(), role: 'thinking', timestamp: Date.now(), content: item.text }];
     }
 
     if (itemType === 'command_execution') {
@@ -912,7 +922,7 @@ export class CodexOutputParser {
       const out = item.aggregated_output || '';
       const isError = typeof item.exit_code === 'number' && item.exit_code !== 0;
       const result: ParsedMessage = {
-        id: genId(), role: 'tool_result', timestamp: Date.now(),
+        id: this.genId(), role: 'tool_result', timestamp: Date.now(),
         content: out, isError,
         toolUseResultId: id,
       };
@@ -921,7 +931,7 @@ export class CodexOutputParser {
       if (!wasStarted) {
         const toolInput = { command: item.command || '' };
         return [
-          { id: genId(), role: 'tool_use', timestamp: Date.now(), toolName: 'Bash', toolInput, content: JSON.stringify(toolInput, null, 2), toolUseId: id },
+          { id: this.genId(), role: 'tool_use', timestamp: Date.now(), toolName: 'Bash', toolInput, content: JSON.stringify(toolInput, null, 2), toolUseId: id },
           result,
         ];
       }
@@ -934,7 +944,7 @@ export class CodexOutputParser {
       const changes = Array.isArray(item.changes) ? item.changes : [];
       const summary = changes.map((c: any) => `${c.kind || 'edit'} ${c.path || ''}`).join('\n');
       return [{
-        id: genId(), role: 'tool_use', timestamp: Date.now(),
+        id: this.genId(), role: 'tool_use', timestamp: Date.now(),
         toolName: 'apply_patch',
         toolInput: { changes },
         content: summary || JSON.stringify(item, null, 2),
@@ -946,7 +956,7 @@ export class CodexOutputParser {
       this.startedItems.delete(id);
       const out = item.result != null ? (typeof item.result === 'string' ? item.result : JSON.stringify(item.result, null, 2)) : '';
       return [{
-        id: genId(), role: 'tool_result', timestamp: Date.now(),
+        id: this.genId(), role: 'tool_result', timestamp: Date.now(),
         content: out, isError: item.status === 'failed',
         toolUseResultId: id,
       }];
@@ -954,7 +964,7 @@ export class CodexOutputParser {
 
     if (itemType === 'web_search') {
       return [{
-        id: genId(), role: 'tool_use', timestamp: Date.now(),
+        id: this.genId(), role: 'tool_use', timestamp: Date.now(),
         toolName: 'WebSearch', toolInput: { query: item.query || '' },
         content: JSON.stringify({ query: item.query }, null, 2),
         toolUseId: id,
@@ -964,7 +974,7 @@ export class CodexOutputParser {
     if (itemType === 'todo_list') {
       const todos = Array.isArray(item.items) ? item.items : [];
       return [{
-        id: genId(), role: 'tool_use', timestamp: Date.now(),
+        id: this.genId(), role: 'tool_use', timestamp: Date.now(),
         toolName: 'TodoWrite', toolInput: { todos },
         content: JSON.stringify({ todos }, null, 2),
         toolUseId: id,
@@ -973,7 +983,7 @@ export class CodexOutputParser {
 
     if (itemType === 'error') {
       return [{
-        id: genId(), role: 'tool_result', timestamp: Date.now(),
+        id: this.genId(), role: 'tool_result', timestamp: Date.now(),
         content: item.message || 'Codex item error', isError: true,
       }];
     }
