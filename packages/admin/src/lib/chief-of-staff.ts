@@ -26,6 +26,7 @@ import {
   isCosInPane,
   closeCosPane,
   reclampCosPanelToViewport,
+  dockCosToLeaf,
   COS_PANE_TAB_ID,
 } from './cos-pane.js';
 
@@ -50,6 +51,7 @@ export {
   isCosInPane,
   closeCosPane,
   reclampCosPanelToViewport,
+  dockCosToLeaf,
   COS_PANE_TAB_ID,
 };
 

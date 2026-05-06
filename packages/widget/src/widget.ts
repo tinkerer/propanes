@@ -1666,6 +1666,19 @@ export class ProPanesElement {
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
+  private clearScreenshotMarkersInDraft() {
+    const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement | null;
+    if (!input) return;
+    // Strip every "[Image N]" marker (and one optional leading space) — used
+    // after Copy path uploads everything and clears pendingScreenshots, so the
+    // markers no longer refer to anything.
+    const next = input.value.replace(/\s?\[Image\s+\d+\]/gi, '').replace(/^\s+/, '');
+    if (next !== input.value) {
+      input.value = next;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  }
+
   private renumberScreenshotMarkersInDraft(removedIndex: number) {
     const input = this.shadow.querySelector('#pw-chat-input') as HTMLTextAreaElement | null;
     if (!input) return;
@@ -1804,6 +1817,7 @@ export class ProPanesElement {
       resolveClipboard(paths.join(' '));
       this.pendingScreenshots = [];
       persistScreenshots(this.pendingScreenshots);
+      this.clearScreenshotMarkersInDraft();
       this.renderScreenshotThumbs();
       this.updateSendButtonTitle();
       this.showFlash(undefined, `${paths.length} path${paths.length === 1 ? '' : 's'} copied`);

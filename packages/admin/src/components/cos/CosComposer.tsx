@@ -7,11 +7,13 @@ import {
   type CosElementRef,
 } from '../../lib/chief-of-staff.js';
 import { activeChannel } from '../../lib/state.js';
+import { inlineElementChipsEnabled } from '../../lib/settings.js';
 import { api } from '../../lib/api.js';
 import { useCosVoice } from '../../lib/use-cos-voice.js';
 import { useCosScreenshot } from '../../lib/use-cos-screenshot.js';
 import { useCosElementPicker } from '../../lib/use-cos-element-picker.js';
 import { CosInputToolbar } from './CosInputToolbar.js';
+import { CosInlineEditor, type CosInlineEditorHandle } from './CosInlineEditor.js';
 import {
   snapshotBrowserContext,
   summarizeBrowserContext,
@@ -177,8 +179,15 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
   onEnqueueAfterCurrent,
   onSendAndInterrupt,
 }, handleRef) {
+  // Snapshot the inline-chip toggle once per mount. Live-toggling between
+  // a textarea and a contenteditable mid-conversation would require
+  // marshaling text + chips between two source-of-truth shapes; instead
+  // the operator gets the new mode on next composer mount (which happens
+  // every bubble open / thread switch anyway).
+  const inlineMode = inlineElementChipsEnabled.value;
   const wrapperRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const inlineEditorRef = useRef<CosInlineEditorHandle>(null);
   // Forward the textarea DOM node to the caller's ref each time it mounts /
   // unmounts. Wrapped in a callback so we don't reach across refs in render.
   const setTextareaEl = (el: HTMLTextAreaElement | null) => {
@@ -286,7 +295,13 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
         return;
       }
       pendingSelfWriteRef.current = null;
-      if (stored !== text) setText(stored);
+      if (stored !== text) {
+        setText(stored);
+        // Inline mode: scope switched (e.g. operator picked another
+        // thread). Push the new draft text into the editor so its
+        // contenteditable contents match.
+        if (inlineMode) inlineEditorRef.current?.setText(stored);
+      }
       return;
     }
     if (draft.read() !== text) {
@@ -331,6 +346,11 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
       );
       setPendingElementRefs(snapshot.elementRefs ?? []);
       setPendingContext(null);
+      // Inline mode keeps content in a contenteditable — setting React
+      // state alone doesn't push into the editor. The snapshot's chips
+      // are lost on this path (we'd need to walk markers to rebuild
+      // them); v1 accepts plain-text-only restore for saved drafts.
+      if (inlineMode) inlineEditorRef.current?.setText(snapshot.text);
     },
   }), [text, pendingAttachments, pendingElementRefs]);
 
@@ -346,8 +366,17 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
 
   const voice = useCosVoice({
     getInputBase: () => text,
-    onAppendInput: (next) => setText(next),
-    focusInput: () => textareaRef.current?.focus(),
+    onAppendInput: (next) => {
+      // In inline mode the editor is the source of truth — push the
+      // transcribed text in via setText so the editor renders it (and
+      // re-fires onChange, which mirrors back into composer state).
+      if (inlineMode) inlineEditorRef.current?.setText(next);
+      else setText(next);
+    },
+    focusInput: () => {
+      if (inlineMode) inlineEditorRef.current?.focus();
+      else textareaRef.current?.focus();
+    },
   });
   const screenshot = useCosScreenshot({
     onAttachBlob: (blob, name) => addImageBlob(blob, name),
@@ -355,8 +384,21 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
   });
   const picker = useCosElementPicker({
     wrapperRef,
-    appendElementRefs: (refs) => setPendingElementRefs((prev) => [...prev, ...refs]),
-    focusInput: () => textareaRef.current?.focus(),
+    appendElementRefs: (refs) => {
+      if (inlineMode) {
+        // Inline mode: chips go into the editor at caret. The editor's
+        // onChange fires with the full ordered ref list, which we mirror
+        // into pendingElementRefs — the strip stays hidden because all
+        // refs are now visible in-flow.
+        inlineEditorRef.current?.insertChips(refs);
+      } else {
+        setPendingElementRefs((prev) => [...prev, ...refs]);
+      }
+    },
+    focusInput: () => {
+      if (inlineMode) inlineEditorRef.current?.focus();
+      else textareaRef.current?.focus();
+    },
     closePickerMenu: () => setPickerMenuOpen(false),
   });
 
@@ -404,6 +446,11 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
     setPendingAttachments([]);
     setPendingElementRefs([]);
     setPendingContext(null);
+    // Inline editor owns its DOM; clear it explicitly so chips disappear
+    // along with the text. The setText below fires onChange, which mirrors
+    // the empty state back into composer state — that's redundant with
+    // the React-side resets above but harmless.
+    if (inlineMode) inlineEditorRef.current?.setText('');
     if (draft) draft.clear();
   }
 
@@ -762,7 +809,7 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
   return (
     <div class={`cos-composer${className ? ` ${className}` : ''}`} ref={wrapperRef}>
       {prefix}
-      {(pendingAttachments.length > 0 || pendingElementRefs.length > 0 || pendingContextHasAny(pendingContext)) && (
+      {(pendingAttachments.length > 0 || (!inlineMode && pendingElementRefs.length > 0) || pendingContextHasAny(pendingContext)) && (
         <div class="cos-attach-strip">
           {pendingAttachments.map((att) => (
             <div class="cos-attach-thumb" key={att.id}>
@@ -782,7 +829,7 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
               >&times;</button>
             </div>
           ))}
-          {pendingElementRefs.map((ref, idx) => {
+          {!inlineMode && pendingElementRefs.map((ref, idx) => {
             let display = ref.tagName || 'element';
             if (ref.id) display += `#${ref.id}`;
             const cls = (ref.classes || []).filter((c) => !c.startsWith('pw-')).slice(0, 2);
@@ -822,35 +869,53 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
         </div>
       )}
       <div class="cos-composer-input-wrap" style={{ position: 'relative' }}>
-        <textarea
-          ref={setTextareaEl}
-          class={`cos-input${submitting ? ' cos-input-submitting' : ''}`}
-          value={text}
-          placeholder={placeholder}
-          disabled={disabled || submitting}
-          style={inputStyle}
-          onInput={onTextareaInput}
-          onClick={(e) => {
-            const ta = e.target as HTMLTextAreaElement;
-            refreshMentionState(ta.value, ta.selectionStart ?? ta.value.length);
-          }}
-          onKeyUp={(e) => {
-            // Arrow keys can move caret without changing value — keep the
-            // mention picker in sync.
-            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
+        {inlineMode ? (
+          <CosInlineEditor
+            ref={inlineEditorRef}
+            placeholder={placeholder}
+            disabled={disabled || submitting}
+            style={inputStyle}
+            autoGrow={autoGrow}
+            initialText={text}
+            onChange={(nextText, refs) => {
+              setText(nextText);
+              setPendingElementRefs(refs);
+            }}
+            onSubmit={() => { void submit(); }}
+            onEscape={() => onEscape ? onEscape() : false}
+            onPaste={onPaste}
+          />
+        ) : (
+          <textarea
+            ref={setTextareaEl}
+            class={`cos-input${submitting ? ' cos-input-submitting' : ''}`}
+            value={text}
+            placeholder={placeholder}
+            disabled={disabled || submitting}
+            style={inputStyle}
+            onInput={onTextareaInput}
+            onClick={(e) => {
               const ta = e.target as HTMLTextAreaElement;
               refreshMentionState(ta.value, ta.selectionStart ?? ta.value.length);
-            }
-          }}
-          onBlur={() => {
-            // Close the picker on blur, but defer so a click on a row still
-            // fires its handler before the dropdown unmounts.
-            setTimeout(() => setMentionPrefix(null), 120);
-          }}
-          onPaste={onPaste}
-          onKeyDown={onKeyDown}
-          rows={rows}
-        />
+            }}
+            onKeyUp={(e) => {
+              // Arrow keys can move caret without changing value — keep the
+              // mention picker in sync.
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
+                const ta = e.target as HTMLTextAreaElement;
+                refreshMentionState(ta.value, ta.selectionStart ?? ta.value.length);
+              }
+            }}
+            onBlur={() => {
+              // Close the picker on blur, but defer so a click on a row still
+              // fires its handler before the dropdown unmounts.
+              setTimeout(() => setMentionPrefix(null), 120);
+            }}
+            onPaste={onPaste}
+            onKeyDown={onKeyDown}
+            rows={rows}
+          />
+        )}
         {mentionPrefix !== null && mentionCandidates.length > 0 && (
           <div
             class="cos-mention-picker"

@@ -173,7 +173,7 @@ function sourceIsLeaf(source: TabDragSource): string | null {
   return null;
 }
 
-function computeLeafZone(x: number, y: number, leafEl: HTMLElement): LeafDropZone {
+export function computeLeafZone(x: number, y: number, leafEl: HTMLElement): LeafDropZone {
   // Check if cursor is over the tab bar or singleton handle
   const tabBar = leafEl.querySelector('.pane-leaf-tabs') as HTMLElement | null;
   const singletonHandle = leafEl.querySelector('.singleton-handle') as HTMLElement | null;

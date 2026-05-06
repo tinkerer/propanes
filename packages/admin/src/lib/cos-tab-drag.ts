@@ -372,7 +372,9 @@ export function startCosTabDrag(e: MouseEvent, config: CosTabDragConfig): void {
 
     if (dropTarget.kind === 'popout-edge') {
       cosRemoveTabFromLeaf(config.leafId, config.tabId);
-      cosDockTabToEdge(config.tabId, dropTarget.edge, true, { floating: true });
+      // Popout outer-edge drops are *external* drawers — they extend past the
+      // popout into page space rather than overlaying the popout's content.
+      cosDockTabToEdge(config.tabId, dropTarget.edge, true, { floating: true, external: true });
       return;
     }
 
@@ -511,11 +513,13 @@ export function startCosLeafDrag(e: MouseEvent, config: CosLeafDragConfig): void
     const tabs = [...sourceLeaf.tabs];
 
     if (dropTarget.kind === 'popout-edge') {
-      // Dock the whole pane as a floating companion at the chosen popout edge.
-      // The first tab opens (or merges into) the drawer at that edge;
-      // subsequent tabs from the same source leaf join as additional tabs.
+      // Dock the whole pane as an *external* floating companion at the chosen
+      // popout edge — the drawer extends past the popout into page space
+      // rather than overlaying the popout's content. The first tab opens (or
+      // merges into) the drawer at that edge; subsequent tabs from the same
+      // source leaf join as additional tabs in the same drawer.
       for (const t of tabs) cosRemoveTabFromLeaf(config.leafId, t);
-      cosDockTabToEdge(tabs[0], dropTarget.edge, true, { floating: true });
+      cosDockTabToEdge(tabs[0], dropTarget.edge, true, { floating: true, external: true });
       const dockedLeaf = cosFindLeafWithTab(tabs[0]);
       if (dockedLeaf) {
         for (let i = 1; i < tabs.length; i++) cosAddTabToLeaf(dockedLeaf.id, tabs[i], false);

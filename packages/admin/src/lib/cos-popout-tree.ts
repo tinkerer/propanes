@@ -962,10 +962,14 @@ export function cosDockTabToEdge(
   tabId: string,
   edge: 'L' | 'R' | 'T' | 'B',
   activate = true,
-  opts?: { floating?: boolean },
+  opts?: { floating?: boolean; external?: boolean },
 ) {
   const tree = clone(cosPopoutTree.value);
   const floating = opts?.floating === true;
+  // `external` only makes sense when floating — otherwise it's a regular
+  // split and there's nothing to render outside the popout. Force it off
+  // when the caller forgot to also pass floating.
+  const external = floating && opts?.external === true;
 
   // Detach the tab from any leaf currently holding it.
   for (const leaf of getAllLeavesLocal(tree.root)) {
@@ -980,12 +984,17 @@ export function cosDockTabToEdge(
 
   // Try to reuse an existing root-level companion split on the same edge —
   // when the user docks multiple tabs to the same edge they should land in
-  // the same companion pane. Only reuse when the floating-ness matches; we
-  // don't want a floating dock to merge into an existing non-floating split.
+  // the same companion pane. Only reuse when the floating-ness *and*
+  // external-ness both match; mixing internal/external drawers in the same
+  // leaf would render half the tabs in the wrong place.
   if (tree.root.type === 'split' && tree.root.direction === wantDir) {
     const idx = wantPos === 'first' ? 0 : 1;
     const sideChild = tree.root.children[idx];
-    if (sideChild.type === 'leaf' && !!sideChild.floating === floating) {
+    if (
+      sideChild.type === 'leaf' &&
+      !!sideChild.floating === floating &&
+      !!sideChild.external === external
+    ) {
       if (!sideChild.tabs.includes(tabId)) sideChild.tabs.push(tabId);
       if (activate) sideChild.activeTabId = tabId;
       cleanupEmptyLeaves(tree);
@@ -1003,6 +1012,7 @@ export function cosDockTabToEdge(
     tabs: [tabId],
     activeTabId: tabId,
     ...(floating ? { floating: true } : {}),
+    ...(external ? { external: true } : {}),
   };
   cleanupEmptyLeaves(tree);
   const oldRoot = structuredClone(tree.root);
@@ -1026,6 +1036,88 @@ export function cosDockTabToEdge(
 // adjacent edge — clicking expands it back. `collapseLeafToEdge` rotates the
 // parent split's direction + child order so the handle appears on the
 // requested edge regardless of where the leaf currently sits.
+
+/**
+ * Flip a leaf between drawer (floating) and split (non-floating) modes.
+ * Promoting a split to a drawer keeps its position in the parent split but
+ * starts overlaying the sibling; demoting a drawer to a split removes the
+ * overlay so both children share the parent's space proportionally.
+ */
+export function cosSetLeafFloating(leafId: string, floating: boolean) {
+  const tree = clone(cosPopoutTree.value);
+  const leaf = findLeafLocal(tree.root, leafId);
+  if (!leaf) return;
+  if (!!leaf.floating === floating) return;
+  leaf.floating = floating || undefined;
+  if (!floating) leaf.external = undefined;
+  commit(tree);
+}
+
+/**
+ * Toggle a floating drawer between overlay (internal) and external — the
+ * external variant renders outside the popout's bounds, anchored to the
+ * popout's edge. Has no effect on non-floating leaves (a regular split has
+ * no edge to anchor outside).
+ */
+export function cosSetLeafExternal(leafId: string, external: boolean) {
+  const tree = clone(cosPopoutTree.value);
+  const leaf = findLeafLocal(tree.root, leafId);
+  if (!leaf || !leaf.floating) return;
+  if (!!leaf.external === external) return;
+  leaf.external = external || undefined;
+  commit(tree);
+}
+
+/**
+ * Move a floating drawer leaf to a different edge of the popout (L/R/T/B).
+ * Implemented by detaching all the leaf's tabs and re-docking them via
+ * `cosDockTabToEdge` so the parent split's direction + child order land
+ * correctly. Preserves floating + external + activeTab.
+ */
+export function cosMoveDrawerToEdge(leafId: string, edge: 'L' | 'R' | 'T' | 'B') {
+  const leaf = findLeafLocal(cosPopoutTree.value.root, leafId);
+  if (!leaf || !leaf.floating) return;
+  const tabs = [...leaf.tabs];
+  const active = leaf.activeTabId;
+  const external = !!leaf.external;
+  if (tabs.length === 0) return;
+  cosDockTabToEdge(tabs[0], edge, active === tabs[0], { floating: true, external });
+  const dockedLeaf = cosFindLeafWithTab(tabs[0]);
+  if (dockedLeaf) {
+    for (let i = 1; i < tabs.length; i++) {
+      cosAddTabToLeaf(dockedLeaf.id, tabs[i], active === tabs[i]);
+    }
+  }
+}
+
+// --- Drawer handle position (slide along the edge) ---
+//
+// Hamburger position along the drawer's edge, normalized 0..1 per leaf id.
+// Defaults to 0.5 (center) when missing. Persisted to localStorage via a
+// simple JSON object so the hamburger stays where the operator put it
+// across reloads.
+
+const DRAWER_HANDLE_POS_KEY = 'pw-cos-drawer-handle-pos';
+const initialHandlePos: Record<string, number> = (() => {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(DRAWER_HANDLE_POS_KEY) : null;
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') return parsed;
+    return {};
+  } catch { return {}; }
+})();
+export const cosDrawerHandlePos = signal<Record<string, number>>(initialHandlePos);
+export function cosGetDrawerHandlePos(leafId: string): number {
+  const v = cosDrawerHandlePos.value[leafId];
+  return typeof v === 'number' ? v : 0.5;
+}
+export function cosSetDrawerHandlePos(leafId: string, pos: number) {
+  const clamped = Math.max(0, Math.min(1, pos));
+  if (cosDrawerHandlePos.value[leafId] === clamped) return;
+  cosDrawerHandlePos.value = { ...cosDrawerHandlePos.value, [leafId]: clamped };
+  try { localStorage.setItem(DRAWER_HANDLE_POS_KEY, JSON.stringify(cosDrawerHandlePos.value)); } catch { /* ignore */ }
+}
 
 export function cosToggleLeafCollapsed(leafId: string) {
   const tree = clone(cosPopoutTree.value);
