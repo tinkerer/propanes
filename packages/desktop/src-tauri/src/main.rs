@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod hotkey;
 mod panels;
 mod tray;
 
@@ -24,11 +25,23 @@ fn get_server_url() -> String {
 }
 
 fn main() {
+    // Capture exit backtrace to debug what triggers app termination
+    extern "C" fn on_exit() {
+        eprintln!("=== atexit: process exiting — backtrace ===");
+        let bt = std::backtrace::Backtrace::force_capture();
+        eprintln!("{bt}");
+    }
+    unsafe {
+        extern "C" {
+            fn atexit(func: extern "C" fn()) -> i32;
+        }
+        atexit(on_exit);
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // On second instance, just show the CoS panel
             panels::toggle_cos(app);
         }))
         .plugin(tauri_nspanel::init())
@@ -39,7 +52,6 @@ fn main() {
             get_server_url,
         ])
         .setup(|app| {
-            // Hide dock icon — tray-only app
             #[cfg(target_os = "macos")]
             {
                 use objc2::MainThreadMarker;
@@ -53,8 +65,25 @@ fn main() {
             tray::setup(&handle)?;
             panels::create_panels(&handle)?;
 
+            let hotkey_handle = handle.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                if !hotkey::check_accessibility() {
+                    hotkey::prompt_accessibility_settings(&hotkey_handle);
+                }
+                hotkey::start_listener(hotkey_handle);
+            });
+
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error running ProPanes");
+        .build(tauri::generate_context!())
+        .expect("error building ProPanes")
+        .run(|_app_handle, event| {
+            // Tray-only app: never auto-exit when panels close.
+            // Explicit quit via tray menu calls app.exit(0) which bypasses this.
+            if let tauri::RunEvent::ExitRequested { api, .. } = event {
+                eprintln!(">>> ExitRequested intercepted — preventing exit");
+                api.prevent_exit();
+            }
+        });
 }

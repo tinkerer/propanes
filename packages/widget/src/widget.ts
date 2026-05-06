@@ -318,6 +318,10 @@ export class ProPanesElement {
       }
     };
 
+    window.addEventListener('propanes:start-brainstorm', () => {
+      if (!this.voiceListenSessionId) this.startListenMode({ silent: true });
+    });
+
   }
 
   private updateWorkbenchBadge(waitingCount: number) {
