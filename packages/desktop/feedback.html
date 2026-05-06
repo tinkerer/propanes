@@ -48,6 +48,21 @@
         s.dataset.appId = 'propanes-desktop';
         document.head.appendChild(s);
       })();
+
+      // Drag support — startDragging works on borderless windows
+      document.querySelector('.fb-header').addEventListener('mousedown', async () => {
+        const { getCurrentWindow } = window.__TAURI__.window;
+        await getCurrentWindow().startDragging();
+      });
+
+      // Esc hides the panel instead of closing the app
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          window.__TAURI__.core.invoke('toggle_feedback_panel');
+        }
+      }, true);
     </script>
   </body>
 </html>

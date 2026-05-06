@@ -12,10 +12,6 @@
   "app": {
     "withGlobalTauri": true,
     "windows": [],
-    "trayIcon": {
-      "iconPath": "icons/icon.png",
-      "iconAsTemplate": true
-    },
     "security": {
       "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' http://localhost:* ws://localhost:* https://* wss://*; img-src 'self' data: blob: http://localhost:*; frame-src http://localhost:* https://*; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:*"
     }

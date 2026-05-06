@@ -16,6 +16,20 @@ import { SetupAssistantDialog } from '../dispatch/SetupAssistantDialog.js';
 import { PageView } from './PageView.js';
 import { ChiefOfStaffBubble } from '../cos/ChiefOfStaffBubble.js';
 
+const isTauri = !!(window as any).__TAURI__ || !!(window as any).__TAURI_INTERNALS__;
+
+function tauriInvoke(cmd: string) {
+  const w = window as any;
+  // Tauri v2: core.invoke or fallback to internals
+  w.__TAURI__?.core?.invoke?.(cmd) ?? w.__TAURI_INTERNALS__?.invoke?.(cmd);
+}
+
+function tauriStartDrag() {
+  const w = window as any;
+  w.__TAURI__?.window?.getCurrentWindow?.()?.startDragging?.()
+    ?? w.__TAURI_INTERNALS__?.invoke?.('plugin:window|start_dragging');
+}
+
 function CosEmbedRoot() {
   // Force the Ops chat open and load apps so dispatch / app context resolves.
   useEffect(() => {
@@ -26,6 +40,23 @@ function CosEmbedRoot() {
   }, []);
   return (
     <div class="pw-cos-embed-root">
+      {isTauri && (
+        <div
+          class="tauri-drag-bar"
+          data-tauri-drag-region
+          onMouseDown={(e) => {
+            if ((e.target as HTMLElement).tagName === 'BUTTON') return;
+            tauriStartDrag();
+          }}
+        >
+          <span class="tauri-drag-bar-label">ProPanes</span>
+          <button
+            class="tauri-drag-bar-close"
+            onClick={() => tauriInvoke('toggle_cos_panel')}
+            title="Hide panel"
+          >&times;</button>
+        </div>
+      )}
       <ChiefOfStaffBubble floatingButton={false} mode="pane" />
     </div>
   );
