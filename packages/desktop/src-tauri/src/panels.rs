@@ -1,12 +1,11 @@
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use objc2::runtime::NSObjectProtocol;
 use objc2::{ClassType, Message};
 use tauri_nspanel::panel;
 use tauri_nspanel::ManagerExt as NSPanelManagerExt;
 use tauri_nspanel::WebviewWindowExt;
 
-// Define a non-activating panel type
 panel!(ProPanel {
     config: {
         can_become_key_window: true,
@@ -39,7 +38,92 @@ pub fn get_server_url() -> String {
 pub fn create_panels(app: &AppHandle) -> tauri::Result<()> {
     create_cos_panel(app)?;
     create_feedback_panel(app)?;
+    #[cfg(target_os = "macos")]
+    install_esc_override();
     Ok(())
+}
+
+/// Override `cancelOperation:` on the RawProPanel ObjC class so Esc hides
+/// panels (`orderOut:`) instead of closing them. NSPanel's default
+/// `cancelOperation:` calls `close`, which destroys the window and can
+/// trigger app exit for an Accessory-policy app with no remaining windows.
+/// This fires at the Cocoa responder-chain level, before JS keydown events.
+#[cfg(target_os = "macos")]
+fn install_esc_override() {
+    use std::ffi::c_void;
+
+    extern "C" {
+        fn objc_getClass(name: *const u8) -> *mut c_void;
+    }
+
+    extern "C" fn order_out(this: *mut c_void, sel_name: &str) {
+        eprintln!(">>> {} intercepted — orderOut instead", sel_name);
+        unsafe {
+            let obj = &*(this as *const objc2::runtime::AnyObject);
+            let _: () = objc2::msg_send![obj, orderOut: std::ptr::null::<objc2::runtime::AnyObject>()];
+        }
+    }
+
+    extern "C" fn on_cancel(this: *mut c_void, _cmd: *mut c_void, _sender: *mut c_void) {
+        order_out(this, "cancelOperation:");
+    }
+
+    extern "C" fn on_perform_close(this: *mut c_void, _cmd: *mut c_void, _sender: *mut c_void) {
+        order_out(this, "performClose:");
+    }
+
+    extern "C" fn on_close(this: *mut c_void, _cmd: *mut c_void) {
+        // close takes no argument (unlike cancelOperation:/performClose: which take a sender)
+        order_out(this, "close");
+    }
+
+    fn add_or_replace_raw(
+        cls: *mut c_void,
+        sel_name: &[u8],
+        imp: *const c_void,
+        types: &[u8],
+    ) {
+        unsafe {
+            extern "C" {
+                fn sel_registerName(name: *const u8) -> *mut c_void;
+                fn class_addMethod(
+                    cls: *mut c_void,
+                    sel: *mut c_void,
+                    imp: *const c_void,
+                    types: *const u8,
+                ) -> bool;
+                fn class_replaceMethod(
+                    cls: *mut c_void,
+                    sel: *mut c_void,
+                    imp: *const c_void,
+                    types: *const u8,
+                ) -> *mut c_void;
+            }
+            let sel = sel_registerName(sel_name.as_ptr());
+            let added = class_addMethod(cls, sel, imp, types.as_ptr());
+            if !added {
+                class_replaceMethod(cls, sel, imp, types.as_ptr());
+                eprintln!(
+                    "install_esc_override: replaced existing {}",
+                    std::str::from_utf8(&sel_name[..sel_name.len() - 1]).unwrap_or("?")
+                );
+            }
+        }
+    }
+
+    unsafe {
+        let cls = objc_getClass(b"ProPanel\0".as_ptr());
+        if cls.is_null() {
+            eprintln!("install_esc_override: ProPanel class not found");
+            return;
+        }
+        // cancelOperation: and performClose: take (self, _cmd, sender)
+        add_or_replace_raw(cls, b"cancelOperation:\0", on_cancel as *const c_void, b"v@:@\0");
+        add_or_replace_raw(cls, b"performClose:\0", on_perform_close as *const c_void, b"v@:@\0");
+        // close takes (self, _cmd) — no sender argument
+        add_or_replace_raw(cls, b"close\0", on_close as *const c_void, b"v@:\0");
+        eprintln!("install_esc_override: overrides installed on ProPanel (cancelOperation:, performClose:, close)");
+    }
 }
 
 fn create_cos_panel(app: &AppHandle) -> tauri::Result<()> {
@@ -54,7 +138,6 @@ fn create_cos_panel(app: &AppHandle) -> tauri::Result<()> {
             .always_on_top(true)
             .skip_taskbar(true)
             .on_page_load(|webview, _payload| {
-                // Auto-login: if no token in localStorage, fetch one and reload
                 let _ = webview.eval(
                     r#"(async()=>{
                         if (!localStorage.getItem('pw-admin-token')) {
@@ -73,15 +156,23 @@ fn create_cos_panel(app: &AppHandle) -> tauri::Result<()> {
                         }
                     })()"#,
                 );
+                let _ = webview.eval(
+                    r#"if(!window.__ppEscInstalled){window.__ppEscInstalled=true;document.addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();window.__TAURI__.core.invoke('toggle_cos_panel')}},true)}"#,
+                );
             })
             .build()?;
 
-    // Convert WebviewWindow → NSPanel
+    win.on_window_event(|event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+        }
+    });
+
     let panel = win.to_panel::<ProPanel>()?;
-    panel.set_level(3); // NSFloatingWindowLevel
+    panel.set_level(3);
     panel.set_floating_panel(true);
     panel.set_becomes_key_only_if_needed(true);
-    panel.set_style_mask(objc2_app_kit::NSWindowStyleMask(1 << 7)); // nonActivatingPanel
+    panel.set_style_mask(objc2_app_kit::NSWindowStyleMask(1 << 7));
 
     Ok(())
 }
@@ -99,6 +190,12 @@ fn create_feedback_panel(app: &AppHandle) -> tauri::Result<()> {
     .always_on_top(true)
     .skip_taskbar(true)
     .build()?;
+
+    win.on_window_event(|event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+        }
+    });
 
     let panel = win.to_panel::<ProPanel>()?;
     panel.set_level(3);
@@ -128,6 +225,38 @@ pub fn toggle_feedback(app: &AppHandle) {
             position_panel(app, FEEDBACK_LABEL, 380.0, 460.0);
             panel.show();
         }
+    }
+}
+
+pub fn show_feedback_spotlight(app: &AppHandle) {
+    if let Ok(panel) = app.get_webview_panel(FEEDBACK_LABEL) {
+        if panel.is_visible() {
+            panel.hide();
+            return;
+        }
+        if let Some(window) = panel.to_window() {
+            if let Ok(Some(monitor)) = window.primary_monitor() {
+                let scale = monitor.scale_factor();
+                let screen_w = monitor.size().width as f64 / scale;
+                let screen_h = monitor.size().height as f64 / scale;
+                let panel_w = 380.0;
+                let x = (screen_w - panel_w) / 2.0;
+                let y = screen_h * 0.2;
+                let _ = window.set_position(tauri::Position::Logical(
+                    tauri::LogicalPosition { x, y },
+                ));
+            }
+        }
+        panel.show();
+    }
+}
+
+pub fn show_feedback_spotlight_brainstorm(app: &AppHandle) {
+    show_feedback_spotlight(app);
+    if let Some(wv) = app.get_webview_window(FEEDBACK_LABEL) {
+        let _ = wv.eval(
+            "if(window.promptWidget){window.promptWidget.open();window.dispatchEvent(new CustomEvent('propanes:start-brainstorm'))}"
+        );
     }
 }
 

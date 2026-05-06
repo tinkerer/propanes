@@ -129,7 +129,7 @@ export function getViewMode(sessionId: string): ViewMode {
   // conversation is what an operator wants when opening a session log; the
   // raw xterm is opt-in.
   const sess = allSessions.value.find((s: any) => s.id === sessionId);
-  if (sess?.jsonlPath) return 'structured';
+  if (sess?.jsonlPath) return 'split';
   return 'terminal';
 }
 
