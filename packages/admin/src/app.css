@@ -13007,6 +13007,13 @@ body.pw-isolate {
    directly into this element, so it has to be the scroll container itself
    (no inner JsonlView managing scroll). Without overflow:auto the bubbles
    would overflow the panel and bleed into the composer / chat below. */
+.cos-thread-panel-jsonl-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
 .cos-thread-panel-jsonl {
   flex: 1 1 auto;
   min-height: 0;
