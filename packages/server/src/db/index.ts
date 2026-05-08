@@ -215,6 +215,8 @@ export function runMigrations() {
     // thread survives feedback purges. Indexed for the by-feedback lookup.
     `ALTER TABLE cos_threads ADD COLUMN feedback_id TEXT REFERENCES feedback_items(id) ON DELETE SET NULL`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_cos_threads_feedback ON cos_threads(feedback_id) WHERE feedback_id IS NOT NULL`,
+    `ALTER TABLE agent_endpoints ADD COLUMN description TEXT`,
+    `ALTER TABLE agent_endpoints ADD COLUMN source_session_ids TEXT`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after

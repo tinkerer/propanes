@@ -121,7 +121,7 @@ export function PopoutSplitPane({
           const activeSid = activeCompanionId;
           if (!activeSid) return 'PANE';
           const t = activeSid.split(':')[0];
-          return (t === 'jsonl' || t === 'summary' || t === 'feedback' || t === 'iframe' || t === 'terminal' || t === 'isolate' || t === 'url')
+          return (t === 'jsonl' || t === 'summary' || t === 'feedback' || t === 'iframe' || t === 'terminal' || t === 'isolate' || t === 'url' || t === 'tasks')
             ? t.toUpperCase()
             : (panelRightTabs.length > 1 ? `${panelRightTabs.length} TABS` : 'PANE');
         })()}

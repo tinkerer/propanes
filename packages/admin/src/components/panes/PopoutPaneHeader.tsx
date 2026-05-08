@@ -77,7 +77,7 @@ export function PopoutPaneHeader({
             })()
           ) : (
             (() => {
-              const label = isJsonlTab ? `JSONL: pw-${realSessionId!.slice(-6)}`
+              const label = isJsonlTab ? `Conversation: pw-${realSessionId!.slice(-6)}`
                 : isFeedbackTab ? `Ticket: pw-${realSessionId!.slice(-6)}`
                 : isIframeTab ? `Page: pw-${realSessionId!.slice(-6)}`
                 : isIsolateTab ? `Isolate: ${realSessionId}`

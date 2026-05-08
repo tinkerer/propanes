@@ -59,12 +59,14 @@ export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
   const isFile = sid.startsWith('file:');
   const isWiggumRuns = sid.startsWith('wiggum-runs:');
   const isArtifact = sid.startsWith('artifact:');
-  const isCompanion = isJsonl || isSummary || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact;
+  const isTasks = sid.startsWith('tasks:');
+  const isFiles = sid.startsWith('files:');
+  const isCompanion = isJsonl || isSummary || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact || isTasks || isFiles;
   const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
   const custom = getSessionLabel(sid);
   if (custom) return custom;
-  const s = (isIsolate || isUrl || isFile || isWiggumRuns || isArtifact) ? null : sessionMap.get(realSid);
-  if (isJsonl) return `JSONL: ${s?.feedbackTitle || s?.agentName || realSid.slice(-6)}`;
+  const s = (isIsolate || isUrl || isFile || isWiggumRuns || isArtifact || isTasks || isFiles) ? null : sessionMap.get(realSid);
+  if (isJsonl) return `Conversation: ${s?.feedbackTitle || s?.agentName || realSid.slice(-6)}`;
   if (isSummary) return `Summary: ${s?.feedbackTitle || s?.agentName || realSid.slice(-6)}`;
   if (isFeedback) return `Ticket: ${s?.feedbackTitle || realSid.slice(-6)}`;
   if (isIframe) return `Page: ${realSid.slice(-6)}`;
@@ -72,6 +74,8 @@ export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (isIsolate) return `Isolate: ${realSid}`;
   if (isUrl) { try { return `Iframe: ${new URL(realSid).hostname}`; } catch { return `Iframe: ${realSid.slice(0, 30)}`; } }
   if (isFile) { const parts = realSid.split('/'); return parts[parts.length - 1] || realSid.slice(-20); }
+  if (isTasks) return `Tasks: ${realSid.slice(-6)}`;
+  if (isFiles) return `Files: ${realSid.slice(-6)}`;
   if (isWiggumRuns) return `Wiggum: ${realSid.slice(-6)}`;
   if (isArtifact) {
     const art = cosArtifacts.value[realSid];

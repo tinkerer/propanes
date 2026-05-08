@@ -177,7 +177,7 @@ function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }
         onClick={() => { jsonlDropdownOpen.value = isOpen ? null : sessionId; }}
         title={claudeUuid ? `${runtimeLabel} session: ${claudeUuid}` : undefined}
       >
-        JSONL: {shortUuid} {files.length > 1 && <span class="id-dropdown-caret">{'\u25BE'}</span>}
+        Conversation: {shortUuid} {files.length > 1 && <span class="id-dropdown-caret">{'\u25BE'}</span>}
       </span>
       {selectedFile && (
         <span class="jsonl-file-badge" title={files.find(f => f.id === selectedFile)?.label || selectedFile}>
@@ -516,14 +516,16 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   const isFile = sid.startsWith('file:');
   const isWiggumRuns = sid.startsWith('wiggum-runs:');
   const isArtifact = sid.startsWith('artifact:');
-  const isCompanion = isJsonl || isSummary || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact;
+  const isTasks = sid.startsWith('tasks:');
+  const isFiles = sid.startsWith('files:');
+  const isCompanion = isJsonl || isSummary || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact || isTasks || isFiles;
   const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
-  const sess = (isIsolate || isUrl || isFile || isWiggumRuns || isArtifact) ? null : sessionMap.get(realSid);
+  const sess = (isIsolate || isUrl || isFile || isWiggumRuns || isArtifact || isTasks || isFiles) ? null : sessionMap.get(realSid);
 
   const customLabel = getSessionLabel(sid);
   if (customLabel) return customLabel;
 
-  if (isJsonl) return `JSONL: ${sess?.feedbackTitle || sess?.agentName || realSid.slice(-6)}`;
+  if (isJsonl) return `Conversation: ${sess?.feedbackTitle || sess?.agentName || realSid.slice(-6)}`;
   if (isSummary) return `Summary: ${sess?.feedbackTitle || sess?.agentName || realSid.slice(-6)}`;
   if (isFeedback) return `FB: ${sess?.feedbackTitle || realSid.slice(-6)}`;
   if (isIframe) return `Page: ${realSid.slice(-6)}`;
@@ -537,6 +539,8 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (isUrl) { try { return `Iframe: ${new URL(realSid).hostname}`; } catch { return `Iframe: ${realSid.slice(0, 30)}`; } }
   if (isFile) { const parts = realSid.split('/'); return parts[parts.length - 1] || realSid.slice(-20); }
   if (isWiggumRuns) return `Wiggum: ${realSid.slice(-6)}`;
+  if (isTasks) return `Tasks: ${realSid.slice(-6)}`;
+  if (isFiles) return `Files: ${realSid.slice(-6)}`;
   if (isArtifact) {
     const art = cosArtifacts.value[realSid];
     const prefix = art ? (art.kind === 'code' ? 'Code' : art.kind === 'table' ? 'Table' : 'List') : 'Artifact';
@@ -882,6 +886,8 @@ export function LeafPane({ leaf }: LeafPaneProps) {
         } else {
           termPickerOpen.value = { kind: 'companion', sessionId: menuSessionId };
         }
+      } else if (key === 't') {
+        if (sess?.jsonlPath) toggleCompanion(menuSessionId, 'tasks');
       } else if (key === 'u') {
         termPickerOpen.value = { kind: 'url' };
       } else if (key === 'o') {
@@ -1125,7 +1131,7 @@ export function LeafPane({ leaf }: LeafPaneProps) {
       class={`pane-leaf${isFocused ? ' pane-leaf-focused' : ''}`}
       data-leaf-id={leaf.id}
       onMouseDown={handleMouseDown}
-      style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflow: 'hidden', position: 'relative', zIndex: isFocused && activePanelId.value == null ? 1000 : undefined }}
+      style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflow: 'hidden', position: 'relative' }}
     >
       <div class="terminal-tab-bar">
         <div
@@ -1147,12 +1153,14 @@ export function LeafPane({ leaf }: LeafPaneProps) {
             const isSettings = sid.startsWith('settings:');
             const isWiggumRuns = sid.startsWith('wiggum-runs:');
             const isArtifact = sid.startsWith('artifact:');
+            const isTasks = sid.startsWith('tasks:');
+            const isFiles = sid.startsWith('files:');
             const isCos = sid.startsWith('cos:');
-            const isCompanion = isView || isJsonl || isSummary || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isSettings || isWiggumRuns || isArtifact || isCos;
+            const isCompanion = isView || isJsonl || isSummary || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isSettings || isWiggumRuns || isArtifact || isTasks || isFiles || isCos;
             const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
             const isActive = sid === leaf.activeTabId;
             const isExited = exited.has(realSid);
-            const sess = (isView || isIsolate || isUrl || isFile) ? null : sessionMap.get(realSid);
+            const sess = (isView || isIsolate || isUrl || isFile || isTasks || isFiles) ? null : sessionMap.get(realSid);
             const isPlain = !isCompanion && sess?.permissionProfile === 'plain';
             const inputState = !isExited && !isCompanion ? (sessionInputStates.value.get(sid) || null) : null;
             const label = getTabLabel(sid, sessionMap);
@@ -1220,6 +1228,8 @@ export function LeafPane({ leaf }: LeafPaneProps) {
                   isFile ? '\u{1F4C4}' :
                   isWiggumRuns ? '\u{1F43B}' :
                   isArtifact ? '\u{1F4CB}' :
+                  isTasks ? '\u2611' :
+                  isFiles ? '\u{1F4C1}' :
                   isSettings ? '\u2699' :
                   isCos ? '\u2B50' :
                   '\u25C6'

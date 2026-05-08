@@ -1,69 +1,56 @@
-import { useCallback, useRef, useState } from 'preact/hooks';
-import { type ComponentChildren } from 'preact';
-import { PopupMenu } from '../pickers/PopupMenu.js';
+import { useCallback, useRef } from 'preact/hooks';
+import { type ComponentChildren, type RefObject } from 'preact';
 
 /**
- * Unified pull-handle for both pane-mode companion drawers (CosBubbleDrawers)
- * and cos popout-tree drawers (CosPopoutTreeView). Renders:
+ * Unified drawer pull-handle — a single popout-grab-tab–shaped container
+ * (20×72px) with a nested ☰ button at the top and a ┃ grip indicator below.
  *
- *   - A thin line/track along one edge of a host element.
- *   - A hamburger button positioned along that line. Clicking opens a popup
- *     menu of context-specific actions (provided by the parent).
+ * **Tab body** (┃ grip area):
+ *   - Click → toggle collapse (hide/show drawer).
+ *   - Drag perpendicular → resize the drawer.
+ *   - Drag parallel → slide the handle along the edge (like popout grabY).
+ *   - Drag past `flipRect` boundary → fire `onDragOutside` (parent flips
+ *     internal↔external); drag continues seamlessly from the new position.
  *
- * Gestures on the hamburger:
- *   - Click (no drag)      → open the popup menu.
- *   - Drag perpendicular   → resize via `onResize(deltaPerpendicularPx)`.
- *   - Drag parallel        → slide along the line via `onPositionChange(0..1)`.
- *   - Drag past host edge  → fire `onDragOutside()` once (parent decides what
- *                            "outside" means — for cos popout the leaf goes
- *                            external, for pane mode the drawer detaches
- *                            from the cos pane and floats in viewport space).
- *
- * Click on the line itself (not the hamburger) toggles the collapsed state
- * via `onClickCollapse()` so the operator can hide/show the drawer with a
- * single tap on a long, easy-to-hit edge.
+ * **☰ hamburger** (nested button):
+ *   - All behavior owned by parent via `onHamburgerMouseDown`.
  */
 export type DrawerEdge = 'left' | 'right' | 'top' | 'bottom';
 
 export interface DrawerPullHandleProps {
-  /** Edge of the host where the line runs. Resize axis is perpendicular. */
   edge: DrawerEdge;
-  /**
-   * Bounding rect of the *host* (the cos popout, or the cos pane). The line
-   * is drawn along the chosen edge of this rect. The line is what tracks the
-   * host during drag/move/resize — its rect is computed from this in real
-   * time by the parent (via rAF or signal).
-   */
-  hostRect: { top: number; left: number; width: number; height: number };
-  /** Hamburger position along the edge, normalized 0..1. */
-  hamburgerPos: number;
-  /** Z-index applied to both line and hamburger (hamburger is +1). */
+  drawerRect: { top: number; left: number; width: number; height: number };
+  handlePos: number;
   zIndex: number;
-  /** Drawer collapsed state — drives the line tooltip ("show" vs "hide"). */
   collapsed?: boolean;
 
-  // -- Callbacks --
-  /** Fired once at the start of a perpendicular drag — the parent should
-   *  capture its current "size" state here so subsequent `onResize` deltas
-   *  can be applied against a stable starting value. */
+  // -- Tab (┃) callbacks --
   onResizeStart?: () => void;
-  /** Drag perpendicular to the line. `delta` is signed pixels relative to
-   *  drag start; positive = toward the host's outer side. */
   onResize?: (deltaPerpendicularPx: number) => void;
-  /** Click on the line (no drag) toggles the drawer hide/show. */
   onClickCollapse?: () => void;
-  /** Hamburger slid along the edge. `pos` is normalized 0..1. */
+  /** Slide the handle along the edge (normalized 0..1). */
   onPositionChange?: (pos: number) => void;
-  /** Hamburger dragged past the host's perpendicular bounds by `OUTSIDE_THRESHOLD`. */
-  onDragOutside?: () => void;
 
-  /** Popup-menu contents — receives a close handler so items can dismiss it. */
-  menuItems: (close: () => void) => ComponentChildren;
+  // -- Edge-crossing flip --
+  /** Rect + edge defining the boundary for the overlay↔external flip.
+   *  When the cursor is dragged past `flipRect`'s `flipEdge` by
+   *  OUTSIDE_THRESHOLD px in the direction selected by `flipDirection`,
+   *  `onDragOutside` fires. The drag continues seamlessly — startX/startY
+   *  are re-anchored, outwardSign is inverted, and onResizeStart re-arms. */
+  flipRect?: { top: number; left: number; width: number; height: number };
+  flipEdge?: DrawerEdge;
+  flipDirection?: 'outward' | 'inward';
+  onDragOutside?: (ev: MouseEvent) => void;
+
+  // -- Hamburger (☰) --
+  hamburgerRef?: RefObject<HTMLButtonElement>;
+  onHamburgerMouseDown?: (e: MouseEvent) => void;
+
+  children?: ComponentChildren;
 }
 
-const HAMBURGER_SIZE = 24;
-const LINE_THICKNESS = 4;
-const HAMBURGER_OFFSET = 14; // px above the line, toward host interior
+const TAB_WIDTH = 20;
+const TAB_HEIGHT = 72;
 const DRAG_THRESHOLD = 4;
 const OUTSIDE_THRESHOLD = 40;
 
@@ -71,206 +58,179 @@ function isHorizontalEdge(edge: DrawerEdge): boolean {
   return edge === 'top' || edge === 'bottom';
 }
 
-function lineRect(host: DrawerPullHandleProps['hostRect'], edge: DrawerEdge): { top: number; left: number; width: number; height: number } {
-  if (edge === 'left') return { top: host.top, left: host.left - LINE_THICKNESS / 2, width: LINE_THICKNESS, height: host.height };
-  if (edge === 'right') return { top: host.top, left: host.left + host.width - LINE_THICKNESS / 2, width: LINE_THICKNESS, height: host.height };
-  if (edge === 'top') return { top: host.top - LINE_THICKNESS / 2, left: host.left, width: host.width, height: LINE_THICKNESS };
-  return { top: host.top + host.height - LINE_THICKNESS / 2, left: host.left, width: host.width, height: LINE_THICKNESS };
-}
-
-function hamburgerXY(line: ReturnType<typeof lineRect>, edge: DrawerEdge, pos: number): { top: number; left: number } {
-  // Hamburger sits slightly *inside* the host (offset toward host interior)
-  // by HAMBURGER_OFFSET, centered perpendicular to the line. Position along
-  // the line is `pos` (0..1) clamped to leave room for the button.
-  const clampedPos = Math.max(0, Math.min(1, pos));
-  if (isHorizontalEdge(edge)) {
-    const x = line.left + clampedPos * Math.max(0, line.width - HAMBURGER_SIZE);
-    const y = edge === 'top'
-      ? line.top + LINE_THICKNESS // sit just below the top line
-      : line.top - HAMBURGER_SIZE; // sit just above the bottom line
-    // Apply HAMBURGER_OFFSET: shift toward host interior.
-    const shifted = edge === 'top' ? y + HAMBURGER_OFFSET : y - HAMBURGER_OFFSET;
-    return { top: shifted, left: x };
-  }
-  const y = line.top + clampedPos * Math.max(0, line.height - HAMBURGER_SIZE);
-  const x = edge === 'left'
-    ? line.left + LINE_THICKNESS
-    : line.left - HAMBURGER_SIZE;
-  const shifted = edge === 'left' ? x + HAMBURGER_OFFSET : x - HAMBURGER_OFFSET;
-  return { top: y, left: shifted };
+/** Tab bar rect — sits outside the drawer, flush against the chosen edge. */
+export function tabRect(
+  host: DrawerPullHandleProps['drawerRect'],
+  edge: DrawerEdge,
+  pos: number,
+): { top: number; left: number; width: number; height: number } {
+  const p = Math.max(0, Math.min(1, pos));
+  if (edge === 'left') return { top: host.top + p * Math.max(0, host.height - TAB_HEIGHT), left: host.left - TAB_WIDTH, width: TAB_WIDTH, height: TAB_HEIGHT };
+  if (edge === 'right') return { top: host.top + p * Math.max(0, host.height - TAB_HEIGHT), left: host.left + host.width, width: TAB_WIDTH, height: TAB_HEIGHT };
+  if (edge === 'top') return { top: host.top - TAB_WIDTH, left: host.left + p * Math.max(0, host.width - TAB_HEIGHT), width: TAB_HEIGHT, height: TAB_WIDTH };
+  return { top: host.top + host.height, left: host.left + p * Math.max(0, host.width - TAB_HEIGHT), width: TAB_HEIGHT, height: TAB_WIDTH };
 }
 
 export function DrawerPullHandle({
   edge,
-  hostRect,
-  hamburgerPos,
+  drawerRect,
+  handlePos,
   zIndex,
   collapsed,
   onResizeStart,
   onResize,
   onClickCollapse,
   onPositionChange,
+  flipRect,
+  flipEdge,
+  flipDirection,
   onDragOutside,
-  menuItems,
+  hamburgerRef,
+  onHamburgerMouseDown,
+  children,
 }: DrawerPullHandleProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuBtnRef = useRef<HTMLButtonElement>(null);
   const horizontal = isHorizontalEdge(edge);
+  const tab = tabRect(drawerRect, edge, handlePos);
 
-  const line = lineRect(hostRect, edge);
-  const ham = hamburgerXY(line, edge, hamburgerPos);
+  // Flip-detection rect defaults.
+  const fRect = flipRect ?? drawerRect;
+  const fEdge: DrawerEdge = flipEdge ?? edge;
+  const fSign = flipDirection === 'inward' ? -1 : 1;
 
-  // ---- Line click → collapse ----
-  const onLineMouseDown = useCallback(
-    (e: MouseEvent) => {
-      // If press began on the hamburger (visual sibling), let it handle.
-      if ((e.target as HTMLElement).closest('.drawer-pull-hamburger')) return;
-      e.preventDefault();
-      const startX = e.clientX;
-      const startY = e.clientY;
-      let moved = false;
-      let resizeArmed = false;
-      const onMove = (ev: MouseEvent) => {
-        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > DRAG_THRESHOLD) moved = true;
-        if (moved && onResize) {
-          if (!resizeArmed) {
-            resizeArmed = true;
-            onResizeStart?.();
-          }
-          // Drag along the line — treat as resize for ergonomics.
-          const dPerp = horizontal ? (ev.clientY - startY) : (ev.clientX - startX);
-          // Sign so that "outward" is positive: for right/bottom edges,
-          // outward = positive; for left/top, outward = negative.
-          const sign = (edge === 'right' || edge === 'bottom') ? 1 : -1;
-          onResize(dPerp * sign);
-        }
-      };
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-        if (!moved && onClickCollapse) onClickCollapse();
-      };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    },
-    [edge, horizontal, onResize, onResizeStart, onClickCollapse],
-  );
+  // Refs so the drag handler always calls the LATEST callback versions,
+  // even though the closure was created at mousedown time. Without these,
+  // a flip re-render produces new callbacks (with fresh isExternal etc.)
+  // but the in-flight drag closure still holds the stale originals.
+  const onResizeRef = useRef(onResize);         onResizeRef.current = onResize;
+  const onResizeStartRef = useRef(onResizeStart); onResizeStartRef.current = onResizeStart;
+  const onCollapseRef = useRef(onClickCollapse);  onCollapseRef.current = onClickCollapse;
+  const onPosChangeRef = useRef(onPositionChange); onPosChangeRef.current = onPositionChange;
+  const onFlipRef = useRef(onDragOutside);        onFlipRef.current = onDragOutside;
 
-  // ---- Hamburger gestures: click=menu, perpendicular drag=resize,
-  // parallel drag=slide, far perpendicular drag=outside. ----
-  const onHamburgerMouseDown = useCallback(
+  // ---- Tab: click → collapse, drag → resize + slide + flip ----
+  const onTabMouseDown = useCallback(
     (e: MouseEvent) => {
       if (e.button !== 0) return;
+      if ((e.target as HTMLElement).closest('.drawer-pull-hamburger')) return;
       e.preventDefault();
-      e.stopPropagation();
-      const startX = e.clientX;
-      const startY = e.clientY;
-      const startPos = hamburgerPos;
-      // Compute the host's parallel span at drag start, used to translate
-      // parallel drag delta into a normalized position delta.
-      const parallelSpan = horizontal ? hostRect.width : hostRect.height;
-      let dragged = false;
-      let firedOutside = false;
+      let startX = e.clientX;
+      let startY = e.clientY;
+      let startPos = handlePos;
+      const parallelSpan = horizontal ? drawerRect.width : drawerRect.height;
+      const parallelStart = horizontal ? drawerRect.top : drawerRect.left;
+      let moved = false;
       let resizeArmed = false;
+      let outwardSign: 1 | -1 = (edge === 'right' || edge === 'bottom') ? 1 : -1;
+      let localFSign = fSign;
+
       const onMove = (ev: MouseEvent) => {
         const dx = ev.clientX - startX;
         const dy = ev.clientY - startY;
-        if (!dragged && Math.hypot(dx, dy) > DRAG_THRESHOLD) dragged = true;
-        if (!dragged) return;
+        if (!moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) moved = true;
+        if (!moved) return;
 
-        // Perpendicular = resize axis; parallel = slide axis.
         const dPerp = horizontal ? dy : dx;
-        const dPar = horizontal ? dx : dy;
-        const outwardSign = (edge === 'right' || edge === 'bottom') ? 1 : -1;
-        const outward = dPerp * outwardSign;
 
-        // -- Outside detection: cursor pulled past host edge by OUTSIDE_THRESHOLD. --
-        if (!firedOutside && onDragOutside) {
-          const outsideOutward = (() => {
-            switch (edge) {
-              case 'right': return ev.clientX - (hostRect.left + hostRect.width);
-              case 'left':  return hostRect.left - ev.clientX;
-              case 'bottom':return ev.clientY - (hostRect.top + hostRect.height);
-              case 'top':   return hostRect.top - ev.clientY;
+        // -- Edge-crossing flip detection --
+        if (onFlipRef.current) {
+          const baseSigned = (() => {
+            switch (fEdge) {
+              case 'right': return ev.clientX - (fRect.left + fRect.width);
+              case 'left':  return fRect.left - ev.clientX;
+              case 'bottom':return ev.clientY - (fRect.top + fRect.height);
+              case 'top':   return fRect.top - ev.clientY;
             }
           })();
-          if (outsideOutward > OUTSIDE_THRESHOLD) {
-            firedOutside = true;
-            onDragOutside();
-            // End the drag — let the parent decide what happens next.
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
+          if (baseSigned * localFSign > OUTSIDE_THRESHOLD) {
+            onFlipRef.current(ev);
+            startX = ev.clientX;
+            startY = ev.clientY;
+            outwardSign = (outwardSign === 1 ? -1 : 1) as 1 | -1;
+            localFSign = (localFSign === 1 ? -1 : 1) as 1 | -1;
+            resizeArmed = false;
+            if (parallelSpan > 0) {
+              const cursorPar = horizontal ? ev.clientY : ev.clientX;
+              startPos = Math.max(0, Math.min(1, (cursorPar - parallelStart) / parallelSpan));
+            }
             return;
           }
         }
 
-        // -- Resize (perpendicular delta in pixels). --
-        if (onResize) {
-          if (!resizeArmed) {
-            resizeArmed = true;
-            onResizeStart?.();
-          }
-          onResize(outward);
+        // -- Perpendicular: resize --
+        if (onResizeRef.current) {
+          if (!resizeArmed) { resizeArmed = true; onResizeStartRef.current?.(); }
+          onResizeRef.current(dPerp * outwardSign);
         }
 
-        // -- Slide (parallel delta in normalized fraction). --
-        if (onPositionChange && parallelSpan > 0) {
+        // -- Parallel: slide handle along edge --
+        if (onPosChangeRef.current && parallelSpan > 0) {
+          const dPar = horizontal ? dx : dy;
           const newPos = Math.max(0, Math.min(1, startPos + dPar / parallelSpan));
-          if (newPos !== hamburgerPos) onPositionChange(newPos);
+          onPosChangeRef.current(newPos);
         }
       };
+
       const onUp = () => {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
-        if (!dragged) setMenuOpen((v) => !v);
+        if (!moved) onCollapseRef.current?.();
       };
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
     },
-    [edge, horizontal, hamburgerPos, hostRect.width, hostRect.height, hostRect.left, hostRect.top, onResize, onResizeStart, onPositionChange, onDragOutside],
+    // Stable deps — refs handle callback freshness; only geometry matters.
+    [edge, horizontal, handlePos, drawerRect.width, drawerRect.height,
+     drawerRect.top, drawerRect.left,
+     fRect.left, fRect.top, fRect.width, fRect.height, fEdge, fSign],
   );
 
+  const borderRadius = (() => {
+    switch (edge) {
+      case 'left':  return '8px 0 0 8px';
+      case 'right': return '0 8px 8px 0';
+      case 'top':   return '8px 8px 0 0';
+      case 'bottom':return '0 0 8px 8px';
+    }
+  })();
+  const borderNone = (() => {
+    switch (edge) {
+      case 'left':  return { borderRight: 'none' } as const;
+      case 'right': return { borderLeft: 'none' } as const;
+      case 'top':   return { borderBottom: 'none' } as const;
+      case 'bottom':return { borderTop: 'none' } as const;
+    }
+  })();
+
   return (
-    <>
-      <div
-        class={`drawer-pull-line drawer-pull-line-${edge}${collapsed ? ' drawer-pull-line-collapsed' : ''}`}
-        style={{
-          position: 'fixed',
-          top: line.top,
-          left: line.left,
-          width: line.width,
-          height: line.height,
-          zIndex,
-          cursor: horizontal ? 'ns-resize' : 'ew-resize',
-        }}
-        onMouseDown={onLineMouseDown}
-        title={collapsed ? 'Click to show drawer · drag to resize' : 'Click to hide drawer · drag to resize'}
-        aria-label={collapsed ? 'Show drawer' : 'Hide drawer'}
-        role="separator"
-        aria-orientation={horizontal ? 'horizontal' : 'vertical'}
-      />
+    <div
+      class={`drawer-pull-tab drawer-pull-tab-${edge}${collapsed ? ' drawer-pull-tab-collapsed' : ''}`}
+      style={{
+        position: 'fixed',
+        top: tab.top,
+        left: tab.left,
+        width: tab.width,
+        height: tab.height,
+        zIndex,
+        borderRadius,
+        ...borderNone,
+        cursor: horizontal ? 'ns-resize' : 'ew-resize',
+      }}
+      onMouseDown={onTabMouseDown}
+      title={collapsed ? 'Click to show drawer · drag to resize' : 'Click to hide drawer · drag to resize/slide'}
+      aria-label={collapsed ? 'Show drawer' : 'Hide drawer'}
+      role="separator"
+      aria-orientation={horizontal ? 'horizontal' : 'vertical'}
+    >
       <button
-        ref={menuBtnRef}
+        ref={hamburgerRef}
         type="button"
-        class={`drawer-pull-hamburger drawer-pull-hamburger-${edge}`}
-        style={{
-          position: 'fixed',
-          top: ham.top,
-          left: ham.left,
-          width: HAMBURGER_SIZE,
-          height: HAMBURGER_SIZE,
-          zIndex: zIndex + 1,
-        }}
+        class="drawer-pull-hamburger"
         onMouseDown={onHamburgerMouseDown}
-        title="Click for options · drag to resize/slide"
+        title="Click for options · drag to move"
         aria-haspopup="true"
-        aria-expanded={menuOpen}
       >☰</button>
-      {menuOpen && (
-        <PopupMenu anchorRef={menuBtnRef} onClose={() => setMenuOpen(false)}>
-          {menuItems(() => setMenuOpen(false))}
-        </PopupMenu>
-      )}
-    </>
+      <span class="drawer-pull-grip" aria-hidden="true">┃</span>
+      {children}
+    </div>
   );
 }

@@ -710,9 +710,8 @@ export function SessionsListView() {
             }
 
             // Keep registered apps in the list even with zero sessions so users can
-            // launch a new one via the + button. Skip when searching (search should
-            // only surface matching sessions) and respect active app filters.
-            if (!sessionSearchQuery.value) {
+            // launch a new one via the + button. Respect active app filters.
+            {
               const appFilter = sessionAppFilters.value;
               for (const app of applications.value) {
                 if (appFilter.size > 0 && !appFilter.has(app.id)) continue;

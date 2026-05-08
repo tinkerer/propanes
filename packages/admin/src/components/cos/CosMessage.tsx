@@ -12,6 +12,7 @@ import { MessageRenderer } from '../terminal/MessageRenderer.js';
 import { MessageAttachments } from './CosMessageAttachments.js';
 import { AssistantContent } from './CosAssistantContent.js';
 import { Tooltip } from '../ui/Tooltip.js';
+import { BubbleRow } from '../conversation/BubbleRow.js';
 
 // Re-export pure helpers/types so existing imports of CosMessage continue to
 // resolve while keeping the heavy parsing logic in lib/cos-markdown.ts and
@@ -220,18 +221,15 @@ export function MessageBubble({
   ) return null;
 
   return (
-    <div
-      class={`cos-msg cos-row cos-row-${msg.role}${highlighted ? ' cos-msg-highlight' : ''}`}
-      data-cos-msg-idx={msgIdx}
+    <BubbleRow
+      role={msg.role}
+      authorLabel={authorLabel}
+      avatarSrc={avatarSrc}
+      timestamp={msg.timestamp || undefined}
+      streaming={msg.streaming}
+      className={`cos-msg${highlighted ? ' cos-msg-highlight' : ''}`}
+      msgIdx={msgIdx}
     >
-      <div class="cos-row-avatar">
-        <MessageAvatar role={msg.role} label={authorLabel} imageSrc={avatarSrc} />
-      </div>
-      <div class="cos-row-main">
-        <div class="cos-row-header">
-          <span class="cos-row-author">{authorLabel}</span>
-          {msg.timestamp && !msg.streaming && <Timestamp ts={msg.timestamp} />}
-        </div>
         {hasTools && showTools && (
           <div class="cos-tools">
             {msg.toolCalls!.map((c, i) => (
@@ -364,7 +362,6 @@ export function MessageBubble({
             </div>
           );
         })()}
-      </div>
-    </div>
+    </BubbleRow>
   );
 }

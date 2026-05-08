@@ -13,6 +13,7 @@ interface AgentFormModalProps {
 
 export function AgentFormModal({ visible, onClose, onSaved, editAgent, applications, fixedAppId }: AgentFormModalProps) {
   const [formName, setFormName] = useState(editAgent?.name || '');
+  const [formDescription, setFormDescription] = useState(editAgent?.description || '');
   const [formUrl, setFormUrl] = useState(editAgent?.url || '');
   const [formAuth, setFormAuth] = useState(editAgent?.authHeader || '');
   const [formDefault, setFormDefault] = useState(editAgent?.isDefault || false);
@@ -51,6 +52,7 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
 
     const data: Record<string, unknown> = {
       name: formName,
+      description: formDescription || undefined,
       url: formUrl || undefined,
       authHeader: formAuth || undefined,
       isDefault: formDefault,
@@ -95,7 +97,18 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
               required
               style="width:100%"
             />
-            <span class="form-hint">Where the selected agent runtime runs</span>
+            <span class="form-hint">A short name for this agent's expertise or role</span>
+          </div>
+          <div class="form-group" style="grid-column:1/-1">
+            <label>Description</label>
+            <input
+              type="text"
+              value={formDescription}
+              onInput={(e) => setFormDescription((e.target as HTMLInputElement).value)}
+              placeholder="e.g., Expert in Nexar API integration, Document Explorer navigation..."
+              style="width:100%"
+            />
+            <span class="form-hint">What this agent specializes in — shown on the Agents page</span>
           </div>
           <div class="form-group">
             <label>Application</label>

@@ -46,8 +46,8 @@ function standaloneTitle(sessionId: string, sess: any, isExited: boolean): strin
   if (sessionId.startsWith('jsonl:')) {
     const realSid = sessionId.slice(6);
     const cs = allSessions.value.find((s: any) => s.id === realSid);
-    if (cs?.feedbackTitle) return `JSONL: ${cs.feedbackTitle}`;
-    return `JSONL: ${realSid.slice(0, 6)}`;
+    if (cs?.feedbackTitle) return `Conversation: ${cs.feedbackTitle}`;
+    return `Conversation: ${realSid.slice(0, 6)}`;
   }
   if (sessionId.startsWith('feedback:')) {
     const realSid = sessionId.slice(9);

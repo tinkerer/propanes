@@ -103,6 +103,8 @@ export const agentEndpoints = sqliteTable('agent_endpoints', {
   preferredLauncherId: text('preferred_launcher_id'),
   harnessConfigId: text('harness_config_id'),
   spriteConfigId: text('sprite_config_id'),
+  description: text('description'),
+  sourceSessionIds: text('source_session_ids'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });

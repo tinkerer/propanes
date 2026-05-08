@@ -1,12 +1,24 @@
 import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'preact/hooks';
-import { MessageRenderer, type ChatRenderOpts } from './MessageRenderer.js';
-import { type ParsedMessage } from '../../lib/output-parser.js';
+import { type ChatRenderOpts } from './MessageRenderer.js';
 import { useTranscriptStream } from '../../lib/transcript-stream.js';
 import { api } from '../../lib/api.js';
 import { sessionInputStates } from '../../lib/session-state.js';
-import { isMobile, NarrowContext, useContainerNarrow, useNarrow } from '../../lib/viewport.js';
+import { isMobile, NarrowContext, useContainerNarrow } from '../../lib/viewport.js';
 import { ChoicePrompt, type ChoiceOption } from './InteractivePrompt.js';
-import { SubagentBlock } from './SubagentBlock.js';
+import {
+  groupMessages,
+  partitionMergedMessages,
+  AssistantGroupHeader,
+  formatTurnTime,
+  shortenModelName,
+  type MessageGroup,
+  type PartitionedMessages,
+} from '../../lib/conversation.js';
+import { ConversationView } from '../conversation/ConversationView.js';
+
+// Re-export for backward compatibility — other files import these from StructuredView.
+export { groupMessages, partitionMergedMessages, AssistantGroupHeader, formatTurnTime, shortenModelName };
+export type { MessageGroup, PartitionedMessages };
 
 // Initial window size — on mobile we render only the most recent N groups
 // to keep first paint cheap; user can expand earlier history on demand.
@@ -95,280 +107,6 @@ function detectChoicePrompt(content: string): DetectedChoicePrompt | null {
   });
 
   return { title, prompt: promptLine, choices };
-}
-
-export interface MessageGroup {
-  id: string;
-  messages: ParsedMessage[];
-  role: 'assistant_group' | 'user_input' | 'standalone';
-}
-
-export interface PartitionedMessages {
-  // Messages from the main agent (no `_subagentId` tag).
-  main: ParsedMessage[];
-  // Subagent messages keyed by agentId, in arrival order.
-  subagents: Map<string, ParsedMessage[]>;
-  // Map main-agent tool_use_id → subagent agentId, derived from the
-  // matching Task tool_result's `toolUseResult.agentId`.
-  toolUseIdToAgentId: Map<string, string>;
-  // Subagents whose agentId never appeared in any main tool_result.
-  // The renderer should append these at the end.
-  orphanSubagentIds: string[];
-}
-
-export function partitionMergedMessages(messages: ParsedMessage[]): PartitionedMessages {
-  const main: ParsedMessage[] = [];
-  const subagents = new Map<string, ParsedMessage[]>();
-  const toolUseIdToAgentId = new Map<string, string>();
-  const linkedAgentIds = new Set<string>();
-
-  for (const msg of messages) {
-    if (msg.subagentId) {
-      const arr = subagents.get(msg.subagentId);
-      if (arr) arr.push(msg);
-      else subagents.set(msg.subagentId, [msg]);
-      continue;
-    }
-    main.push(msg);
-    if (msg.role === 'tool_result' && msg.toolUseResultId && msg.subagentLink) {
-      toolUseIdToAgentId.set(msg.toolUseResultId, msg.subagentLink);
-      linkedAgentIds.add(msg.subagentLink);
-    }
-  }
-
-  const orphanSubagentIds: string[] = [];
-  for (const agentId of subagents.keys()) {
-    if (!linkedAgentIds.has(agentId)) orphanSubagentIds.push(agentId);
-  }
-
-  return { main, subagents, toolUseIdToAgentId, orphanSubagentIds };
-}
-
-export function groupMessages(messages: ParsedMessage[]): MessageGroup[] {
-  const groups: MessageGroup[] = [];
-  let currentGroup: ParsedMessage[] | null = null;
-
-  for (const msg of messages) {
-    const isAssistantLike = msg.role === 'assistant' || msg.role === 'tool_use' || msg.role === 'tool_result' || msg.role === 'thinking';
-
-    if (isAssistantLike) {
-      if (!currentGroup) {
-        currentGroup = [msg];
-      } else {
-        currentGroup.push(msg);
-      }
-    } else {
-      if (currentGroup) {
-        groups.push({ id: currentGroup[0].id, messages: currentGroup, role: 'assistant_group' });
-        currentGroup = null;
-      }
-      groups.push({ id: msg.id, messages: [msg], role: msg.role === 'user_input' ? 'user_input' : 'standalone' });
-    }
-  }
-
-  if (currentGroup) {
-    groups.push({ id: currentGroup[0].id, messages: currentGroup, role: 'assistant_group' });
-  }
-
-  return groups;
-}
-
-function shortenModelName(model: string): string | null {
-  if (!model || model.startsWith('<')) return null;
-  const parts = model.split('-');
-  let version: string | null = null;
-  for (let i = 0; i < parts.length - 1; i++) {
-    const major = parseInt(parts[i]);
-    const minor = parseInt(parts[i + 1]);
-    if (!isNaN(major) && !isNaN(minor) && parts[i + 1].length < 8) {
-      version = `${major}.${minor}`;
-      break;
-    }
-  }
-  if (model.includes('opus')) return version ? `Opus ${version}` : 'Opus';
-  if (model.includes('sonnet')) return version ? `Sonnet ${version}` : 'Sonnet';
-  if (model.includes('haiku')) return version ? `Haiku ${version}` : 'Haiku';
-  return parts[0];
-}
-
-export function AssistantGroupHeader({
-  messages,
-  collapsed,
-  onToggle,
-}: {
-  messages: ParsedMessage[];
-  collapsed?: boolean;
-  onToggle?: () => void;
-}) {
-  let model = '';
-  let totalInput = 0;
-  let totalOutput = 0;
-  let toolCount = 0;
-  let firstTs = 0;
-  let lastTs = 0;
-
-  for (const msg of messages) {
-    if (msg.model && !model) model = msg.model;
-    if (msg.usage) {
-      totalInput += msg.usage.input_tokens || 0;
-      totalOutput += msg.usage.output_tokens || 0;
-    }
-    if (msg.role === 'tool_use') toolCount++;
-    if (msg.timestamp) {
-      if (!firstTs || msg.timestamp < firstTs) firstTs = msg.timestamp;
-      if (msg.timestamp > lastTs) lastTs = msg.timestamp;
-    }
-  }
-
-  const shortModel = model ? shortenModelName(model) : null;
-  const hasTokens = totalInput > 0 || totalOutput > 0;
-  const toggleable = !!onToggle;
-  const timeLabel = formatTurnTime(firstTs, lastTs);
-  // Always render when toggleable so the user has a handle to expand an
-  // empty-ish group header — otherwise groups with no model/tokens/tools
-  // would have no click target.
-  if (!toggleable && !shortModel && !hasTokens && toolCount === 0) return null;
-
-  return (
-    <div
-      class={`sm-group-header${toggleable ? ' sm-group-header-toggle' : ''}${collapsed ? ' sm-group-header-collapsed' : ''}`}
-      onClick={toggleable ? onToggle : undefined}
-      role={toggleable ? 'button' : undefined}
-      tabIndex={toggleable ? 0 : undefined}
-      onKeyDown={toggleable ? (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle?.(); }
-      } : undefined}
-    >
-      {toggleable && <span class="sm-group-caret">{collapsed ? '▸' : '▾'}</span>}
-      {shortModel && <span class="sm-group-model" title={model}>{shortModel}</span>}
-      {toolCount > 0 && (
-        <span class="sm-group-tools">{toolCount} tool{toolCount !== 1 ? 's' : ''}</span>
-      )}
-      {hasTokens && (
-        <span class="sm-group-tokens" title={`Input: ${totalInput} | Output: ${totalOutput}`}>
-          {totalInput.toLocaleString()}↓ {totalOutput.toLocaleString()}↑
-        </span>
-      )}
-      {timeLabel && (
-        <span class="sm-group-time" title={firstTs ? new Date(firstTs).toLocaleString() : undefined}>
-          {timeLabel}
-        </span>
-      )}
-      {toggleable && collapsed && (
-        <span class="sm-group-collapsed-hint">collapsed</span>
-      )}
-    </div>
-  );
-}
-
-// Format the turn's wall-clock time. If the turn spans more than 2s, show the
-// duration too — long turns are useful to spot. Anything within 2s of "now"
-// is treated as a fresh live-stream message and gets no time stamp (the user
-// is watching it happen).
-function formatTurnTime(firstTs: number, lastTs: number): string | null {
-  if (!firstTs) return null;
-  if (Math.abs(Date.now() - firstTs) < 2000) return null;
-  const d = new Date(firstTs);
-  if (isNaN(d.getTime())) return null;
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  const base = `${hh}:${mm}:${ss}`;
-  const dur = lastTs - firstTs;
-  if (dur < 2000) return base;
-  const secs = Math.round(dur / 1000);
-  if (secs < 60) return `${base} · ${secs}s`;
-  const mins = Math.floor(secs / 60);
-  const remSec = secs % 60;
-  return `${base} · ${mins}m${remSec ? ` ${remSec}s` : ''}`;
-}
-
-function AssistantGroup({
-  group,
-  lastGroupMsg,
-  askingForInput,
-  pendingTool,
-  sessionId,
-  subagentLookup,
-  chat,
-}: {
-  group: MessageGroup;
-  lastGroupMsg: ParsedMessage;
-  askingForInput: boolean;
-  pendingTool: ParsedMessage | null;
-  sessionId: string;
-  subagentLookup?: {
-    subagents: Map<string, ParsedMessage[]>;
-    toolUseIdToAgentId: Map<string, string>;
-  };
-  chat?: ChatRenderOpts;
-}) {
-  const toolCount = group.messages.filter(m => m.role === 'tool_use').length;
-  const narrow = useNarrow();
-  // In narrow containers, collapse tools by default above 2 — a 4-tool cutoff
-  // still wall-papers the viewport when the pane is 350px wide. Chat mode is
-  // always narrow visually, so use the narrow cutoff there too.
-  const toolCollapseCutoff = (chat || narrow) ? 2 : 4;
-  const defaultCollapsed = toolCount > toolCollapseCutoff;
-  const [toolsCollapsed, setToolsCollapsed] = useState(defaultCollapsed);
-  const [groupCollapsed, setGroupCollapsed] = useState(false);
-
-  return (
-    <div class={`sm-group sm-group-assistant_group${groupCollapsed ? ' sm-group-collapsed' : ''}${chat ? ' sm-group-chat' : ''}`}>
-      {!chat && (
-        <AssistantGroupHeader
-          messages={group.messages}
-          collapsed={groupCollapsed}
-          onToggle={() => setGroupCollapsed(c => !c)}
-        />
-      )}
-      {!groupCollapsed && toolCount > toolCollapseCutoff && (
-        <button
-          class="sm-tools-toggle"
-          onClick={() => setToolsCollapsed(c => !c)}
-        >
-          {toolsCollapsed ? `▸ ${toolCount} tool calls` : '▾ hide tools'}
-        </button>
-      )}
-      {!groupCollapsed && group.messages.map((msg, idx) => {
-        const isTool = msg.role === 'tool_use' || msg.role === 'tool_result';
-        if (isTool && toolsCollapsed) return null;
-        const isInteractive = askingForInput && msg === lastGroupMsg && msg === pendingTool;
-        const renderedMsg = (
-          <MessageRenderer
-            key={msg.id}
-            message={msg}
-            messages={group.messages}
-            index={idx}
-            sessionId={sessionId}
-            interactive={isInteractive}
-            chat={chat}
-          />
-        );
-        // Inline subagent transcript right after the call that spawned it.
-        // Match by toolUseId rather than name — Anthropic's SDK calls this
-        // tool either "Task" or "Agent" depending on the version.
-        if (subagentLookup && msg.role === 'tool_use' && msg.toolUseId) {
-          const agentId = subagentLookup.toolUseIdToAgentId.get(msg.toolUseId);
-          const subMsgs = agentId ? subagentLookup.subagents.get(agentId) : null;
-          if (agentId && subMsgs && subMsgs.length > 0) {
-            return (
-              <>
-                {renderedMsg}
-                <SubagentBlock
-                  key={`sub-${agentId}`}
-                  agentId={agentId}
-                  messages={subMsgs}
-                  taskInput={msg.toolInput}
-                />
-              </>
-            );
-          }
-        }
-        return renderedMsg;
-      })}
-    </div>
-  );
 }
 
 export function StructuredView({ sessionId, chat }: Props) {
@@ -495,10 +233,16 @@ export function StructuredView({ sessionId, chat }: Props) {
   const mainMessages = partitioned.main;
 
   const hiddenMsgCount = Math.max(0, mainMessages.length - shownCount);
-  const groups = useMemo(
-    () => groupMessages(hiddenMsgCount > 0 ? mainMessages.slice(-shownCount) : mainMessages),
-    [mainMessages, shownCount, hiddenMsgCount]
-  );
+
+  // Build the windowed message list for ConversationView: the visible slice
+  // of main messages plus all subagent messages (ConversationView partitions
+  // them internally and renders subagents inline at their parent tool call).
+  const windowedMessages = useMemo(() => {
+    const windowed = hiddenMsgCount > 0 ? mainMessages.slice(-shownCount) : mainMessages;
+    const subMsgs = messages.filter(m => m.subagentId);
+    if (subMsgs.length === 0) return windowed;
+    return [...windowed, ...subMsgs];
+  }, [messages, mainMessages, shownCount, hiddenMsgCount]);
 
   if (loading) {
     const msg = isSessionDone
@@ -553,55 +297,13 @@ export function StructuredView({ sessionId, chat }: Props) {
           )}
         </div>
       )}
-      {groups.map(group => {
-        const lastGroupMsg = group.messages[group.messages.length - 1];
-        if (group.role === 'assistant_group') {
-          return (
-            <AssistantGroup
-              key={group.id}
-              group={group}
-              lastGroupMsg={lastGroupMsg}
-              askingForInput={askingForInput}
-              pendingTool={pendingTool}
-              sessionId={sessionId}
-              subagentLookup={partitioned}
-              chat={chat}
-            />
-          );
-        }
-        return (
-          <div key={group.id} class={`sm-group sm-group-${group.role}${chat ? ' sm-group-chat' : ''}`}>
-            {group.messages.map((msg, idx) => {
-              const isInteractive = askingForInput && msg === lastGroupMsg && msg === pendingTool;
-              return (
-                <MessageRenderer
-                  key={msg.id}
-                  message={msg}
-                  messages={group.messages}
-                  index={idx}
-                  sessionId={sessionId}
-                  interactive={isInteractive}
-                  chat={chat}
-                />
-              );
-            })}
-          </div>
-        );
-      })}
-      {partitioned.orphanSubagentIds.length > 0 && (
-        <div class="sm-subagent-orphans">
-          {partitioned.orphanSubagentIds.map((agentId) => {
-            const subMsgs = partitioned.subagents.get(agentId) || [];
-            return (
-              <SubagentBlock
-                key={`orphan-${agentId}`}
-                agentId={agentId}
-                messages={subMsgs}
-              />
-            );
-          })}
-        </div>
-      )}
+      <ConversationView
+        messages={windowedMessages}
+        sessionId={sessionId}
+        mode="structured"
+        chat={chat}
+        isWaiting={isWaiting}
+      />
       {isWaiting && choicePrompt && !askingForInput && (
         <ChoicePrompt
           sessionId={sessionId}
@@ -610,14 +312,6 @@ export function StructuredView({ sessionId, chat }: Props) {
           choices={choicePrompt.choices}
           onSubmitted={() => setChoicePrompt(null)}
         />
-      )}
-      {pendingTool && !askingForInput && (
-        <div class="sm-pending-approval">
-          <span class="sm-pending-icon">⚙️</span>
-          <span class="sm-pending-text">
-            Running: <strong>{pendingTool.toolName || 'tool call'}</strong>
-          </span>
-        </div>
       )}
     </div>
     </NarrowContext.Provider>

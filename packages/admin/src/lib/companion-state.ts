@@ -33,7 +33,7 @@ import {
 
 // --- Companion Types ---
 
-export type CompanionType = 'jsonl' | 'summary' | 'feedback' | 'iframe' | 'terminal' | 'isolate' | 'url' | 'file' | 'wiggum-runs' | 'artifact';
+export type CompanionType = 'jsonl' | 'summary' | 'feedback' | 'iframe' | 'terminal' | 'isolate' | 'url' | 'file' | 'wiggum-runs' | 'artifact' | 'tasks' | 'files';
 
 // --- Terminal Companion Map ---
 
@@ -115,7 +115,7 @@ export function extractCompanionType(tabId: string): CompanionType | null {
   const idx = tabId.indexOf(':');
   if (idx < 0) return null;
   const prefix = tabId.slice(0, idx);
-  if (prefix === 'jsonl' || prefix === 'summary' || prefix === 'feedback' || prefix === 'iframe' || prefix === 'terminal' || prefix === 'isolate' || prefix === 'url' || prefix === 'file' || prefix === 'wiggum-runs' || prefix === 'artifact') return prefix as CompanionType;
+  if (prefix === 'jsonl' || prefix === 'summary' || prefix === 'feedback' || prefix === 'iframe' || prefix === 'terminal' || prefix === 'isolate' || prefix === 'url' || prefix === 'file' || prefix === 'wiggum-runs' || prefix === 'artifact' || prefix === 'tasks' || prefix === 'files') return prefix as CompanionType;
   return null;
 }
 
