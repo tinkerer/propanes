@@ -1,3 +1,5 @@
+@import './components/conversation/conversation.css';
+
 /* ==================== Theme Variables ==================== */
 :root {
   /* Surface */
@@ -2243,11 +2245,22 @@ select:focus, textarea:focus {
   flex-shrink: 0;
 }
 
+.agent-card-icon {
+  font-size: 14px;
+}
+
+.agent-card-description {
+  font-size: 13px;
+  color: var(--pw-text-secondary);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
 .agent-card-meta {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: 10px;
+  margin-top: 8px;
   flex-wrap: wrap;
 }
 
@@ -2271,9 +2284,22 @@ select:focus, textarea:focus {
   color: var(--pw-text-faint);
 }
 
+.agent-meta-tag--subtle {
+  font-size: 10px;
+  color: var(--pw-text-faint);
+  background: transparent;
+  border-color: var(--pw-border-light);
+}
+
 .agent-meta-tag--plan {
   background: var(--pw-warning-soft);
   color: var(--pw-warning);
+  border-color: transparent;
+}
+
+.agent-meta-tag--distilled {
+  background: rgba(168, 85, 247, 0.12);
+  color: #a855f7;
   border-color: transparent;
 }
 
@@ -3798,8 +3824,6 @@ select:focus, textarea:focus {
 /* Quick Dispatch Panel (draggable floating panel) */
 .qdp-panel {
   position: fixed;
-  /* Above .resize-overlay (99999) and any pane-leaf-focused::after rings so
-     the split-divider never shows through when the panel is focused. */
   z-index: 100000;
   width: 400px;
   background: var(--pw-bg-surface);
@@ -3867,68 +3891,33 @@ select:focus, textarea:focus {
   background: var(--pw-bg-hover);
   color: var(--pw-text-primary);
 }
-.qdp-textarea {
-  width: calc(100% - 28px);
-  margin: 12px 14px 0;
-  padding: 10px 12px;
+/* UnifiedComposer lives inside this wrapper */
+.qdp-composer-wrap {
+  padding: 12px 14px 0;
+}
+.qdp-composer-wrap .interrupt-bar-row {
+  gap: 6px;
+}
+.qdp-composer-wrap .interrupt-bar-input {
   font-size: 13px;
-  border: 1px solid var(--pw-border);
-  border-radius: 10px;
-  background: var(--pw-bg-sunken);
-  color: var(--pw-text-primary);
-  resize: vertical;
-  min-height: 74px;
-  font-family: inherit;
-  box-sizing: border-box;
-  outline: none;
-  line-height: 1.45;
-  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  min-height: 64px;
 }
-.qdp-textarea::placeholder {
-  color: var(--pw-text-faint);
-}
-.qdp-textarea:focus {
-  border-color: var(--pw-primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--pw-primary) 22%, transparent);
+/* The expand menu portals to body with z-index:10000 inline — bump it above the
+   QDP panel (z-index:100000) so Screenshot/DOM options aren't clipped. */
+.interrupt-bar-expand-menu {
+  z-index: 200000 !important;
 }
 .qdp-footer {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 12px 14px 14px;
+  padding: 8px 14px 14px;
 }
-.qdp-types {
+.qdp-selects {
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.qdp-type-btn {
-  background: var(--pw-bg-sunken);
-  border: 1px solid color-mix(in srgb, var(--pw-primary) 16%, var(--pw-border));
-  color: var(--pw-text-secondary);
-  padding: 6px 11px;
-  border-radius: 999px;
-  font-size: 11px;
-  cursor: pointer;
-  white-space: nowrap;
-  font-weight: 600;
-}
-.qdp-type-btn:hover {
-  background: var(--pw-bg-hover);
-  color: var(--pw-text-primary);
-}
-.qdp-type-btn.active {
-  background: linear-gradient(135deg, #1d9bf0, #38bdf8);
-  color: #fff;
-  border-color: transparent;
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--pw-primary) 24%, transparent);
-}
-.qdp-actions {
-  display: flex;
-  align-items: center;
   gap: 8px;
-  justify-content: flex-end;
 }
+.qdp-dispatch-select,
 .qdp-agent-select {
   background: var(--pw-bg-sunken);
   color: var(--pw-text-primary);
@@ -3936,85 +3925,15 @@ select:focus, textarea:focus {
   border-radius: 10px;
   padding: 7px 10px;
   font-size: 12px;
-  max-width: 200px;
   cursor: pointer;
   flex: 1;
+  min-width: 0;
 }
-.qdp-submit {
-  background: linear-gradient(135deg, #1d9bf0, #38bdf8);
-  color: #fff;
-  border: none;
-  border-radius: 11px;
-  padding: 8px 15px;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  white-space: nowrap;
-  box-shadow: 0 12px 28px color-mix(in srgb, var(--pw-primary) 24%, transparent);
+.qdp-dispatch-select {
+  flex: 0 0 auto;
 }
-.qdp-submit:hover { transform: translateY(-1px); }
-.qdp-submit:disabled { opacity: 0.4; cursor: default; }
-.qdp-clear {
-  background: none;
-  border: 1px solid var(--pw-border);
-  color: var(--pw-text-muted);
-  border-radius: 10px;
-  padding: 7px 10px;
-  font-size: 11px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.qdp-clear:hover {
-  background: var(--pw-bg-hover);
-  color: var(--pw-text);
-}
-.qdp-error {
-  color: var(--pw-danger, #dc2626);
-  font-size: 12px;
-  padding: 6px 2px 0;
-  text-align: right;
-}
-.qdp-attachments {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding: 10px 14px 0;
-}
-.qdp-attachment {
-  position: relative;
-  width: 64px;
-  height: 64px;
-  border: 1px solid var(--pw-border);
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--pw-bg-sunken);
-}
-.qdp-attachment img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.qdp-attachment-remove {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.65);
-  color: #fff;
-  border: none;
-  border-radius: 50%;
-  font-size: 10px;
-  line-height: 1;
-  cursor: pointer;
-}
-.qdp-attachment-remove:hover {
-  background: rgba(0, 0, 0, 0.85);
+.qdp-agent-select {
+  flex: 1;
 }
 
 .auto-jump-dropdown {
@@ -12277,54 +12196,73 @@ body.pw-isolate {
 .cos-tree-floating-overlay-external .cos-tree-floating-grab-top,
 .cos-tree-floating-overlay-external .cos-tree-floating-grab-bottom { height: 22px; }
 
-/* Unified DrawerPullHandle — the line + hamburger combo shared by both the
-   pane-mode companion drawer and the cos popout's floating drawer. The line
-   is a thin colored bar along the host's external edge; the hamburger is a
-   small button slightly inset toward the host interior. */
-.drawer-pull-line {
-  background: rgba(29, 155, 240, 0.6);
-  border-radius: 2px;
+/* Unified DrawerPullHandle — single container (20×72px) matching the
+   popout-grab-tab look. Contains a nested ☰ button at the top and a
+   ┃ grip indicator below. Tab click → collapse; tab drag → resize.
+   Hamburger click → popup menu; hamburger drag → leaf-drag/move. */
+.drawer-pull-tab {
+  background: #1e3a8a;
+  border: 2px solid #1d9bf0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 3px 0;
+  user-select: none;
   transition: background 120ms;
+  box-sizing: border-box;
 }
-.drawer-pull-line:hover {
-  background: #1d9bf0;
+/* Horizontal edges (top/bottom): flex row instead of column. */
+.drawer-pull-tab-top,
+.drawer-pull-tab-bottom {
+  flex-direction: row;
+  padding: 0 3px;
 }
-.drawer-pull-line-collapsed {
-  background: rgba(29, 155, 240, 0.4);
+.drawer-pull-tab:hover {
+  background: #1e40af;
+  border-color: #60a5fa;
+}
+.drawer-pull-tab-collapsed {
+  background: #172554;
+  border-color: rgba(29, 155, 240, 0.5);
+  cursor: pointer;
+}
+.drawer-pull-grip {
+  color: #1d9bf0;
+  opacity: 0.6;
+  font-size: 14px;
+  line-height: 1;
+  pointer-events: none;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .drawer-pull-hamburger {
-  background: #1e3a8a;
-  border: 1px solid #1d9bf0;
-  border-radius: 4px;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  background: transparent;
+  border: 1px solid rgba(29, 155, 240, 0.5);
+  border-radius: 3px;
   color: #93c5fd;
-  font-size: 13px;
+  font-size: 10px;
   line-height: 1;
   padding: 0;
   cursor: grab;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
   user-select: none;
 }
 .drawer-pull-hamburger:hover {
-  background: #1e40af;
+  background: rgba(29, 155, 240, 0.25);
   border-color: #60a5fa;
   color: #fff;
 }
 .drawer-pull-hamburger:active {
   cursor: grabbing;
-}
-
-/* Hidden drawer — the overlay shrinks to handle width and shows only the
-   resize strip + hamburger button. Click the strip to bring the drawer
-   back. The reduced footprint stays anchored to the same edge. */
-.cos-tree-floating-overlay-collapsed {
-  background: rgba(15, 23, 42, 0.92);
-  cursor: pointer;
-}
-.cos-tree-floating-overlay-external.cos-tree-floating-overlay-collapsed {
-  border-radius: 8px;
 }
 
 /* Popup-menu items used by the drawer hamburger menu (and any other place
@@ -13135,76 +13073,6 @@ body.pw-isolate {
   background: rgba(0, 0, 0, 0.25);
 }
 
-/* Inner-edge popout-style tab — mirrors .popout-grab-tab. Rendered as a
-   fixed-position sibling of the drawer (drawer wraps content in
-   `overflow: hidden`, so a child tab would be clipped). Geometry comes from
-   inline styles set by CosDrawerHandle. The attached-side border is dropped
-   so the tab reads as a pulled-out edge of the drawer. */
-.cos-drawer-tab {
-  background: #1e3a8a;
-  border: 2px solid #1d9bf0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 0;
-  cursor: ew-resize;
-  user-select: none;
-  box-sizing: border-box;
-}
-.cos-drawer-tab:hover {
-  background: #1e40af;
-  border-color: #60a5fa;
-}
-.cos-drawer-tab-left {
-  border-right: none;
-  border-radius: 8px 0 0 8px;
-}
-.cos-drawer-tab-right {
-  border-left: none;
-  border-radius: 0 8px 8px 0;
-}
-/* Embedded tab — sits *inside* the drawer body in split mode. Drop the
-   shadow + outer border-radius so it reads as a flush separator rather than
-   a popped-out tab. */
-.cos-drawer-tab.cos-drawer-tab-embedded {
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
-}
-.cos-drawer-tab.cos-drawer-tab-embedded.cos-drawer-tab-left {
-  border-right: 1px solid #1d9bf0;
-}
-.cos-drawer-tab.cos-drawer-tab-embedded.cos-drawer-tab-right {
-  border-left: 1px solid #1d9bf0;
-}
-.cos-drawer-tab-grip {
-  color: #1d9bf0;
-  opacity: 0.7;
-  font-size: 14px;
-  line-height: 1;
-  pointer-events: none;
-}
-.cos-drawer-tab-btn {
-  width: 18px;
-  height: 18px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  color: #93c5fd;
-  cursor: pointer;
-  font-size: 11px;
-  line-height: 1;
-  border-radius: 3px;
-  padding: 0;
-}
-.cos-drawer-tab-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
-  color: #fff;
-}
-
 /* When the drawer overlays *inside* the pane (overlay or split mode),
    restore the side border that the attached-to-pane variants drop, so the
    drawer reads as a standalone floating surface instead of a flush
@@ -13289,11 +13157,6 @@ body.pw-isolate {
   background: rgba(29, 155, 240, 0.4);
 }
 
-/* Mode-cycle button highlight by current mode so the operator can tell at a
-   glance what state the drawer is in. */
-.cos-drawer-tab-outside .cos-drawer-tab-btn:first-child { color: #93c5fd; }
-.cos-drawer-tab-overlay .cos-drawer-tab-btn:first-child { color: #fde68a; }
-.cos-drawer-tab-split   .cos-drawer-tab-btn:first-child { color: #6ee7b7; }
 .cos-learnings-panel {
   background: var(--pw-bg-surface);
   padding: 8px 12px 12px 12px;
@@ -17056,5 +16919,109 @@ body.pw-mobile .cos-channel-org-modal {
   padding-left: var(--pw-safe-left, 0px);
   padding-right: var(--pw-safe-right, 0px);
   box-sizing: border-box;
+}
+
+/* --- Tasks Companion --- */
+.tasks-companion {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  font-size: 13px;
+  color: #e2e8f0;
+}
+.tasks-companion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid #1e293b;
+}
+.tasks-companion-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+.tasks-companion-stats {
+  display: flex;
+  gap: 8px;
+  font-size: 11px;
+}
+.tasks-companion-stat {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #1e293b;
+}
+.tasks-companion-stat-completed { color: #facc15; }
+.tasks-companion-stat-progress { color: #fbbf24; }
+.tasks-companion-stat-pending { color: #94a3b8; }
+.tasks-companion-list {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 0;
+}
+.tasks-companion-item {
+  padding: 4px 14px;
+  border-bottom: 1px dashed #1e293b;
+}
+.tasks-companion-item:last-child { border-bottom: 0; }
+.tasks-companion-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+.tasks-companion-icon {
+  width: 16px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 12px;
+}
+.tasks-companion-status-completed .tasks-companion-icon { color: #eab308; }
+.tasks-companion-status-in_progress .tasks-companion-icon { color: #f59e0b; }
+.tasks-companion-status-pending .tasks-companion-icon { color: #64748b; }
+.tasks-companion-status-deleted .tasks-companion-icon,
+.tasks-companion-status-failed .tasks-companion-icon { color: #f87171; }
+.tasks-companion-id {
+  color: #94a3b8;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.tasks-companion-badge {
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: #1e293b;
+  flex-shrink: 0;
+}
+.tasks-companion-badge-completed { color: #facc15; }
+.tasks-companion-badge-in_progress { color: #fbbf24; }
+.tasks-companion-badge-pending { color: #94a3b8; }
+.tasks-companion-badge-deleted,
+.tasks-companion-badge-failed { color: #f87171; }
+.tasks-companion-subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tasks-companion-expand {
+  color: #64748b;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.tasks-companion-desc {
+  padding: 4px 0 4px 22px;
+  color: #94a3b8;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tasks-companion-empty {
+  padding: 24px 16px;
+  color: #64748b;
+  text-align: center;
 }
 

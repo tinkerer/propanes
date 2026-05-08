@@ -4,9 +4,10 @@ import { captureScreenshot, type ScreenshotMethod } from '@propanes/widget/scree
 import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-picker';
 import { VoiceRecorder, type VoiceRecordingResult } from '@propanes/widget/voice-recorder';
 import { snapshotConsole, type ConsoleEntry } from '../../lib/console-buffer.js';
+import { useComposerCore, type ComposerImage } from '../../lib/use-composer-core.js';
 
 // Single composer used by InterruptBar (resume/interrupt session) and
-// CosComposer (CoS thread reply). Owns:
+// QuickDispatchPopup. Owns:
 //   - textarea (auto-resize, paste-image, Enter-to-submit / Shift+Enter newline)
 //   - attachment chips (image previews, DOM element refs, console capture, voice)
 //   - expand-toggle popover menu with Screenshot / DOM-pick / Console / Mic
@@ -15,8 +16,7 @@ import { snapshotConsole, type ConsoleEntry } from '../../lib/console-buffer.js'
 //
 // Submit hand-off: callers receive raw blobs + structured attachments via
 // onSubmit and decide what to do with them — InterruptBar uploads to
-// /api/v1/screenshots and inlines URLs into a single resume prompt;
-// CosComposer hands them to sendChiefOfStaffMessage which packs dataUrls.
+// /api/v1/screenshots and inlines URLs into a single resume prompt.
 //
 // CSS contract: outer container uses the className prop. Internal class
 // names use the `.interrupt-bar-*` vocabulary (matching the existing
@@ -53,13 +53,6 @@ export type UnifiedComposerProps = {
   rows?: number;
 };
 
-type PendingImage = {
-  id: string;
-  blob: Blob;
-  previewUrl: string;
-  name: string;
-};
-
 const DRAFT_DEBOUNCE_MS = 300;
 
 async function pushDraft(key: string, payload: { text: string; attachmentsJson?: string }): Promise<void> {
@@ -75,7 +68,7 @@ async function pushDraft(key: string, payload: { text: string; attachmentsJson?:
   } catch { /* best-effort */ }
 }
 
-async function clearDraft(key: string): Promise<void> {
+async function clearDraftApi(key: string): Promise<void> {
   try {
     const token = localStorage.getItem('pw-admin-token');
     const headers: Record<string, string> = {};
@@ -113,17 +106,21 @@ export function UnifiedComposer({
   onEscapeWhenEmpty,
   rows = 1,
 }: UnifiedComposerProps) {
-  const [text, setText] = useState<string>(initialText ?? '');
-  const [submitting, setSubmitting] = useState(false);
-  // Synchronous mirror of `submitting` — guards against rapid re-entry from
-  // double-fired touch/click + keydown events (iOS) before React has applied
-  // the state update. Without this, two calls in the same tick both close
-  // over `submitting=false` and slip past the state guard.
-  const submittingRef = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Core composer state from shared hook (text, images, elements, submit guard,
+  // paste, keyboard). UnifiedComposer uses blob-mode images and manages its own
+  // API-based draft persistence (draftKey) rather than the hook's draft binding.
+  const core = useComposerCore<SelectedElementInfo, ConsoleEntry[] | null>({
+    initialText,
+    onEscapeWhenEmpty,
+    autoGrowMaxPx: 140,
+    textareaRef,
+    imageMode: 'blob',
+    contextHasContent: (ctx) => !!(ctx && ctx.length > 0),
+  });
+
   const [internalError, setInternalError] = useState<string | null>(null);
-  const [images, setImages] = useState<PendingImage[]>([]);
-  const [elements, setElements] = useState<SelectedElementInfo[]>([]);
-  const [consoleCap, setConsoleCap] = useState<ConsoleEntry[] | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [pickerActive, setPickerActive] = useState(false);
   const [captureBusy, setCaptureBusy] = useState(false);
@@ -145,7 +142,6 @@ export function UnifiedComposer({
   const micTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const micStartRef = useRef<number>(0);
 
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const submitGroupRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -156,15 +152,6 @@ export function UnifiedComposer({
   const draftLoadedKeyRef = useRef<string | null>(null);
 
   const error = externalError ?? internalError;
-
-  // Auto-grow textarea height based on content. Cap at 140px to match the
-  // interrupt-bar styling.
-  useEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 140) + 'px';
-  }, [text]);
 
   // Hydrate from draft on mount / when draftKey changes. Only fires once per
   // key — text typed before the load resolves is preserved as the user input
@@ -177,7 +164,7 @@ export function UnifiedComposer({
     void (async () => {
       const draft = await loadDraft(draftKey);
       if (cancelled) return;
-      if (draft && draft.text && !text) setText(draft.text);
+      if (draft && draft.text && !core.text) core.setText(draft.text);
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -190,7 +177,7 @@ export function UnifiedComposer({
     if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = setTimeout(() => {
       draftSaveTimerRef.current = null;
-      void pushDraft(draftKey, { text });
+      void pushDraft(draftKey, { text: core.text });
     }, DRAFT_DEBOUNCE_MS);
     return () => {
       if (draftSaveTimerRef.current) {
@@ -198,7 +185,7 @@ export function UnifiedComposer({
         draftSaveTimerRef.current = null;
       }
     };
-  }, [draftKey, text]);
+  }, [draftKey, core.text]);
 
   // Click-outside to close the expand menu.
   useEffect(() => {
@@ -238,10 +225,9 @@ export function UnifiedComposer({
     };
   }, [menuOpen]);
 
-  // Cleanup on unmount: revoke object URLs, stop pickers, kill mic.
+  // Cleanup on unmount: stop pickers, kill mic.
   useEffect(() => {
     return () => {
-      for (const img of images) URL.revokeObjectURL(img.previewUrl);
       if (pickerCleanupRef.current) pickerCleanupRef.current();
       if (micTimerRef.current) clearInterval(micTimerRef.current);
       if (voiceRecorderRef.current?.recording) {
@@ -250,36 +236,6 @@ export function UnifiedComposer({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  function addImageBlob(blob: Blob, name = 'pasted.png') {
-    const previewUrl = URL.createObjectURL(blob);
-    setImages((prev) => [...prev, {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      blob,
-      previewUrl,
-      name,
-    }]);
-  }
-
-  function removeImage(id: string) {
-    setImages((prev) => {
-      const hit = prev.find((p) => p.id === id);
-      if (hit) URL.revokeObjectURL(hit.previewUrl);
-      return prev.filter((p) => p.id !== id);
-    });
-  }
-
-  function onPaste(ev: ClipboardEvent) {
-    const items = ev.clipboardData?.items;
-    if (!items) return;
-    for (const item of items) {
-      if (item.type.startsWith('image/')) {
-        ev.preventDefault();
-        const blob = item.getAsFile();
-        if (blob) addImageBlob(blob, blob.name || 'pasted.png');
-      }
-    }
-  }
 
   async function takeScreenshot() {
     if (captureBusy) return;
@@ -291,7 +247,7 @@ export function UnifiedComposer({
         excludeWidget: shotExcludeWidget,
         excludeCursor: shotExcludeCursor,
       });
-      if (blob) addImageBlob(blob, 'screenshot.png');
+      if (blob) void core.addImageBlob(blob, 'screenshot.png');
     } catch (err: any) {
       setInternalError(err?.message || 'Screenshot failed');
     } finally {
@@ -308,7 +264,7 @@ export function UnifiedComposer({
         pickerCleanupRef.current = null;
         setPickerActive(false);
         if (infos.length === 0) return;
-        setElements((prev) => [...prev, ...infos]);
+        core.setElements((prev) => [...prev, ...infos]);
       },
       document.body,
       {
@@ -323,7 +279,7 @@ export function UnifiedComposer({
   function captureConsoleNow() {
     setMenuOpen(false);
     const snap = snapshotConsole();
-    setConsoleCap(snap);
+    core.setContext(snap);
   }
 
   async function toggleMicRecord() {
@@ -365,72 +321,62 @@ export function UnifiedComposer({
   }
 
   function removeElement(idx: number) {
-    setElements((prev) => prev.filter((_, i) => i !== idx));
+    core.setElements((prev) => prev.filter((_, i) => i !== idx));
   }
 
-  const hasContent = !!text.trim()
-    || images.length > 0
-    || elements.length > 0
-    || !!(consoleCap && consoleCap.length > 0)
-    || !!voiceResult;
+  // hasContent includes voice result which the core hook doesn't know about
+  const hasContent = core.hasContent || !!voiceResult;
 
   async function submit() {
     if (!hasContent) return;
-    if (submittingRef.current) return;
-    submittingRef.current = true;
-    setSubmitting(true);
+    if (core.submittingRef.current) return;
+    core.submittingRef.current = true;
+    core.setSubmitting(true);
     setInternalError(null);
     try {
+      // Extract blobs from core images (UnifiedComposer always uses blob mode)
+      const blobs: Blob[] = [];
+      const names: string[] = [];
+      for (const img of core.images) {
+        if (img.kind === 'blob') {
+          blobs.push(img.blob);
+          names.push(img.name);
+        }
+      }
       await onSubmit({
-        text: text.trim(),
-        images: images.map((i) => i.blob),
-        imageNames: images.map((i) => i.name),
-        elements,
-        consoleEntries: consoleCap,
+        text: core.text.trim(),
+        images: blobs,
+        imageNames: names,
+        elements: core.elements,
+        consoleEntries: core.context,
         voice: voiceResult,
       });
       // Reset on success
-      setText('');
-      for (const img of images) URL.revokeObjectURL(img.previewUrl);
-      setImages([]);
-      setElements([]);
-      setConsoleCap(null);
+      core.clearAll();
       setVoiceResult(null);
       if (draftKey) {
         if (draftSaveTimerRef.current) {
           clearTimeout(draftSaveTimerRef.current);
           draftSaveTimerRef.current = null;
         }
-        void clearDraft(draftKey);
+        void clearDraftApi(draftKey);
       }
     } catch (err: any) {
       setInternalError(err?.message || String(err));
     } finally {
-      setSubmitting(false);
-      submittingRef.current = false;
+      core.setSubmitting(false);
+      core.submittingRef.current = false;
     }
   }
 
   function onKeyDown(ev: KeyboardEvent) {
-    if (ev.key === 'Enter' && !ev.shiftKey) {
-      ev.preventDefault();
-      void submit();
-      return;
-    }
-    if (ev.key === 'Escape') {
-      if (text) {
-        ev.preventDefault();
-        setText('');
-      } else if (onEscapeWhenEmpty) {
-        ev.preventDefault();
-        onEscapeWhenEmpty();
-      }
-    }
+    core.onKeyDown(ev, { submit: () => void submit() });
   }
 
+  const consoleCap = core.context;
   const consoleCount = consoleCap?.length ?? 0;
-  const showChips = images.length > 0
-    || elements.length > 0
+  const showChips = core.images.length > 0
+    || core.elements.length > 0
     || consoleCap !== null
     || !!voiceResult
     || micRecording;
@@ -444,19 +390,19 @@ export function UnifiedComposer({
       {error && <div class="interrupt-bar-error">{error}</div>}
       {showChips && (
         <div class="interrupt-bar-chips">
-          {images.map((img) => (
+          {core.images.map((img) => (
             <div class="cos-attach-thumb" key={img.id}>
-              <img src={img.previewUrl} alt={img.name} />
+              <img src={img.kind === 'blob' ? img.previewUrl : img.dataUrl} alt={img.name} />
               <button
                 type="button"
                 class="cos-attach-remove"
-                onClick={() => removeImage(img.id)}
+                onClick={() => core.removeImage(img.id)}
                 title="Remove image"
                 aria-label="Remove image"
-              >×</button>
+              >&times;</button>
             </div>
           ))}
-          {elements.map((ref, idx) => {
+          {core.elements.map((ref, idx) => {
             let display = ref.tagName || 'element';
             if (ref.id) display += `#${ref.id}`;
             const cls = (ref.classes || []).filter((c) => !c.startsWith('pw-')).slice(0, 2);
@@ -473,7 +419,7 @@ export function UnifiedComposer({
                   onClick={() => removeElement(idx)}
                   title="Remove element"
                   aria-label="Remove element"
-                >×</button>
+                >&times;</button>
               </div>
             );
           })}
@@ -487,14 +433,14 @@ export function UnifiedComposer({
               <button
                 type="button"
                 class="cos-attach-remove"
-                onClick={() => setConsoleCap(null)}
+                onClick={() => core.setContext(null)}
                 title="Remove console capture"
                 aria-label="Remove console capture"
-              >×</button>
+              >&times;</button>
             </div>
           )}
           {micRecording && (
-            <div class="cos-element-chip interrupt-bar-mic-chip is-recording" title="Recording…">
+            <div class="cos-element-chip interrupt-bar-mic-chip is-recording" title="Recording...">
               <span class="interrupt-bar-mic-dot" aria-hidden="true" />
               <code>recording · {micElapsed}s</code>
               <button
@@ -525,7 +471,7 @@ export function UnifiedComposer({
                 onClick={discardVoice}
                 title="Remove voice capture"
                 aria-label="Remove voice capture"
-              >×</button>
+              >&times;</button>
             </div>
           )}
         </div>
@@ -536,18 +482,18 @@ export function UnifiedComposer({
           class="interrupt-bar-input"
           rows={rows}
           placeholder={placeholder}
-          value={text}
-          disabled={disabled || submitting}
-          onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
+          value={core.text}
+          disabled={disabled || core.submitting}
+          onInput={(e) => core.setText((e.target as HTMLTextAreaElement).value)}
           onKeyDown={onKeyDown}
-          onPaste={onPaste}
+          onPaste={core.onPaste}
         />
         <div class="interrupt-bar-submit-group" ref={submitGroupRef}>
           <button
             type="button"
             class={`interrupt-bar-expand-toggle${menuOpen ? ' is-open' : ''}`}
             onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
-            disabled={disabled || submitting}
+            disabled={disabled || core.submitting}
             aria-expanded={menuOpen}
             aria-label="Attach context"
             title="Attach screenshot, DOM selection, console, or voice capture"
@@ -559,12 +505,12 @@ export function UnifiedComposer({
           <button
             type="button"
             class="interrupt-bar-submit"
-            disabled={disabled || submitting || !hasContent}
+            disabled={disabled || core.submitting || !hasContent}
             onClick={() => void submit()}
             title={submitTitle}
             aria-label={submitAriaLabel || (submitIcon === 'interrupt' ? 'Interrupt' : 'Send')}
           >
-            {submitting ? (
+            {core.submitting ? (
               <svg width="16" height="16" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true" style={{ fill: 'none' }}>
                 <path d="M21 12a9 9 0 1 1-6.219-8.56" style={{ fill: 'none' }}>
                   <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.9s" repeatCount="indefinite" />
@@ -596,7 +542,7 @@ export function UnifiedComposer({
                     <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
                     <circle cx="12" cy="13" r="4" />
                   </svg>
-                  <span>{captureBusy ? 'Capturing…' : 'Screenshot'}</span>
+                  <span>{captureBusy ? 'Capturing...' : 'Screenshot'}</span>
                 </button>
                 <div class="interrupt-bar-expand-options">
                   <label class="interrupt-bar-expand-opt" title="html-to-image is silent; display-media asks for screen-share permission">
@@ -639,7 +585,7 @@ export function UnifiedComposer({
                     <path d="M3 3h4V1H1v6h2V3zm0 14H1v6h6v-2H3v-4zm14 4h-4v2h6v-6h-2v4zM17 3V1h6v6h-2V3h-4z" />
                     <circle cx="12" cy="12" r="3" />
                   </svg>
-                  <span>{pickerActive ? 'Picking…' : 'DOM select'}</span>
+                  <span>{pickerActive ? 'Picking...' : 'DOM select'}</span>
                 </button>
                 <div class="interrupt-bar-expand-options">
                   <label class="interrupt-bar-expand-opt">
@@ -722,6 +668,6 @@ export function UnifiedComposer({
 }
 
 // `submitIcon` is included in the public type but visually we always render
-// the paper-plane (matches the existing InterruptBar/CosComposer behavior).
+// the paper-plane (matches the existing InterruptBar behavior).
 // The prop is exposed so a future variant can swap in an interrupt glyph.
 export type { SubmitIcon as UnifiedComposerSubmitIcon };

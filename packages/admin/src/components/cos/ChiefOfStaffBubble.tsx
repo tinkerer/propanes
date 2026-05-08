@@ -550,6 +550,9 @@ export function ChiefOfStaffBubble({
     const update = () => {
       const r = el.getBoundingClientRect();
       setShellRect((prev) => {
+        // Zero-sized rects (hidden tab, collapsed pane) → null so drawers
+        // and their handles don't render at viewport origin.
+        if (r.width < 1 || r.height < 1) return null;
         if (prev && prev.top === r.top && prev.left === r.left && prev.width === r.width && prev.height === r.height) return prev;
         return { top: r.top, left: r.left, width: r.width, height: r.height };
       });
@@ -1585,7 +1588,7 @@ export function ChiefOfStaffBubble({
   if (showLearnings && shellRect) {
     const placed = placeDrawer(learningsSide, learningsWidth, learningsMode, shellRect);
     const v = placeVertical(shellRect, learningsTopOffset, learningsHeightOverride);
-    const zIdx = !inPane && panel ? getPanelZIndex(panel) + 1 : 900;
+    const zIdx = !inPane && panel ? getPanelZIndex(panel) + 1 : 50;
     learningsDrawerStyle = {
       position: 'fixed',
       top: v.top,
@@ -1613,7 +1616,7 @@ export function ChiefOfStaffBubble({
     }
     const placed = placeDrawer(desiredSide, threadWidth, threadMode, shellRect);
     const v = placeVertical(shellRect, threadTopOffset, threadHeightOverride);
-    const zIdx = !inPane && panel ? getPanelZIndex(panel) + 1 : 900;
+    const zIdx = !inPane && panel ? getPanelZIndex(panel) + 1 : 50;
     threadDrawerStyle = {
       position: 'fixed',
       top: v.top,
@@ -1662,7 +1665,7 @@ export function ChiefOfStaffBubble({
       placed = placeDrawer(desiredSide, artifactWidth, artifactMode, shellRect);
       v = placeVertical(shellRect, artifactTopOffset, artifactHeightOverride);
     }
-    const zIdx = !inPane && panel ? getPanelZIndex(panel) + 2 : 901;
+    const zIdx = !inPane && panel ? getPanelZIndex(panel) + 2 : 51;
     artifactDrawerStyle = {
       position: 'fixed',
       top: v.top,
@@ -1711,9 +1714,7 @@ export function ChiefOfStaffBubble({
       {shouldRenderShell && activeAgent && inPane && showLearnings && learningsDrawerStyle && shellRect && (
         <CosLearningsDrawer
           style={learningsDrawerStyle}
-          paneRect={shellRect}
           hamburgerPos={learningsHamburgerPos}
-          setHamburgerPos={setLearningsHamburgerPos}
           setLearningsSide={setLearningsSide}
           setLearningsMode={(m) => setLearningsMode(m)}
           cycleLearningsMode={() => setLearningsMode(cycleMode(learningsMode))}
@@ -1729,9 +1730,7 @@ export function ChiefOfStaffBubble({
           agentId={activeAgent.id}
           showTools={showTools}
           verbosity={activeAgent.verbosity || DEFAULT_VERBOSITY}
-          paneRect={shellRect}
           hamburgerPos={threadHamburgerPos}
-          setHamburgerPos={setThreadHamburgerPos}
           onArtifactPopout={handleArtifactPopout}
           onReply={handleReply}
           onClose={() => setShowThreadPanel(false)}
@@ -1747,9 +1746,7 @@ export function ChiefOfStaffBubble({
         <CosArtifactDrawer
           style={artifactDrawerStyle}
           artifactId={activeArtifactId}
-          paneRect={shellRect}
           hamburgerPos={artifactHamburgerPos}
-          setHamburgerPos={setArtifactHamburgerPos}
           setArtifactSide={setArtifactSide}
           cycleArtifactMode={() => setArtifactMode(cycleMode(artifactMode))}
           setArtifactWidthClamped={setArtifactWidthClamped}

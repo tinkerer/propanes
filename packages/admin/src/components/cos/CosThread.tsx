@@ -1,4 +1,6 @@
 import { useEffect, useMemo } from 'preact/hooks';
+import { ConversationView } from '../conversation/ConversationView.js';
+import { cosMessageToConversation } from '../../lib/conversation.js';
 import { selectedAppId } from '../../lib/state.js';
 import {
   type ChiefOfStaffMsg,
@@ -25,7 +27,6 @@ import { openSession, openFeedbackItem, toggleCompanion, openSessionLogDrawer } 
 import {
   MessageAvatar,
   MessageAttachments,
-  MessageBubble,
   Timestamp,
   HighlightedText,
   getAgentAvatarSrc,
@@ -430,20 +431,15 @@ export function ThreadBlock({
                   </div>
                 );
               })()}
-              {replies.map((r) => (
-                <MessageBubble
-                  key={r.idx}
-                  msg={r.msg}
-                  msgIdx={r.idx}
-                  highlighted={highlightMsgIdx === r.idx}
-                  showTools={showTools}
-                  onArtifactPopout={onArtifactPopout}
-                  agentId={agentId}
-                  agentName={agentName}
-                  verbosity={verbosity}
-                  searchHighlight={searchHighlight}
-                />
-              ))}
+              <ConversationView
+                messages={replies.flatMap((r) => cosMessageToConversation(r.msg, r.idx))}
+                mode="bubble"
+                agentName={agentName}
+                agentId={agentId}
+                onArtifactPopout={onArtifactPopout}
+                searchHighlight={searchHighlight}
+                showTools={showTools}
+              />
             </>
           )}
         </div>

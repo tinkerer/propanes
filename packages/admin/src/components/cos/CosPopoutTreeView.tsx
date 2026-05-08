@@ -206,7 +206,10 @@ function FloatingCompanionSplit({
   const baseChild = isFirst ? b : a;
   const isHorizontal = node.direction === 'horizontal';
   const isExternal = isExternalSubtree(floatChild);
-  const sizePct = (isFirst ? node.ratio : 1 - node.ratio) * 100;
+  // Ref so the flip callback always reads the LATEST isExternal, even
+  // when called from a stale drag-handler closure.
+  const isExternalRef = useRef(isExternal);
+  isExternalRef.current = isExternal;
   // First leaf inside the floating subtree drives popup-menu actions
   // (toggle internal/external, etc.). Recurses to handle nested drawer
   // splits where the actionable leaf is deeper than the immediate child.
@@ -236,69 +239,113 @@ function FloatingCompanionSplit({
     return () => { if (raf !== null) cancelAnimationFrame(raf); };
   }, []);
 
-  // The drawer's *inner edge* drives the overlay's border/radius treatment
-  // (no border on inner edge so the drawer reads as flush against the
-  // popout). The unified `DrawerPullHandle` lives on the popout's edge
-  // matching the drawer's anchor side — same edge whether the drawer is
-  // overlay or external; the difference is which side of the line the
-  // drawer body sits on.
+  // The drawer's *inner edge* drives both:
+  //   1. the overlay's border/radius treatment (no border on inner edge so
+  //      the drawer reads as flush against the popout);
+  //   2. the unified DrawerPullHandle's edge in *overlay* mode — handle
+  //      sits on the inner edge of the drawer (over the main pane area,
+  //      not over the drawer body).
+  // The drawer's *outer edge* is used as the handle edge in *external*
+  // mode (handle sits past the drawer's outer side, over background space).
   const innerEdge: 'left' | 'right' | 'top' | 'bottom' = isHorizontal
     ? (isFirst ? 'right' : 'left')
     : (isFirst ? 'bottom' : 'top');
   const grabSide = innerEdge; // legacy alias used for the overlay border/radius class
-  const drawerEdge: DrawerEdge = isHorizontal
+  // Outer edge of the drawer = the popout's outer edge that the drawer is
+  // anchored to. Used as both the external-mode handle edge and the flip
+  // threshold (cursor crosses popout's outer boundary → flip).
+  const outerEdge: DrawerEdge = isHorizontal
     ? (isFirst ? 'left' : 'right')
     : (isFirst ? 'top' : 'bottom');
+  // Handle edge depends on layout: overlay → inner; external → outer.
+  const handleEdge: DrawerEdge = isExternal ? outerEdge : innerEdge;
 
-  // Watch the persisted slide position so the hamburger snaps to wherever
+  // Watch the persisted slide position so the handle snaps to wherever
   // the operator left it across renders.
   const _handlePosTick = cosDrawerHandlePos.value;
   void _handlePosTick;
 
-  // Resize callbacks: capture starting ratio at drag start, then translate
-  // each cumulative px-delta to a ratio delta against the popout's
-  // perpendicular size.
+  // Computed drawer rect in viewport coords. When collapsed, the drawer
+  // body is hidden and the handle pins to the popout's boundary edge
+  // instead (zero-width rect at the boundary so the tab positions
+  // correctly via the inner/outer edge logic).
+  const collapsed = floatChild.type === 'leaf' && !!floatChild.collapsed;
+  const drawerRectViewport = popoutRect
+    ? collapsed
+      ? collapsedHandleRect(popoutRect, isHorizontal, isFirst)
+      : drawerRectFor(popoutRect, node.ratio, isHorizontal, isFirst, isExternal)
+    : null;
+
+  // Resize: tab drag changes the split ratio.
   const startRatioRef = useRef<number>(node.ratio);
-  const handlePullNode = drawerLeaf && popoutRect ? (
+
+  // Popup-menu state for the ☰ hamburger (toggled via onClickFallback
+  // from startCosLeafDrag — click without drag opens the menu).
+  const [handleMenuOpen, setHandleMenuOpen] = useState(false);
+  const hamburgerRef = useRef<HTMLButtonElement>(null);
+
+  const drawerLabel = drawerLeaf
+    ? (drawerLeaf.tabs[0] ? resolve(drawerLeaf.tabs[0]).label : 'Companion')
+    : 'Companion';
+
+  const handlePullNode = drawerLeaf && popoutRect && drawerRectViewport ? (
     <DrawerPullHandle
-      edge={drawerEdge}
-      hostRect={{ top: popoutRect.top, left: popoutRect.left, width: popoutRect.width, height: popoutRect.height }}
-      hamburgerPos={cosGetDrawerHandlePos(drawerLeaf.id)}
+      edge={handleEdge}
+      drawerRect={drawerRectViewport}
+      handlePos={cosGetDrawerHandlePos(drawerLeaf.id)}
       zIndex={1100}
-      collapsed={floatChild.type === 'leaf' && !!floatChild.collapsed}
+      collapsed={collapsed}
+      // Tab (┃): click → collapse, drag → resize + slide + flip
       onClickCollapse={() => cosToggleLeafCollapsed(drawerLeaf.id)}
       onResizeStart={() => { startRatioRef.current = node.ratio; }}
       onResize={(deltaPx) => {
         const popoutPerp = isHorizontal ? popoutRect.width : popoutRect.height;
         if (popoutPerp <= 0) return;
-        // Outward = drawer growing. The drawer's "first child share" of the
-        // parent split corresponds to:
-        //   - isFirst=true: ratio represents the floating share itself.
-        //   - isFirst=false: ratio represents the base share, so floating
-        //     share is (1 - ratio); growing the drawer means *shrinking* ratio.
         const ratioDelta = deltaPx / popoutPerp;
-        const newRatio = isFirst ? startRatioRef.current + ratioDelta : startRatioRef.current - ratioDelta;
+        const newRatio = isFirst
+          ? startRatioRef.current + ratioDelta
+          : startRatioRef.current - ratioDelta;
         cosSetSplitRatio(node.id, Math.max(0.05, Math.min(0.95, newRatio)));
       }}
       onPositionChange={(pos) => cosSetDrawerHandlePos(drawerLeaf.id, pos)}
-      onDragOutside={() => {
-        // Drag past the popout's edge → flip overlay/external. (For external
-        // drawers, "outside" past the *outer* edge is page space — leave
-        // alone; the inner-edge cross is what triggers the flip back.)
-        if (!isExternal) cosSetLeafExternal(drawerLeaf.id, true);
-        else cosSetLeafExternal(drawerLeaf.id, false);
+      // Flip: drag tab past popout boundary → toggle overlay↔external
+      flipRect={{ top: popoutRect.top, left: popoutRect.left, width: popoutRect.width, height: popoutRect.height }}
+      flipEdge={outerEdge}
+      flipDirection={isExternal ? 'inward' : 'outward'}
+      onDragOutside={(ev) => {
+        const wasExternal = isExternalRef.current;
+        cosSetLeafExternal(drawerLeaf.id, !wasExternal);
+        // Reposition handle at cursor's parallel coordinate on the new edge.
+        const newRect = drawerRectFor(popoutRect!, node.ratio, isHorizontal, isFirst, !wasExternal);
+        const parallelSize = isHorizontal ? newRect.height : newRect.width;
+        const parallelStart = isHorizontal ? newRect.top : newRect.left;
+        const cursorParallel = isHorizontal ? ev.clientY : ev.clientX;
+        if (parallelSize > 0) {
+          cosSetDrawerHandlePos(drawerLeaf.id, Math.max(0, Math.min(1, (cursorParallel - parallelStart) / parallelSize)));
+        }
       }}
-      menuItems={(close) => (
-        <>
+      // Hamburger (☰): click → menu, drag → leaf-drag (move/split/dock)
+      hamburgerRef={hamburgerRef}
+      onHamburgerMouseDown={(e: MouseEvent) => {
+        if (e.button !== 0) return;
+        startCosLeafDrag(e, {
+          leafId: drawerLeaf.id,
+          label: drawerLabel,
+          onClickFallback: () => setHandleMenuOpen((v) => !v),
+        });
+      }}
+    >
+      {handleMenuOpen && (
+        <PopupMenu anchorRef={hamburgerRef} onClose={() => setHandleMenuOpen(false)}>
           <button
             type="button"
             class="popup-menu-item"
-            onClick={() => { cosSetLeafExternal(drawerLeaf.id, !isExternal); close(); }}
+            onClick={() => { cosSetLeafExternal(drawerLeaf.id, !isExternal); setHandleMenuOpen(false); }}
           >{isExternal ? '◰ Make overlay drawer' : '⬚ Make external drawer'}</button>
           <button
             type="button"
             class="popup-menu-item"
-            onClick={() => { onConvertToSplit(); close(); }}
+            onClick={() => { onConvertToSplit(); setHandleMenuOpen(false); }}
           >⊟ Convert to split pane</button>
           <div class="popup-menu-separator" />
           {(['L','R','T','B'] as const).filter((e) => e !== (isHorizontal ? (isFirst ? 'L' : 'R') : (isFirst ? 'T' : 'B'))).map((e) => (
@@ -306,26 +353,26 @@ function FloatingCompanionSplit({
               key={e}
               type="button"
               class="popup-menu-item"
-              onClick={() => { cosMoveDrawerToEdge(drawerLeaf.id, e); close(); }}
+              onClick={() => { cosMoveDrawerToEdge(drawerLeaf.id, e); setHandleMenuOpen(false); }}
             >{`${e === 'L' ? '◂ Move to left' : e === 'R' ? '▸ Move to right' : e === 'T' ? '▴ Move to top' : '▾ Move to bottom'} edge`}</button>
           ))}
           <div class="popup-menu-separator" />
           <button
             type="button"
             class="popup-menu-item"
-            onClick={() => { cosToggleLeafCollapsed(drawerLeaf.id); close(); }}
-          >{floatChild.type === 'leaf' && floatChild.collapsed ? '▣ Show drawer' : '▭ Hide drawer'}</button>
+            onClick={() => { cosToggleLeafCollapsed(drawerLeaf.id); setHandleMenuOpen(false); }}
+          >{collapsed ? '▣ Show drawer' : '▭ Hide drawer'}</button>
           <button
             type="button"
             class="popup-menu-item popup-menu-item-danger"
             onClick={() => {
               for (const t of [...drawerLeaf.tabs]) cosRemoveTabFromLeaf(drawerLeaf.id, t);
-              close();
+              setHandleMenuOpen(false);
             }}
           >× Close drawer</button>
-        </>
+        </PopupMenu>
       )}
-    />
+    </DrawerPullHandle>
   ) : null;
 
   // Convert-to-split helper — preserves chat width by expanding the popout.
@@ -360,131 +407,41 @@ function FloatingCompanionSplit({
     cosSetLeafFloating(drawerLeaf.id, false);
   }
 
-  // Collapsed (hidden) drawer — only the handle should show, the leaf content
-  // is suppressed and the overlay shrinks to handle width on the matching
-  // axis. Click on the handle (the strip mousedown handler) toggles the
-  // leaf back to expanded.
-  const collapsed = floatChild.type === 'leaf' && !!floatChild.collapsed;
-  const HANDLE_SLIM = 26;
+  // -- Unified render: both internal and external overlays are portaled to
+  // <body> with fixed positioning so that flipping between overlay↔external
+  // does NOT destroy/recreate the DOM — the same portal node survives the
+  // flip, which preserves scroll position and avoids a flash.
+  const overlayRect = popoutRect && !collapsed
+    ? drawerRectFor(popoutRect, node.ratio, isHorizontal, isFirst, isExternal)
+    : null;
 
-  // -- External path: portal the overlay to body, position fixed against the
-  // popout's rect. The unified pull-handle is rendered separately (also as
-  // a portaled fixed-position element) so it lives on the popout's edge,
-  // independent of the drawer body's position.
-  if (isExternal) {
-    const baseStyle = externalOverlayStyle(popoutRect ?? new DOMRect(0, 0, 0, 0), node.ratio, isHorizontal, isFirst);
-    const style = collapsed ? collapseExternalStyle(baseStyle, isHorizontal, isFirst, HANDLE_SLIM) : baseStyle;
-    return (
-      <div
-        ref={hostRef}
-        class={`cos-tree-floating-host cos-tree-floating-host-${node.direction}${isFirst ? ' cos-tree-floating-host-first' : ' cos-tree-floating-host-second'} cos-tree-floating-host-external`}
-      >
-        <div class="cos-tree-floating-base">
-          {renderNode(baseChild, resolve, parentDir)}
-        </div>
-        {popoutRect && createPortal(
-          <div
-            class={`cos-tree-floating-overlay cos-tree-floating-overlay-external cos-tree-floating-overlay-${grabSide}${collapsed ? ' cos-tree-floating-overlay-collapsed' : ''}`}
-            style={style}
-          >
-            {!collapsed && renderNode(floatChild, resolve, node.direction)}
-          </div>,
-          document.body,
-        )}
-        {handlePullNode && createPortal(handlePullNode, document.body)}
-      </div>
-    );
-  }
-
-  // -- Internal path: overlay rendered as an absolute child of the host.
-  const overlayStyle: Record<string, string | number> = collapsed
-    ? collapseInternalStyle(isHorizontal, isFirst, HANDLE_SLIM)
-    : isHorizontal
-      ? {
-          position: 'absolute',
-          top: 0,
-          bottom: 0,
-          width: `${sizePct}%`,
-          ...(isFirst ? { left: 0 } : { right: 0 }),
-        }
-      : {
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          height: `${sizePct}%`,
-          ...(isFirst ? { top: 0 } : { bottom: 0 }),
-        };
   return (
     <div
       ref={hostRef}
-      class={`cos-tree-floating-host cos-tree-floating-host-${node.direction}${isFirst ? ' cos-tree-floating-host-first' : ' cos-tree-floating-host-second'}`}
+      class={`cos-tree-floating-host cos-tree-floating-host-${node.direction}${isFirst ? ' cos-tree-floating-host-first' : ' cos-tree-floating-host-second'}${isExternal ? ' cos-tree-floating-host-external' : ''}`}
     >
       <div class="cos-tree-floating-base">
         {renderNode(baseChild, resolve, parentDir)}
       </div>
-      <div
-        class={`cos-tree-floating-overlay${collapsed ? ' cos-tree-floating-overlay-collapsed' : ''}`}
-        style={overlayStyle}
-      >
-        {!collapsed && renderNode(floatChild, resolve, node.direction)}
-      </div>
+      {overlayRect && createPortal(
+        <div
+          class={`cos-tree-floating-overlay${isExternal ? ` cos-tree-floating-overlay-external cos-tree-floating-overlay-${grabSide}` : ''}`}
+          style={{
+            position: 'fixed',
+            top: overlayRect.top,
+            left: overlayRect.left,
+            width: overlayRect.width,
+            height: overlayRect.height,
+            zIndex: 1000,
+          }}
+        >
+          {renderNode(floatChild, resolve, node.direction)}
+        </div>,
+        document.body,
+      )}
       {handlePullNode && createPortal(handlePullNode, document.body)}
     </div>
   );
-}
-
-/** Hidden-drawer (collapsed) style for the *external* overlay — keep the
- *  position fixed against the popout's outer edge but shrink the perpendicular
- *  axis to handle width so only the strip + hamburger show. */
-function collapseExternalStyle(
-  baseStyle: Record<string, string | number>,
-  isHorizontal: boolean,
-  isFirst: boolean,
-  slim: number,
-): Record<string, string | number> {
-  const out = { ...baseStyle };
-  if (isHorizontal) {
-    out.width = slim;
-    if (isFirst && typeof out.left === 'number') {
-      // Anchor so the slim strip's outer edge sits flush with where the
-      // drawer's outer edge was — i.e., the strip is closest to the popout.
-      const prevWidth = (baseStyle.width as number) ?? 0;
-      out.left = (out.left as number) + (prevWidth - slim);
-    }
-  } else {
-    out.height = slim;
-    if (isFirst && typeof out.top === 'number') {
-      const prevHeight = (baseStyle.height as number) ?? 0;
-      out.top = (out.top as number) + (prevHeight - slim);
-    }
-  }
-  return out;
-}
-
-/** Hidden-drawer style for the *internal* overlay — shrink the absolute
- *  overlay to handle width, anchored on the matching edge so it reads as a
- *  slim tab attached to the popout's interior edge. */
-function collapseInternalStyle(
-  isHorizontal: boolean,
-  isFirst: boolean,
-  slim: number,
-): Record<string, string | number> {
-  if (isHorizontal) {
-    return {
-      position: 'absolute',
-      top: 0,
-      bottom: 0,
-      width: `${slim}px`,
-      ...(isFirst ? { left: 0 } : { right: 0 }),
-    };
-  }
-  return {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: `${slim}px`,
-    ...(isFirst ? { top: 0 } : { bottom: 0 }),
-  };
 }
 
 function firstLeafOf(node: PaneNode): LeafNode | null {
@@ -493,58 +450,63 @@ function firstLeafOf(node: PaneNode): LeafNode | null {
 }
 
 /**
- * Compute fixed-position coords for an external drawer anchored to the cos
- * popout's bounding rect. Drawer extends *outside* the popout on the matching
- * edge; size = `ratio` of the popout's perpendicular span (so dragging the
- * resize grip via cosSetSplitRatio works the same way as for internal
- * overlays — same mental model, different anchor).
+ * Viewport-coord rect for the floating drawer body — same geometry as the
+ * rendered overlay <div>, regardless of whether it's an absolute child of
+ * the popout (overlay/internal) or a portaled fixed element (external).
+ * The DrawerPullHandle uses this to pin its line/hamburger against the
+ * drawer (vs. against the popout edge).
  */
-function externalOverlayStyle(
+function drawerRectFor(
   popoutRect: DOMRect,
   ratio: number,
   isHorizontal: boolean,
   isFirst: boolean,
-): Record<string, string | number> {
-  const drawerSize = (isFirst ? ratio : 1 - ratio);
+  isExternal: boolean,
+): { top: number; left: number; width: number; height: number } {
+  const drawerShare = isFirst ? ratio : 1 - ratio;
   if (isHorizontal) {
-    const width = Math.max(120, popoutRect.width * drawerSize);
-    if (isFirst) {
-      // Drawer on the left edge of popout — extends leftward into page space.
-      return {
-        position: 'fixed',
-        top: popoutRect.top,
-        left: Math.max(0, popoutRect.left - width),
-        width,
-        height: popoutRect.height,
-      };
+    const width = isExternal
+      ? Math.max(120, popoutRect.width * drawerShare)
+      : popoutRect.width * drawerShare;
+    if (isExternal) {
+      // External: extends outside popout on the matching side.
+      const left = isFirst ? Math.max(0, popoutRect.left - width) : popoutRect.left + popoutRect.width;
+      return { top: popoutRect.top, left, width, height: popoutRect.height };
     }
-    return {
-      position: 'fixed',
-      top: popoutRect.top,
-      left: popoutRect.left + popoutRect.width,
-      width,
-      height: popoutRect.height,
-    };
+    // Overlay: inside popout on the matching side.
+    const left = isFirst ? popoutRect.left : popoutRect.left + popoutRect.width - width;
+    return { top: popoutRect.top, left, width, height: popoutRect.height };
   }
-  const height = Math.max(120, popoutRect.height * drawerSize);
-  if (isFirst) {
-    return {
-      position: 'fixed',
-      top: Math.max(0, popoutRect.top - height),
-      left: popoutRect.left,
-      width: popoutRect.width,
-      height,
-    };
+  const height = isExternal
+    ? Math.max(120, popoutRect.height * drawerShare)
+    : popoutRect.height * drawerShare;
+  if (isExternal) {
+    const top = isFirst ? Math.max(0, popoutRect.top - height) : popoutRect.top + popoutRect.height;
+    return { top, left: popoutRect.left, width: popoutRect.width, height };
   }
-  return {
-    position: 'fixed',
-    top: popoutRect.top + popoutRect.height,
-    left: popoutRect.left,
-    width: popoutRect.width,
-    height,
-  };
+  const top = isFirst ? popoutRect.top : popoutRect.top + popoutRect.height - height;
+  return { top, left: popoutRect.left, width: popoutRect.width, height };
 }
 
+/**
+ * Collapsed handle anchor — a zero-width (or zero-height for vertical splits)
+ * rect at the popout's boundary edge. Combined with handleEdge (inner for
+ * overlay, outer for external), this places the tab correctly:
+ *   - Overlay right collapsed → tab sits inside popout at right border.
+ *   - External right collapsed → tab sits outside popout at right border.
+ */
+function collapsedHandleRect(
+  popoutRect: DOMRect,
+  isHorizontal: boolean,
+  isFirst: boolean,
+): { top: number; left: number; width: number; height: number } {
+  if (isHorizontal) {
+    const boundary = isFirst ? popoutRect.left : popoutRect.left + popoutRect.width;
+    return { top: popoutRect.top, left: boundary, width: 0, height: popoutRect.height };
+  }
+  const boundary = isFirst ? popoutRect.top : popoutRect.top + popoutRect.height;
+  return { top: boundary, left: popoutRect.left, width: popoutRect.width, height: 0 };
+}
 
 function CosLeafView({
   leaf,

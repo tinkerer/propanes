@@ -4,6 +4,7 @@ import { api } from '../../lib/api.js';
 import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../../lib/agent-constants.js';
 import { formatAgentOption, agentSortCmp } from '../../lib/agent-matrix.js';
 import { openSession, loadAllSessions, ensureAgentsLoaded } from '../../lib/sessions.js';
+import { UnifiedComposer, type UnifiedComposerData } from '../feedback/UnifiedComposer.js';
 
 export type DispatchType = 'agent' | 'yolo' | 'wiggum' | 'fafo' | 'structured' | 'powwow';
 
@@ -35,37 +36,6 @@ function groupAgentsByRuntime(agents: any[]): Array<[string, any[]]> {
   return Array.from(groups.entries());
 }
 
-const DRAFT_KEY = 'pw-qdp-drafts';
-
-interface Draft {
-  text: string;
-  dispatchType: DispatchType;
-  agentId: string;
-}
-
-function loadDrafts(): Record<string, Draft> {
-  try {
-    const raw = localStorage.getItem(DRAFT_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
-}
-
-function saveDraft(appKey: string, draft: Draft) {
-  const all = loadDrafts();
-  if (!draft.text.trim()) {
-    delete all[appKey];
-  } else {
-    all[appKey] = draft;
-  }
-  localStorage.setItem(DRAFT_KEY, JSON.stringify(all));
-}
-
-function clearDraft(appKey: string) {
-  const all = loadDrafts();
-  delete all[appKey];
-  localStorage.setItem(DRAFT_KEY, JSON.stringify(all));
-}
-
 interface Props {
   appKey: string;
   appName?: string;
@@ -73,82 +43,20 @@ interface Props {
   initialDispatchType?: DispatchType;
 }
 
-interface PastedImage {
-  id: string;
-  blob: Blob;
-  previewUrl: string;
-  mimeType: string;
-}
-
 export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchType }: Props) {
-  const draft = loadDrafts()[appKey];
-  const [text, setText] = useState(draft?.text || '');
-  const [dispatchType, setDispatchType] = useState<DispatchType>(
-    draft?.dispatchType || initialDispatchType || 'agent',
-  );
+  const [dispatchType, setDispatchType] = useState<DispatchType>(initialDispatchType || 'agent');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [agents, setAgents] = useState<any[]>([]);
-  const [selectedAgentId, setSelectedAgentId] = useState<string>(draft?.agentId || '');
-  const [images, setImages] = useState<PastedImage[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string>('');
   const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
     x: Math.round(window.innerWidth / 2 - 200),
     y: Math.round(window.innerHeight * 0.3),
   }));
   const dragging = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const allObjectUrls = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    return () => {
-      allObjectUrls.current.forEach((url) => URL.revokeObjectURL(url));
-      allObjectUrls.current.clear();
-    };
-  }, []);
-
-  function addImage(blob: Blob) {
-    const previewUrl = URL.createObjectURL(blob);
-    allObjectUrls.current.add(previewUrl);
-    setImages((prev) => [
-      ...prev,
-      {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        blob,
-        previewUrl,
-        mimeType: blob.type || 'image/png',
-      },
-    ]);
-  }
-
-  function removeImage(id: string) {
-    setImages((prev) => {
-      const removed = prev.find((img) => img.id === id);
-      if (removed) URL.revokeObjectURL(removed.previewUrl);
-      return prev.filter((img) => img.id !== id);
-    });
-  }
-
-  function onPaste(e: ClipboardEvent) {
-    const items = e.clipboardData?.items;
-    if (!items || items.length === 0) return;
-    let handled = false;
-    for (const item of items) {
-      if (item.kind === 'file' && item.type.startsWith('image/')) {
-        const file = item.getAsFile();
-        if (!file) continue;
-        handled = true;
-        addImage(file);
-      }
-    }
-    if (handled) e.preventDefault();
-  }
 
   const appId = appKey === '__unlinked__' ? '' : appKey;
-
-  useEffect(() => {
-    textareaRef.current?.focus();
-  }, []);
 
   useEffect(() => {
     (async () => {
@@ -157,9 +65,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
           ? await api.getAgents(appId)
           : await ensureAgentsLoaded();
         setAgents(list);
-        // Only pick default if we don't have a saved agent
         if (!selectedAgentId || !list.some((a: any) => a.id === selectedAgentId)) {
-          // Skip webhook endpoints with no URL — they'd fail dispatch immediately.
           const usable = (list as any[]).filter((a: any) => a.mode !== 'webhook' || !!a.url);
           const appDefault = appId ? usable.find((a: any) => a.isDefault && a.appId === appId) : null;
           const globalDefault = usable.find((a: any) => a.isDefault && !a.appId);
@@ -169,11 +75,6 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
       } catch { /* ignore */ }
     })();
   }, [appId]);
-
-  // Persist draft on every change
-  useEffect(() => {
-    saveDraft(appKey, { text, dispatchType, agentId: selectedAgentId });
-  }, [text, dispatchType, selectedAgentId, appKey]);
 
   // Drag handling
   const onMouseDown = useCallback((e: MouseEvent) => {
@@ -199,7 +100,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
     };
   }, []);
 
-  // Escape to close (hides, draft preserved)
+  // Escape to close
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') { e.preventDefault(); onClose(); }
@@ -208,8 +109,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  // Close when focus leaves the panel (keyboard tab-out or click-away).
-  // Draft is persisted on every change, so dismissing is safe.
+  // Click-away close
   useEffect(() => {
     function onMouseDown(e: MouseEvent) {
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
@@ -229,34 +129,34 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
     };
   }, [onClose]);
 
-  function handleClear() {
-    setText('');
-    setDispatchType('agent');
-    setImages((prev) => {
-      prev.forEach((img) => URL.revokeObjectURL(img.previewUrl));
-      return [];
-    });
-    clearDraft(appKey);
-    textareaRef.current?.focus();
-  }
-
-  async function submit() {
-    if (!text.trim() || submitting) return;
+  async function handleSubmit(data: UnifiedComposerData) {
+    if (!data.text.trim() || submitting) return;
     setSubmitting(true);
     setError('');
     try {
       const fb = await api.createFeedback({
-        title: text.trim().slice(0, 200),
-        description: text.trim(),
+        title: data.text.trim().slice(0, 200),
+        description: data.text.trim(),
         type: 'manual',
         appId,
         tags: dispatchType === 'agent' ? [] : [dispatchType],
       });
 
-      if (images.length > 0) {
+      // Upload images (pasted screenshots + captured screenshots)
+      if (data.images.length > 0) {
         await Promise.all(
-          images.map((img) => api.saveImageAsNew(fb.id, img.blob)),
+          data.images.map((img) => api.saveImageAsNew(fb.id, img)),
         );
+      }
+
+      // If we have element selections, append them to the feedback description
+      if (data.elements.length > 0) {
+        const elDesc = data.elements.map((el) =>
+          `[${el.tagName}${el.id ? `#${el.id}` : ''}${el.classes?.length ? `.${el.classes.join('.')}` : ''}] ${el.textContent?.slice(0, 100) || ''}`,
+        ).join('\n');
+        await api.updateFeedback(fb.id, {
+          customData: JSON.stringify({ selectedElements: data.elements }),
+        }).catch(() => {});
       }
 
       // YOLO mode auto-picks a skip-permissions agent, ignoring the manual selection.
@@ -276,16 +176,13 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
           feedbackId: fb.id,
           moderatorAgentId: moderator.id,
           participantAgentIds: participantAgents.map((a: any) => a.id),
-          instructions: text.trim(),
+          instructions: data.text.trim(),
           rounds: 2,
         });
         if (result.sessionId) {
           openSession(result.sessionId);
         }
         loadAllSessions();
-        setText('');
-        setDispatchType('agent');
-        clearDraft(appKey);
         onClose();
         return;
       }
@@ -309,10 +206,6 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
         openSession(result.sessionId);
       }
       loadAllSessions();
-      // Clear draft on successful submit
-      setText('');
-      setDispatchType('agent');
-      clearDraft(appKey);
       onClose();
     } catch (err: any) {
       console.error('Quick dispatch failed:', err.message);
@@ -338,64 +231,33 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
         </span>
         <button class="qdp-close" onClick={onClose}>{'\u2715'}</button>
       </div>
-      <textarea
-        ref={textareaRef}
-        class="qdp-textarea"
-        placeholder="What should we cook up? (paste screenshots too)"
-        value={text}
-        onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
-        onPaste={onPaste}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            submit();
-          }
-          if (e.key === 'Escape') {
-            e.preventDefault();
-            onClose();
-          }
-        }}
-        rows={3}
-      />
-      {images.length > 0 && (
-        <div class="qdp-attachments">
-          {images.map((img) => (
-            <div key={img.id} class="qdp-attachment">
-              <img src={img.previewUrl} alt="pasted screenshot" />
-              <button
-                class="qdp-attachment-remove"
-                onClick={() => removeImage(img.id)}
-                title="Remove screenshot"
-              >
-                {'✕'}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      <div class="qdp-composer-wrap">
+        <UnifiedComposer
+          onSubmit={handleSubmit}
+          placeholder="What should we cook up?"
+          submitTitle={dispatchType === 'yolo' ? 'YOLO Cook' : 'Cook It'}
+          submitIcon="send"
+          disabled={submitting}
+          draftKey={`qdp-${appKey}`}
+          className="qdp-unified-composer"
+          error={error || null}
+          rows={3}
+        />
+      </div>
       <div class="qdp-footer">
-        <div class="qdp-types">
-          {(['agent', 'yolo', 'wiggum', 'fafo', 'structured', 'powwow'] as const).map((t) => (
-            <button
-              key={t}
-              class={`qdp-type-btn ${dispatchType === t ? 'active' : ''}`}
-              onClick={() => setDispatchType(t)}
-            >
-              {t === 'agent'
-                ? '\u{1F525} Cook It'
-                : t === 'yolo'
-                  ? '\u{26A1} YOLO'
-                  : t === 'wiggum'
-                    ? '\u{1F575} Wiggum'
-                    : t === 'fafo'
-                      ? '\u{1F9EC} FAFO'
-                      : t === 'structured'
-                        ? '\u{1F4CB} Structured'
-                        : '\u{1FAD6} Powwow'}
-            </button>
-          ))}
-        </div>
-        <div class="qdp-actions">
+        <div class="qdp-selects">
+          <select
+            class="qdp-dispatch-select"
+            value={dispatchType}
+            onChange={(e) => setDispatchType((e.target as HTMLSelectElement).value as DispatchType)}
+          >
+            <option value="agent">{'\u{1F525}'} Cook It</option>
+            <option value="yolo">{'\u{26A1}'} YOLO</option>
+            <option value="wiggum">{'\u{1F575}'} Wiggum</option>
+            <option value="fafo">{'\u{1F9EC}'} FAFO</option>
+            <option value="structured">{'\u{1F4CB}'} Structured</option>
+            <option value="powwow">{'\u{1FAD6}'} Powwow</option>
+          </select>
           {agents.length > 1 && (
             <select
               class="qdp-agent-select"
@@ -415,24 +277,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
               ))}
             </select>
           )}
-          {text.trim() && (
-            <button class="qdp-clear" onClick={handleClear} title="Clear draft">Clear</button>
-          )}
-          <button
-            class="qdp-submit"
-            disabled={!text.trim() || submitting}
-            onClick={submit}
-          >
-            {submitting
-              ? 'Cooking…'
-              : dispatchType === 'yolo'
-                ? '\u{26A1} YOLO Cook'
-                : '\u{1F525} Cook It'}
-          </button>
         </div>
-        {error && (
-          <div class="qdp-error">{error}</div>
-        )}
       </div>
     </div>,
     document.body,

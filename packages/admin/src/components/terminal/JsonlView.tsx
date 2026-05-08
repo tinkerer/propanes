@@ -1,3 +1,4 @@
+// DEPRECATED: Use StructuredView (which delegates to ConversationView) instead.
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { MessageRenderer } from './MessageRenderer.js';
 import { groupMessages, AssistantGroupHeader, partitionMergedMessages } from './StructuredView.js';

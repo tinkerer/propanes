@@ -1,0 +1,1478 @@
+/* ==========================================================================
+   Unified Conversation System
+   Shared styles for both structured (JSONL viewer) and bubble (CoS chat)
+   rendering modes.  The `.conv-*` classes are additive — existing `.sm-*`
+   and `.cos-*` classes remain untouched.
+   ========================================================================== */
+
+/* ---------- Base container ---------- */
+.conversation-view {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: #0f172a;
+  padding: 12px 16px;
+  font-size: 13px;
+  color: #e2e8f0;
+  min-width: 0;
+  container-type: inline-size;
+}
+
+/* Narrow variant (applied via JS ResizeObserver) */
+.conversation-view.conversation-view-narrow {
+  padding: 6px 6px;
+  font-size: 12px;
+}
+@media (max-width: 640px) {
+  .conversation-view { padding: 8px 8px; }
+}
+
+/* ---------- Message row ---------- */
+/* In structured mode: simple vertical stack, no grid, compact spacing.
+   In bubble mode (.conv-row-bubble): 2-column grid with avatar + content. */
+.conv-row {
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.08s ease;
+  min-width: 0;
+}
+.conv-row + .conv-row {
+  margin-top: 2px;
+}
+.conv-row:hover {
+  background: rgba(148, 163, 184, 0.06);
+}
+
+/* Bubble mode: grid layout matching cos-row */
+.conv-row-bubble {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  column-gap: 12px;
+  row-gap: 0;
+  padding: 6px 10px 6px 8px;
+}
+
+/* ---------- Avatar ---------- */
+.conv-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  flex: 0 0 auto;
+  user-select: none;
+  color: #fff;
+  overflow: hidden;
+  background: #1e293b;
+  border: 1px solid rgba(226, 232, 240, 0.15);
+}
+.conv-avatar-user {
+  background: linear-gradient(135deg, #1d9bf0, #0f7ac7);
+  border-color: rgba(29, 155, 240, 0.3);
+}
+.conv-avatar-assistant {
+  background: linear-gradient(135deg, #ffb347, #f59e0b);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+.conv-avatar-initial {
+  line-height: 1;
+}
+.conv-avatar-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.conv-avatar-sm {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  font-size: 10px;
+}
+
+/* Bubble mode: avatar placement */
+.conv-row-bubble .conv-avatar-slot {
+  grid-column: 1;
+  grid-row: 1 / span 20;
+  padding-top: 1px;
+}
+
+/* Structured mode: hide avatar */
+.conv-row:not(.conv-row-bubble) .conv-avatar-slot {
+  display: none;
+}
+
+/* ---------- Row main area ---------- */
+.conv-row-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.conv-row-bubble .conv-row-main {
+  grid-column: 2;
+}
+
+/* ---------- Row header (author + timestamp) ---------- */
+.conv-row-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  line-height: 1.2;
+}
+.conv-row-author {
+  font-weight: 700;
+  font-size: 14px;
+  color: #e2e8f0;
+  letter-spacing: -0.005em;
+}
+.conv-row-time {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 400;
+  cursor: default;
+}
+
+/* Structured mode: hide author line (not needed) */
+.conv-row:not(.conv-row-bubble) .conv-row-header {
+  display: none;
+}
+
+/* ---------- Row content ---------- */
+.conv-row-content {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #e2e8f0;
+  word-break: break-word;
+}
+.conv-row-user .conv-row-content {
+  white-space: pre-wrap;
+}
+.conv-row-assistant .conv-row-content {
+  white-space: normal;
+}
+
+/* ---------- Message group ---------- */
+.conv-group {
+  margin-bottom: 12px;
+}
+.conv-group-assistant {
+  border-left: 2px solid #334155;
+  padding-left: 10px;
+  margin-left: 4px;
+}
+
+/* Collapsed group */
+.conv-group-collapsed {
+  margin-bottom: 4px;
+}
+.conv-group-collapsed .conv-group-header {
+  margin-bottom: 0;
+}
+
+/* ---------- Group header ---------- */
+.conv-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-family: 'SF Mono', Monaco, monospace;
+  color: #64748b;
+  flex-wrap: wrap;
+}
+
+.conv-group-header-toggle {
+  cursor: pointer;
+  user-select: none;
+  border-radius: 4px;
+  transition: background 0.12s;
+}
+.conv-group-header-toggle:hover {
+  background: rgba(148, 163, 184, 0.08);
+}
+.conv-group-header-toggle:focus-visible {
+  outline: 1px solid #475569;
+  outline-offset: 1px;
+}
+
+.conv-group-caret {
+  color: #475569;
+  font-size: 10px;
+  width: 10px;
+  flex-shrink: 0;
+}
+
+.conv-group-collapsed-hint {
+  margin-left: auto;
+  color: #475569;
+  font-style: italic;
+}
+
+.conv-group-model {
+  color: #60a5fa;
+  font-weight: 600;
+}
+
+.conv-group-tools {
+  color: #64748b;
+}
+
+.conv-group-tokens {
+  color: #475569;
+  margin-left: auto;
+}
+.conv-group-header-toggle .conv-group-tokens {
+  margin-left: 0;
+}
+
+/* ---------- Bubble-mode: group header hidden by default ---------- */
+.conversation-view-bubble .conv-group-header {
+  display: none;
+}
+
+/* ---------- Tool chips (bubble mode) ---------- */
+/* In bubble mode, tools render as collapsed one-line chips.
+   In structured mode, they expand inline (handled by existing .sm-* classes). */
+.conv-tool-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  margin: 2px 0;
+  background: #1e293b;
+  border-radius: 6px;
+  border-left: 3px solid #475569;
+  font-size: 12px;
+  line-height: 1.4;
+  min-width: 0;
+}
+.conv-tool-chip.tool-bash   { border-left-color: #94a3b8; }
+.conv-tool-chip.tool-edit   { border-left-color: #f59e0b; }
+.conv-tool-chip.tool-write  { border-left-color: #eab308; }
+.conv-tool-chip.tool-read   { border-left-color: #60a5fa; }
+.conv-tool-chip.tool-search { border-left-color: #cbd5e1; }
+.conv-tool-chip.tool-todo   { border-left-color: #fb923c; }
+.conv-tool-chip.tool-task   { border-left-color: #ef4444; }
+.conv-tool-chip.tool-web    { border-left-color: #38bdf8; }
+.conv-tool-chip.tool-default{ border-left-color: #475569; }
+.conv-tool-chip.tool-ask    { border-left-color: #facc15; }
+
+.conv-tool-chip-icon {
+  font-size: 12px;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  color: #94a3b8;
+}
+.conv-tool-chip-name {
+  font-weight: 600;
+  font-family: 'SF Mono', Monaco, monospace;
+  color: #cbd5e1;
+  flex-shrink: 0;
+}
+.conv-tool-chip-summary {
+  color: #94a3b8;
+  font-family: 'SF Mono', Monaco, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+.conv-tool-chip-header {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  cursor: pointer;
+  min-width: 0;
+}
+.conv-tool-chip-header:disabled {
+  cursor: default;
+}
+.conv-tool-chip-header:hover:not(:disabled) {
+  opacity: 0.85;
+}
+.conv-tool-chip-toggle {
+  color: #64748b;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.conv-tool-chip-error {
+  border-left-color: #f87171 !important;
+}
+.conv-tool-chip-error .conv-tool-chip-summary {
+  color: #fca5a5;
+}
+
+/* Expanded chip */
+.conv-tool-chip-expanded {
+  display: block;
+  padding: 6px 10px 8px;
+}
+.conv-tool-chip-expanded .conv-tool-chip-summary {
+  white-space: normal;
+}
+.conv-tool-chip-body {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.conv-tool-chip-section {
+  background: #0f172a;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+.conv-tool-chip-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  margin-bottom: 3px;
+}
+.conv-tool-chip-pre {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* ---------- Thinking indicator ---------- */
+.conv-thinking-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 14px;
+}
+.conv-thinking {
+  display: flex;
+  gap: 4px;
+  padding: 10px 14px;
+}
+.conv-thinking-row .conv-thinking {
+  padding-right: 0;
+}
+.conv-thinking span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #64748b;
+  animation: conv-bounce 1.2s infinite ease-in-out both;
+}
+.conv-thinking span:nth-child(2) { animation-delay: 0.15s; }
+.conv-thinking span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes conv-bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+.conv-thinking-label {
+  font-size: 11px;
+  color: #64748b;
+  font-style: italic;
+}
+.conv-thinking-label-elapsed {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+/* ---------- Error block ---------- */
+.conv-error {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--pw-danger-soft);
+  border: 1px solid var(--pw-danger);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.conv-error-text {
+  color: var(--pw-danger);
+}
+.conv-error-actions {
+  display: flex;
+  gap: 6px;
+}
+.conv-error-btn {
+  background: var(--pw-danger);
+  color: #fff;
+  border: 1px solid var(--pw-danger);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.conv-error-btn:hover {
+  filter: brightness(1.1);
+}
+.conv-error-btn-secondary {
+  background: transparent;
+  color: #94a3b8;
+  border-color: #334155;
+}
+.conv-error-btn-secondary:hover {
+  color: #e2e8f0;
+  border-color: #64748b;
+  filter: none;
+}
+
+/* ---------- Unread indicator ---------- */
+.conv-row-unread-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #1d9bf0;
+  box-shadow: 0 0 0 2px #0f172a;
+  margin-left: 2px;
+}
+
+/* ---------- Empty / loading states ---------- */
+.conv-empty {
+  color: #64748b;
+  text-align: center;
+  padding: 24px;
+  font-family: 'SF Mono', Monaco, monospace;
+}
+.conv-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  padding: 24px;
+}
+.conv-loading-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #475569;
+  animation: conv-bounce 1.2s infinite ease-in-out both;
+}
+.conv-loading-dot:nth-child(2) { animation-delay: 0.15s; }
+.conv-loading-dot:nth-child(3) { animation-delay: 0.3s; }
+
+/* ---------- Show earlier / load more ---------- */
+.conv-show-earlier {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  border: 1px dashed #334155;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 12px;
+  font-family: 'SF Mono', Monaco, monospace;
+  cursor: pointer;
+  text-align: center;
+  margin-bottom: 8px;
+}
+.conv-show-earlier:hover {
+  border-color: #475569;
+  color: #e2e8f0;
+  background: rgba(148, 163, 184, 0.04);
+}
+
+/* ---------- Message toggle (expand/collapse long messages) ---------- */
+.conv-msg-toggle {
+  display: inline-flex;
+  margin-top: 4px;
+  padding: 2px 8px;
+  background: transparent;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #94a3b8;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.conv-msg-toggle:hover {
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+/* ---------- User input group ---------- */
+.conv-group-user {
+  margin-left: 0;
+}
+
+/* ---------- Narrow container overrides ---------- */
+.conversation-view-narrow .conv-group { margin-bottom: 8px; }
+.conversation-view-narrow .conv-group-assistant {
+  padding-left: 5px;
+  margin-left: 1px;
+  border-left-width: 1px;
+}
+.conversation-view-narrow .conv-group-header {
+  padding: 2px 4px;
+  font-size: 10px;
+  gap: 6px;
+}
+.conversation-view-narrow .conv-row {
+  padding: 3px 6px;
+}
+.conversation-view-narrow .conv-row-content {
+  font-size: 12px;
+}
+.conversation-view-narrow .conv-tool-chip {
+  font-size: 11px;
+  padding: 3px 7px;
+}
+.conversation-view-narrow .conv-show-earlier {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+/* ---------- Popups / floating overlays ---------- */
+/* Per CLAUDE.md: floating overlays MUST use hardcoded opaque backgrounds,
+   never var(--pw-bg-surface) which may be translucent in dark scopes. */
+.conv-popup {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  color: #e2e8f0;
+}
+.conv-context-menu {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  padding: 4px 0;
+  min-width: 140px;
+}
+.conv-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #cbd5e1;
+  cursor: pointer;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+}
+.conv-context-menu-item:hover {
+  background: #334155;
+  color: #f1f5f9;
+}
+
+/* ==========================================================================
+   Virtual Keyboard — mobile touch-friendly key overlay
+   ========================================================================== */
+
+/* Collapsed toggle button */
+.conv-vkbd-toggle {
+  position: sticky;
+  bottom: 4px;
+  left: 4px;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+.conv-vkbd-toggle:hover {
+  background: #334155;
+}
+
+/* Expanded container */
+.conv-vkbd {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #1e293b;
+  border-top: 1px solid #334155;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 10;
+}
+
+.conv-vkbd-header {
+  display: flex;
+  justify-content: flex-end;
+}
+.conv-vkbd-close {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.conv-vkbd-close:hover {
+  color: #e2e8f0;
+  background: #334155;
+}
+
+/* Key row */
+.conv-vkbd-row {
+  display: flex;
+  gap: 4px;
+}
+
+/* Individual key */
+.conv-vkbd-key {
+  min-height: 44px;
+  flex: 1;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: 'SF Mono', Monaco, monospace;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.08s ease;
+}
+.conv-vkbd-key:active {
+  background: #334155;
+}
+.conv-vkbd-key:hover {
+  background: rgba(51, 65, 85, 0.6);
+}
+
+/* Text mode toggle button */
+.conv-vkbd-key-text {
+  font-family: inherit;
+  font-weight: 400;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+/* Text input row */
+.conv-vkbd-text-input {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+.conv-vkbd-input {
+  flex: 1;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 14px;
+  font-family: 'SF Mono', Monaco, monospace;
+  outline: none;
+}
+.conv-vkbd-input:focus {
+  border-color: #475569;
+}
+.conv-vkbd-input::placeholder {
+  color: #475569;
+}
+.conv-vkbd-send {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.conv-vkbd-send:active {
+  background: #334155;
+}
+.conv-vkbd-send-cancel {
+  color: #94a3b8;
+  font-weight: 400;
+  padding: 0 10px;
+}
+
+/* ==========================================================================
+   Session Input Bar
+   Bottom-sticky input bar for sending responses / input to agent sessions.
+   ========================================================================== */
+
+.conv-input-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  background: #0f172a;
+  border-top: 1px solid #1e293b;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conv-input-bar-dimmed {
+  opacity: 0.55;
+}
+
+/* --- Question text (AskUserQuestion) --- */
+.conv-input-bar-question {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e2e8f0;
+  line-height: 1.4;
+  padding: 0 2px;
+}
+
+/* --- Option buttons (radio / checkbox) --- */
+.conv-input-bar-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.conv-input-bar-opt {
+  all: unset;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  min-height: 44px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  cursor: pointer;
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.4;
+  transition: border-color 0.12s, background 0.12s;
+}
+.conv-input-bar-opt:hover:not(:disabled) {
+  border-color: #475569;
+  background: #253348;
+}
+.conv-input-bar-opt-sel {
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
+}
+.conv-input-bar-opt:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.conv-input-bar-opt-marker {
+  font-size: 14px;
+  line-height: 1;
+  margin-top: 2px;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+.conv-input-bar-opt-sel .conv-input-bar-opt-marker {
+  color: #3b82f6;
+}
+
+.conv-input-bar-opt-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.conv-input-bar-opt-label {
+  font-weight: 600;
+  color: #e2e8f0;
+}
+.conv-input-bar-opt-desc {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+/* --- Textarea (open-ended AskUserQuestion) --- */
+.conv-input-bar-textarea {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+.conv-input-bar-textarea:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.conv-input-bar-textarea::placeholder {
+  color: #64748b;
+}
+
+/* --- Submit button (AskUserQuestion) --- */
+.conv-input-bar-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.conv-input-bar-submit {
+  padding: 8px 20px;
+  min-height: 44px;
+  border: none;
+  border-radius: 6px;
+  background: #3b82f6;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.conv-input-bar-submit:hover:not(:disabled) {
+  background: #2563eb;
+}
+.conv-input-bar-submit:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* --- Quick-action row (generic waiting) --- */
+.conv-input-bar-quick {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.conv-input-bar-quick-btn {
+  min-width: 48px;
+  min-height: 44px;
+  padding: 6px 14px;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: #1e293b;
+  color: #cbd5e1;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+}
+.conv-input-bar-quick-btn:hover:not(:disabled) {
+  border-color: #475569;
+  background: #253348;
+  color: #e2e8f0;
+}
+.conv-input-bar-quick-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* --- Inline text input row --- */
+.conv-input-bar-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.conv-input-bar-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-family: inherit;
+}
+.conv-input-bar-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+.conv-input-bar-input::placeholder {
+  color: #64748b;
+}
+
+.conv-input-bar-send {
+  min-height: 44px;
+  min-width: 48px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #3b82f6;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s;
+  flex-shrink: 0;
+}
+.conv-input-bar-send:hover:not(:disabled) {
+  background: #2563eb;
+}
+.conv-input-bar-send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* --- Error --- */
+.conv-input-bar-error {
+  font-size: 12px;
+  color: #f87171;
+  padding: 2px 4px;
+}
+
+/* --- Mobile overrides --- */
+@media (max-width: 640px) {
+  .conv-input-bar { padding: 8px 8px; }
+  .conv-input-bar-quick-btn { min-width: 44px; padding: 6px 10px; font-size: 12px; }
+  .conv-input-bar-opt { padding: 8px 10px; font-size: 12px; }
+}
+
+/* ==========================================================================
+   Sub-thread (nested subagent conversation in bubble mode)
+   ========================================================================== */
+
+/* --- Collapsed pill --- */
+.conv-subthread-pill {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  margin: 4px 0 4px 48px; /* align with bubble content (avatar col + gap) */
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 16px;
+  font-size: 12px;
+  color: #94a3b8;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s, border-color 0.12s;
+}
+.conv-subthread-pill:hover {
+  background: #334155;
+  border-color: #475569;
+  color: #e2e8f0;
+}
+.conv-subthread-pill-icon {
+  font-size: 14px;
+  color: #60a5fa;
+  flex-shrink: 0;
+}
+.conv-subthread-pill-label {
+  font-weight: 600;
+  color: #cbd5e1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+.conv-subthread-pill-badge {
+  font-size: 11px;
+  color: #64748b;
+  white-space: nowrap;
+}
+.conv-subthread-pill-caret {
+  font-size: 10px;
+  color: #475569;
+  flex-shrink: 0;
+}
+
+/* --- Expanded container --- */
+.conv-subthread {
+  margin: 6px 0 6px 48px;
+  padding-left: 24px;
+  border-left: 2px solid #334155;
+}
+
+.conv-subthread-header {
+  margin-bottom: 4px;
+}
+.conv-subthread-header-toggle {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #94a3b8;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s;
+}
+.conv-subthread-header-toggle:hover {
+  background: rgba(148, 163, 184, 0.08);
+  color: #e2e8f0;
+}
+.conv-subthread-header-caret {
+  font-size: 10px;
+  color: #475569;
+  flex-shrink: 0;
+}
+.conv-subthread-header-icon {
+  font-size: 13px;
+  color: #60a5fa;
+  flex-shrink: 0;
+}
+.conv-subthread-header-label {
+  font-weight: 600;
+  color: #cbd5e1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
+}
+
+.conv-subthread-expanded {
+  font-size: 0.9em;
+  opacity: 0.92;
+}
+.conv-subthread-expanded .conversation-view {
+  padding: 4px 0;
+  background: transparent;
+}
+/* Dim avatars one nesting level */
+.conv-subthread-expanded .cv-row-avatar {
+  opacity: 0.7;
+}
+
+/* --- Narrow overrides --- */
+.conversation-view-narrow .conv-subthread-pill {
+  margin-left: 0;
+}
+.conversation-view-narrow .conv-subthread {
+  margin-left: 0;
+  padding-left: 12px;
+}
+
+/* ==========================================================================
+   Conversation Filter — header bar + popup
+   ========================================================================== */
+
+/* --- Header bar --- */
+.conv-header-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: 'SF Mono', Monaco, monospace;
+  color: #94a3b8;
+  border-bottom: 1px solid #1e293b;
+  background: #0f172a;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.conv-header-count {
+  color: #64748b;
+}
+
+.conv-header-filtered {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+.conv-header-search-badge {
+  color: #60a5fa;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+/* --- Filter trigger button --- */
+.conv-filter-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  color: #94a3b8;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+.conv-filter-btn:hover {
+  background: #1e293b;
+  color: #e2e8f0;
+}
+.conv-filter-btn-active {
+  color: #60a5fa;
+}
+.conv-filter-btn-active:hover {
+  color: #93c5fd;
+}
+
+/* Active-filter dot indicator */
+.conv-filter-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3b82f6;
+  box-shadow: 0 0 0 2px #0f172a;
+}
+
+/* --- Filter popup --- */
+.conv-filter-popup {
+  position: absolute;
+  top: 100%;
+  left: 4px;
+  margin-top: 4px;
+  min-width: 260px;
+  max-width: 340px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  padding: 8px 0;
+  color: #e2e8f0;
+}
+
+/* --- Sections --- */
+.conv-filter-section {
+  padding: 6px 12px;
+}
+.conv-filter-section + .conv-filter-section {
+  border-top: 1px solid #334155;
+}
+
+.conv-filter-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.conv-filter-section-footer {
+  display: flex;
+  justify-content: center;
+}
+
+/* --- Search input --- */
+.conv-filter-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #e2e8f0;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+.conv-filter-search:focus {
+  border-color: #475569;
+}
+.conv-filter-search::placeholder {
+  color: #475569;
+}
+
+/* --- Chips container --- */
+.conv-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* --- Individual chip --- */
+.conv-filter-chip {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  color: #475569;
+  background: rgba(71, 85, 105, 0.15);
+  border: 1px solid transparent;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  user-select: none;
+  text-decoration: line-through;
+}
+.conv-filter-chip:hover {
+  background: rgba(71, 85, 105, 0.25);
+  color: #94a3b8;
+}
+
+.conv-filter-chip-active {
+  color: #e2e8f0;
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.3);
+  text-decoration: none;
+}
+.conv-filter-chip-active:hover {
+  background: rgba(59, 130, 246, 0.25);
+  color: #f1f5f9;
+}
+
+/* --- Clear all button --- */
+.conv-filter-clear {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #f87171;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.conv-filter-clear:hover {
+  background: rgba(248, 113, 113, 0.1);
+}
+
+/* ==========================================================================
+   Files Companion — file operations viewer for sessions
+   ========================================================================== */
+
+.conv-files-list {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: #0f172a;
+  padding: 8px 0;
+  font-size: 13px;
+  color: #e2e8f0;
+}
+
+.conv-files-empty {
+  color: #64748b;
+  text-align: center;
+  padding: 24px;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 12px;
+}
+
+.conv-files-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px 8px;
+  border-bottom: 1px solid #1e293b;
+  margin-bottom: 4px;
+}
+
+.conv-files-title {
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+}
+
+.conv-files-counts {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  font-family: 'SF Mono', Monaco, monospace;
+}
+
+.conv-files-count-edit { color: #f59e0b; }
+.conv-files-count-read { color: #60a5fa; }
+.conv-files-count-search { color: #94a3b8; }
+
+.conv-files-section {
+  margin-top: 8px;
+  border-top: 1px solid #1e293b;
+  padding-top: 4px;
+}
+
+.conv-files-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  padding: 4px 12px;
+}
+
+/* --- File row --- */
+.conv-file-row {
+  border-bottom: 1px solid rgba(30, 41, 59, 0.5);
+}
+
+.conv-file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  min-height: 32px;
+}
+
+.conv-file-header.conv-file-expandable {
+  cursor: pointer;
+  transition: background 0.08s;
+}
+
+.conv-file-header.conv-file-expandable:hover {
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.conv-file-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.conv-badge-edit {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
+.conv-badge-write {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.conv-badge-read {
+  background: rgba(96, 165, 250, 0.15);
+  color: #60a5fa;
+  font-size: 12px;
+}
+
+.conv-badge-search {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.conv-file-path {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 12px;
+  color: #cbd5e1;
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.conv-file-path:hover {
+  color: #60a5fa;
+  text-decoration: underline;
+}
+
+.conv-file-meta {
+  font-size: 11px;
+  color: #64748b;
+  font-family: 'SF Mono', Monaco, monospace;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.conv-file-caret {
+  color: #475569;
+  font-size: 10px;
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+}
+
+.conv-search-pattern {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 12px;
+  color: #cbd5e1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.conv-search-row {
+  border-bottom: none;
+}
+
+/* --- Diff display --- */
+.conv-file-details {
+  padding: 0 12px 8px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conv-file-diff {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  background: #0c1322;
+  border-radius: 4px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.conv-diff-del {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.1);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.conv-diff-add {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.1);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.conv-diff-truncated {
+  color: #64748b;
+  font-style: italic;
+  padding-top: 4px;
+}

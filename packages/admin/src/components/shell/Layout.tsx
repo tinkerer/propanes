@@ -17,6 +17,8 @@ import { AutoFixToast } from '../ai-assist/AutoFixToast.js';
 import { NotificationCenter } from '../ui/NotificationCenter.js';
 import { SshSetupDialog } from '../modals/SshSetupDialog.js';
 import { TerminalPicker } from '../pickers/TerminalPicker.js';
+import { BranchModal } from '../modals/BranchModal.js';
+import { DistillModal } from '../modals/DistillModal.js';
 import { ControlBar } from './ControlBar.js';
 import { MobileNav } from './MobileNav.js';
 import { MobilePageView } from './MobilePageView.js';
@@ -629,6 +631,8 @@ export function Layout() {
         />
       )}
       <FileViewerOverlay />
+      <BranchModal />
+      <DistillModal />
       {showShortcutHelp && <ShortcutHelpModal onClose={() => setShowShortcutHelp(false)} />}
       {showSpotlight && <SpotlightSearch onClose={() => closeSpotlight()} />}
       {addAppModalOpen.value && <AddAppModal onClose={() => { addAppModalOpen.value = false; }} />}
