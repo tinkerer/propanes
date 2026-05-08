@@ -56,25 +56,17 @@ fn install_esc_override() {
         fn objc_getClass(name: *const u8) -> *mut c_void;
     }
 
-    extern "C" fn order_out(this: *mut c_void, sel_name: &str) {
-        eprintln!(">>> {} intercepted — orderOut instead", sel_name);
-        unsafe {
-            let obj = &*(this as *const objc2::runtime::AnyObject);
-            let _: () = objc2::msg_send![obj, orderOut: std::ptr::null::<objc2::runtime::AnyObject>()];
-        }
+    unsafe fn do_order_out(this: *mut c_void) {
+        let obj = &*(this as *const objc2::runtime::AnyObject);
+        let _: () = objc2::msg_send![obj, orderOut: std::ptr::null::<objc2::runtime::AnyObject>()];
     }
 
     extern "C" fn on_cancel(this: *mut c_void, _cmd: *mut c_void, _sender: *mut c_void) {
-        order_out(this, "cancelOperation:");
+        unsafe { do_order_out(this) }
     }
 
     extern "C" fn on_perform_close(this: *mut c_void, _cmd: *mut c_void, _sender: *mut c_void) {
-        order_out(this, "performClose:");
-    }
-
-    extern "C" fn on_close(this: *mut c_void, _cmd: *mut c_void) {
-        // close takes no argument (unlike cancelOperation:/performClose: which take a sender)
-        order_out(this, "close");
+        unsafe { do_order_out(this) }
     }
 
     fn add_or_replace_raw(
@@ -103,10 +95,6 @@ fn install_esc_override() {
             let added = class_addMethod(cls, sel, imp, types.as_ptr());
             if !added {
                 class_replaceMethod(cls, sel, imp, types.as_ptr());
-                eprintln!(
-                    "install_esc_override: replaced existing {}",
-                    std::str::from_utf8(&sel_name[..sel_name.len() - 1]).unwrap_or("?")
-                );
             }
         }
     }
@@ -114,15 +102,10 @@ fn install_esc_override() {
     unsafe {
         let cls = objc_getClass(b"ProPanel\0".as_ptr());
         if cls.is_null() {
-            eprintln!("install_esc_override: ProPanel class not found");
             return;
         }
-        // cancelOperation: and performClose: take (self, _cmd, sender)
         add_or_replace_raw(cls, b"cancelOperation:\0", on_cancel as *const c_void, b"v@:@\0");
         add_or_replace_raw(cls, b"performClose:\0", on_perform_close as *const c_void, b"v@:@\0");
-        // close takes (self, _cmd) — no sender argument
-        add_or_replace_raw(cls, b"close\0", on_close as *const c_void, b"v@:\0");
-        eprintln!("install_esc_override: overrides installed on ProPanel (cancelOperation:, performClose:, close)");
     }
 }
 
