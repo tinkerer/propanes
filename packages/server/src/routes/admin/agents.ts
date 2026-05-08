@@ -157,6 +157,8 @@ agentRoutes.post('/agents', async (c) => {
     permissionProfile: parsed.data.permissionProfile || 'interactive-require',
     allowedTools: parsed.data.allowedTools || null,
     autoPlan: parsed.data.autoPlan || false,
+    description: parsed.data.description || null,
+    sourceSessionIds: parsed.data.sourceSessionIds || null,
     createdAt: now,
     updatedAt: now,
   });
@@ -202,6 +204,8 @@ agentRoutes.patch('/agents/:id', async (c) => {
     permissionProfile: parsed.data.permissionProfile || 'interactive-require',
     allowedTools: parsed.data.allowedTools || null,
     autoPlan: parsed.data.autoPlan || false,
+    description: parsed.data.description ?? existing.description,
+    sourceSessionIds: parsed.data.sourceSessionIds ?? existing.sourceSessionIds,
     preferredLauncherId: parsed.data.preferredLauncherId ?? existing.preferredLauncherId,
     harnessConfigId: parsed.data.harnessConfigId ?? existing.harnessConfigId,
     spriteConfigId: parsed.data.spriteConfigId ?? existing.spriteConfigId,

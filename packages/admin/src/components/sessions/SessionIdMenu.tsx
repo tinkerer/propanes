@@ -19,6 +19,7 @@ import {
   type CompanionType,
   type PopoutPanelState,
 } from '../../lib/sessions.js';
+import { branchPickerOpen, distillPickerOpen } from '../../lib/agent-actions.js';
 
 const RUNTIME_OPTIONS = ['claude', 'codex'] as const;
 
@@ -152,6 +153,11 @@ export function SessionIdMenu({
           <button class="popup-menu-item" onClick={() => { onClose(); openTerminalCompanion(); }}>
             {isCompanionActive('terminal') ? '\u2713 ' : ''}Terminal <kbd>M</kbd>
           </button>
+          {sess?.jsonlPath && (
+            <button class="popup-menu-item" onClick={() => { onClose(); toggle('tasks'); }}>
+              {isCompanionActive('tasks') ? '\u2713 ' : ''}Tasks <kbd>T</kbd>
+            </button>
+          )}
           <button class="popup-menu-item" onClick={() => { onClose(); toggle('wiggum-runs'); }}>
             {isCompanionActive('wiggum-runs') ? '\u2713 ' : ''}Wiggum Runs <kbd>W</kbd>
           </button>
@@ -232,6 +238,20 @@ export function SessionIdMenu({
           })}
         </div>
       </div>
+      {sess?.claudeSessionId && (
+        <button class="popup-menu-item" onClick={() => {
+          onClose();
+          branchPickerOpen.value = { sessionId, runtime: sess?.runtime || 'claude', permissionProfile: sess?.permissionProfile || 'interactive-yolo' };
+        }}>
+          Branch...
+        </button>
+      )}
+      <button class="popup-menu-item" onClick={() => {
+        onClose();
+        distillPickerOpen.value = { sessionIds: [sessionId], sessionTitle: sess?.title || sessionId.slice(-6) };
+      }}>
+        Distill to Agent...
+      </button>
     </PopupMenu>
   );
 }

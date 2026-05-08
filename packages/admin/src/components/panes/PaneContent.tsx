@@ -1,6 +1,6 @@
 import { SessionViewToggle } from '../terminal/SessionViewToggle.js';
 import { ChiefOfStaffBubble } from '../cos/ChiefOfStaffBubble.js';
-import { JsonlView } from '../terminal/JsonlView.js';
+import { StructuredView } from '../terminal/StructuredView.js';
 import { SessionSummaryView } from '../sessions/SessionSummaryView.js';
 import { FeedbackCompanionView } from '../feedback/FeedbackCompanionView.js';
 import { IframeCompanion } from '../files/IframeCompanion.js';
@@ -8,6 +8,8 @@ import { getIsolateEntry } from '../../lib/isolate.js';
 import { TerminalCompanionView } from '../files/TerminalCompanionView.js';
 import { FileCompanionView } from '../files/FileCompanionView.js';
 import { ArtifactCompanionView } from '../files/ArtifactCompanionView.js';
+import { TasksCompanion } from '../conversation/TasksCompanion.js';
+import { FilesCompanion } from '../conversation/FilesCompanion.js';
 import { WiggumRunsPanel } from '../sessions/WiggumRunsPanel.js';
 import { SessionsListView } from '../sessions/SessionsListView.js';
 import { TerminalsListView } from '../sessions/TerminalsListView.js';
@@ -138,15 +140,21 @@ export function renderTabContent(
   const isFile = sid.startsWith('file:');
   const isWiggumRuns = sid.startsWith('wiggum-runs:');
   const isArtifact = sid.startsWith('artifact:');
-  const isCompanion = isJsonl || isSummary || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact;
+  const isTasks = sid.startsWith('tasks:');
+  const isFiles = sid.startsWith('files:');
+  const isCompanion = isJsonl || isSummary || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isFile || isWiggumRuns || isArtifact || isTasks || isFiles;
   const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
-  const sess = (isIsolate || isUrl || isFile || isWiggumRuns || isArtifact) ? null : sessionMap.get(realSid);
+  const sess = (isIsolate || isUrl || isFile || isWiggumRuns || isArtifact || isTasks || isFiles) ? null : sessionMap.get(realSid);
 
   const handleExit = onExit ?? ((code: number, text: string) => markSessionExited(sid, code, text));
 
   return (
     <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0 }}>
-      {isWiggumRuns ? (
+      {isFiles ? (
+        <FilesCompanion sessionId={realSid} />
+      ) : isTasks ? (
+        <TasksCompanion sessionId={realSid} />
+      ) : isWiggumRuns ? (
         <WiggumRunsPanel sessionId={realSid} />
       ) : isArtifact ? (
         <ArtifactCompanionView artifactId={realSid} />
@@ -162,7 +170,7 @@ export function renderTabContent(
           return <IframeCompanion url={src} label={label} />;
         })()
       ) : isJsonl ? (
-        <JsonlView sessionId={realSid} />
+        <StructuredView sessionId={realSid} />
       ) : isSummary ? (
         <SessionSummaryView sessionId={realSid} />
       ) : isFeedback ? (

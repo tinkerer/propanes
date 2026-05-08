@@ -205,6 +205,8 @@ export const agentEndpointSchema = z.object({
   preferredLauncherId: z.string().nullable().optional(),
   harnessConfigId: z.string().nullable().optional(),
   spriteConfigId: z.string().nullable().optional(),
+  description: z.string().max(500).optional(),
+  sourceSessionIds: z.string().max(5000).optional(),
 });
 
 export const dispatchSchema = z.object({

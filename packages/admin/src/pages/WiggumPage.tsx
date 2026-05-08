@@ -446,9 +446,9 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
                   border: '1px solid rgba(100,181,246,0.3)', borderRadius: 3,
                   color: '#64B5F6', cursor: 'pointer',
                 }}
-                title="Open JSONL structured view"
+                title="Open conversation view"
               >
-                JSONL
+                Conversation
               </button>
               <span style={{ color: '#888' }}>
                 exit={iter.exitCode ?? '?'}

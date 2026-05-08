@@ -147,7 +147,7 @@ function JsonlFileDropdown({ sessionId, sess }: { sessionId: string; sess: any }
         }}
         title={claudeUuid ? `${runtimeLabel} session: ${claudeUuid}` : undefined}
       >
-        JSONL: {shortUuid} {files.length > 1 && <span class="id-dropdown-caret">{'\u25BE'}</span>}
+        Conversation: {shortUuid} {files.length > 1 && <span class="id-dropdown-caret">{'\u25BE'}</span>}
       </span>
       {selectedFile && (
         <span class="jsonl-file-badge" title={selectedLabel}>
@@ -423,12 +423,14 @@ function PaneTabBar({
         const isIsolate = sid.startsWith('isolate:');
         const isUrl = sid.startsWith('url:');
         const isArtifact = sid.startsWith('artifact:');
-        const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isArtifact;
+        const isTasks = sid.startsWith('tasks:');
+        const isFiles = sid.startsWith('files:');
+        const isCompanion = isJsonl || isFeedback || isIframe || isTerminal || isIsolate || isUrl || isArtifact || isTasks || isFiles;
         const realSid = isCompanion ? sid.slice(sid.indexOf(':') + 1) : sid;
         const isExited = exited.has(realSid);
         const inputState = !isExited && !isCompanion ? (sessionInputStates.value.get(sid) || null) : null;
         const isActive = sid === activeId;
-        const sess = (isIsolate || isUrl || isArtifact) ? null : sessionMap.get(realSid);
+        const sess = (isIsolate || isUrl || isArtifact || isTasks || isFiles) ? null : sessionMap.get(realSid);
         const isPlain = !isCompanion && sess?.permissionProfile === 'plain';
         const plainLabel = sess?.title
           ? sess.title
@@ -436,13 +438,15 @@ function PaneTabBar({
             ? `${sess.paneCommand}:${sess.panePath || ''} \u2014 ${sess?.paneTitle || realSid.slice(-6)}`
             : (sess?.paneTitle || realSid.slice(-6));
         const customLabel = getSessionLabel(sid);
-        const companionLabel = isJsonl ? `JSONL: ${sess?.feedbackTitle || sess?.agentName || realSid.slice(-6)}`
+        const companionLabel = isJsonl ? `Conversation: ${sess?.feedbackTitle || sess?.agentName || realSid.slice(-6)}`
           : isFeedback ? `FB: ${sess?.feedbackTitle || realSid.slice(-6)}`
           : isIframe ? `Page: ${realSid.slice(-6)}`
           : isTerminal ? (() => { const ts = getTerminalCompanion(realSid); if (ts === '__loading__') return 'Term: loading...'; const tSess = ts ? sessionMap.get(ts) : null; return `Term: ${tSess?.paneTitle || ts?.slice(-6) || realSid.slice(-6)}`; })()
           : isIsolate ? `Isolate: ${realSid}`
           : isUrl ? (() => { try { return `Iframe: ${new URL(realSid).hostname}`; } catch { return `Iframe: ${realSid.slice(0, 30)}`; } })()
           : isArtifact ? (() => { const art = cosArtifacts.value[realSid]; const prefix = art ? (art.kind === 'code' ? 'Code' : art.kind === 'table' ? 'Table' : 'List') : 'Artifact'; return `${prefix}: ${art?.label || realSid.slice(-6)}`; })()
+          : isTasks ? `Tasks: ${realSid.slice(-6)}`
+          : isFiles ? `Files: ${realSid.slice(-6)}`
           : '';
         const locationPrefix = !isCompanion && sess?.isHarness ? '\u{1F4E6}' : !isCompanion && sess?.isRemote ? '\u{1F310}' : '';
         const raw = customLabel || (isCompanion ? companionLabel : isPlain ? `${locationPrefix || '\u{1F5A5}\uFE0F'} ${plainLabel}` : `${locationPrefix ? locationPrefix + ' ' : ''}${sess?.title || sess?.feedbackTitle || sess?.agentName || `Session ${sid.slice(-6)}`}`);
@@ -502,6 +506,8 @@ function PaneTabBar({
               isTerminal ? '\u{25B8}' :
               isUrl ? '\u{1F517}' :
               isArtifact ? '\u{1F4CB}' :
+              isTasks ? '\u2611' :
+              isFiles ? '\u{1F4C1}' :
               isIsolate ? '\u2699' :
               '\u25C6'
             }</span>}
@@ -641,6 +647,9 @@ export function GlobalTerminalPanel() {
         } else {
           termPickerOpen.value = { kind: 'companion', sessionId: menuSessionId };
         }
+      } else if (key === 't') {
+        const s = sessionMap.get(menuSessionId);
+        if (s?.jsonlPath) toggleCompanion(menuSessionId, 'tasks');
       } else if (key === 'u') {
         termPickerOpen.value = { kind: 'url' };
       } else if (key === 's' && tabs.length >= 2 && !isSplit) {
@@ -1020,7 +1029,7 @@ export function GlobalTerminalPanel() {
               <div class="terminal-split-grab-label">
                 {(() => {
                   const t = rightActive ? extractCompanionType(rightActive) : null;
-                  if (t === 'jsonl') return 'JSONL';
+                  if (t === 'jsonl') return 'CONVERSATION';
                   if (t === 'summary') return 'SUMMARY';
                   if (t === 'feedback') return 'TICKET';
                   if (t === 'iframe') return 'IFRAME';
