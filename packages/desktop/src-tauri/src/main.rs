@@ -25,19 +25,6 @@ fn get_server_url() -> String {
 }
 
 fn main() {
-    // Capture exit backtrace to debug what triggers app termination
-    extern "C" fn on_exit() {
-        eprintln!("=== atexit: process exiting — backtrace ===");
-        let bt = std::backtrace::Backtrace::force_capture();
-        eprintln!("{bt}");
-    }
-    unsafe {
-        extern "C" {
-            fn atexit(func: extern "C" fn()) -> i32;
-        }
-        atexit(on_exit);
-    }
-
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -79,11 +66,12 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error building ProPanes")
         .run(|_app_handle, event| {
-            // Tray-only app: never auto-exit when panels close.
-            // Explicit quit via tray menu calls app.exit(0) which bypasses this.
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                eprintln!(">>> ExitRequested intercepted — preventing exit");
-                api.prevent_exit();
+            // Only prevent auto-exit when all windows close (code=None).
+            // Explicit app.exit(0) from tray Quit passes code=Some(0) — let it through.
+            if let tauri::RunEvent::ExitRequested { code, api, .. } = event {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
             }
         });
 }

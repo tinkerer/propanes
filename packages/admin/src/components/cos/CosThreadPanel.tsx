@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useScrollAnchor } from '../../lib/use-scroll-anchor.js';
 import {
   chiefOfStaffAgents,
   sendChiefOfStaffMessage,
@@ -363,26 +364,10 @@ function ThreadPanelBody({
   projected: ChiefOfStaffMsg[];
   pendingMessages: ChiefOfStaffMsg[];
 }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const wasAtBottomRef = useRef(true);
-
-  // Stick to bottom when new messages arrive while pinned. Scroll listener
-  // updates the pinned flag so manual scroll-up disables auto-stick.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      wasAtBottomRef.current =
-        el.scrollHeight - el.scrollTop - el.clientHeight < 32;
-    };
-    el.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [sessionId]);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && wasAtBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [projected.length, pendingMessages.length]);
+  const { setRef, showScrollDown, scrollToBottom } = useScrollAnchor({
+    resetKey: sessionId,
+    contentDeps: [projected.length, pendingMessages.length],
+  });
 
   if (!sessionId) {
     return (
@@ -396,29 +381,16 @@ function ThreadPanelBody({
   }
 
   return (
-    <div class="cos-thread-panel-jsonl" ref={scrollRef}>
-      {projected.length === 0 && pendingMessages.length === 0 && (
-        <div class="cos-thread-panel-empty-msg">Loading transcript…</div>
-      )}
-      {projected.map((msg, idx) => (
-        <MessageBubble
-          key={`${msg.timestamp}-${idx}`}
-          msg={msg}
-          msgIdx={idx}
-          highlighted={false}
-          showTools={showTools}
-          onArtifactPopout={onArtifactPopout}
-          agentId={agentId}
-          agentName={agentName}
-          verbosity={verbosity}
-          searchHighlight={null}
-        />
-      ))}
-      {pendingMessages.map((msg, idx) => (
-        <div class="cos-msg-pending-wrap" key={`pending-${msg.timestamp}-${idx}`}>
+    <div class="cos-thread-panel-jsonl-wrap">
+      <div class="cos-thread-panel-jsonl" ref={setRef}>
+        {projected.length === 0 && pendingMessages.length === 0 && (
+          <div class="cos-thread-panel-empty-msg">Loading transcript…</div>
+        )}
+        {projected.map((msg, idx) => (
           <MessageBubble
+            key={`${msg.timestamp}-${idx}`}
             msg={msg}
-            msgIdx={projected.length + idx}
+            msgIdx={idx}
             highlighted={false}
             showTools={showTools}
             onArtifactPopout={onArtifactPopout}
@@ -427,12 +399,42 @@ function ThreadPanelBody({
             verbosity={verbosity}
             searchHighlight={null}
           />
-          <span class="cos-msg-pending-pill" aria-live="polite">
-            <span class="cos-sending-spinner" aria-hidden="true" />
-            Sending…
-          </span>
-        </div>
-      ))}
+        ))}
+        {pendingMessages.map((msg, idx) => (
+          <div class="cos-msg-pending-wrap" key={`pending-${msg.timestamp}-${idx}`}>
+            <MessageBubble
+              msg={msg}
+              msgIdx={projected.length + idx}
+              highlighted={false}
+              showTools={showTools}
+              onArtifactPopout={onArtifactPopout}
+              agentId={agentId}
+              agentName={agentName}
+              verbosity={verbosity}
+              searchHighlight={null}
+            />
+            <span class="cos-msg-pending-pill" aria-live="polite">
+              <span class="cos-sending-spinner" aria-hidden="true" />
+              Sending…
+            </span>
+          </div>
+        ))}
+      </div>
+      <div class="cos-floating-actions" aria-hidden={!showScrollDown}>
+        {showScrollDown && (
+          <button
+            type="button"
+            class="cos-scroll-down-btn"
+            onClick={() => scrollToBottom('auto')}
+            title="Scroll to latest"
+            aria-label="Scroll to latest message"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+        )}
+      </div>
     </div>
   );
 }
