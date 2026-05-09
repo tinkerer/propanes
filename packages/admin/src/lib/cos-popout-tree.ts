@@ -13,6 +13,7 @@ import {
 export const COS_POPOUT_CHAT_TAB = 'cos-chat:main';
 export const COS_POPOUT_LEARNINGS_TAB = 'cos-learnings:main';
 export const COS_POPOUT_THREAD_TAB = 'thread:active';
+export const COS_POPOUT_CHANNELS_TAB = 'cos-channels:main';
 export const COS_POPOUT_ROOT_LEAF = 'cos-root-leaf';
 
 export const ARTIFACT_TAB_PREFIX = 'artifact:';
@@ -937,6 +938,41 @@ export function cosCloseThreadTab() {
 
 export function cosIsThreadOpen(): boolean {
   return !!cosFindLeafWithTab(COS_POPOUT_THREAD_TAB);
+}
+
+// --- Channels companion tab ---
+
+export function cosToggleChannelsTab(position: PanePosition = 'left') {
+  const existingLeaf = cosFindLeafWithTab(COS_POPOUT_CHANNELS_TAB);
+  if (existingLeaf) {
+    cosRemoveTabFromLeaf(existingLeaf.id, COS_POPOUT_CHANNELS_TAB);
+    return false;
+  }
+  const anchorLeafId = pickAnchorLeafId();
+  cosSplitLeafAtPosition(anchorLeafId, position, [COS_POPOUT_CHANNELS_TAB], 0.25);
+  return true;
+}
+
+export function cosOpenChannelsTab(position: PanePosition = 'left') {
+  const existing = cosFindLeafWithTab(COS_POPOUT_CHANNELS_TAB);
+  if (existing) {
+    if (existing.activeTabId !== COS_POPOUT_CHANNELS_TAB) {
+      cosSetActiveTab(existing.id, COS_POPOUT_CHANNELS_TAB);
+    }
+    return;
+  }
+  const anchorLeafId = pickAnchorLeafId();
+  cosSplitLeafAtPosition(anchorLeafId, position, [COS_POPOUT_CHANNELS_TAB], 0.25);
+}
+
+export function cosCloseChannelsTab() {
+  const existing = cosFindLeafWithTab(COS_POPOUT_CHANNELS_TAB);
+  if (!existing) return;
+  cosRemoveTabFromLeaf(existing.id, COS_POPOUT_CHANNELS_TAB);
+}
+
+export function cosIsChannelsOpen(): boolean {
+  return !!cosFindLeafWithTab(COS_POPOUT_CHANNELS_TAB);
 }
 
 export function cosResetPopoutTree() {

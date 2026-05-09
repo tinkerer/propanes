@@ -99,6 +99,7 @@ import { cosFollowups, enqueueCosFollowup } from '../../lib/cos-followups.js';
 import { CosSavedDraftsList } from './CosSavedDraftsList.js';
 import { CosEnqueuedList } from './CosEnqueuedList.js';
 import { CosPopoutTreeView } from './CosPopoutTreeView.js';
+import { CosChannelList } from './CosChannelList.js';
 import { cosOpenArtifactTab } from '../../lib/cos-popout-tree.js';
 import { runSlashCommandIfAny, parseAgentMentions } from '../../lib/cos-slash-commands.js';
 import { api } from '../../lib/api.js';
@@ -1820,6 +1821,8 @@ export function ChiefOfStaffBubble({
               ) : ((() => {
                 const mobileThreadActive = isMobile.value && showThreadPanel && !!cosActiveThread.value;
                 const chatPane = (
+                  <div class="cos-chat-pane-with-channels">
+                  <CosChannelList />
                   <div class="cos-chat-pane">
                     {mobileThreadActive && (
                       <div class="cos-thread-inline">
@@ -2214,6 +2217,7 @@ export function ChiefOfStaffBubble({
                         />
                       }
                     />
+                  </div>
                   </div>
                 );
                 // Focus mode (popped-out single-tab window) ignores inPane —

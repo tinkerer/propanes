@@ -862,6 +862,21 @@
   cursor: default;
 }
 
+/* --- Pending tool context (shown above quick-actions when waiting) --- */
+.conv-input-bar-context {
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.4;
+  padding: 4px 6px;
+  background: rgba(30, 41, 59, 0.6);
+  border-radius: 4px;
+  border-left: 2px solid #3b82f6;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* --- Quick-action row (generic waiting) --- */
 .conv-input-bar-quick {
   display: flex;
