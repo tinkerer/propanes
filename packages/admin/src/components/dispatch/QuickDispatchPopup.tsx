@@ -36,6 +36,34 @@ function groupAgentsByRuntime(agents: any[]): Array<[string, any[]]> {
   return Array.from(groups.entries());
 }
 
+// Store dispatch settings per app in localStorage
+const SETTINGS_KEY = 'pw-qdp-settings';
+
+interface DispatchSettings {
+  dispatchType: DispatchType;
+  agentId: string;
+}
+
+function loadSettings(appKey: string): DispatchSettings | null {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return null;
+    const all = JSON.parse(raw);
+    return all[appKey] || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSettings(appKey: string, settings: DispatchSettings) {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    const all = raw ? JSON.parse(raw) : {};
+    all[appKey] = settings;
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(all));
+  } catch { /* ignore */ }
+}
+
 interface Props {
   appKey: string;
   appName?: string;
@@ -44,11 +72,14 @@ interface Props {
 }
 
 export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchType }: Props) {
-  const [dispatchType, setDispatchType] = useState<DispatchType>(initialDispatchType || 'agent');
+  const settings = loadSettings(appKey);
+  const [dispatchType, setDispatchType] = useState<DispatchType>(
+    settings?.dispatchType || initialDispatchType || 'agent'
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [agents, setAgents] = useState<any[]>([]);
-  const [selectedAgentId, setSelectedAgentId] = useState<string>('');
+  const [selectedAgentId, setSelectedAgentId] = useState<string>(settings?.agentId || '');
   const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
     x: Math.round(window.innerWidth / 2 - 200),
     y: Math.round(window.innerHeight * 0.3),
@@ -75,6 +106,11 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
       } catch { /* ignore */ }
     })();
   }, [appId]);
+
+  // Save settings when they change
+  useEffect(() => {
+    saveSettings(appKey, { dispatchType, agentId: selectedAgentId });
+  }, [dispatchType, selectedAgentId, appKey]);
 
   // Drag handling
   const onMouseDown = useCallback((e: MouseEvent) => {
