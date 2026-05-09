@@ -11914,6 +11914,21 @@ body.pw-isolate {
    — see CosPopoutTreeView. Chat scroll is preserved across leaf re-mounts via
    `lastScrollTopRef` in ChiefOfStaffBubble. */
 .cos-popout-body { flex-direction: row; }
+.cos-chat-pane-with-channels {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+.cos-chat-pane-with-channels > .cos-channel-list {
+  width: 180px;
+  min-width: 140px;
+  max-width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid #1e293b;
+}
 .cos-chat-pane {
   flex: 1 1 auto;
   min-width: 0;
@@ -17023,5 +17038,169 @@ body.pw-mobile .cos-channel-org-modal {
   padding: 24px 16px;
   color: #64748b;
   text-align: center;
+}
+
+/* ==========================================================================
+   CoS Channel List — companion panel inside the CoS popout
+   ========================================================================== */
+
+.cos-channel-list {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 13px;
+}
+
+.cos-channel-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 6px;
+  border-bottom: 1px solid #1e293b;
+  flex-shrink: 0;
+}
+
+.cos-channel-list-app-name {
+  font-weight: 700;
+  font-size: 13px;
+  color: #e2e8f0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.cos-channel-list-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.cos-channel-list-add-btn {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: background 0.12s, color 0.12s;
+}
+.cos-channel-list-add-btn:hover {
+  background: #1e293b;
+  color: #e2e8f0;
+}
+
+.cos-channel-list-create {
+  padding: 6px 12px;
+}
+
+.cos-channel-list-create-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #e2e8f0;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+.cos-channel-list-create-input:focus {
+  border-color: #475569;
+}
+.cos-channel-list-create-input::placeholder {
+  color: #475569;
+}
+
+.cos-channel-list-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  font-weight: 600;
+  padding: 8px 12px 4px;
+  flex-shrink: 0;
+}
+
+.cos-channel-list-items {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 4px 8px;
+}
+
+.cos-channel-item {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #cbd5e1;
+  font-size: 13px;
+  transition: background 0.08s;
+}
+.cos-channel-item:hover {
+  background: rgba(148, 163, 184, 0.08);
+  color: #e2e8f0;
+}
+.cos-channel-item-active {
+  background: rgba(59, 130, 246, 0.15);
+  color: #e2e8f0;
+}
+.cos-channel-item-active:hover {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.cos-channel-item-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cos-channel-item-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+  width: 16px;
+  text-align: center;
+}
+
+.cos-channel-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cos-channel-item-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.12);
+  padding: 1px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.cos-channel-list-empty {
+  color: #64748b;
+  text-align: center;
+  padding: 16px 12px;
+  font-size: 12px;
 }
 
