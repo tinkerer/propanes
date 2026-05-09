@@ -91,7 +91,13 @@ function StructuredAssistantGroup({
       )}
       {!groupCollapsed && group.messages.map((msg, idx) => {
         const isTool = msg.role === 'tool_use' || msg.role === 'tool_result';
-        if (isTool && toolsCollapsed) return null;
+        // When tools are collapsed, still show the pending tool that needs
+        // approval — otherwise the user has zero context for the permission
+        // prompt (YES/NO buttons without knowing what's being approved).
+        const isPending = msg === pendingTool;
+        // Also show the tool_result that immediately follows the pending tool_use
+        const isPendingResult = msg.role === 'tool_result' && msg.toolUseResultId && pendingTool?.toolUseId === msg.toolUseResultId;
+        if (isTool && toolsCollapsed && !isPending && !isPendingResult) return null;
         const isInteractive = askingForInput && msg === lastGroupMsg && msg === pendingTool;
         const renderedMsg = (
           <MessageRenderer

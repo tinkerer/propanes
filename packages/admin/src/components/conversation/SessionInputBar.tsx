@@ -89,6 +89,43 @@ const QUICK_ACTIONS = [
 ];
 
 // ---------------------------------------------------------------------------
+// Pending tool context summary
+// ---------------------------------------------------------------------------
+
+function summarizePendingTool(msg: ParsedMessage | null | undefined): string | null {
+  if (!msg || msg.role !== 'tool_use') return null;
+  const name = msg.toolName || 'tool call';
+  const inp = msg.toolInput as Record<string, unknown> | undefined;
+  if (!inp) return name;
+
+  // Extract a meaningful one-liner for common tools
+  if (name === 'Bash' || name === 'bash') {
+    const cmd = typeof inp.command === 'string' ? inp.command : null;
+    if (cmd) return `Bash: ${cmd.length > 120 ? cmd.slice(0, 117) + '...' : cmd}`;
+  }
+  if (name === 'Edit' || name === 'edit') {
+    const fp = typeof inp.file_path === 'string' ? inp.file_path : null;
+    if (fp) return `Edit: ${fp}`;
+  }
+  if (name === 'Write' || name === 'write') {
+    const fp = typeof inp.file_path === 'string' ? inp.file_path : null;
+    if (fp) return `Write: ${fp}`;
+  }
+  if (name === 'Read' || name === 'read') {
+    const fp = typeof inp.file_path === 'string' ? inp.file_path : null;
+    if (fp) return `Read: ${fp}`;
+  }
+  // Fallback: tool name + first string-valued key
+  for (const [k, v] of Object.entries(inp)) {
+    if (typeof v === 'string' && v.length > 0) {
+      const snippet = v.length > 100 ? v.slice(0, 97) + '...' : v;
+      return `${name}: ${snippet}`;
+    }
+  }
+  return name;
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -279,8 +316,12 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
 
   // -- State 2: Generic waiting --
   if (isWaiting) {
+    const pendingContext = summarizePendingTool(lastMessage);
     return (
       <div class="conv-input-bar conv-input-bar-waiting">
+        {pendingContext && (
+          <div class="conv-input-bar-context">{pendingContext}</div>
+        )}
         <div class="conv-input-bar-quick">
           {QUICK_ACTIONS.map((qa) => (
             <button
