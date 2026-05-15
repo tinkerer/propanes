@@ -1,11 +1,12 @@
 // DEPRECATED: Use StructuredView (which delegates to ConversationView) instead.
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'preact/hooks';
 import { MessageRenderer } from './MessageRenderer.js';
 import { groupMessages, AssistantGroupHeader, partitionMergedMessages } from './StructuredView.js';
 import { SubagentBlock } from './SubagentBlock.js';
 import { InterruptBar } from './InterruptBar.js';
 import { type ParsedMessage } from '../../lib/output-parser.js';
 import { useTranscriptStream } from '../../lib/transcript-stream.js';
+import { useScrollAnchor } from '../../lib/use-scroll-anchor.js';
 import { getJsonlSelectedFile, jsonlSelectedFile } from '../../lib/sessions.js';
 import { allSessions } from '../../lib/sessions.js';
 import { isMobile, NarrowContext, useContainerNarrow } from '../../lib/viewport.js';
@@ -55,7 +56,6 @@ export function JsonlView({ sessionId, hideInterruptBar, compact }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const containerNarrow = useContainerNarrow(containerRef);
   const narrow = isMobile.value || containerNarrow;
-  const autoScroll = useRef(true);
 
   // Read the selected file from signal
   const selectedFile = getJsonlSelectedFile(sessionId);
@@ -67,19 +67,17 @@ export function JsonlView({ sessionId, hideInterruptBar, compact }: Props) {
     { fileFilter: selectedFile }
   );
 
+  const { setRef: setScrollRef, showScrollDown, scrollToBottom } = useScrollAnchor({
+    resetKey: sessionId,
+    contentDeps: [messages.length],
+  });
+
+  const setCombinedRef = useCallback((el: HTMLDivElement | null) => {
+    (containerRef as any).current = el;
+    setScrollRef(el);
+  }, [setScrollRef]);
+
   const sessionRecord = allSessions.value.find((s: any) => s.id === sessionId);
-
-  useEffect(() => {
-    if (autoScroll.current && containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
-  }, [messages]);
-
-  const handleScroll = () => {
-    const el = containerRef.current;
-    if (!el) return;
-    autoScroll.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-  };
 
   const profile = sessionRecord?.permissionProfile;
 
@@ -299,7 +297,8 @@ export function JsonlView({ sessionId, hideInterruptBar, compact }: Props) {
             </div>
           </aside>
         )}
-        <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} style={{ flex: 1, minHeight: 0 }} ref={containerRef} onScroll={handleScroll}>
+        <div class="structured-view-wrap" style={{ flex: 1, minHeight: 0 }}>
+        <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} style={{ flex: 1, minHeight: 0 }} ref={setCombinedRef}>
           {messages.length === 0 && (
             <div class="sm-empty">No messages in JSONL file</div>
           )}
@@ -345,6 +344,20 @@ export function JsonlView({ sessionId, hideInterruptBar, compact }: Props) {
               </span>
             </div>
           )}
+        </div>
+        {showScrollDown && (
+          <button
+            type="button"
+            class="cos-scroll-down-btn"
+            onClick={() => scrollToBottom('auto')}
+            title="Scroll to latest"
+            aria-label="Scroll to latest message"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+        )}
         </div>
         {!compact && filesDrawerOpen && (
           <aside class="jsonl-drawer jsonl-drawer-right">

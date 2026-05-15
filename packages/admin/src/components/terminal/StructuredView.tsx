@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { type ChatRenderOpts } from './MessageRenderer.js';
 import { useTranscriptStream } from '../../lib/transcript-stream.js';
+import { useScrollAnchor } from '../../lib/use-scroll-anchor.js';
 import { api } from '../../lib/api.js';
 import { sessionInputStates } from '../../lib/session-state.js';
 import { isMobile, NarrowContext, useContainerNarrow } from '../../lib/viewport.js';
@@ -114,12 +115,22 @@ export function StructuredView({ sessionId, chat }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const containerNarrow = useContainerNarrow(containerRef);
   const narrow = isMobile.value || containerNarrow;
-  const autoScroll = useRef(true);
 
   const inputState = sessionInputStates.value.get(sessionId) || 'active';
   const isWaiting = inputState === 'waiting';
 
   const { messages, loading, error, isSessionDone, isRunning } = useTranscriptStream(sessionId);
+
+  const { setRef: setScrollRef, showScrollDown, scrollToBottom } = useScrollAnchor({
+    resetKey: sessionId,
+    contentDeps: [messages.length],
+  });
+
+  // Combine refs: useContainerNarrow needs containerRef, useScrollAnchor needs setScrollRef.
+  const setCombinedRef = (el: HTMLDivElement | null) => {
+    (containerRef as any).current = el;
+    setScrollRef(el);
+  };
 
   // When the session is waiting for input, poll the captured terminal output
   // for permission-prompt patterns and surface them as a ChoicePrompt card.
@@ -146,18 +157,6 @@ export function StructuredView({ sessionId, chat }: Props) {
     const interval = setInterval(() => { if (!document.hidden) scan(); }, 1500);
     return () => { cancelled = true; clearInterval(interval); };
   }, [sessionId, isWaiting, loading]);
-
-  useEffect(() => {
-    if (autoScroll.current && containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
-  }, [messages]);
-
-  const handleScroll = () => {
-    const el = containerRef.current;
-    if (!el) return;
-    autoScroll.current = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-  };
 
   const initialWindow = isMobile.value ? MOBILE_INITIAL_WINDOW : DESKTOP_INITIAL_WINDOW;
   const [shownCount, setShownCount] = useState(initialWindow);
@@ -203,8 +202,6 @@ export function StructuredView({ sessionId, chat }: Props) {
     const delta = el.scrollHeight - anchor.height;
     if (delta > 0) el.scrollTop = anchor.top + delta;
     scrollAnchorRef.current = null;
-    // Auto-scroll-to-bottom must NOT fire after a load-earlier expansion.
-    autoScroll.current = false;
   }, [shownCount]);
 
   // IntersectionObserver: fire load-more when the sentinel near the top of
@@ -273,7 +270,8 @@ export function StructuredView({ sessionId, chat }: Props) {
 
   return (
     <NarrowContext.Provider value={narrow}>
-    <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} ref={containerRef} onScroll={handleScroll}>
+    <div class="structured-view-wrap">
+    <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} ref={setCombinedRef}>
       {messages.length === 0 && (
         <div class="sm-empty">No messages yet</div>
       )}
@@ -313,6 +311,20 @@ export function StructuredView({ sessionId, chat }: Props) {
           onSubmitted={() => setChoicePrompt(null)}
         />
       )}
+    </div>
+    {showScrollDown && (
+      <button
+        type="button"
+        class="cos-scroll-down-btn"
+        onClick={() => scrollToBottom('auto')}
+        title="Scroll to latest"
+        aria-label="Scroll to latest message"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </button>
+    )}
     </div>
     </NarrowContext.Provider>
   );

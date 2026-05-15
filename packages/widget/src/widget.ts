@@ -505,43 +505,26 @@ export class ProPanesElement {
     const menu = document.createElement('div');
     menu.className = 'pw-send-menu';
 
-    const actions: Array<{ label: string; kind: 'submit' | 'dispatch' | 'yolo'; desc: string }> = [
-      { label: 'Submit', kind: 'submit', desc: 'Submit feedback only' },
-      { label: 'Dispatch', kind: 'dispatch', desc: 'Submit & dispatch this time' },
-      { label: '⚡ YOLO', kind: 'yolo', desc: 'Submit & dispatch with skip-permissions agent' },
-    ];
-
-    for (const item of actions) {
-      const btn = document.createElement('button');
-      btn.className = item.kind === 'yolo' ? 'pw-send-menu-item pw-send-menu-item-yolo' : 'pw-send-menu-item';
-      btn.textContent = item.label;
-      btn.title = item.desc;
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (item.kind === 'yolo') {
-          // Prefer a *-yolo profile agent so downstream resume/continue logic
-          // sees a natively-yolo parent, but also pass an explicit
-          // permissionProfile override (interactive-yolo = TTY + skip) so the
-          // dispatch skips permissions even if the selected agent's stored
-          // profile is mis-configured.
-          const agent = this.pickYoloAgent(this.cachedAgents);
-          this.dispatchAgentOverride = agent ? agent.id : null;
-          this.pendingPermissionProfile = 'interactive-yolo';
-          this.setDispatchMode('once');
-        } else {
-          this.dispatchAgentOverride = null;
-          this.pendingPermissionProfile = null;
-          this.setDispatchMode(item.kind === 'dispatch' ? 'once' : 'off');
-        }
-        menu.remove();
-        this.handleSubmit();
-      });
-      menu.appendChild(btn);
-    }
-
-    const divider = document.createElement('div');
-    divider.className = 'pw-send-menu-divider';
-    menu.appendChild(divider);
+    // Mode selector row
+    const modeRow = document.createElement('div');
+    modeRow.className = 'pw-send-menu-target';
+    const modeLabel = document.createElement('span');
+    modeLabel.textContent = 'Mode:';
+    modeLabel.style.cssText = 'font-size:11px;color:#94a3b8;flex-shrink:0';
+    const modeSel = document.createElement('select');
+    modeSel.className = 'pw-send-menu-target-select';
+    const savedMode = localStorage.getItem('pw-dispatch-mode') || 'dispatch';
+    modeSel.innerHTML = [
+      '<option value="submit">Submit only</option>',
+      '<option value="dispatch">Dispatch</option>',
+      '<option value="yolo">\u26A1 YOLO</option>',
+    ].join('');
+    modeSel.value = savedMode;
+    modeSel.addEventListener('change', () => {
+      localStorage.setItem('pw-dispatch-mode', modeSel.value);
+    });
+    modeRow.append(modeLabel, modeSel);
+    menu.appendChild(modeRow);
 
     // Agent selector
     const agentRow = document.createElement('div');
@@ -621,10 +604,33 @@ export class ProPanesElement {
       })
       .catch(() => {});
 
-    const divider2 = document.createElement('div');
-    divider2.className = 'pw-send-menu-divider';
-    menu.appendChild(divider2);
+    const divider = document.createElement('div');
+    divider.className = 'pw-send-menu-divider';
+    menu.appendChild(divider);
 
+    // Send button
+    const sendBtn = document.createElement('button');
+    sendBtn.className = 'pw-send-menu-item pw-send-menu-send-btn';
+    sendBtn.textContent = 'Send';
+    sendBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const selectedMode = modeSel.value;
+      if (selectedMode === 'yolo') {
+        const agent = this.pickYoloAgent(this.cachedAgents);
+        this.dispatchAgentOverride = agent ? agent.id : null;
+        this.pendingPermissionProfile = 'interactive-yolo';
+        this.setDispatchMode('once');
+      } else {
+        this.dispatchAgentOverride = null;
+        this.pendingPermissionProfile = null;
+        this.setDispatchMode(selectedMode === 'dispatch' ? 'once' : 'off');
+      }
+      menu.remove();
+      this.handleSubmit();
+    });
+    menu.appendChild(sendBtn);
+
+    // Auto-dispatch checkbox
     const label = document.createElement('label');
     label.className = 'pw-send-menu-item pw-send-menu-checkbox';
     const cb = document.createElement('input');
