@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { signal } from '@preact/signals';
+import { signal, effect } from '@preact/signals';
 import {
   allSessions,
   openTabs,
@@ -59,8 +59,34 @@ import { loadCosDispatches, cosGroupForSession } from '../../lib/cos-dispatches.
 import { chiefOfStaffAgents } from '../../lib/chief-of-staff.js';
 
 const autoJumpMenuOpen = signal(false);
+
+// Persist QDP settings (dispatch type, agent) but never auto-open on load
+const QDP_STATE_KEY = 'pw-qdp-open-state';
+function loadQdpState(): { appKey: string | null; dispatchType: DispatchType | null } {
+  try {
+    const raw = localStorage.getItem(QDP_STATE_KEY);
+    if (!raw) return { appKey: null, dispatchType: null };
+    return JSON.parse(raw);
+  } catch { return { appKey: null, dispatchType: null }; }
+}
+function saveQdpState(appKey: string | null, dispatchType: DispatchType | null) {
+  try { localStorage.setItem(QDP_STATE_KEY, JSON.stringify({ appKey, dispatchType })); } catch {}
+}
+const _qdpInit = loadQdpState();
+// Start closed — don't restore appKey (which controls visibility)
 const quickDispatchAppKey = signal<string | null>(null);
-const quickDispatchInitialType = signal<DispatchType | null>(null);
+// But restore the last-used dispatch type so it's pre-selected when opened
+const quickDispatchInitialType = signal<DispatchType | null>(_qdpInit.dispatchType);
+effect(() => {
+  if (quickDispatchAppKey.value != null) {
+    saveQdpState(quickDispatchAppKey.value, quickDispatchInitialType.value);
+  }
+});
+function clearQdpState() {
+  quickDispatchAppKey.value = null;
+  quickDispatchInitialType.value = null;
+  try { localStorage.removeItem(QDP_STATE_KEY); } catch {}
+}
 const renamingSessionId = signal<string | null>(null);
 const renameValue = signal<string>('');
 const renameSaving = signal(false);
@@ -761,6 +787,7 @@ export function SessionsListView() {
                       appName={appName(appKey)}
                       initialDispatchType={quickDispatchInitialType.value || undefined}
                       onClose={() => { quickDispatchAppKey.value = null; quickDispatchInitialType.value = null; }}
+                      onSubmitClose={clearQdpState}
                     />
                   )}
                   {!collapsed && (
@@ -829,6 +856,7 @@ export function SessionsListView() {
                   appName={selectedAppId.value ? (applications.value.find((a: any) => a.id === selectedAppId.value)?.name || selectedAppId.value.slice(-8)) : undefined}
                   initialDispatchType={quickDispatchInitialType.value || undefined}
                   onClose={() => { quickDispatchAppKey.value = null; quickDispatchInitialType.value = null; }}
+                  onSubmitClose={clearQdpState}
                 />
               )}
               {renderSwarmGroups()}

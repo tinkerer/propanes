@@ -358,7 +358,7 @@ cosThreadRoutes.post('/chief-of-staff/threads/:id/spawn-interactive', async (c) 
 });
 
 cosThreadRoutes.post('/chief-of-staff/threads', async (c) => {
-  let body: { agentId?: string; appId?: string; name?: string; systemPrompt?: string; model?: string };
+  let body: { agentId?: string; appId?: string; channelId?: string; name?: string; systemPrompt?: string; model?: string };
   try {
     body = await c.req.json();
   } catch {
@@ -378,6 +378,7 @@ cosThreadRoutes.post('/chief-of-staff/threads', async (c) => {
     id,
     agentId,
     appId: body.appId || null,
+    channelId: body.channelId || null,
     name,
     systemPrompt: body.systemPrompt || null,
     model: body.model || null,

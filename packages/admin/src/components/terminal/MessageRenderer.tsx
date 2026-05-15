@@ -1030,7 +1030,7 @@ function UserInputMessage({ message }: { message: ParsedMessage }) {
   const longChars = narrow ? 280 : 800;
   const longLines = narrow ? 5 : 14;
   const long = content.length > longChars || lines.length > longLines;
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
 
   if (!long) {
     return (

@@ -30,11 +30,14 @@ import {
   reclampCosPanelToViewport,
   COS_PANE_TAB_ID,
   cosThreadMeta,
+  cosThreadChannels,
   getThreadMeta,
+  getThreadChannelId,
   setThreadResolved,
   setThreadArchived,
   leavingThreadIds,
   isThreadLeaving,
+  loadChiefOfStaffHistory,
 } from '../../lib/chief-of-staff.js';
 import { MessageRenderer } from '../terminal/MessageRenderer.js';
 import { layoutTree as layoutTreeSignal, findLeafWithTab, setFocusedLeaf } from '../../lib/pane-tree.js';
@@ -103,10 +106,9 @@ import { CosChannelList } from './CosChannelList.js';
 import { cosOpenArtifactTab } from '../../lib/cos-popout-tree.js';
 import { runSlashCommandIfAny, parseAgentMentions } from '../../lib/cos-slash-commands.js';
 import { api } from '../../lib/api.js';
-import { activeChannel } from '../../lib/state.js';
+import { activeChannel, activeChannelSlug } from '../../lib/state.js';
 import { cosLearnings, loadCosLearnings } from '../../lib/cos-learnings.js';
 import {
-  cosDrafts,
   getCosDraft,
   setCosDraft,
   clearCosDraft,
@@ -138,7 +140,6 @@ import { CosAgentSettings } from './CosAgentSettings.js';
 import { CosScrollToolbar } from './CosScrollToolbar.js';
 import { CosThreadRail, type RailStatus } from './CosThreadRail.js';
 import { CosComposer, type CosComposerHandle } from './CosComposer.js';
-import { CosTabList } from './CosTabList.js';
 import { CosResizeHandles } from './CosResizeHandles.js';
 import {
   CosLearningsDrawer,
@@ -564,6 +565,11 @@ export function ChiefOfStaffBubble({
   }, [showLearnings, showThreadPanel, activeArtifactId, inPane]);
 
   const [newAgentName, setNewAgentName] = useState<string | null>(null);
+  const [channelListOpen, setChannelListOpen] = useState<boolean>(() => {
+    if (mobile) return false;
+    const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-channels-open') : null;
+    return v !== '0';
+  });
 
   // The active draft scope is (agent, app, threadId-or-empty). When the
   // operator is in "reply to thread" mode (replyTo set) this resolves to that
@@ -571,11 +577,14 @@ export function ChiefOfStaffBubble({
   // CosComposer drives all read/write/clear traffic through `draftBinding`
   // below, keyed off this scope.
   const draftScopeThreadId = replyTo?.threadServerId ?? '';
-  // Subscribe to cosDrafts so binding identity bumps whenever the underlying
-  // store changes — covers example-chip clicks (which write directly to the
-  // store) and any peer-window updates. Keystrokes also bounce through this,
-  // which CosComposer's prev-binding ref handles without looping.
-  const cosDraftsTick = cosDrafts.value;
+  // Stable binding keyed only on scope identifiers.  The old version included
+  // `cosDrafts.value` ("tick") so example-chip clicks (which wrote directly to
+  // the store) would bump the binding identity and trigger a re-hydrate.  But
+  // every *keystroke* also writes to the store, and if an unrelated key's write
+  // (broadcast channel, loadCosDrafts, a different agent's draft) batches with
+  // the typing render, the new binding identity reads the stale stored value
+  // and overwrites the textarea — the "ghost input" bug.  Example chips now go
+  // through the imperative `composerRef` handle instead.
   const draftBinding = useMemo(
     () => ({
       read: () => getCosDraft(activeId, selectedAppId.value, draftScopeThreadId),
@@ -583,13 +592,23 @@ export function ChiefOfStaffBubble({
       clear: () => clearCosDraft(activeId, selectedAppId.value, draftScopeThreadId),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeId, selectedAppId.value, draftScopeThreadId, cosDraftsTick],
+    [activeId, selectedAppId.value, draftScopeThreadId],
   );
   // Pull all drafts for the current app on mount and whenever the operator
-  // switches app scope. Per-(agent, thread) values land in the cosDrafts
-  // signal and CosComposer's draft binding picks them up via the tick above.
+  // switches app scope. Values land in the cosDrafts signal; the composer
+  // picks them up on next scope switch (binding identity change).
   useEffect(() => {
     void loadCosDrafts(selectedAppId.value);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAppId.value]);
+
+  // Reload CoS history when the workspace changes so the chat shows threads
+  // for the selected app (or all threads for the CoS workspace).
+  useEffect(() => {
+    const appId = selectedAppId.value;
+    for (const agent of chiefOfStaffAgents.value) {
+      void loadChiefOfStaffHistory(agent.id, appId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAppId.value]);
 
@@ -639,6 +658,11 @@ export function ChiefOfStaffBubble({
   // change wouldn't trigger a re-render of the bubble.
   const _leavingVersion = leavingThreadIds.value;
   void _leavingVersion;
+  // Subscribe to channel assignments so the filter re-runs when threads
+  // are moved between channels.
+  const _threadChannelsVersion = cosThreadChannels.value;
+  void _threadChannelsVersion;
+  const currentChannel = activeChannel.value;
 
   function threadServerIdFor(t: Thread): string | null {
     return (
@@ -710,6 +734,15 @@ export function ChiefOfStaffBubble({
       return draftThreadIds.has(tid);
     }
     if (!tid) return true;
+    // Channel filter: when a channel is selected, only show threads in it.
+    // The special slug '_unsorted' matches threads with no channel assignment.
+    if (currentChannel) {
+      const threadCh = getThreadChannelId(tid);
+      if (threadCh !== currentChannel.id) return false;
+    } else if (activeChannelSlug.value === '_unsorted') {
+      const threadCh = getThreadChannelId(tid);
+      if (threadCh !== null) return false;
+    }
     const meta = getThreadMeta(tid);
     if (meta?.archivedAt && !showArchived) return false;
     if (meta?.resolvedAt && !meta.archivedAt && !showResolved) return false;
@@ -1321,9 +1354,8 @@ export function ChiefOfStaffBubble({
   // Reply-pill "Close" button: drop the in-thread scope but keep the operator's
   // text — it now becomes the agent's new-thread compose draft. Implemented by
   // copying the current text into the new-thread scope before clearing the
-  // thread-scoped row; the cosDrafts signal tick rebuilds CosComposer's
-  // binding identity and re-hydrates from the new scope so the textarea
-  // shows the same text under the new key.
+  // thread-scoped row; changing draftScopeThreadId (via setReplyTo(null))
+  // rebuilds the binding identity and re-hydrates from the new scope.
   function closeReplyKeepText() {
     const text = composerText;
     if (replyTo?.threadServerId && text.length > 0) {
@@ -1335,9 +1367,8 @@ export function ChiefOfStaffBubble({
 
   // Reply-pill "Save draft" button: thread scope already has the live text
   // (composer's continuous draft.write keeps it current). Just drop reply
-  // scope; CosComposer's binding-identity bump re-hydrates from the new-
-  // thread scope, matching the original's setInput('') + scope-drop flow
-  // where the box reflected whatever new-thread draft existed.
+  // scope; the draftScopeThreadId change rebuilds the binding and re-hydrates
+  // from the new-thread scope.
   function saveReplyDraftClearInput() {
     if (replyTo?.threadServerId && composerText.length === 0) {
       clearCosDraft(activeId, selectedAppId.value, replyTo.threadServerId);
@@ -1774,39 +1805,44 @@ export function ChiefOfStaffBubble({
             setFocusedLeaf(null);
           })}
         >
-          <div class="popout-tab-bar" onMouseDown={inPane ? undefined : onHeaderDragStart}>
-            <div class="popout-tab-scroll">
-              <CosTabList
-                agents={agents}
-                activeId={activeId}
-                showSettings={showSettings}
-                onActivateAgent={(id) => {
-                  chiefOfStaffActiveId.value = id;
-                  setShowSettings(false);
-                  if (!inPane) bringToFront(COS_PANEL_ID);
-                }}
-                onShowChat={() => setShowSettings(false)}
-                setShowSettings={setShowSettings}
-                appId={selectedAppId.value}
-                newAgentName={newAgentName}
-                setNewAgentName={setNewAgentName}
-                onCommitNewAgent={commitNewAgent}
-                inputRef={inputRef}
-                isMobile={isMobile.value}
-              />
+          <div class="cos-thin-toolbar" onMouseDown={inPane ? undefined : onHeaderDragStart}>
+            <button
+              type="button"
+              class="cos-toolbar-toggle-channels"
+              onClick={() => setChannelListOpen((v) => { try { localStorage.setItem('pw-cos-channels-open', v ? '0' : '1'); } catch {} return !v; })}
+              title={channelListOpen ? 'Hide channels' : 'Show channels'}
+              aria-label={channelListOpen ? 'Hide channels' : 'Show channels'}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <path d="M3 6h18M3 12h18M3 18h18" />
+              </svg>
+            </button>
+            <span class="cos-toolbar-agent-name" title={activeAgent?.name || ''}>{activeAgent?.name || 'Ops'}</span>
+            <div class="cos-toolbar-actions">
+              <button
+                type="button"
+                class={`cos-toolbar-btn${showSettings ? ' cos-toolbar-btn-active' : ''}`}
+                onClick={() => setShowSettings(!showSettings)}
+                title="Settings"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83" />
+                </svg>
+              </button>
+              {!inPane && panel && (
+                <CosBubbleWindowControls
+                  panel={panel}
+                  isDocked={isDocked}
+                  isLeftDocked={isLeftDocked}
+                  isMinimized={isMinimized}
+                  menuOpen={menuOpen}
+                  setMenuOpen={setMenuOpen}
+                  menuButtonRef={menuButtonRef}
+                  onClosePanel={toggleChiefOfStaff}
+                />
+              )}
             </div>
-            {!inPane && panel && (
-              <CosBubbleWindowControls
-                panel={panel}
-                isDocked={isDocked}
-                isLeftDocked={isLeftDocked}
-                isMinimized={isMinimized}
-                menuOpen={menuOpen}
-                setMenuOpen={setMenuOpen}
-                menuButtonRef={menuButtonRef}
-                onClosePanel={toggleChiefOfStaff}
-              />
-            )}
           </div>
 
           {!isMinimized && (
@@ -1822,7 +1858,18 @@ export function ChiefOfStaffBubble({
                 const mobileThreadActive = isMobile.value && showThreadPanel && !!cosActiveThread.value;
                 const chatPane = (
                   <div class="cos-chat-pane-with-channels">
-                  <CosChannelList />
+                  {channelListOpen && (
+                    <CosChannelList
+                      agents={agents}
+                      activeAgentId={activeId}
+                      onSelectAgent={(id) => {
+                        chiefOfStaffActiveId.value = id;
+                        setShowSettings(false);
+                        if (!inPane) bringToFront(COS_PANEL_ID);
+                        if (mobile) setChannelListOpen(false);
+                      }}
+                    />
+                  )}
                   <div class="cos-chat-pane">
                     {mobileThreadActive && (
                       <div class="cos-thread-inline">
@@ -1904,7 +1951,7 @@ export function ChiefOfStaffBubble({
                               <button
                                 key={q}
                                 class="cos-example"
-                                onClick={() => setCosDraft(activeId, selectedAppId.value, draftScopeThreadId, q)}
+                                onClick={() => composerRef.current?.loadSnapshot({ text: q, attachments: [], elementRefs: [] })}
                               >{q}</button>
                             ))}
                           </div>

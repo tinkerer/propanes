@@ -7,9 +7,12 @@ import {
 import {
   cosThreadSessions,
   cosThreadMeta,
+  cosThreadChannels,
   mergeThreadSessions,
   mergeThreadMeta,
+  mergeThreadChannels,
   getSessionIdForThread,
+  getThreadChannelId,
   getThreadMeta,
   setThreadResolved,
   setThreadArchived,
@@ -34,7 +37,9 @@ export { type ChiefOfStaffToolCall, type DispatchInfo, extractDispatchInfo };
 export {
   cosThreadSessions,
   cosThreadMeta,
+  cosThreadChannels,
   getSessionIdForThread,
+  getThreadChannelId,
   getThreadMeta,
   setThreadResolved,
   setThreadArchived,
@@ -335,12 +340,16 @@ function serverMessageToClient(m: any): ChiefOfStaffMsg {
  * right Claude session. Called on module startup so a fresh page load (or
  * cleared localStorage) still sees prior CoS history.
  */
+export const COS_WORKSPACE_ID = '__cos__';
+
 export async function loadChiefOfStaffHistory(agentId: string, appId: string | null = null): Promise<void> {
   try {
     const token = localStorage.getItem('pw-admin-token');
     const headers: Record<string, string> = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
-    const qs = appId ? `?appId=${encodeURIComponent(appId)}` : '';
+    // CoS workspace spans all apps — don't filter by appId
+    const effectiveAppId = appId === COS_WORKSPACE_ID ? null : appId;
+    const qs = effectiveAppId ? `?appId=${encodeURIComponent(effectiveAppId)}` : '';
     const res = await fetch(
       `/api/v1/admin/chief-of-staff/history/${encodeURIComponent(agentId)}${qs}`,
       { headers },
@@ -350,6 +359,7 @@ export async function loadChiefOfStaffHistory(agentId: string, appId: string | n
     const threads = Array.isArray(data?.threads) ? data.threads : (data?.thread ? [data.thread] : []);
     mergeThreadSessions(threads);
     mergeThreadMeta(threads);
+    mergeThreadChannels(threads);
     // Server returns rows with `threadId` column — propagate it into each
     // ChiefOfStaffMsg via serverMessageToClient.
     const serverMessages: ChiefOfStaffMsg[] = Array.isArray(data?.messages)
@@ -398,12 +408,19 @@ async function createCosThread(
 
     const trimmedHint = nameHint.trim();
     const name = (trimmedHint ? trimmedHint.slice(0, 80) : agent.name) || 'New thread';
+    // Import activeChannel inline to avoid circular deps — state.ts imports
+    // from chief-of-staff.ts indirectly. Reading .value here is fine because
+    // createCosThread is only called in event handlers (not render).
+    const { activeChannel: activeChannelSig } = await import('./state.js');
+    const channelId = activeChannelSig.value?.id ?? undefined;
+
     const res = await fetch('/api/v1/admin/chief-of-staff/threads', {
       method: 'POST',
       headers,
       body: JSON.stringify({
         agentId: agent.id,
-        appId: appId || undefined,
+        appId: (appId && appId !== COS_WORKSPACE_ID) ? appId : undefined,
+        channelId,
         name,
         systemPrompt: agent.systemPrompt || undefined,
         model: agent.model || undefined,
@@ -414,6 +431,7 @@ async function createCosThread(
     if (data && typeof data === 'object') {
       mergeThreadSessions([data]);
       mergeThreadMeta([data]);
+      mergeThreadChannels([data]);
     }
     return typeof data?.id === 'string' ? data.id : undefined;
   } catch {
@@ -675,11 +693,13 @@ export function sendChiefOfStaffMessage(
         }));
       }
 
+      // CoS workspace spans all apps — don't lock the thread to a specific app
+      const effectiveAppId = appId === COS_WORKSPACE_ID ? null : appId;
       const payload: Record<string, unknown> = {
         text: trimmed,
         systemPrompt: agent.systemPrompt || undefined,
         model: agent.model || undefined,
-        appId: appId || undefined,
+        appId: effectiveAppId || undefined,
         threadId: threadId || undefined,
         verbosity: agent.verbosity || DEFAULT_VERBOSITY,
         style: agent.style || DEFAULT_STYLE,

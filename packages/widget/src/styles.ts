@@ -1062,6 +1062,21 @@ export const WIDGET_CSS = `
   margin: 2px 0;
 }
 
+.pw-send-menu-send-btn {
+  background: #1d9bf0 !important;
+  color: #fff !important;
+  font-weight: 600;
+  text-align: center !important;
+  justify-content: center;
+  border-radius: 4px;
+  margin: 4px 8px;
+  width: calc(100% - 16px) !important;
+  padding: 7px 12px !important;
+}
+.pw-send-menu-send-btn:hover {
+  background: #1a8cd8 !important;
+}
+
 .pw-flash {
   position: absolute;
   top: 50%;

@@ -124,10 +124,13 @@ export async function loadApprovals(appId: string): Promise<typeof api.getApprov
   }
 }
 
+// CoS workspace constant — spans all apps, default when none registered.
+export const COS_WORKSPACE_ID = '__cos__';
+
 // Whenever the selected workspace changes, refresh its channel list.
 effect(() => {
   const id = selectedAppId.value;
-  if (id) loadChannels(id);
+  if (id && id !== COS_WORKSPACE_ID) loadChannels(id);
 });
 
 export function openSpotlight() { spotlightOpen.value = true; }
@@ -155,9 +158,9 @@ export async function loadApplications() {
       if (match) selectedAppId.value = match.id;
     }
 
-    // Auto-select first app if none selected
-    if (!selectedAppId.value && apps.length > 0) {
-      selectedAppId.value = apps[0].id;
+    // Auto-select first app if none selected, or CoS workspace if no apps exist
+    if (!selectedAppId.value) {
+      selectedAppId.value = apps.length > 0 ? apps[0].id : COS_WORKSPACE_ID;
     }
 
     // Defer feedback counts so visible page content loads first

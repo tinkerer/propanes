@@ -42,6 +42,8 @@ const SETTINGS_KEY = 'pw-qdp-settings';
 interface DispatchSettings {
   dispatchType: DispatchType;
   agentId: string;
+  posX?: number;
+  posY?: number;
 }
 
 function loadSettings(appKey: string): DispatchSettings | null {
@@ -68,10 +70,12 @@ interface Props {
   appKey: string;
   appName?: string;
   onClose: () => void;
+  /** Called after successful submit — use to clear persistent open state */
+  onSubmitClose?: () => void;
   initialDispatchType?: DispatchType;
 }
 
-export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchType }: Props) {
+export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, initialDispatchType }: Props) {
   const settings = loadSettings(appKey);
   const [dispatchType, setDispatchType] = useState<DispatchType>(
     settings?.dispatchType || initialDispatchType || 'agent'
@@ -81,8 +85,8 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
   const [agents, setAgents] = useState<any[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>(settings?.agentId || '');
   const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
-    x: Math.round(window.innerWidth / 2 - 200),
-    y: Math.round(window.innerHeight * 0.3),
+    x: settings?.posX ?? Math.round(window.innerWidth / 2 - 200),
+    y: settings?.posY ?? Math.round(window.innerHeight * 0.3),
   }));
   const dragging = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -109,8 +113,8 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
 
   // Save settings when they change
   useEffect(() => {
-    saveSettings(appKey, { dispatchType, agentId: selectedAgentId });
-  }, [dispatchType, selectedAgentId, appKey]);
+    saveSettings(appKey, { dispatchType, agentId: selectedAgentId, posX: pos.x, posY: pos.y });
+  }, [dispatchType, selectedAgentId, appKey, pos.x, pos.y]);
 
   // Drag handling
   const onMouseDown = useCallback((e: MouseEvent) => {
@@ -219,7 +223,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
           openSession(result.sessionId);
         }
         loadAllSessions();
-        onClose();
+        (onSubmitClose || onClose)();
         return;
       }
 
@@ -242,7 +246,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose, initialDispatchTy
         openSession(result.sessionId);
       }
       loadAllSessions();
-      onClose();
+      (onSubmitClose || onClose)();
     } catch (err: any) {
       console.error('Quick dispatch failed:', err.message);
       setError(err.message || 'Cook failed');
