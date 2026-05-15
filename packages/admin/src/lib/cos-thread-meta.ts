@@ -18,6 +18,11 @@ import { adminHeaders } from './admin-headers.js';
 // straight to its jsonl log without round-tripping the server.
 export const cosThreadSessions = signal<Record<string, string>>({});
 
+// threadId → channelId. Drives channel-scoped thread filtering — when the
+// operator selects a channel, only threads belonging to it are shown.
+// Null/missing entries mean "unsorted" (no channel assignment).
+export const cosThreadChannels = signal<Record<string, string | null>>({});
+
 export function mergeThreadSessions(
   threads: Array<{ id?: unknown; agentSessionId?: unknown }>,
 ): void {
@@ -38,6 +43,29 @@ export function mergeThreadSessions(
 export function getSessionIdForThread(threadId: string | undefined | null): string | null {
   if (!threadId) return null;
   return cosThreadSessions.value[threadId] ?? null;
+}
+
+export function mergeThreadChannels(
+  threads: Array<{ id?: unknown; channelId?: unknown }>,
+): void {
+  if (!Array.isArray(threads) || threads.length === 0) return;
+  const next = { ...cosThreadChannels.value };
+  let changed = false;
+  for (const t of threads) {
+    const tid = typeof t?.id === 'string' ? t.id : null;
+    if (!tid) continue;
+    const cid = typeof t?.channelId === 'string' ? t.channelId : null;
+    if (next[tid] !== cid) {
+      next[tid] = cid;
+      changed = true;
+    }
+  }
+  if (changed) cosThreadChannels.value = next;
+}
+
+export function getThreadChannelId(threadId: string | undefined | null): string | null {
+  if (!threadId) return null;
+  return cosThreadChannels.value[threadId] ?? null;
 }
 
 // Per-thread health derived from the joined agentSessions row (server-side)

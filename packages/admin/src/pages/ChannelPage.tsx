@@ -16,7 +16,7 @@ import { chiefOfStaffOpen, chiefOfStaffActiveId } from '../lib/chief-of-staff.js
 // Channel detail page: shows the channel's name, kind badge, members, policy
 // summary, and the thread list. Click a thread to open it in the CoS bubble.
 
-type ThreadRow = {
+export type ThreadRow = {
   id: string;
   agentId: string;
   appId: string | null;
@@ -45,7 +45,7 @@ const KIND_COLORS: Record<ChannelKind, { dot: string; label: string }> = {
   exploratory: { dot: '#22c55e', label: 'exploratory' },
 };
 
-const channelThreads = signal<Record<string, ThreadRow[]>>({});
+export const channelThreads = signal<Record<string, ThreadRow[]>>({});
 
 export async function loadChannelThreads(appId: string): Promise<void> {
   // Server endpoint /chief-of-staff/threads?appId returns ALL threads for the

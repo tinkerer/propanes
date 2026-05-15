@@ -2,9 +2,9 @@ import { signal } from '@preact/signals';
 import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { api } from '../../lib/api.js';
 import { openSession, loadAllSessions } from '../../lib/sessions.js';
-import { cachedTargets, ensureTargetsLoaded, targetKey, findTargetByKey, parseTargetKey } from './DispatchTargetSelect.js';
+import { cachedTargets, ensureTargetsLoaded, targetKey, parseTargetKey } from './DispatchTargetSelect.js';
 import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../../lib/agent-constants.js';
-import { formatAgentOption, agentSortCmp, PROFILE_MATRIX } from '../../lib/agent-matrix.js';
+import { formatAgentOption, agentSortCmp } from '../../lib/agent-matrix.js';
 import { openSetupAssistant } from './SetupAssistantDialog.js';
 
 export interface DispatchDialogRequest {
@@ -27,6 +27,16 @@ export function DispatchDialog() {
 }
 
 type ActionKind = 'interactive' | 'yolo' | 'wiggum' | 'fafo' | 'structured' | 'powwow' | 'assistant';
+
+const MODE_OPTIONS: Array<{ value: ActionKind; label: string; icon: string }> = [
+  { value: 'interactive', label: 'Interactive', icon: '\u{25B6}' },
+  { value: 'yolo', label: 'YOLO', icon: '\u{26A1}' },
+  { value: 'wiggum', label: 'Wiggum Swarm', icon: '\u{1F575}' },
+  { value: 'fafo', label: 'FAFO Swarm', icon: '\u{1F9EC}' },
+  { value: 'structured', label: 'Structured', icon: '\u{1F4CB}' },
+  { value: 'powwow', label: 'Powwow', icon: '\u{1FAD6}' },
+  { value: 'assistant', label: 'Setup Assistant', icon: '\u{1F3AF}' },
+];
 
 interface Agent {
   id: string;
@@ -82,20 +92,13 @@ function groupAgentsByRuntime(agents: Agent[]): Array<[string, Agent[]]> {
   return Array.from(groups.entries());
 }
 
-function agentMatrixSubtitle(agent: Agent | undefined, fallback: string): string {
-  if (!agent) return fallback;
-  const rt = RUNTIME_INFO[agent.runtime || 'claude'] || RUNTIME_INFO.claude;
-  const pd = PROFILE_MATRIX[agent.permissionProfile] || PROFILE_MATRIX['interactive-require'];
-  return `${rt.label} · ${pd.icon} ${pd.label}`;
-}
 
 function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onClose: () => void }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [target, setTarget] = useState('');
   const [instructions, setInstructions] = useState('');
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [mode, setMode] = useState<ActionKind>('interactive');
   const [overrideAgentId, setOverrideAgentId] = useState<string>('');
-  const [targetOpen, setTargetOpen] = useState(false);
   const [running, setRunning] = useState<ActionKind | null>(null);
   const [error, setError] = useState('');
   const instructionsRef = useRef<HTMLTextAreaElement>(null);
@@ -129,9 +132,6 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
   const harnesses = targets.filter(t => t.isHarness);
   const sprites = targets.filter(t => t.isSprite);
   const isBatch = req.feedbackIds.length > 1;
-  const selectedTarget = target ? findTargetByKey(targets, target) : null;
-  const targetLabel = selectedTarget ? (selectedTarget.machineName || selectedTarget.name) : 'Local';
-
   const interactiveAgent = useMemo(() => pickAgent(agents, 'interactive-require', req.appId), [agents, req.appId]);
   const yoloAgent = useMemo(() => pickAgent(agents, 'interactive-yolo', req.appId, ['codex', 'claude']), [agents, req.appId]);
   const fallbackAgent = useMemo(() => defaultAgent(agents, req.appId), [agents, req.appId]);
@@ -236,15 +236,16 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
   function handleKeyDown(e: KeyboardEvent) {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      runAction('interactive');
+      runAction(mode);
     }
   }
 
   const batchSuffix = isBatch ? ` (${req.feedbackIds.length})` : '';
+  const modeOpt = MODE_OPTIONS.find(m => m.value === mode)!;
 
   return (
     <div class="spotlight-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div class="spotlight-container dispatch-dialog-v2" style="max-width:560px" onKeyDown={handleKeyDown}>
+      <div class="spotlight-container dispatch-dialog-v2" style="max-width:480px" onKeyDown={handleKeyDown}>
         <div class="spotlight-input-row dispatch-dialog-topbar">
           <div class="dispatch-dialog-heading compact">
             <span class="spotlight-search-icon">{'\u{1F525}'}</span>
@@ -252,55 +253,8 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
               <div class="dispatch-dialog-title">Cook It{batchSuffix}</div>
             </div>
           </div>
-          <button
-            class={`dispatch-target-chip ${targetOpen ? 'open' : ''}`}
-            onClick={() => setTargetOpen(v => !v)}
-            title="Change cooking target"
-          >
-            {'\u{1F4CD}'} {targetLabel} {'\u25BE'}
-          </button>
           <kbd class="spotlight-esc" onClick={onClose}>esc</kbd>
         </div>
-
-        {targetOpen && (
-          <div style="padding:8px 16px;border-bottom:1px solid var(--pw-border);background:var(--pw-bg-sunken)">
-            <select
-              class="dispatch-dialog-select"
-              value={target}
-              onChange={(e) => { setTarget((e.target as HTMLSelectElement).value); setTargetOpen(false); }}
-              autofocus
-            >
-              <option value="">Local</option>
-              {machines.length > 0 && (
-                <optgroup label="Remote Machines">
-                  {machines.map(t => (
-                    <option key={targetKey(t)} value={targetKey(t)} disabled={!t.online}>
-                      {t.machineName || t.name}{t.online ? ` (${t.activeSessions}/${t.maxSessions})` : ' (offline)'}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              {harnesses.length > 0 && (
-                <optgroup label="Harnesses">
-                  {harnesses.map(t => (
-                    <option key={targetKey(t)} value={targetKey(t)} disabled={!t.online}>
-                      {t.name}{t.online ? ` (${t.activeSessions}/${t.maxSessions})` : ' (offline)'}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-              {sprites.length > 0 && (
-                <optgroup label="Sprites">
-                  {sprites.map(t => (
-                    <option key={targetKey(t)} value={targetKey(t)} disabled={!t.online}>
-                      {t.name}{t.online ? ` (${t.activeSessions}/${t.maxSessions})` : ' (offline)'}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-            </select>
-          </div>
-        )}
 
         <div class="dispatch-dialog-body">
           <textarea
@@ -309,99 +263,31 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
             placeholder="Instructions or context..."
             value={instructions}
             onInput={(e) => setInstructions((e.target as HTMLTextAreaElement).value)}
-            rows={2}
+            rows={3}
           />
 
-          <div class="dispatch-actions-grid">
-            <ActionButton
-              kind="interactive"
-              icon={'\u{25B6}'}
-              label={`Cook It${batchSuffix}`}
-              subtitle={agentMatrixSubtitle(interactiveAgent, 'Interactive (supervised)')}
-              accent="primary"
-              disabled={!fallbackAgent}
-              running={running}
-              onClick={() => runAction('interactive')}
-            />
-            <ActionButton
-              kind="yolo"
-              icon={'\u{26A1}'}
-              label={`YOLO${batchSuffix}`}
-              subtitle={agentMatrixSubtitle(yoloAgent, 'YOLO (skip permissions)')}
-              accent="warning"
-              disabled={!fallbackAgent}
-              running={running}
-              onClick={() => runAction('yolo')}
-            />
-            <ActionButton
-              kind="wiggum"
-              icon={'\u{1F575}'}
-              label="Wiggum Swarm"
-              subtitle="Iterative experiments"
-              accent="neutral"
-              disabled={!fallbackAgent}
-              running={running}
-              onClick={() => runAction('wiggum')}
-            />
-            <ActionButton
-              kind="fafo"
-              icon={'\u{1F9EC}'}
-              label="FAFO Swarm"
-              subtitle="Evolutionary search"
-              accent="neutral"
-              disabled={!fallbackAgent}
-              running={running}
-              onClick={() => runAction('fafo')}
-            />
-            <ActionButton
-              kind="structured"
-              icon={'\u{1F4CB}'}
-              label="Structured Mode"
-              subtitle={agentMatrixSubtitle(structuredAgent, 'Structured output')}
-              accent="neutral"
-              disabled={!fallbackAgent}
-              running={running}
-              onClick={() => runAction('structured')}
-            />
-            <ActionButton
-              kind="powwow"
-              icon={'\u{1FAD6}'}
-              label="Powwow"
-              subtitle="Multi-agent compare"
-              accent="neutral"
-              disabled={agents.filter((a) => a.mode !== 'webhook').length < 2}
-              running={running}
-              onClick={() => runAction('powwow')}
-            />
-            <ActionButton
-              kind="assistant"
-              icon={'\u{1F3AF}'}
-              label="Setup Assistant"
-              subtitle="Plan, tests, branch — answer Q/A then dispatch"
-              accent="neutral"
-              disabled={!fallbackAgent}
-              running={running}
-              onClick={() => runAction('assistant')}
-              full
-            />
-          </div>
-
-          <button
-            class="dispatch-advanced-toggle"
-            onClick={() => setAdvancedOpen(v => !v)}
-          >
-            {advancedOpen ? '\u25BE' : '\u25B8'} Fine Tune
-          </button>
-
-          {advancedOpen && (
-            <div style="display:flex;flex-direction:column;gap:6px">
-              <label style="font-size:12px;color:var(--pw-text-muted)">Force a specific burner</label>
+          <div class="dispatch-selectors">
+            <div class="dispatch-selector-group">
+              <label class="dispatch-selector-label">Mode</label>
               <select
-                class="dispatch-dialog-select"
+                class="dispatch-selector-select"
+                value={mode}
+                onChange={(e) => setMode((e.target as HTMLSelectElement).value as ActionKind)}
+              >
+                {MODE_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.icon} {opt.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div class="dispatch-selector-group">
+              <label class="dispatch-selector-label">Agent</label>
+              <select
+                class="dispatch-selector-select"
                 value={overrideAgentId}
                 onChange={(e) => setOverrideAgentId((e.target as HTMLSelectElement).value)}
               >
-                <option value="">Auto-pick for this mode</option>
+                <option value="">Auto</option>
                 {groupAgentsByRuntime(agents).map(([runtime, group]) => (
                   <optgroup key={runtime} label={(RUNTIME_INFO[runtime] || RUNTIME_INFO.claude).label}>
                     {group.map((a) => (
@@ -412,18 +298,60 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
                   </optgroup>
                 ))}
               </select>
-              <div style="font-size:11px;color:var(--pw-text-muted);line-height:1.5">
-                {'\u{1F441}'} Interactive (supervised) · {'\u{26A1}'} YOLO (skip permissions) · {'\u{1F916}'} Headless (JSONL)
-              </div>
             </div>
-          )}
+
+            <div class="dispatch-selector-group">
+              <label class="dispatch-selector-label">Target</label>
+              <select
+                class="dispatch-selector-select"
+                value={target}
+                onChange={(e) => setTarget((e.target as HTMLSelectElement).value)}
+              >
+                <option value="">Local</option>
+                {machines.length > 0 && (
+                  <optgroup label="Remote Machines">
+                    {machines.map(t => (
+                      <option key={targetKey(t)} value={targetKey(t)} disabled={!t.online}>
+                        {t.machineName || t.name}{t.online ? ` (${t.activeSessions}/${t.maxSessions})` : ' (offline)'}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {harnesses.length > 0 && (
+                  <optgroup label="Harnesses">
+                    {harnesses.map(t => (
+                      <option key={targetKey(t)} value={targetKey(t)} disabled={!t.online}>
+                        {t.name}{t.online ? ` (${t.activeSessions}/${t.maxSessions})` : ' (offline)'}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {sprites.length > 0 && (
+                  <optgroup label="Sprites">
+                    {sprites.map(t => (
+                      <option key={targetKey(t)} value={targetKey(t)} disabled={!t.online}>
+                        {t.name}{t.online ? ` (${t.activeSessions}/${t.maxSessions})` : ' (offline)'}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </div>
+          </div>
 
           {error && (
             <div style="color:var(--pw-danger);font-size:13px;padding:4px 0">{error}</div>
           )}
 
-          <div style="display:flex;justify-content:flex-end;gap:8px;padding-top:4px">
+          <div class="dispatch-submit-row">
             <button class="btn btn-sm" onClick={onClose}>Cancel</button>
+            <button
+              class={`dispatch-cook-btn ${mode === 'yolo' ? 'yolo' : ''}`}
+              disabled={!fallbackAgent || !!running}
+              onClick={() => runAction(mode)}
+            >
+              {running ? 'Cooking\u2026' : `${modeOpt.icon} ${modeOpt.label}`}{batchSuffix}
+            </button>
           </div>
         </div>
       </div>
@@ -431,30 +359,3 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
   );
 }
 
-function ActionButton(props: {
-  kind: ActionKind;
-  icon: string;
-  label: string;
-  subtitle: string;
-  accent: 'primary' | 'warning' | 'neutral';
-  disabled?: boolean;
-  running: ActionKind | null;
-  onClick: () => void;
-  full?: boolean;
-}) {
-  const isRunning = props.running === props.kind;
-  const otherRunning = props.running && props.running !== props.kind;
-  return (
-    <button
-      class={`dispatch-action-btn accent-${props.accent} ${props.full ? 'full' : ''}`}
-      disabled={!!props.disabled || !!otherRunning || isRunning}
-      onClick={props.onClick}
-    >
-      <span class="dispatch-action-icon">{props.icon}</span>
-      <span class="dispatch-action-body">
-        <span class="dispatch-action-label">{isRunning ? 'Cooking\u2026' : props.label}</span>
-        <span class="dispatch-action-subtitle">{props.subtitle}</span>
-      </span>
-    </button>
-  );
-}

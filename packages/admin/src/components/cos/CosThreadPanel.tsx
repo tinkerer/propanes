@@ -147,11 +147,16 @@ export function ThreadPanel({
     // `\n\n---\n\n` boundaries.
     const norm = (s: string) => s.trim().replace(/\s+/g, ' ');
     const projectedTexts = new Set<string>();
-    let projectedHasUserInThread = false;
+    // Collect timestamps of assistant messages already confirmed in the JSONL
+    // so the settled-assistant fallback only fires when the reply is also
+    // persisted — not just optimistic in-memory.
+    const projectedAssistantTs = new Set<number>();
     for (const p of projected) {
       if (p.role === 'user' && p.text) {
         projectedTexts.add(norm(p.text));
-        projectedHasUserInThread = true;
+      }
+      if (p.role === 'assistant') {
+        projectedAssistantTs.add(p.timestamp);
       }
     }
     return agent.messages.filter((m) => {
@@ -168,20 +173,25 @@ export function ThreadPanel({
       // Skip rows that JSONL already has by text match.
       if (m.text && projectedTexts.has(norm(m.text))) return false;
       // Belt-and-braces fallback: once an assistant reply *after* this user
-      // row has finished streaming AND projected has at least one user msg
-      // in the thread, the optimistic row is stale — drop it even if the
-      // text-match missed. Without this fallback the row sticks on
-      // "Sending…" until the operator refreshes the page.
-      if (projectedHasUserInThread) {
-        const assistantSettled = agent.messages.some(
-          (a) => a.role === 'assistant'
-            && a.threadId === (m.threadId ?? threadServerId)
-            && a.timestamp > m.timestamp
-            && a.streaming !== true
-            && a.sending !== true,
-        );
-        if (assistantSettled) return false;
-      }
+      // row has finished streaming AND the reply is confirmed in the JSONL,
+      // the optimistic row is stale — drop it even if the text-match missed.
+      // Without this fallback the row sticks on "Sending…" until the operator
+      // refreshes the page.
+      //
+      // Critical: only consider assistants whose timestamp appears in
+      // `projected` (JSONL-confirmed). Pure in-memory optimistic assistants
+      // (streaming/sending just cleared but JSONL hasn't polled yet) must NOT
+      // trigger this — otherwise enqueued followups vanish in the gap between
+      // dispatch-ack and the next JSONL poll.
+      const assistantSettled = agent.messages.some(
+        (a) => a.role === 'assistant'
+          && a.threadId === (m.threadId ?? threadServerId)
+          && a.timestamp > m.timestamp
+          && a.streaming !== true
+          && a.sending !== true
+          && projectedAssistantTs.has(a.timestamp),
+      );
+      if (assistantSettled) return false;
       return true;
     });
   }, [agent?.messages, projected, threadServerId, anchorTs]);
