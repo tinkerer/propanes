@@ -113,7 +113,7 @@ function SshConfigManager() {
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px">
         <input
           type="text"
-          placeholder="Hostname (e.g. example.com)"
+          placeholder="Hostname (e.g. staging.example.com)"
           value={hostname}
           onInput={(e) => setHostname((e.target as HTMLInputElement).value)}
           style="flex:2;min-width:180px;padding:4px 8px;font-size:12px;border:1px solid var(--pw-border);border-radius:4px;background:var(--pw-bg-secondary);color:var(--pw-text)"
