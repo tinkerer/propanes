@@ -353,7 +353,7 @@ Each config specifies machine, app image, ports, env vars, compose dir. When an 
 
 ## Visible VNC Browser (pw-vnc)
 
-To open a visible browser watchable via NoVNC at `azstaging.myworkbench.ai:6080`:
+To open a visible browser watchable via NoVNC on port `6080`:
 
 ```bash
 ~/.claude/bin/pw-vnc-start          # launch/restart visible Chromium on DISPLAY=:1

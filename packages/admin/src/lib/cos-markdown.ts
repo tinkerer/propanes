@@ -22,7 +22,7 @@ export const EXT_TO_LANG: Record<string, string> = {
 };
 
 export const ULID_RE = /\b01[A-Z0-9]{24}\b/g;
-// Matches http(s) URLs and bare host:port patterns (e.g. azstaging.myworkbench.ai:6080)
+// Matches http(s) URLs and bare host:port patterns (e.g. example.com:6080)
 export const URL_RE = /\bhttps?:\/\/[^\s<>"')\]]+|\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?::\d{1,5})(?:\/[^\s<>"')\]]*)?/gi;
 
 // Wrap ULID matches and URL matches in CoS-rendered HTML with clickable anchors.
