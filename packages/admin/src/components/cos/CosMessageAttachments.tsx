@@ -4,6 +4,7 @@
 // attachment of either kind is present.
 
 import { useEffect, useState } from 'preact/hooks';
+import { createPortal } from 'preact/compat';
 import type {
   CosImageAttachment,
   CosElementRef,
@@ -48,13 +49,14 @@ function MessageImageThumb({ src, name }: { src: string; name?: string }) {
       >
         <img src={src} alt={name || 'attachment'} />
       </button>
-      {lightbox && (
+      {lightbox && createPortal(
         <div class="sm-lightbox" onClick={() => setLightbox(false)}>
           <div class="sm-lightbox-content" onClick={(e) => e.stopPropagation()}>
             <img src={src} alt={name || 'attachment (full)'} />
             <button class="sm-lightbox-close" onClick={() => setLightbox(false)}>&times;</button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

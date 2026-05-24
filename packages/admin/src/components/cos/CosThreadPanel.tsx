@@ -16,8 +16,9 @@ import {
 } from '../../lib/cos-followups.js';
 import { CosEnqueuedList } from './CosEnqueuedList.js';
 import { selectedAppId } from '../../lib/state.js';
-import { getSessionIdForThread, getThreadMeta } from '../../lib/cos-thread-meta.js';
-import { openSession, openThreadAsInteractive } from '../../lib/sessions.js';
+import { getSessionIdForThread, getThreadMeta, cosThreadMeta } from '../../lib/cos-thread-meta.js';
+import { AgentTerminal } from '../terminal/AgentTerminal.js';
+import { openSession, openThreadAsInteractive, setViewMode } from '../../lib/sessions.js';
 import {
   cosActiveThread,
   getThreadDraft,
@@ -122,6 +123,24 @@ export function ThreadPanel({
     fUserMsg?.threadId ?? fReplies.find((r) => r.msg.threadId)?.msg.threadId ?? null;
   const anchorTs = fUserMsg?.timestamp;
   const sessionId = getSessionIdForThread(threadServerId);
+
+  // Subscribe to cosThreadMeta so the panel re-renders when the backing
+  // session's permissionProfile changes (e.g. headless → interactive convert).
+  // Without reading the signal here the body sticks on the JSONL view until
+  // some other render triggers a refresh.
+  const _metaTick = cosThreadMeta.value;
+  void _metaTick;
+  const threadMeta = threadServerId ? getThreadMeta(threadServerId) : null;
+  // TTY-backed profiles render as live terminals inline. interactive-* are
+  // Claude/Codex TTY sessions; `plain` is a bare shell PTY (e.g. the
+  // build-admin / restart-server tmux sessions surfaced as CoS threads).
+  // headless / headless-stream profiles still render as JSONL chat.
+  const ttyProfile = threadMeta?.sessionPermissionProfile;
+  const isInteractiveSession =
+    !!sessionId &&
+    (ttyProfile === 'interactive-yolo' ||
+      ttyProfile === 'interactive-require' ||
+      ttyProfile === 'plain');
 
   // Lift the JSONL stream up here so we can dedupe optimistic user messages
   // against what's already landed on disk. The body below renders `projected`
@@ -275,6 +294,7 @@ export function ThreadPanel({
     <div class={`cos-thread-panel${compact ? ' cos-thread-panel-compact' : ''}`}>
       <div class="cos-thread-panel-header">
         <span class="cos-thread-panel-title" title={userMsg?.text || ''}>{titlePreview}</span>
+        <ThreadSessionViewButton sessionId={sessionId} />
         <ThreadInteractivePanelButton
           threadServerId={threadServerId}
           sessionId={sessionId}
@@ -287,17 +307,23 @@ export function ThreadPanel({
           aria-label="Close panel"
         >×</button>
       </div>
-      <ThreadPanelBody
-        sessionId={sessionId}
-        agentId={agentId}
-        agentName={agent.name}
-        verbosity={agent.verbosity || DEFAULT_VERBOSITY}
-        showTools={showTools}
-        onArtifactPopout={onArtifactPopout}
-        projected={projected}
-        pendingMessages={pendingMessages}
-      />
-      {threadDrafts.length > 0 && (
+      {isInteractiveSession && sessionId ? (
+        <div class="cos-thread-panel-terminal">
+          <AgentTerminal sessionId={sessionId} isActive={true} />
+        </div>
+      ) : (
+        <ThreadPanelBody
+          sessionId={sessionId}
+          agentId={agentId}
+          agentName={agent.name}
+          verbosity={agent.verbosity || DEFAULT_VERBOSITY}
+          showTools={showTools}
+          onArtifactPopout={onArtifactPopout}
+          projected={projected}
+          pendingMessages={pendingMessages}
+        />
+      )}
+      {!isInteractiveSession && threadDrafts.length > 0 && (
         <div class="cos-thread-panel-drafts">
           <CosSavedDraftsList
             drafts={threadDrafts}
@@ -307,12 +333,12 @@ export function ThreadPanel({
           />
         </div>
       )}
-      {threadFollowups.length > 0 && (
+      {!isInteractiveSession && threadFollowups.length > 0 && (
         <div class="cos-thread-panel-drafts">
           <CosEnqueuedList followups={threadFollowups} scope="thread" />
         </div>
       )}
-      <div class="cos-thread-panel-composer">
+      {!isInteractiveSession && <div class="cos-thread-panel-composer">
         <CosComposer
           ref={composerRef}
           placeholder={isAgentStreaming ? 'Reply (agent is responding…)' : 'Reply in this thread… (paste images to attach)'}
@@ -344,7 +370,7 @@ export function ThreadPanel({
             if (userMsg?.text) onReply('user', userMsg.text, anchorTs, threadServerId);
           }}
         />
-      </div>
+      </div>}
     </div>
   );
 }
@@ -446,6 +472,36 @@ function ThreadPanelBody({
         )}
       </div>
     </div>
+  );
+}
+
+function ThreadSessionViewButton({ sessionId }: { sessionId: string | null }) {
+  const disabled = !sessionId;
+  const tooltip = disabled
+    ? 'No session yet — send a message to spawn one'
+    : 'Open structured / terminal split for this thread’s session';
+
+  function handleClick() {
+    if (!sessionId) return;
+    setViewMode(sessionId, 'split');
+    openSession(sessionId);
+  }
+
+  return (
+    <button
+      type="button"
+      class="cos-thread-panel-interactive"
+      onClick={handleClick}
+      disabled={disabled}
+      title={tooltip}
+      aria-label={tooltip}
+    >
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="4" width="18" height="16" rx="1" />
+        <line x1="12" y1="4" x2="12" y2="20" />
+      </svg>
+      <span>Session view</span>
+    </button>
   );
 }
 

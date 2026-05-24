@@ -1170,6 +1170,82 @@ body {
   word-break: break-word;
 }
 
+.spec-wiki-layout {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.spec-wiki-layout.pages-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.spec-wiki-pages-card {
+  position: sticky;
+  top: 12px;
+}
+
+.spec-wiki-layout.pages-collapsed .spec-wiki-pages-card {
+  position: static;
+}
+
+.spec-wiki-pages-toggle {
+  appearance: none;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--pw-text-muted);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.spec-wiki-current-page {
+  color: var(--pw-text-faint);
+  font-weight: 500;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spec-wiki-pages-toggle-icon {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--pw-border);
+  border-radius: 6px;
+  color: var(--pw-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.spec-wiki-pages-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.spec-wiki-pages-list .btn {
+  justify-content: flex-start;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spec-wiki-layout.pages-collapsed .spec-wiki-pages-list {
+  display: none;
+}
+
 /* Table */
 .table-wrap {
   background: var(--pw-bg-surface);
@@ -4477,6 +4553,18 @@ select:focus, textarea:focus {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.sidebar-cos-thread-divider:hover {
+  color: rgba(20, 184, 166, 1);
+  background: rgba(20, 184, 166, 0.1);
+}
+
+.sidebar-cos-thread-divider:focus-visible {
+  outline: 1px solid rgba(20, 184, 166, 0.6);
+  outline-offset: -1px;
 }
 
 .sidebar-cos-thread-divider:first-child {
@@ -4749,7 +4837,8 @@ select:focus, textarea:focus {
   width: 100%;
   height: 100%;
 }
-.structured-view-wrap > .cos-scroll-down-btn {
+.structured-view-wrap > .cos-scroll-down-btn,
+.agent-terminal-wrap > .cos-scroll-down-btn {
   position: absolute;
   bottom: 12px;
   left: 50%;
@@ -6099,7 +6188,7 @@ select:focus, textarea:focus {
   position: fixed;
   inset: 0;
   z-index: 9999;
-  background: rgba(0, 0, 0, 0.85);
+  background: #0b1220;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -11006,6 +11095,18 @@ body.pw-isolate {
     padding: 14px;
     border-radius: 8px;
   }
+  .mobile-page-view .spec-wiki-layout,
+  .mobile-page-view .spec-wiki-layout.pages-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 0 12px 12px;
+  }
+  .mobile-page-view .spec-wiki-pages-card {
+    position: static;
+  }
+  .mobile-page-view .spec-wiki-pages-list .btn {
+    justify-content: center;
+  }
   .mobile-page-view .detail-sidebar {
     padding: 0;
   }
@@ -12967,6 +13068,17 @@ body.pw-isolate {
   position: relative;
   display: flex;
   flex-direction: column;
+}
+/* Inline terminal mode — when the thread's backing session is interactive
+   (interactive-yolo / interactive-require), the panel body renders an
+   AgentTerminal instead of the JSONL bubble list so the operator can drive
+   the live TTY without leaving the chat. xterm fits to this container. */
+.cos-thread-panel-terminal {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  background: #1e293b;
+  padding: 4px 6px;
 }
 .cos-thread-panel-jsonl {
   flex: 1 1 auto;
@@ -17070,11 +17182,49 @@ body.pw-mobile .cos-channel-org-modal {
   display: flex;
   flex-direction: column;
   height: 100%;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
   background: #0f172a;
   color: #e2e8f0;
   font-size: 13px;
+}
+
+.cos-channel-list-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cos-channel-list-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cos-channel-list-section-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.cos-channel-list-split-divider {
+  flex: 0 0 4px;
+  height: 4px;
+  background: #1e293b;
+  cursor: row-resize;
+  position: relative;
+  transition: background 0.12s;
+}
+.cos-channel-list-split-divider:hover,
+body.cos-channel-list-resizing .cos-channel-list-split-divider {
+  background: #1d9bf0;
+}
+body.cos-channel-list-resizing {
+  cursor: row-resize !important;
+  user-select: none;
 }
 
 .cos-channel-list-header {
@@ -17102,6 +17252,39 @@ body.pw-mobile .cos-channel-org-modal {
   gap: 4px;
   flex-shrink: 0;
 }
+
+.cos-channel-list-hamburger {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: #94a3b8;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+.cos-channel-list-hamburger:hover { background: #1e293b; color: #e2e8f0; }
+
+.cos-chat-show-channels {
+  all: unset;
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: #94a3b8;
+  cursor: pointer;
+}
+.cos-chat-show-channels:hover { background: #1e293b; color: #e2e8f0; }
+.cos-chat-pane { position: relative; }
 
 .cos-channel-list-add-btn {
   all: unset;
@@ -17420,6 +17603,36 @@ body.pw-mobile .cos-channel-org-modal {
   min-width: 0;
   flex: 1;
 }
+.cos-toolbar-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding-left: 4px;
+}
+.cos-toolbar-title-workspace {
+  font-weight: 600;
+  color: #e2e8f0;
+  flex: 0 0 auto;
+}
+.cos-toolbar-title-sep {
+  color: #475569;
+  font-weight: 400;
+  flex: 0 0 auto;
+}
+.cos-toolbar-title-scope {
+  color: #94a3b8;
+  font-weight: 500;
+  flex: 0 0 auto;
+}
+.cos-toolbar-title-thread {
+  color: #94a3b8;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
 
 .cos-toolbar-actions {
   display: flex;
@@ -17442,4 +17655,3 @@ body.pw-mobile .cos-channel-org-modal {
 .cos-toolbar-btn:hover { background: #1e293b; color: #e2e8f0; }
 .cos-toolbar-btn-active { color: #3b82f6; }
 .cos-toolbar-btn-active:hover { color: #60a5fa; }
-

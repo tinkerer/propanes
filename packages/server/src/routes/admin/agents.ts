@@ -231,6 +231,12 @@ agentRoutes.delete('/agents/:id', async (c) => {
 // Dispatch targets (connected remote launchers + running harness configs + DB-sourced offline targets)
 agentRoutes.get('/dispatch-targets', (c) => {
   const launchers = listLaunchers();
+  const localMachine = db.select().from(schema.machines).where(eq(schema.machines.type, 'local')).get();
+  const localTarget = localMachine ? {
+    name: localMachine.name,
+    hostname: localMachine.hostname || null,
+    machineId: localMachine.id,
+  } : null;
   const launcherTargets: Array<Record<string, unknown>> = launchers
     .filter(l => !l.isLocal && l.ws?.readyState === 1)
     .map(l => {
@@ -352,7 +358,7 @@ agentRoutes.get('/dispatch-targets', (c) => {
     });
   }
 
-  return c.json({ targets: launcherTargets });
+  return c.json({ targets: launcherTargets, localTarget });
 });
 
 // Dispatch

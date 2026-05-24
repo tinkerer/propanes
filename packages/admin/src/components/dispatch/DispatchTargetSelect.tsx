@@ -16,8 +16,22 @@ export interface DispatchTarget {
   online: boolean;
 }
 
+export interface LocalDispatchTarget {
+  name: string;
+  hostname: string | null;
+  machineId: string;
+}
+
 export const cachedTargets = signal<DispatchTarget[]>([]);
+export const cachedLocalTarget = signal<LocalDispatchTarget | null>(null);
 let lastFetch = 0;
+
+export function localTargetLabel(): string {
+  const local = cachedLocalTarget.value;
+  if (!local) return 'Local';
+  const name = local.name || local.hostname;
+  return name ? `Local (${name})` : 'Local';
+}
 
 /** Unique selection key for a dispatch target (launcherId alone is not unique for harnesses) */
 export function targetKey(t: DispatchTarget): string {
@@ -43,8 +57,9 @@ export function parseTargetKey(key: string, targets: DispatchTarget[]): { launch
 
 export async function refreshTargets() {
   try {
-    const { targets } = await api.getDispatchTargets();
+    const { targets, localTarget } = await api.getDispatchTargets();
     cachedTargets.value = targets;
+    cachedLocalTarget.value = localTarget || null;
     lastFetch = Date.now();
   } catch {
     // ignore — leave stale data
@@ -86,7 +101,7 @@ export function DispatchTargetSelect({
       }}
       onFocus={() => refreshTargets()}
     >
-      <option value="">Local</option>
+      <option value="">{localTargetLabel()}</option>
       {machines.length > 0 && (
         <optgroup label="Machines">
           {machines.map(t => (

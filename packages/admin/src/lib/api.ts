@@ -4,16 +4,18 @@ function getToken(): string | null {
   return localStorage.getItem('pw-admin-token');
 }
 
-async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
+/** Low-level fetch that attaches the admin bearer token and centralises 401
+ *  handling. Any call that returns 401 trips the `pw-admin-401` event so the
+ *  App shell flips to LoginPage without a manual refresh — this is the only
+ *  way "sessions failing to sync" auto-logs-out the user. Every direct fetch
+ *  in this file MUST go through here; raw `fetch()` calls bypass the redirect.
+ *  Returns the Response so callers can read .text() / .blob() / .json(). */
+async function authFetch(path: string, opts: RequestInit = {}): Promise<Response> {
   const token = getToken();
   const headers: Record<string, string> = {
     ...(opts.headers as Record<string, string> || {}),
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  if (!headers['Content-Type'] && !(opts.body instanceof FormData)) {
-    headers['Content-Type'] = 'application/json';
-  }
-
   const res = await fetch(`${BASE}${path}`, { ...opts, headers });
   if (res.status === 401) {
     localStorage.removeItem('pw-admin-token');
@@ -23,8 +25,21 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     // user manually refreshes. Custom event avoids a circular import.
     window.dispatchEvent(new CustomEvent('pw-admin-401'));
     window.location.hash = '#/login';
-    throw new Error('Unauthorized');
+    const err = new Error('Unauthorized') as Error & { status?: number };
+    err.status = 401;
+    throw err;
   }
+  return res;
+}
+
+async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
+  const headers: Record<string, string> = {
+    ...(opts.headers as Record<string, string> || {}),
+  };
+  if (!headers['Content-Type'] && !(opts.body instanceof FormData)) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const res = await authFetch(path, { ...opts, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Request failed' }));
     throw new Error(err.error || `HTTP ${res.status}`);
@@ -255,20 +270,27 @@ export const api = {
     }),
 
   getDispatchTargets: () =>
-    request<{ targets: Array<{
-      launcherId: string;
-      name: string;
-      hostname: string;
-      machineName: string | null;
-      machineId: string | null;
-      isHarness: boolean;
-      harnessConfigId: string | null;
-      isSprite?: boolean;
-      spriteConfigId?: string | null;
-      activeSessions: number;
-      maxSessions: number;
-      online: boolean;
-    }> }>('/admin/dispatch-targets'),
+    request<{
+      localTarget: {
+        name: string;
+        hostname: string | null;
+        machineId: string;
+      } | null;
+      targets: Array<{
+        launcherId: string;
+        name: string;
+        hostname: string;
+        machineName: string | null;
+        machineId: string | null;
+        isHarness: boolean;
+        harnessConfigId: string | null;
+        isSprite?: boolean;
+        spriteConfigId?: string | null;
+        activeSessions: number;
+        maxSessions: number;
+        online: boolean;
+      }>
+    }>('/admin/dispatch-targets'),
 
   getApplications: () => request<any[]>('/admin/applications'),
 
@@ -415,14 +437,11 @@ export const api = {
     }),
 
   getJsonl: async (id: string, fileFilter?: string, tail?: number): Promise<string> => {
-    const token = getToken();
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
     const params: string[] = [];
     if (fileFilter) params.push(`file=${encodeURIComponent(fileFilter)}`);
     if (tail && tail > 0) params.push(`tail=${tail}`);
     const qs = params.length ? `?${params.join('&')}` : '';
-    const res = await fetch(`${BASE}/admin/agent-sessions/${id}/jsonl${qs}`, { headers });
+    const res = await authFetch(`/admin/agent-sessions/${id}/jsonl${qs}`);
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
       try {
@@ -489,6 +508,38 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  updateSpec: (data: { appId: string; additionalInstructions?: string; preferYolo?: boolean }) =>
+    request<{
+      ok: boolean;
+      mode?: 'session' | 'generated';
+      sessionId?: string;
+      feedbackId?: string;
+      agentEndpointId?: string;
+      agentName?: string;
+      wikiDir: string;
+      indexPath: string;
+      files?: string[];
+      ticketCount?: number;
+      cosMessageCount?: number;
+      sessionCount?: number;
+      jsonlFileCount?: number;
+      jsonlInputCount?: number;
+      themeCount?: number;
+      updatedAt: string;
+    }>('/admin/aggregate/spec/update', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  getSpec: (appId: string, file = 'index.md') =>
+    request<{
+      exists: boolean;
+      wikiDir: string;
+      file: string;
+      files: string[];
+      content: string;
+    }>(`/admin/aggregate/spec?appId=${encodeURIComponent(appId)}&file=${encodeURIComponent(file)}`),
 
   getFeedbackTags: (appId?: string) => {
     const qs = appId ? `?appId=${encodeURIComponent(appId)}` : '';
@@ -560,10 +611,7 @@ export const api = {
     request<{ ok: boolean }>(`/admin/launchers/${id}/restart`, { method: 'POST' }),
 
   getSystemdTemplate: async (id: string): Promise<string> => {
-    const token = getToken();
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    const res = await fetch(`${BASE}/admin/launchers/${id}/systemd-template`, { headers });
+    const res = await authFetch(`/admin/launchers/${id}/systemd-template`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.text();
   },
@@ -575,7 +623,10 @@ export const api = {
       launcherVersion: string;
       platform: string;
       arch: string;
+      cpu?: { cores: number; loadAverage: number[] };
       memory: { total: number; free: number };
+      disks?: Array<{ filesystem: string; mount: string; total: number; used: number; available: number; usePercent: number }>;
+      network?: Array<{ interface: string; rxBytes: number; txBytes: number }>;
       activeSessions: number;
       capabilities: { maxSessions: number; hasClaudeCli: boolean; hasDocker?: boolean };
       claudeCliVersion?: string;
@@ -585,6 +636,18 @@ export const api = {
 
   // Machines
   getMachines: () => request<any[]>('/admin/machines'),
+
+  getMachineSystemHealth: (id: string) =>
+    request<{
+      uptime: number;
+      nodeVersion: string;
+      platform: string;
+      arch: string;
+      cpu?: { cores: number; loadAverage: number[] };
+      memory: { total: number; free: number };
+      disks?: Array<{ filesystem: string; mount: string; total: number; used: number; available: number; usePercent: number }>;
+      network?: Array<{ interface: string; rxBytes: number; txBytes: number }>;
+    }>(`/admin/machines/${id}/system-health`),
 
   createMachine: (data: Record<string, unknown>) =>
     request<any>('/admin/machines', {
@@ -702,10 +765,7 @@ export const api = {
     request<{ path: string; content: string; size: number }>(`/admin/read-file?path=${encodeURIComponent(path)}`),
 
   readFileImage: async (path: string): Promise<string> => {
-    const token = getToken();
-    const headers: Record<string, string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    const res = await fetch(`${BASE}/admin/read-file?path=${encodeURIComponent(path)}`, { headers });
+    const res = await authFetch(`/admin/read-file?path=${encodeURIComponent(path)}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const blob = await res.blob();
     return URL.createObjectURL(blob);
@@ -927,7 +987,7 @@ export const api = {
 
   // Worker diff
   getWorkerDiff: (swarmId: string, gen: number, pathName: string) =>
-    fetch(`/api/v1/admin/wiggum/swarms/${swarmId}/gen/${gen}/path/${pathName}/diff`)
+    authFetch(`/admin/wiggum/swarms/${swarmId}/gen/${gen}/path/${pathName}/diff`)
       .then(r => r.ok ? r.text() : ''),
 
   // CoS channels
@@ -1012,6 +1072,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ appId }),
     }),
+
+  autoOrganizeChannelsSession: (appId: string) =>
+    request<{ sessionId: string; feedbackId: string; appId: string }>(
+      '/admin/chief-of-staff/channels/auto-organize-session',
+      { method: 'POST', body: JSON.stringify({ appId }) },
+    ),
 
   listOrgProposals: (appId?: string) => {
     const qs = appId ? `?appId=${encodeURIComponent(appId)}` : '';

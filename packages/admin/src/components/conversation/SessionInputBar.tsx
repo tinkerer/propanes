@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
 import { api } from '../../lib/api.js';
+import { resumeSession, lastResumeError } from '../../lib/sessions.js';
 import type { ParsedMessage } from '../../lib/output-parser.js';
 
 export interface SessionInputBarProps {
@@ -133,6 +134,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
   const [text, setText] = useState('');
   const [answer, setAnswer] = useState<AnswerState | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -162,15 +164,22 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
     }
   }, [isWaiting, !!askQuestion]);
 
-  if (!isRunning) return null;
-
   async function sendText(value: string) {
-    if (!value.trim() || submitting) return;
+    if (!value.trim() || submitting || stopping) return;
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.sendKeys(sessionId, { keys: value, enter: true });
-      if (!result.ok) throw new Error(result.error || 'send-keys failed');
+      if (isRunning) {
+        const result = await api.sendKeys(sessionId, { keys: value, enter: true });
+        if (!result.ok) throw new Error(result.error || 'send-keys failed');
+      } else {
+        const newId = await resumeSession(sessionId, { additionalPrompt: value.trim() });
+        if (!newId) {
+          const real = lastResumeError.value;
+          const realMsg = real && real.sessionId === sessionId ? real.message : null;
+          throw new Error(realMsg ? `Resume failed: ${realMsg}` : 'Resume failed');
+        }
+      }
       setText('');
     } catch (err: any) {
       setError(err.message || String(err));
@@ -180,7 +189,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
   }
 
   async function sendAnswer() {
-    if (!answer || !canSubmitAnswer(answer) || submitting) return;
+    if (!answer || !canSubmitAnswer(answer) || submitting || stopping) return;
     const value = serializeAnswer(answer);
     if (!value) return;
     setSubmitting(true);
@@ -197,7 +206,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
   }
 
   async function sendQuickAction(keys: string) {
-    if (submitting) return;
+    if (submitting || stopping) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -207,6 +216,26 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
       setError(err.message || String(err));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function resumeWithInterruption(value: string) {
+    const additionalPrompt = value.trim();
+    if (!additionalPrompt || submitting || stopping) return;
+    setStopping(true);
+    setError(null);
+    try {
+      const newId = await resumeSession(sessionId, { additionalPrompt });
+      if (!newId) {
+        const real = lastResumeError.value;
+        const realMsg = real && real.sessionId === sessionId ? real.message : null;
+        throw new Error(realMsg ? `Stop and resume failed: ${realMsg}` : 'Stop and resume failed');
+      }
+      setText('');
+    } catch (err: any) {
+      setError(err.message || String(err));
+    } finally {
+      setStopping(false);
     }
   }
 
@@ -224,7 +253,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
     }
   }
 
-  const dimmed = inputState === 'idle';
+  const dimmed = !isRunning || inputState === 'idle';
 
   // -- State 1: AskUserQuestion with options or text --
   if (isWaiting && askQuestion && answer) {
@@ -328,7 +357,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
               key={qa.label}
               type="button"
               class="conv-input-bar-quick-btn"
-              disabled={submitting}
+              disabled={submitting || stopping}
               onClick={() => sendQuickAction(qa.keys)}
             >
               {qa.label}
@@ -342,14 +371,25 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
             class="conv-input-bar-input"
             placeholder="Type a response..."
             value={text}
-            disabled={submitting}
+            disabled={submitting || stopping}
             onInput={(e) => setText((e.target as HTMLInputElement).value)}
             onKeyDown={onInputKeyDown}
           />
+          {isRunning && (
+            <button
+              type="button"
+              class="conv-input-bar-stop"
+              disabled={!text.trim() || submitting || stopping}
+              onClick={() => resumeWithInterruption(text)}
+              title="Stop the running session and resume with this text"
+            >
+              {stopping ? 'Stopping...' : 'Stop'}
+            </button>
+          )}
           <button
             type="button"
             class="conv-input-bar-send"
-            disabled={!text.trim() || submitting}
+            disabled={!text.trim() || submitting || stopping}
             onClick={() => sendText(text)}
           >
             Send
@@ -368,19 +408,30 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
           ref={inputRef}
           type="text"
           class="conv-input-bar-input"
-          placeholder="Send input to session..."
+          placeholder={isRunning ? 'Send input to session...' : 'Resume with a follow-up...'}
           value={text}
-          disabled={submitting}
+          disabled={submitting || stopping}
           onInput={(e) => setText((e.target as HTMLInputElement).value)}
           onKeyDown={onInputKeyDown}
         />
+        {isRunning && (
+          <button
+            type="button"
+            class="conv-input-bar-stop"
+            disabled={!text.trim() || submitting || stopping}
+            onClick={() => resumeWithInterruption(text)}
+            title="Stop the running session and resume with this text"
+          >
+            {stopping ? 'Stopping...' : 'Stop'}
+          </button>
+        )}
         <button
           type="button"
           class="conv-input-bar-send"
-          disabled={!text.trim() || submitting}
+          disabled={!text.trim() || submitting || stopping}
           onClick={() => sendText(text)}
         >
-          Send
+          {isRunning ? 'Send' : 'Resume'}
         </button>
       </div>
       {error && <div class="conv-input-bar-error">{error}</div>}

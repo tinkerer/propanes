@@ -7,8 +7,8 @@ import { openDispatchDialog, dispatchDialogResult } from '../components/dispatch
 import { copyWithTooltip } from '../lib/clipboard.js';
 import { DeletedItemsPanel, trackDeletion } from '../components/ui/DeletedItemsPanel.js';
 import { formatDate } from '../lib/date-utils.js';
-import { AggregateWizard, openAggregateWizard } from '../components/feedback/AggregateWizard.js';
 import { isMobile } from '../lib/viewport.js';
+import { SpecUpdateComposer } from '../components/feedback/SpecUpdateComposer.js';
 
 const TYPES = ['', 'manual', 'ab_test', 'analytics', 'error_report', 'programmatic'];
 const STATUSES = ['', 'new', 'reviewed', 'running', 'completed', 'killed', 'failed', 'resolved', 'archived', 'deleted'];
@@ -213,6 +213,7 @@ export function FeedbackListPage({ appId }: { appId: string }) {
   const filterTag = useSignal('');
   const availableTags = useSignal<{ tag: string; count: number }[]>([]);
   const expandedBrainstorms = useSignal<Set<string>>(loadExpandedBrainstorms());
+  const specComposerOpen = useSignal(false);
 
   function toggleBrainstorm(voiceSessionId: string) {
     const next = new Set(expandedBrainstorms.value);
@@ -268,6 +269,10 @@ export function FeedbackListPage({ appId }: { appId: string }) {
     } finally {
       loading.value = false;
     }
+  }
+
+  function openSpecComposer() {
+    specComposerOpen.value = true;
   }
 
   // Reactive filter/load effect
@@ -499,12 +504,17 @@ export function FeedbackListPage({ appId }: { appId: string }) {
   return (
     <div>
       <div class="page-header">
-        <button class="btn btn-sm btn-primary" onClick={() => (showCreateForm.value = !showCreateForm.value)}>
-          + New
-        </button>
-        <button class="btn btn-sm" onClick={() => openAggregateWizard(appId)} title="Cluster tickets by similarity and auto-tag">
-          Aggregate
-        </button>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-sm btn-primary" onClick={() => (showCreateForm.value = !showCreateForm.value)}>
+            + New
+          </button>
+          <button class="btn btn-sm" onClick={openSpecComposer} title="Launch an agent to update the app spec wiki from tickets, threads, and agent JSONL inputs">
+            {'Update Spec'}
+          </button>
+          <button class="btn btn-sm" onClick={() => navigate(`/app/${appId}/spec`)} title="View the generated spec wiki index">
+            View Spec
+          </button>
+        </div>
       </div>
 
       {showCreateForm.value && (
@@ -871,7 +881,13 @@ export function FeedbackListPage({ appId }: { appId: string }) {
         )}
       </div>
       <DeletedItemsPanel type="feedback" />
-      <AggregateWizard onTagFilter={(tag) => { filterTag.value = tag; page.value = 1; }} />
+      {specComposerOpen.value && (
+        <SpecUpdateComposer
+          appId={appId}
+          onClose={() => { specComposerOpen.value = false; }}
+          onLaunched={() => { void loadFeedback(); }}
+        />
+      )}
     </div>
   );
 }

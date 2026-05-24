@@ -20,6 +20,8 @@ import {
   policyForKind,
   type ChannelKind,
 } from './cos-channels.js';
+import { dispatchAgentSession } from '../../dispatch.js';
+import type { PermissionProfile } from '@propanes/shared';
 
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const ORGANIZER_MODEL = process.env.COS_ORGANIZER_MODEL || 'claude-sonnet-4-6';
@@ -403,4 +405,221 @@ cosChannelOrganizeRoutes.post('/chief-of-staff/org-proposals/:id/reject', async 
     .set({ status: 'rejected' })
     .where(eq(schema.cosChannelOrgProposals.id, id));
   return c.json({ ok: true });
+});
+
+// Persist + apply a proposal in one call. Used by the auto-sort agent session
+// so the model can ship its grouping directly without a separate review step.
+async function persistAndApplyProposal(appId: string, proposal: ProposalShape): Promise<{
+  proposalId: string;
+  channels: { id: string; slug: string; threadCount: number }[];
+}> {
+  const id = ulid();
+  const now = Date.now();
+  await db.insert(schema.cosChannelOrgProposals).values({
+    id,
+    appId,
+    status: 'pending',
+    proposalJson: JSON.stringify(proposal),
+    reasoning: proposal.reasoning || '',
+    createdAt: now,
+  });
+
+  const channelsOut: { id: string; slug: string; threadCount: number }[] = [];
+  for (const ch of proposal.channels) {
+    const existing = await db
+      .select().from(schema.cosChannels)
+      .where(and(eq(schema.cosChannels.appId, appId), eq(schema.cosChannels.slug, ch.slug)))
+      .limit(1)
+      .then((r) => r[0]);
+
+    let channelId: string;
+    if (existing) {
+      channelId = existing.id;
+    } else {
+      channelId = ulid();
+      const slug = await uniqueSlug(appId, ch.slug);
+      await db.insert(schema.cosChannels).values({
+        id: channelId,
+        appId,
+        slug,
+        name: ch.name,
+        description: ch.description,
+        kind: ch.kind,
+        policyJson: JSON.stringify(policyForKind(ch.kind)),
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    for (const threadId of ch.threadIds) {
+      await db
+        .update(schema.cosThreads)
+        .set({ channelId, updatedAt: now })
+        .where(eq(schema.cosThreads.id, threadId));
+    }
+    channelsOut.push({ id: channelId, slug: ch.slug, threadCount: ch.threadIds.length });
+  }
+
+  await db
+    .update(schema.cosChannelOrgProposals)
+    .set({ status: 'applied', appliedAt: now })
+    .where(eq(schema.cosChannelOrgProposals.id, id));
+
+  return { proposalId: id, channels: channelsOut };
+}
+
+// POST /chief-of-staff/channels/auto-organize-apply  body: { appId, proposal }
+// One-shot endpoint the auto-sort agent session curls into when it's ready
+// to ship its grouping. Validates against the live thread set so the model
+// can't bind ids that no longer exist, then creates channels and rebinds
+// threads in a single transaction-ish pass (uses persistAndApplyProposal).
+cosChannelOrganizeRoutes.post('/chief-of-staff/channels/auto-organize-apply', async (c) => {
+  let body: { appId?: string; proposal?: unknown };
+  try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON body' }, 400); }
+  const appId = (body.appId || '').trim();
+  if (!appId) return c.json({ error: 'appId is required' }, 400);
+  if (!body.proposal) return c.json({ error: 'proposal is required' }, 400);
+
+  const summaries = await loadThreadSummaries(appId);
+  const knownThreadIds = new Set(summaries.map((s) => s.id));
+  const validation = validateProposal(body.proposal, knownThreadIds);
+  if (!validation.ok) return c.json({ error: `invalid proposal: ${validation.error}` }, 400);
+
+  try {
+    const result = await persistAndApplyProposal(appId, validation.proposal);
+    return c.json({ ok: true, ...result });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return c.json({ error: `failed to apply: ${msg}` }, 500);
+  }
+});
+
+function buildSessionPrompt(
+  appId: string,
+  appName: string,
+  baseUrl: string,
+  summaries: Awaited<ReturnType<typeof loadThreadSummaries>>,
+): string {
+  const threadsBlock = summaries.map((s, i) =>
+    `[${i + 1}] id=${s.id} agent=${s.agentId} msgs=${s.msgCount}\n  name: ${s.name}\n  first: ${s.firstUserText.replace(/\s+/g, ' ').slice(0, 360)}`
+  ).join('\n\n');
+
+  return `# Auto-sort CoS threads into channels
+
+Workspace: "${appName}" (appId=${appId})
+
+There are ${summaries.length} threads in this workspace that need to be organized into Slack-style channels. Group them by topic, scope, or operational mode — fewer channels (~5) is better than many.
+
+For each channel, decide:
+- slug: short, lowercase, hyphenated, ≤24 chars (e.g. "mobile-ui", "deploy-ops", "agent-fafo")
+- name: human-friendly title (e.g. "Mobile UI", "Deploy Ops")
+- description: one short sentence
+- kind: "prod" (production/deploy/secrets/migrations), "staging" (default product work), or "exploratory" (fafo/yolo/pow-wow experiments)
+- threadIds: array of thread ids assigned to this channel
+
+Every thread must appear in exactly one channel. Prefer fewer channels (~5) over many.
+
+## Threads
+
+${threadsBlock}
+
+## How to apply
+
+POST your proposal directly to the apply endpoint (no review step). Example:
+
+\`\`\`bash
+curl -s -X POST ${baseUrl}/api/v1/admin/chief-of-staff/channels/auto-organize-apply \\
+  -H 'Content-Type: application/json' \\
+  -d '{
+    "appId": "${appId}",
+    "proposal": {
+      "channels": [
+        {"slug":"mobile-ui","name":"Mobile UI","description":"...","kind":"staging","threadIds":["...","..."]}
+      ],
+      "reasoning": "one short paragraph on the grouping logic"
+    }
+  }'
+\`\`\`
+
+The server validates against the live thread set, creates channels (reusing existing slugs), binds each thread, and responds with \`{ ok: true, proposalId, channels: [...] }\`. Report the channel count and a one-line summary when done.`;
+}
+
+// POST /chief-of-staff/channels/auto-organize-session  body: { appId }
+// Launches a visible agent session that does the auto-sort work. The session
+// reads thread summaries in its prompt, picks a grouping, and curls the
+// apply endpoint above to ship channels + thread bindings.
+cosChannelOrganizeRoutes.post('/chief-of-staff/channels/auto-organize-session', async (c) => {
+  let body: { appId?: string };
+  try { body = await c.req.json(); } catch { return c.json({ error: 'Invalid JSON body' }, 400); }
+  const appId = (body.appId || '').trim();
+  if (!appId) return c.json({ error: 'appId is required' }, 400);
+
+  const app = await db
+    .select({ id: schema.applications.id, name: schema.applications.name, projectDir: schema.applications.projectDir })
+    .from(schema.applications)
+    .where(eq(schema.applications.id, appId))
+    .limit(1)
+    .then((r) => r[0]);
+  if (!app) return c.json({ error: 'app not found' }, 404);
+
+  const summaries = await loadThreadSummaries(appId);
+  if (summaries.length === 0) return c.json({ error: 'no threads to organize' }, 400);
+
+  // Pick the default agent endpoint (mirrors setupAssist pattern).
+  let agentEndpointId: string | null = null;
+  const defaultAgent = db.select().from(schema.agentEndpoints)
+    .where(eq(schema.agentEndpoints.isDefault, true)).get();
+  if (defaultAgent) {
+    agentEndpointId = defaultAgent.id;
+  } else {
+    const anyAgent = db.select().from(schema.agentEndpoints).get();
+    if (anyAgent) agentEndpointId = anyAgent.id;
+  }
+  if (!agentEndpointId) return c.json({ error: 'No agent endpoint configured' }, 400);
+
+  const agentRow = db.select().from(schema.agentEndpoints)
+    .where(eq(schema.agentEndpoints.id, agentEndpointId)).get();
+  if (!agentRow) return c.json({ error: 'Agent endpoint not found' }, 404);
+
+  const host = c.req.header('host') || 'localhost:3001';
+  const proto = c.req.header('x-forwarded-proto') || 'http';
+  const baseUrl = `${proto}://${host}`;
+
+  const prompt = buildSessionPrompt(appId, app.name, baseUrl, summaries);
+
+  // Create a feedback row so the session has somewhere to land. Reuses the
+  // dispatchedAt fields so the row reads correctly in the feedback list if
+  // the operator stumbles on it; type=request matches setupAssist's pattern.
+  const feedbackId = ulid();
+  const now = new Date().toISOString();
+  db.insert(schema.feedbackItems).values({
+    id: feedbackId,
+    type: 'request',
+    status: 'dispatched',
+    title: `[Auto-sort threads] ${app.name}: organize ${summaries.length} threads`,
+    description: `Auto-sort agent session for ${summaries.length} CoS threads in workspace "${app.name}".`,
+    appId,
+    dispatchedTo: agentRow.name,
+    dispatchedAt: now,
+    dispatchStatus: 'dispatched',
+    createdAt: now,
+    updatedAt: now,
+  }).run();
+
+  const cwd = app.projectDir || process.cwd();
+
+  try {
+    const { sessionId } = await dispatchAgentSession({
+      feedbackId,
+      agentEndpointId,
+      prompt,
+      cwd,
+      permissionProfile: 'interactive-yolo' as PermissionProfile,
+      allowedTools: agentRow.allowedTools,
+    });
+    return c.json({ sessionId, feedbackId, appId });
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+    return c.json({ error: errorMsg }, 500);
+  }
 });

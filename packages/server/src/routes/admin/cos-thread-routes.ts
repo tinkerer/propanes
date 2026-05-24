@@ -164,12 +164,20 @@ cosThreadRoutes.put('/chief-of-staff/drafts', async (c) => {
 cosThreadRoutes.get('/chief-of-staff/threads', async (c) => {
   const agentId = c.req.query('agentId');
   const appId = c.req.query('appId');
+  // Accept an explicit limit (?limit=N, max 2000). Default is 100 for the
+  // unscoped case to stay cheap; when scoped by appId we lift to 1000 because
+  // the channel-list UX depends on seeing every thread in the workspace
+  // (#sessions auto-populates one thread per agent_sessions row, easily 500+).
+  const rawLimit = parseInt(c.req.query('limit') || '', 10);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0
+    ? Math.min(rawLimit, 2000)
+    : (appId ? 1000 : 100);
 
   const conditions = [];
   if (agentId) conditions.push(eq(schema.cosThreads.agentId, agentId));
   if (appId) conditions.push(eq(schema.cosThreads.appId, appId));
 
-  const rows = await fetchThreadsWithSessionStatus(conditions, 100);
+  const rows = await fetchThreadsWithSessionStatus(conditions, limit);
   return c.json({ threads: rows });
 });
 

@@ -182,6 +182,11 @@ async function handleHealthCheck(launcherId: string, harnessId: string) {
   }
 }
 
+function formatLoadAverage(loadAverage: number[] | undefined): string {
+  if (!loadAverage?.length) return 'n/a';
+  return loadAverage.slice(0, 3).map(v => v.toFixed(2)).join(' / ');
+}
+
 async function handleCheckContainerClaude(harnessId: string) {
   containerCheckLoading.value = { ...containerCheckLoading.value, [harnessId]: true };
   try {
@@ -433,15 +438,47 @@ export function HarnessSubCard({ h }: { h: any }) {
             {health.error ? (
               <div style="color:var(--pw-danger, #ef4444)">{health.error}</div>
             ) : (
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;color:var(--pw-text-muted)">
-                <div><span style="color:var(--pw-text)">Uptime:</span> {formatUptime(health.uptime)}</div>
-                <div><span style="color:var(--pw-text)">Node:</span> {health.nodeVersion}</div>
-                <div><span style="color:var(--pw-text)">Version:</span> {health.launcherVersion}</div>
-                <div><span style="color:var(--pw-text)">Platform:</span> {health.platform}/{health.arch}</div>
-                <div><span style="color:var(--pw-text)">Memory:</span> {formatBytes(health.memory?.free)} free / {formatBytes(health.memory?.total)}</div>
-                <div><span style="color:var(--pw-text)">Sessions:</span> {health.activeSessions}</div>
-                {health.dockerVersion && <div><span style="color:var(--pw-text)">Docker:</span> {health.dockerVersion}</div>}
-                {health.claudeCliVersion && <div><span style="color:var(--pw-text)">Claude:</span> {health.claudeCliVersion}</div>}
+              <div style="display:grid;gap:8px;color:var(--pw-text-muted)">
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:4px 16px">
+                  <div><span style="color:var(--pw-text)">Uptime:</span> {formatUptime(health.uptime)}</div>
+                  <div><span style="color:var(--pw-text)">Node:</span> {health.nodeVersion}</div>
+                  <div><span style="color:var(--pw-text)">Version:</span> {health.launcherVersion}</div>
+                  <div><span style="color:var(--pw-text)">Platform:</span> {health.platform}/{health.arch}</div>
+                  {health.cpu && <div><span style="color:var(--pw-text)">CPU:</span> {health.cpu.cores} cores, load {formatLoadAverage(health.cpu.loadAverage)}</div>}
+                  {health.memory && <div><span style="color:var(--pw-text)">Memory:</span> {formatBytes(health.memory.free)} free / {formatBytes(health.memory.total)}</div>}
+                  <div><span style="color:var(--pw-text)">Sessions:</span> {health.activeSessions}</div>
+                  {health.dockerVersion && <div><span style="color:var(--pw-text)">Docker:</span> {health.dockerVersion}</div>}
+                  {health.claudeCliVersion && <div><span style="color:var(--pw-text)">Claude:</span> {health.claudeCliVersion}</div>}
+                </div>
+                {health.disks?.length ? (
+                  <div>
+                    <div style="font-weight:500;color:var(--pw-text);margin-bottom:4px">Disks</div>
+                    <div style="display:grid;gap:4px">
+                      {health.disks.map((d: any) => {
+                        const warn = d.usePercent >= 85;
+                        return (
+                          <div key={`${d.filesystem}:${d.mount}`} style="display:grid;grid-template-columns:minmax(90px,1fr) 2fr auto;gap:8px;align-items:center">
+                            <span style="color:var(--pw-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={d.mount}>{d.mount}</span>
+                            <div style="height:6px;border-radius:999px;background:var(--pw-bg-hover);overflow:hidden">
+                              <div style={`height:100%;width:${Math.min(100, d.usePercent)}%;background:${warn ? 'var(--pw-warning, #f59e0b)' : 'var(--pw-primary)'};border-radius:999px`} />
+                            </div>
+                            <span style={warn ? 'color:var(--pw-warning, #f59e0b)' : ''}>{d.usePercent}% ({formatBytes(d.available)} free)</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+                {health.network?.length ? (
+                  <div>
+                    <div style="font-weight:500;color:var(--pw-text);margin-bottom:4px">Network</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px 12px">
+                      {health.network.map((n: any) => (
+                        <span key={n.interface}><span style="color:var(--pw-text)">{n.interface}:</span> rx {formatBytes(n.rxBytes)} / tx {formatBytes(n.txBytes)}</span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )}
           </div>

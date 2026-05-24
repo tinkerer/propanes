@@ -578,7 +578,10 @@ export class ProPanesElement {
     targetLabel.style.cssText = 'font-size:11px;color:#94a3b8;flex-shrink:0';
     const targetSel = document.createElement('select');
     targetSel.className = 'pw-send-menu-target-select';
-    targetSel.innerHTML = '<option value="">Local</option>';
+    const localTargetOpt = document.createElement('option');
+    localTargetOpt.value = '';
+    localTargetOpt.textContent = 'Local';
+    targetSel.appendChild(localTargetOpt);
     targetSel.value = localStorage.getItem('pw-dispatch-target') || '';
     targetSel.addEventListener('change', () => {
       if (targetSel.value) localStorage.setItem('pw-dispatch-target', targetSel.value);
@@ -592,6 +595,8 @@ export class ProPanesElement {
     fetch(`${origin}/api/v1/admin/dispatch-targets`)
       .then(r => r.json())
       .then((data: any) => {
+        const localName = data.localTarget?.name || data.localTarget?.hostname;
+        if (localName) localTargetOpt.textContent = `Local (${localName})`;
         if (!data.targets?.length) return;
         for (const t of data.targets) {
           const opt = document.createElement('option');
@@ -1248,6 +1253,7 @@ export class ProPanesElement {
     targetRow.style.display = 'none';
     targetRow.innerHTML = `<span class="pw-session-id-label">Target:</span><select class="pw-dispatch-target-select" style="flex:1;font-size:11px;padding:1px 2px;background:#333;color:#ccc;border:1px solid #555;border-radius:3px"><option value="">Local</option></select>`;
     const sel = targetRow.querySelector('select') as HTMLSelectElement;
+    const localSessionTargetOpt = sel.querySelector('option[value=""]') as HTMLOptionElement | null;
     sel.value = localStorage.getItem('pw-dispatch-target') || '';
     sel.addEventListener('change', () => {
       if (sel.value) localStorage.setItem('pw-dispatch-target', sel.value);
@@ -1257,6 +1263,8 @@ export class ProPanesElement {
     fetch(`${origin}/api/v1/admin/dispatch-targets`)
       .then(r => r.json())
       .then((data: any) => {
+        const localName = data.localTarget?.name || data.localTarget?.hostname;
+        if (localSessionTargetOpt && localName) localSessionTargetOpt.textContent = `Local (${localName})`;
         if (!data.targets?.length) return;
         for (const t of data.targets) {
           const opt = document.createElement('option');

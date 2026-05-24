@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useMemo } from 'preact/hooks';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo } from 'preact/hooks';
 import { type ChatRenderOpts } from './MessageRenderer.js';
 import { useTranscriptStream } from '../../lib/transcript-stream.js';
 import { useScrollAnchor } from '../../lib/use-scroll-anchor.js';
@@ -126,11 +126,17 @@ export function StructuredView({ sessionId, chat }: Props) {
     contentDeps: [messages.length],
   });
 
-  // Combine refs: useContainerNarrow needs containerRef, useScrollAnchor needs setScrollRef.
-  const setCombinedRef = (el: HTMLDivElement | null) => {
+  // This wrapper is only used for container-width measurements. The real
+  // session scroller lives inside ConversationView so the input bar can stay
+  // fixed while messages scroll.
+  const setContainerRef = useCallback((el: HTMLDivElement | null) => {
     (containerRef as any).current = el;
+  }, []);
+  const messageScrollRef = useRef<HTMLDivElement>(null);
+  const setMessageScrollRef = useCallback((el: HTMLDivElement | null) => {
+    (messageScrollRef as any).current = el;
     setScrollRef(el);
-  };
+  }, [setScrollRef]);
 
   // When the session is waiting for input, poll the captured terminal output
   // for permission-prompt patterns and surface them as a ChoicePrompt card.
@@ -182,7 +188,7 @@ export function StructuredView({ sessionId, chat }: Props) {
   }, [messages, initialWindow]);
 
   function loadMoreEarlier() {
-    const el = containerRef.current;
+    const el = messageScrollRef.current;
     if (el) scrollAnchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
     setLoadingEarlier(true);
     // rAF so the spinner paints before the heavy expansion + grouping pass.
@@ -197,7 +203,7 @@ export function StructuredView({ sessionId, chat }: Props) {
   // sees the content jump downward.
   useLayoutEffect(() => {
     const anchor = scrollAnchorRef.current;
-    const el = containerRef.current;
+    const el = messageScrollRef.current;
     if (!anchor || !el) return;
     const delta = el.scrollHeight - anchor.height;
     if (delta > 0) el.scrollTop = anchor.top + delta;
@@ -209,7 +215,7 @@ export function StructuredView({ sessionId, chat }: Props) {
   // before the user actually hits the top, smoothing the experience.
   useEffect(() => {
     const sentinel = loadMoreSentinelRef.current;
-    const root = containerRef.current;
+    const root = messageScrollRef.current;
     if (!sentinel || !root) return;
     if (loadingEarlier) return;
     if (shownCount >= messages.filter((m) => !m.subagentId).length) return;
@@ -271,29 +277,9 @@ export function StructuredView({ sessionId, chat }: Props) {
   return (
     <NarrowContext.Provider value={narrow}>
     <div class="structured-view-wrap">
-    <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} ref={setCombinedRef}>
+    <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} ref={setContainerRef}>
       {messages.length === 0 && (
         <div class="sm-empty">No messages yet</div>
-      )}
-      {hiddenMsgCount > 0 && (
-        <div class="sm-load-more" ref={loadMoreSentinelRef}>
-          {loadingEarlier ? (
-            <div class="sm-load-spinner" role="status" aria-label="Loading earlier messages">
-              <span class="sm-load-spinner-dot" />
-              <span class="sm-load-spinner-dot" />
-              <span class="sm-load-spinner-dot" />
-            </div>
-          ) : (
-            <button
-              type="button"
-              class="sm-show-earlier"
-              onClick={loadMoreEarlier}
-              title="Or scroll up to auto-load"
-            >
-              Pull / scroll for {Math.min(hiddenMsgCount, initialWindow)} more ({hiddenMsgCount} earlier)
-            </button>
-          )}
-        </div>
       )}
       <ConversationView
         messages={windowedMessages}
@@ -301,6 +287,28 @@ export function StructuredView({ sessionId, chat }: Props) {
         mode="structured"
         chat={chat}
         isWaiting={isWaiting}
+        isRunning={isRunning}
+        scrollBodyRef={setMessageScrollRef}
+        scrollBodyTop={hiddenMsgCount > 0 && (
+          <div class="sm-load-more" ref={loadMoreSentinelRef}>
+            {loadingEarlier ? (
+              <div class="sm-load-spinner" role="status" aria-label="Loading earlier messages">
+                <span class="sm-load-spinner-dot" />
+                <span class="sm-load-spinner-dot" />
+                <span class="sm-load-spinner-dot" />
+              </div>
+            ) : (
+              <button
+                type="button"
+                class="sm-show-earlier"
+                onClick={loadMoreEarlier}
+                title="Or scroll up to auto-load"
+              >
+                Pull / scroll for {Math.min(hiddenMsgCount, initialWindow)} more ({hiddenMsgCount} earlier)
+              </button>
+            )}
+          </div>
+        )}
       />
       {isWaiting && choicePrompt && !askingForInput && (
         <ChoicePrompt

@@ -2,7 +2,7 @@ import { signal } from '@preact/signals';
 import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { api } from '../../lib/api.js';
 import { openSession, loadAllSessions } from '../../lib/sessions.js';
-import { cachedTargets, ensureTargetsLoaded, targetKey, parseTargetKey } from './DispatchTargetSelect.js';
+import { cachedTargets, ensureTargetsLoaded, localTargetLabel, targetKey, parseTargetKey } from './DispatchTargetSelect.js';
 import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../../lib/agent-constants.js';
 import { formatAgentOption, agentSortCmp } from '../../lib/agent-matrix.js';
 import { openSetupAssistant } from './SetupAssistantDialog.js';
@@ -307,7 +307,7 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
                 value={target}
                 onChange={(e) => setTarget((e.target as HTMLSelectElement).value)}
               >
-                <option value="">Local</option>
+                <option value="">{localTargetLabel()}</option>
                 {machines.length > 0 && (
                   <optgroup label="Remote Machines">
                     {machines.map(t => (
@@ -358,4 +358,3 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
     </div>
   );
 }
-

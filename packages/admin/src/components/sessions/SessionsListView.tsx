@@ -56,7 +56,9 @@ import { selectedAppId, applications, navigate } from '../../lib/state.js';
 import { PopupMenu } from '../pickers/PopupMenu.js';
 import { QuickDispatchPopup, type DispatchType } from '../dispatch/QuickDispatchPopup.js';
 import { loadCosDispatches, cosGroupForSession } from '../../lib/cos-dispatches.js';
-import { chiefOfStaffAgents } from '../../lib/chief-of-staff.js';
+import { chiefOfStaffAgents, chiefOfStaffActiveId, ensureChiefOfStaffAgent, loadChiefOfStaffHistory, setChiefOfStaffOpen } from '../../lib/chief-of-staff.js';
+import { cosActiveThread } from '../../lib/cos-popout-tree.js';
+import { getSessionIdForThread } from '../../lib/cos-thread-meta.js';
 
 const autoJumpMenuOpen = signal(false);
 
@@ -519,9 +521,11 @@ export function SessionsListView() {
             {waitingAgents.map(renderItem)}
           </>
         )}
-        {restAgents.length > 0 && (() => {
+        {(() => {
           // Build parent-child hierarchy from filtered agent sessions
           // Uses both parentSessionId chains AND swarmId/wiggumRunId from server
+          // Always renders (even with zero matches) so the app list and [+] new
+          // session buttons remain reachable when filters exclude everything.
           const sessionById = new Map(sessions.map((s: any) => [s.id, s]));
           const childrenByParent = new Map<string, any[]>();
           const childIds = new Set<string>();
@@ -593,8 +597,63 @@ export function SessionsListView() {
               const link = cosGroupForSession(child);
               const tid = link?.threadId || '';
               if (tid && tid !== lastThreadId) {
+                const agentId = link?.agentId || 'default';
                 out.push(
-                  <div key={`cos-thread-${tid}`} class="sidebar-cos-thread-divider" title={tid}>
+                  <div
+                    key={`cos-thread-${tid}`}
+                    class="sidebar-cos-thread-divider"
+                    title={`Open thread ${tid} — jumps CoS bubble and docks the backing session`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      ensureChiefOfStaffAgent(agentId);
+                      chiefOfStaffActiveId.value = agentId;
+                      cosActiveThread.value = { agentId, threadKey: `tid:${tid}` };
+                      setChiefOfStaffOpen(true);
+                      const backingSid = getSessionIdForThread(tid);
+                      if (backingSid) {
+                        const panel = findPanelForSession(backingSid);
+                        if (panel) {
+                          updatePanel(panel.id, { activeSessionId: backingSid, visible: true });
+                          bringToFront(panel.id);
+                          activePanelId.value = panel.id;
+                          setFocusedPanel(panel.id);
+                          setFocusedLeaf(null);
+                          persistPopoutState();
+                          focusSessionTerminal(backingSid);
+                          setTimeout(() => focusSessionTerminal(backingSid), 100);
+                        } else {
+                          openSession(backingSid);
+                          focusSessionTerminal(backingSid);
+                          setTimeout(() => focusSessionTerminal(backingSid), 100);
+                        }
+                      }
+                      void loadChiefOfStaffHistory(agentId, selectedAppId.value).finally(() => {
+                        requestAnimationFrame(() => {
+                          window.dispatchEvent(new CustomEvent('cos-jump-to-thread', {
+                            detail: { agentId, threadId: tid },
+                          }));
+                        });
+                      });
+                    }}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        (e.currentTarget as HTMLDivElement).click();
+                      }
+                    }}
+                  >
                     {link?.name || 'Thread'}
                   </div>,
                 );
@@ -692,7 +751,7 @@ export function SessionsListView() {
                       }}
                     >
                       {grp.label}
-                      {activeCount > 0 && <span style={{ color: '#4CAF50', marginLeft: 4, fontWeight: 400 }}>{activeCount} running</span>}
+                      {activeCount > 0 && <span style={{ color: 'var(--pw-success)', marginLeft: 4, fontWeight: 400 }}>{activeCount} running</span>}
                     </span>
                     <button
                       class="sidebar-new-terminal-btn"
@@ -812,7 +871,7 @@ export function SessionsListView() {
                                   if (swarmAppId && swarmAppId !== '__unlinked__') navigate(`/app/${swarmAppId}/wiggum`);
                                 }}>
                                 {grp.label}
-                                {activeCount > 0 && <span style={{ color: '#4CAF50', marginLeft: 4, fontWeight: 400 }}>{activeCount} running</span>}
+                                {activeCount > 0 && <span style={{ color: 'var(--pw-success)', marginLeft: 4, fontWeight: 400 }}>{activeCount} running</span>}
                               </span>
                               <button
                                 class="sidebar-new-terminal-btn"

@@ -6,6 +6,7 @@ import { FeedbackDetailPage } from '../../pages/FeedbackDetailPage.js';
 import { GettingStartedPage } from '../../pages/GettingStartedPage.js';
 import { SessionsPage } from '../../pages/SessionsPage.js';
 import { AggregatePage } from '../../pages/AggregatePage.js';
+import { SpecWikiPage } from '../../pages/SpecWikiPage.js';
 import { LiveConnectionsPage } from '../../pages/LiveConnectionsPage.js';
 import { SettingsPage } from '../../pages/SettingsPage.js';
 import { AppSettingsPage } from '../../pages/AppSettingsPage.js';
@@ -51,6 +52,8 @@ export function PageView() {
       page = <SessionsPage appId={parsed.appId} />;
     } else if (parsed.sub === 'aggregate') {
       page = <AggregatePage appId={parsed.appId} />;
+    } else if (parsed.sub === 'spec') {
+      page = <SpecWikiPage appId={parsed.appId} />;
     } else if (parsed.sub === 'live') {
       page = <LiveConnectionsPage appId={parsed.appId} />;
     } else if (parsed.sub === 'wiggum') {

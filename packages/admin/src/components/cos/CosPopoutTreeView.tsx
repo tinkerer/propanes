@@ -45,6 +45,8 @@ import {
   popoutPanels,
   updatePanel,
   persistPopoutState,
+  panelZOrders,
+  getPanelZIndex,
   COS_PANEL_ID,
 } from '../../lib/popout-state.js';
 import { DrawerPullHandle, type DrawerEdge } from './DrawerPullHandle.js';
@@ -265,6 +267,17 @@ function FloatingCompanionSplit({
   const _handlePosTick = cosDrawerHandlePos.value;
   void _handlePosTick;
 
+  // Subscribe to panel z-orders so overlay/handle re-stack when the cos
+  // popout is brought to front. getPanelZIndex can exceed 1000 once a few
+  // panels have been focused; a hardcoded 1000 leaves the portaled overlay
+  // *under* the popout while the higher-z handle still floats visibly above
+  // it — the "pull handle but no companion" bug.
+  const _zTick = panelZOrders.value;
+  void _zTick;
+  const cosZ = getPanelZIndex(COS_PANEL_ID);
+  const overlayZ = cosZ + 1;
+  const handleZ = cosZ + 2;
+
   // Computed drawer rect in viewport coords. When collapsed, the drawer
   // body is hidden and the handle pins to the popout's boundary edge
   // instead (zero-width rect at the boundary so the tab positions
@@ -293,7 +306,7 @@ function FloatingCompanionSplit({
       edge={handleEdge}
       drawerRect={drawerRectViewport}
       handlePos={cosGetDrawerHandlePos(drawerLeaf.id)}
-      zIndex={1100}
+      zIndex={handleZ}
       collapsed={collapsed}
       // Tab (┃): click → collapse, drag → resize + slide + flip
       onClickCollapse={() => cosToggleLeafCollapsed(drawerLeaf.id)}
@@ -324,7 +337,7 @@ function FloatingCompanionSplit({
           cosSetDrawerHandlePos(drawerLeaf.id, Math.max(0, Math.min(1, (cursorParallel - parallelStart) / parallelSize)));
         }
       }}
-      // Hamburger (☰): click → menu, drag → leaf-drag (move/split/dock)
+      // Hamburger (☰): click → menu, drag → flip or leaf-drag (move/split/dock)
       hamburgerRef={hamburgerRef}
       onHamburgerMouseDown={(e: MouseEvent) => {
         if (e.button !== 0) return;
@@ -332,6 +345,21 @@ function FloatingCompanionSplit({
           leafId: drawerLeaf.id,
           label: drawerLabel,
           onClickFallback: () => setHandleMenuOpen((v) => !v),
+        }, {
+          flipRect: { top: popoutRect!.top, left: popoutRect!.left, width: popoutRect!.width, height: popoutRect!.height },
+          flipEdge: outerEdge,
+          flipDirection: isExternalRef.current ? 'inward' : 'outward',
+          onFlip: (ev) => {
+            const wasExternal = isExternalRef.current;
+            cosSetLeafExternal(drawerLeaf.id, !wasExternal);
+            const newRect = drawerRectFor(popoutRect!, node.ratio, isHorizontal, isFirst, !wasExternal);
+            const parallelSize = isHorizontal ? newRect.height : newRect.width;
+            const parallelStart = isHorizontal ? newRect.top : newRect.left;
+            const cursorParallel = isHorizontal ? ev.clientY : ev.clientX;
+            if (parallelSize > 0) {
+              cosSetDrawerHandlePos(drawerLeaf.id, Math.max(0, Math.min(1, (cursorParallel - parallelStart) / parallelSize)));
+            }
+          },
         });
       }}
     >
@@ -432,7 +460,7 @@ function FloatingCompanionSplit({
             left: overlayRect.left,
             width: overlayRect.width,
             height: overlayRect.height,
-            zIndex: 1000,
+            zIndex: overlayZ,
           }}
         >
           {renderNode(floatChild, resolve, node.direction)}
@@ -541,8 +569,14 @@ function CosLeafView({
     ? resolve(activeId).label
     : `Pane: ${leaf.tabs.length} tab${leaf.tabs.length === 1 ? '' : 's'}`;
 
+  // Single-tab leaves don't need a visible strip — the title bar
+  // (cos-thin-toolbar) acts as the tab. Drag-drop still works because
+  // cos-tree-leaf hosts the CosDiagonalDropZone overlay below.
+  const showTabBar = leaf.tabs.length > 1;
+
   return (
     <div class={`cos-tree-leaf${isEmpty ? ' cos-tree-leaf-empty' : ''}`} data-cos-leaf-id={leaf.id}>
+      {showTabBar && (
       <div class="cos-tree-tab-bar" role="tablist">
         <div class="cos-tree-tabs">
           {leaf.tabs.map((sid) => {
@@ -663,6 +697,7 @@ function CosLeafView({
           )}
         </div>
       </div>
+      )}
       <div class="cos-tree-leaf-body">
         {active ? active.content : <div class="cos-tree-empty-hint">Empty pane — use + to open a companion, or drag a tab here.</div>}
       </div>

@@ -6,7 +6,9 @@ import { api } from '../../lib/api.js';
 import {
   chiefOfStaffAgents,
   chiefOfStaffActiveId,
-  chiefOfStaffOpen,
+  ensureChiefOfStaffAgent,
+  loadChiefOfStaffHistory,
+  setChiefOfStaffOpen,
 } from '../../lib/chief-of-staff.js';
 
 interface SearchResult {
@@ -270,11 +272,14 @@ export function SpotlightSearch({ onClose }: Props) {
   function openCosMessage(result: SearchResult) {
     if (!result.cos) return;
     const { agentId, messageId } = result.cos;
+    ensureChiefOfStaffAgent(agentId);
     chiefOfStaffActiveId.value = agentId;
-    chiefOfStaffOpen.value = true;
+    setChiefOfStaffOpen(true);
     // Hand off to ChiefOfStaffBubble — it picks up the request, scrolls + highlights.
-    requestAnimationFrame(() => {
-      window.dispatchEvent(new CustomEvent('cos-jump-to-message', { detail: { agentId, messageId } }));
+    void loadChiefOfStaffHistory(agentId).finally(() => {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new CustomEvent('cos-jump-to-message', { detail: { agentId, messageId } }));
+      });
     });
   }
 

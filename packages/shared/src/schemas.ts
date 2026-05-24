@@ -1,13 +1,22 @@
 import { z } from 'zod';
 import { FEEDBACK_TYPES, FEEDBACK_STATUSES, DISPATCH_MODES, AGENT_RUNTIMES, PERMISSION_PROFILES } from './constants.js';
 
+const nullishToUndefined = (value: unknown) => value == null ? undefined : value;
+const emptyStringToUndefined = (value: unknown) => value === '' ? undefined : nullishToUndefined(value);
+
+const optionalString = z.preprocess(nullishToUndefined, z.string().optional());
+const optionalUrl = z.preprocess(emptyStringToUndefined, z.string().url().optional());
+const optionalRecord = z.preprocess(nullishToUndefined, z.record(z.unknown()).optional());
+const optionalStringArray = z.preprocess(nullishToUndefined, z.array(z.string().max(50)).max(20).optional());
+
 export const feedbackSubmitSchema = z.object({
-  type: z.enum(FEEDBACK_TYPES).default('manual'),
-  title: z.string().max(500).default(''),
-  description: z.string().max(10000).default(''),
-  data: z.record(z.unknown()).optional(),
-  context: z
-    .object({
+  type: z.preprocess(nullishToUndefined, z.enum(FEEDBACK_TYPES).default('manual')),
+  title: z.preprocess(nullishToUndefined, z.string().max(500).default('')),
+  description: z.preprocess(nullishToUndefined, z.string().max(10000).default('')),
+  data: optionalRecord,
+  context: z.preprocess(
+    nullishToUndefined,
+    z.object({
       consoleLogs: z
         .array(
           z.object({
@@ -49,18 +58,19 @@ export const feedbackSubmitSchema = z.object({
         })
         .optional(),
     })
-    .optional(),
-  sourceUrl: z.string().url().optional(),
-  userAgent: z.string().optional(),
-  viewport: z.string().optional(),
-  sessionId: z.string().optional(),
-  userId: z.string().optional(),
-  tags: z.array(z.string().max(50)).max(20).optional(),
+      .optional()
+  ),
+  sourceUrl: optionalUrl,
+  userAgent: optionalString,
+  viewport: optionalString,
+  sessionId: optionalString,
+  userId: optionalString,
+  tags: optionalStringArray,
   autoDispatch: z.boolean().optional(),
-  appId: z.string().optional(),
-  launcherId: z.string().optional(),
-  agentEndpointId: z.string().optional(),
-  permissionProfile: z.enum(PERMISSION_PROFILES).optional(),
+  appId: optionalString,
+  launcherId: optionalString,
+  agentEndpointId: optionalString,
+  permissionProfile: z.preprocess(nullishToUndefined, z.enum(PERMISSION_PROFILES).optional()),
 });
 
 export type FeedbackSubmitInput = z.infer<typeof feedbackSubmitSchema>;

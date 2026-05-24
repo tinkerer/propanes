@@ -11,6 +11,9 @@ import { loadCosDispatches, cosGroupForSession } from '../lib/cos-dispatches.js'
 const ALL_STATUSES = ['running', 'pending', 'completed', 'failed', 'killed', 'deleted'] as const;
 const DEFAULT_STATUSES = new Set<string>(['running', 'pending', 'completed', 'failed', 'killed']);
 const UNLINKED_APP_KEY = '__unlinked__';
+const STATUS_FILTER_STORAGE_KEY = 'pw-sessions-filter-statuses';
+const TARGET_FILTER_STORAGE_KEY = 'pw-sessions-filter-targets';
+const APP_FILTER_STORAGE_KEY = 'pw-sessions-filter-apps';
 
 type SortMode = 'activity' | 'started';
 const SORT_STORAGE_KEY = 'pw-sessions-sort-mode';
@@ -22,14 +25,16 @@ function loadSortMode(): SortMode {
   return 'activity';
 }
 
-function loadSetFromStorage(key: string): Set<string> {
+function loadSetFromStorage(key: string, fallback?: Iterable<string>, allowed?: Set<string>): Set<string> {
   try {
     const raw = localStorage.getItem(key);
-    if (!raw) return new Set();
+    if (!raw) return new Set(fallback);
     const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? new Set(arr) : new Set();
+    if (!Array.isArray(arr)) return new Set(fallback);
+    const values = arr.filter((v): v is string => typeof v === 'string' && (!allowed || allowed.has(v)));
+    return new Set(values);
   } catch {
-    return new Set();
+    return new Set(fallback);
   }
 }
 
@@ -99,9 +104,11 @@ function getTargetCategory(key: string): string {
 
 export function SessionsPage({ appId }: { appId?: string | null }) {
   const autoTerminalDone = useRef(false);
-  const filterStatuses = useSignal<Set<string>>(new Set(DEFAULT_STATUSES));
-  const filterTargets = useSignal<Set<string>>(new Set<string>());
-  const filterApps = useSignal<Set<string>>(new Set<string>());
+  const filterStatuses = useSignal<Set<string>>(
+    loadSetFromStorage(STATUS_FILTER_STORAGE_KEY, DEFAULT_STATUSES, new Set(ALL_STATUSES)),
+  );
+  const filterTargets = useSignal<Set<string>>(loadSetFromStorage(TARGET_FILTER_STORAGE_KEY));
+  const filterApps = useSignal<Set<string>>(loadSetFromStorage(APP_FILTER_STORAGE_KEY));
   const searchQuery = useSignal('');
   const feedbackMap = useSignal<Record<string, string>>({});
   const agentMap = useSignal<Record<string, string>>({});
@@ -149,6 +156,7 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
     const next = new Set(filterApps.value);
     if (next.has(appKey)) next.delete(appKey); else next.add(appKey);
     filterApps.value = next;
+    saveSetToStorage(APP_FILTER_STORAGE_KEY, next);
   }
 
   async function loadMaps() {
@@ -186,12 +194,14 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
     const next = new Set(filterStatuses.value);
     if (next.has(status)) next.delete(status); else next.add(status);
     filterStatuses.value = next;
+    saveSetToStorage(STATUS_FILTER_STORAGE_KEY, next);
   }
 
   function toggleTarget(targetKey: string) {
     const next = new Set(filterTargets.value);
     if (next.has(targetKey)) next.delete(targetKey); else next.add(targetKey);
     filterTargets.value = next;
+    saveSetToStorage(TARGET_FILTER_STORAGE_KEY, next);
   }
 
   useEffect(() => {
@@ -477,7 +487,8 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
   const appKeysForFilter = [
     ...applications.value.map((a: any) => a.id as string),
     UNLINKED_APP_KEY,
-  ].filter((k) => (appCounts[k] || 0) > 0);
+    ...activeApps,
+  ].filter((k, idx, arr) => arr.indexOf(k) === idx && ((appCounts[k] || 0) > 0 || activeApps.has(k)));
 
   const targetCounts: Record<string, number> = {};
   for (const s of appFiltered) {
@@ -493,6 +504,9 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
     if (!(key in targetCounts)) targetCounts[key] = 0;
   }
   if (!('local' in targetCounts)) targetCounts['local'] = 0;
+  for (const key of activeTargets) {
+    if (!(key in targetCounts)) targetCounts[key] = 0;
+  }
   const targetKeys = Object.keys(targetCounts).sort((a, b) => {
     if (a === 'local') return -1;
     if (b === 'local') return 1;

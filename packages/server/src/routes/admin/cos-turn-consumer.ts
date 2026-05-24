@@ -84,6 +84,14 @@ export function runCosTurnConsumer(params: {
     const finalToolCallsById = new Map<string, { id: string; name: string; input: unknown; result?: string; error?: string }>();
     const finalToolCallOrder: string[] = [];
     const finalImages: { dataUrl: string; name?: string; mimeType?: string }[] = [];
+    // Defense-in-depth fallback for the long-reply PTY-wrap drop
+    // (project_cos_long_reply_drop). Sessions are spawned with
+    // --include-partial-messages, so claude emits per-token text_delta events
+    // before the final assistant block. If the final block's JSON line is
+    // wrapped/corrupted and fails JSON.parse, the deltas (each individually
+    // short enough to often survive) can still reconstruct the assistant text.
+    // Keyed by content-block index so multiple text blocks stay ordered.
+    const deltaTextByIndex = new Map<number, string>();
     let capturedSessionId: string | null = null;
     let seqCursor = 0;
 
@@ -99,6 +107,10 @@ export function runCosTurnConsumer(params: {
     const finish = (exitCode: number, cancelled = false) => {
       if (finished) return;
       finished = true;
+      if (!finalAssistantText && deltaTextByIndex.size > 0) {
+        const sorted = Array.from(deltaTextByIndex.entries()).sort((a, b) => a[0] - b[0]);
+        finalAssistantText = sorted.map(([, t]) => t).join('').trim();
+      }
       onAssistantText(finalAssistantText, finalToolCallsById, finalToolCallOrder, finalImages);
       if (capturedSessionId) onCapturedSessionId(capturedSessionId);
       publishStatus({ kind: 'completed', threadId, turnId, exitCode, cancelled });
@@ -126,13 +138,13 @@ export function runCosTurnConsumer(params: {
     // on the frontend even though the turn completed normally. Strip any
     // ANSI sequences + CRs before parsing.
     //
-    // KNOWN ISSUE (followup): tmux wraps stream-json at the PTY's `cols`
-    // (default 120), so long assistant replies arrive split across multiple
-    // hard-wrapped lines that each fail JSON.parse. The empty-finalText
-    // path now persists a recovered row downstream, but the actual content
-    // is still lost. The proper fix is to widen / disable wrap in the
-    // session-service PTY buffering layer. See memory note
-    // `project_cos_long_reply_drop.md` for the investigation trail.
+    // PTY-wrap fix: session-service now spawns stream profiles with a
+    // very wide cols value, so tmux no longer hard-wraps long assistant
+    // lines. As defense-in-depth, we also accumulate text_delta events
+    // emitted by --include-partial-messages — each delta is short enough
+    // to usually survive even if some future wrap regression appears, and
+    // we only fall back to that text when the final assistant block was
+    // never parsed. See memory note `project_cos_long_reply_drop.md`.
     const ANSI_RE = /\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x20-\x2f]*[\x30-\x7e])/g;
     const processJsonLine = (line: string, seq: number): boolean => {
       const cleaned = line.replace(ANSI_RE, '').replace(/\r/g, '').trim();
@@ -186,6 +198,19 @@ export function runCosTurnConsumer(params: {
           }
           if (content.length > 4000) content = `${content.slice(0, 4000)}…`;
           if (block.is_error) call.error = content; else call.result = content;
+        }
+      } else if (obj.type === 'stream_event' && obj.event) {
+        // Partial-message events from --include-partial-messages. We only
+        // collect text_delta as a fallback for finalAssistantText; tool calls
+        // / inputs are reconciled from the canonical assistant block above.
+        const event = obj.event;
+        if (
+          event.type === 'content_block_delta' &&
+          event.delta?.type === 'text_delta' &&
+          typeof event.delta.text === 'string'
+        ) {
+          const idx = typeof event.index === 'number' ? event.index : 0;
+          deltaTextByIndex.set(idx, (deltaTextByIndex.get(idx) || '') + event.delta.text);
         }
       } else if (obj.type === 'result') {
         if (!finalAssistantText && obj.result) finalAssistantText = String(obj.result).trim();

@@ -11,11 +11,12 @@ interface Props {
   isActive?: boolean;
   onExit?: (exitCode: number, terminalText: string) => void;
   onInputStateChange?: (state: InputState) => void;
+  onLoginRequired?: (companionSessionId: string) => void;
   permissionProfile?: string;
   mode: ViewMode;
 }
 
-export function SessionViewToggle({ sessionId, isActive, onExit, onInputStateChange, permissionProfile, mode }: Props) {
+export function SessionViewToggle({ sessionId, isActive, onExit, onInputStateChange, onLoginRequired, permissionProfile, mode }: Props) {
   // Mobile: force structured view — xterm + split are not usable on a phone.
   const effectiveMode: ViewMode = isMobile.value ? 'structured' : mode;
   const showTerminal = effectiveMode === 'terminal' || effectiveMode === 'split';
@@ -35,7 +36,13 @@ export function SessionViewToggle({ sessionId, isActive, onExit, onInputStateCha
             height: '100%',
             overflow: 'hidden',
           }}>
-            <AgentTerminal sessionId={sessionId} isActive={isActive} onExit={onExit} onInputStateChange={onInputStateChange} />
+            <AgentTerminal
+              sessionId={sessionId}
+              isActive={isActive}
+              onExit={onExit}
+              onInputStateChange={onInputStateChange}
+              onLoginRequired={onLoginRequired}
+            />
           </div>
         )}
         {effectiveMode === 'structured' && (
