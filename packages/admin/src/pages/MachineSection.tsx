@@ -9,7 +9,7 @@ import {
   machines, harnessConfigs, applications, launchers,
   loading, error, expandedMachines, loadAll, closeAllForms,
   getAppName, getRepoName, getAppsForMachine, getHarnessUrl,
-  harnessStatusColor, AppLink, SharedRepoBadge,
+  harnessStatusColor, formatBytes, formatUptime, AppLink, SharedRepoBadge,
 } from '../pages/InfrastructurePage.js';
 import { HarnessSubCard, openAddHarness } from './HarnessSection.js';
 
@@ -28,6 +28,130 @@ const mFormError = signal('');
 // Admin health state
 const adminHealthStatus = signal<Record<string, 'checking' | 'alive' | 'dead'>>({});
 const adminActionLoading = signal<Record<string, boolean>>({});
+const machineHealthResults = signal<Record<string, SystemHealthResult>>({});
+const machineHealthLoading = signal<Record<string, boolean>>({});
+const expandedMachineHealth = signal<string | null>(null);
+
+type DiskStat = {
+  filesystem: string;
+  mount: string;
+  total: number;
+  used: number;
+  available: number;
+  usePercent: number;
+};
+
+type NetworkStat = {
+  interface: string;
+  rxBytes: number;
+  txBytes: number;
+};
+
+type SystemHealthResult = {
+  uptime?: number;
+  nodeVersion?: string;
+  launcherVersion?: string;
+  platform?: string;
+  arch?: string;
+  cpu?: { cores: number; loadAverage: number[] };
+  memory?: { total: number; free: number };
+  disks?: DiskStat[];
+  network?: NetworkStat[];
+  activeSessions?: number;
+  error?: string;
+};
+
+function getLauncherForMachine(m: any): any | null {
+  return launchers.value.find(l => l.machineId === m.id && !l.isHarness && l.online)
+    || launchers.value.find(l => l.machineId === m.id && !l.isHarness)
+    || null;
+}
+
+async function handleMachineHealthCheck(m: any) {
+  machineHealthLoading.value = { ...machineHealthLoading.value, [m.id]: true };
+  try {
+    const launcher = getLauncherForMachine(m);
+    const result = launcher
+      ? await api.getLauncherHealth(launcher.id)
+      : m.type === 'local'
+        ? await api.getMachineSystemHealth(m.id)
+        : null;
+    if (!result) throw new Error('No connected launcher for this machine');
+    machineHealthResults.value = { ...machineHealthResults.value, [m.id]: result };
+    expandedMachineHealth.value = m.id;
+  } catch (err: any) {
+    machineHealthResults.value = { ...machineHealthResults.value, [m.id]: { error: err.message } };
+    expandedMachineHealth.value = m.id;
+  } finally {
+    machineHealthLoading.value = { ...machineHealthLoading.value, [m.id]: false };
+  }
+}
+
+function formatLoadAverage(loadAverage: number[] | undefined): string {
+  if (!loadAverage?.length) return 'n/a';
+  return loadAverage.slice(0, 3).map(v => v.toFixed(2)).join(' / ');
+}
+
+function SystemHealthPanel({ health }: { health: SystemHealthResult }) {
+  const diskWarnings = (health.disks || []).filter(d => d.usePercent >= 85);
+  return (
+    <div style="margin-top:8px;padding:8px;border:1px solid var(--pw-border);border-radius:6px;font-size:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-weight:600;color:var(--pw-text)">System Health</span>
+        <button class="btn btn-sm" style="font-size:10px;padding:1px 6px" onClick={() => expandedMachineHealth.value = null}>{'\u2715'}</button>
+      </div>
+      {health.error ? (
+        <div style="color:var(--pw-danger, #ef4444)">{health.error}</div>
+      ) : (
+        <div style="display:grid;gap:8px;color:var(--pw-text-muted)">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:4px 16px">
+            {health.uptime !== undefined && <div><span style="color:var(--pw-text)">Uptime:</span> {formatUptime(health.uptime)}</div>}
+            {health.nodeVersion && <div><span style="color:var(--pw-text)">Node:</span> {health.nodeVersion}</div>}
+            {health.launcherVersion && <div><span style="color:var(--pw-text)">Launcher:</span> {health.launcherVersion}</div>}
+            {(health.platform || health.arch) && <div><span style="color:var(--pw-text)">Platform:</span> {health.platform}/{health.arch}</div>}
+            {health.cpu && <div><span style="color:var(--pw-text)">CPU:</span> {health.cpu.cores} cores, load {formatLoadAverage(health.cpu.loadAverage)}</div>}
+            {health.memory && <div><span style="color:var(--pw-text)">Memory:</span> {formatBytes(health.memory.free)} free / {formatBytes(health.memory.total)}</div>}
+            {health.activeSessions !== undefined && <div><span style="color:var(--pw-text)">Sessions:</span> {health.activeSessions}</div>}
+          </div>
+          {diskWarnings.length > 0 && (
+            <div style="padding:4px 8px;border-radius:4px;color:var(--pw-warning, #f59e0b);background:var(--pw-warning, #f59e0b)10">
+              Disk warning: {diskWarnings.map(d => `${d.mount} ${d.usePercent}%`).join(', ')}
+            </div>
+          )}
+          {health.disks?.length ? (
+            <div>
+              <div style="font-weight:500;color:var(--pw-text);margin-bottom:4px">Disks</div>
+              <div style="display:grid;gap:4px">
+                {health.disks.map(d => {
+                  const warn = d.usePercent >= 85;
+                  return (
+                    <div key={`${d.filesystem}:${d.mount}`} style="display:grid;grid-template-columns:minmax(90px,1fr) 2fr auto;gap:8px;align-items:center">
+                      <span style="color:var(--pw-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title={d.mount}>{d.mount}</span>
+                      <div style="height:6px;border-radius:999px;background:var(--pw-bg-hover);overflow:hidden">
+                        <div style={`height:100%;width:${Math.min(100, d.usePercent)}%;background:${warn ? 'var(--pw-warning, #f59e0b)' : 'var(--pw-primary)'};border-radius:999px`} />
+                      </div>
+                      <span style={warn ? 'color:var(--pw-warning, #f59e0b)' : ''}>{d.usePercent}% ({formatBytes(d.available)} free)</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+          {health.network?.length ? (
+            <div>
+              <div style="font-weight:500;color:var(--pw-text);margin-bottom:4px">Network</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px 12px">
+                {health.network.map(n => (
+                  <span key={n.interface}><span style="color:var(--pw-text)">{n.interface}:</span> rx {formatBytes(n.rxBytes)} / tx {formatBytes(n.txBytes)}</span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export async function probeAdminUrls() {
   const withAdmin = machines.value.filter(m => m.adminUrl);
@@ -193,6 +317,12 @@ export function MachineCard({ m }: { m: any }) {
   const isExpanded = expandedMachines.value.has(m.id);
   const machineHarnesses = harnessConfigs.value.filter(h => h.machineId === m.id);
   const harnessCount = machineHarnesses.length;
+  const typeLabel = m.type === 'local' ? `local: ${m.name}` : m.type;
+  const launcher = getLauncherForMachine(m);
+  const canCheckHealth = !!launcher || m.type === 'local';
+  const health = machineHealthResults.value[m.id];
+  const healthLoading = machineHealthLoading.value[m.id];
+  const isHealthExpanded = expandedMachineHealth.value === m.id;
 
   return (
     <div class="agent-card" key={m.id}>
@@ -207,7 +337,7 @@ export function MachineCard({ m }: { m: any }) {
               {m.status === 'online' ? 'ONLINE' : 'OFFLINE'}
             </span>
             <span class="agent-badge" style="background:var(--pw-bg-hover);color:var(--pw-text-muted);margin-left:4px">
-              {m.type}
+              {typeLabel}
             </span>
           </div>
           <div style="display:flex;gap:6px;align-items:center">
@@ -217,6 +347,14 @@ export function MachineCard({ m }: { m: any }) {
                 <button class="btn btn-sm" onClick={() => spawnTerminal(selectedAppId.value, target.launcherId)} title={`Open terminal on ${m.name}`}>Terminal</button>
               ) : null;
             })()}
+            <button
+              class="btn btn-sm"
+              onClick={() => handleMachineHealthCheck(m)}
+              disabled={!canCheckHealth || healthLoading}
+              title={canCheckHealth ? 'Check CPU, memory, disk, and network health' : 'No connected launcher for this machine'}
+            >
+              {healthLoading ? 'Checking...' : 'Health'}
+            </button>
             <button class="btn btn-sm" onClick={() => openAddHarness(m.id)}>Add Harness</button>
             <SetupAssistButton entityType="machine" entityId={m.id} entityLabel={m.name} />
             <button class="btn btn-sm" onClick={() => openEditMachine(m)}>Edit</button>
@@ -288,6 +426,8 @@ export function MachineCard({ m }: { m: any }) {
             Last seen: {new Date(m.lastSeenAt).toLocaleString()}
           </div>
         )}
+
+        {isHealthExpanded && health && <SystemHealthPanel health={health} />}
 
         {(() => {
           const apps = getAppsForMachine(m.id);

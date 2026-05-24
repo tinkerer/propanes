@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { api } from '../lib/api.js';
-import { loadApprovals, selectedAppId } from '../lib/state.js';
+import { pendingApprovalCountByApp, selectedAppId } from '../lib/state.js';
 
 // Approval queue: dispatches diverted by channel.policy.requireApproval.
 // Operators approve (replays the saved payload through dispatchFeedbackToAgent)
@@ -29,7 +29,7 @@ type Approval = {
 const KIND_DOT: Record<string, string> = {
   prod: '#ef4444',
   staging: '#eab308',
-  exploratory: '#22c55e',
+  exploratory: '#1d9bf0',
 };
 
 function relTime(ts: number): string {
@@ -65,12 +65,8 @@ export function ApprovalQueuePage() {
     try {
       const res = await api.getApprovals(appId, statusFilter);
       setApprovals(res.approvals);
-      // Keep the sidebar badge in sync (only counts pending).
-      if (statusFilter === 'pending') {
-        loadApprovals(appId);
-      } else {
-        loadApprovals(appId);
-      }
+      const pendingCount = res.approvals.filter((approval) => approval.status === 'pending').length;
+      pendingApprovalCountByApp.value = { ...pendingApprovalCountByApp.value, [appId]: pendingCount };
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load approvals');

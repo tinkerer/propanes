@@ -42,8 +42,19 @@ export function connectAdminWs() {
     }
   };
 
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
     ws = null;
+    // Server rejects with 4001 (missing token) / 4003 (invalid token) when the
+    // admin token is stale. Fire the same redirect path as a 401 fetch so a
+    // logged-out user lands on LoginPage even if no fetch happens to be in
+    // flight (e.g. they're staring at a list page that has finished loading
+    // and only the WS is keeping the view "live").
+    if (ev.code === 4001 || ev.code === 4003) {
+      localStorage.removeItem('pw-admin-token');
+      window.dispatchEvent(new CustomEvent('pw-admin-401'));
+      window.location.hash = '#/login';
+      return;
+    }
     scheduleReconnect();
   };
 

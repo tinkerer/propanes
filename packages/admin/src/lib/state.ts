@@ -96,6 +96,7 @@ export const channelOrgProposalOpen = signal(false);
 // Pending approvals per workspace. Populated by loadApprovals(appId), polled
 // by ApprovalQueuePage every 15s while visible. Used for the sidebar badge.
 export const pendingApprovalCountByApp = signal<Record<string, number>>({});
+let approvalsEndpointMissing = false;
 
 export const activeChannel = computed(() => {
   const appId = selectedAppId.value;
@@ -115,11 +116,13 @@ export async function loadChannels(appId: string): Promise<void> {
 }
 
 export async function loadApprovals(appId: string): Promise<typeof api.getApprovals extends (...args: any[]) => Promise<infer R> ? R : never> {
+  if (approvalsEndpointMissing) return { approvals: [] } as any;
   try {
     const res = await api.getApprovals(appId, 'pending');
     pendingApprovalCountByApp.value = { ...pendingApprovalCountByApp.value, [appId]: res.approvals.length };
     return res as any;
-  } catch {
+  } catch (err) {
+    if (err instanceof Error && err.message === 'HTTP 404') approvalsEndpointMissing = true;
     return { approvals: [] } as any;
   }
 }
@@ -226,6 +229,7 @@ function routeToViewId(route: string): string | null {
     live: 'view:live',
     approvals: 'view:approvals',
     settings: 'view:app-settings',
+    spec: 'view:spec',
   };
   return map[m[1]] || null;
 }

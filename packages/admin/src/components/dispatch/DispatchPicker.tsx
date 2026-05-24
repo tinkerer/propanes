@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { signal } from '@preact/signals';
-import { cachedTargets, ensureTargetsLoaded, targetKey, findTargetByKey, type DispatchTarget } from './DispatchTargetSelect.js';
+import { cachedTargets, ensureTargetsLoaded, localTargetLabel, targetKey, findTargetByKey, type DispatchTarget } from './DispatchTargetSelect.js';
 import { navigate } from '../../lib/state.js';
 
 export const dispatchPickerOpen = signal(false);
@@ -52,7 +52,7 @@ export function DispatchPicker({ value, onSelect, onClose }: Props) {
     id: '__local__',
     category: 'Targets',
     icon: '\u{1F4BB}',
-    title: 'Local',
+    title: localTargetLabel(),
     subtitle: 'Run on this machine',
     launcherId: '',
   });
@@ -265,7 +265,7 @@ export function DispatchTargetButton({
   const selectedTarget = value ? findTargetByKey(targets, value) : null;
   const label = selectedTarget
     ? (selectedTarget.machineName || selectedTarget.name)
-    : 'Local';
+    : localTargetLabel();
 
   return (
     <>

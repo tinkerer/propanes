@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import {
   selectedAppId,
   applications,
@@ -10,8 +10,9 @@ import {
 } from '../../lib/state.js';
 import { api } from '../../lib/api.js';
 import { loadChannelThreads, channelThreads, type ThreadRow } from '../../pages/ChannelPage.js';
-import { type ChiefOfStaffAgent, COS_WORKSPACE_ID, loadChiefOfStaffHistory, chiefOfStaffAgents, chiefOfStaffActiveId, setChiefOfStaffOpen } from '../../lib/chief-of-staff.js';
+import { type ChiefOfStaffAgent, COS_WORKSPACE_ID, loadChiefOfStaffHistory, chiefOfStaffAgents, chiefOfStaffActiveId, ensureChiefOfStaffAgent, setChiefOfStaffOpen } from '../../lib/chief-of-staff.js';
 import { cosActiveThread } from '../../lib/cos-popout-tree.js';
+import { openSession, loadAllSessions } from '../../lib/sessions.js';
 
 const KIND_DOT: Record<ChannelKind, string> = {
   prod: '#ef4444',
@@ -19,16 +20,34 @@ const KIND_DOT: Record<ChannelKind, string> = {
   exploratory: '#22c55e',
 };
 
+const SPLIT_RATIO_KEY = 'pw-cos-channel-list-split-ratio';
+const DEFAULT_SPLIT_RATIO = 0.6;
+function readSplitRatio(): number {
+  try {
+    const raw = localStorage.getItem(SPLIT_RATIO_KEY);
+    if (raw) {
+      const n = parseFloat(raw);
+      if (Number.isFinite(n) && n >= 0.1 && n <= 0.9) return n;
+    }
+  } catch { /* ignore */ }
+  return DEFAULT_SPLIT_RATIO;
+}
+
 export function CosChannelList({
   onClose,
   agents,
   activeAgentId,
   onSelectAgent,
+  onToggleVisible,
 }: {
   onClose?: () => void;
   agents?: ChiefOfStaffAgent[];
   activeAgentId?: string;
   onSelectAgent?: (id: string) => void;
+  /** Hide the drawer entirely. Lives on the hamburger inside the channel
+   *  header (next to the workspace picker). The inverse "show" affordance
+   *  is rendered by the parent on the chat pane when the drawer is hidden. */
+  onToggleVisible?: () => void;
 }) {
   const appId = selectedAppId.value;
   const apps = applications.value;
@@ -44,8 +63,36 @@ export function CosChannelList({
   const [dmsExpanded, setDmsExpanded] = useState(true);
   const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
   const [expandedChannels, setExpandedChannels] = useState<Set<string>>(new Set());
+  const [splitRatio, setSplitRatio] = useState<number>(readSplitRatio);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const isCosWorkspace = appId === COS_WORKSPACE_ID;
   const allThreads = channelThreads.value;
+
+  useEffect(() => {
+    try { localStorage.setItem(SPLIT_RATIO_KEY, String(splitRatio)); } catch { /* ignore */ }
+  }, [splitRatio]);
+
+  const onSplitDividerMouseDown = useCallback((e: MouseEvent) => {
+    e.preventDefault();
+    const body = bodyRef.current;
+    if (!body) return;
+    document.body.classList.add('cos-channel-list-resizing');
+    const onMove = (ev: MouseEvent) => {
+      const b = bodyRef.current;
+      if (!b) return;
+      const rect = b.getBoundingClientRect();
+      if (rect.height <= 0) return;
+      const r = (ev.clientY - rect.top) / rect.height;
+      setSplitRatio(Math.max(0.1, Math.min(0.9, r)));
+    };
+    const onUp = () => {
+      document.body.classList.remove('cos-channel-list-resizing');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, []);
 
   // Fetch threads when appId changes
   useEffect(() => {
@@ -64,9 +111,21 @@ export function CosChannelList({
   }
 
   function openThread(t: ThreadRow) {
+    ensureChiefOfStaffAgent(t.agentId);
     chiefOfStaffActiveId.value = t.agentId;
-    cosActiveThread.value = { agentId: t.agentId, threadKey: t.id };
+    // threadKey carries a `tid:` prefix everywhere else (see threadKeyOf in
+    // CosThread.tsx) — chat uses raw `idx:` keys for legacy unsaved threads.
+    // Drop the prefix and the chat's `isActiveInPanel` comparison misses.
+    cosActiveThread.value = { agentId: t.agentId, threadKey: `tid:${t.id}` };
     setChiefOfStaffOpen(true);
+    // Hand off to ChiefOfStaffBubble — it scrolls + highlights the anchor row.
+    void loadChiefOfStaffHistory(t.agentId, selectedAppId.value).finally(() => {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new CustomEvent('cos-jump-to-thread', {
+          detail: { agentId: t.agentId, threadId: t.id },
+        }));
+      });
+    });
   }
 
   function getThreadsForChannel(channelId: string): ThreadRow[] {
@@ -116,13 +175,25 @@ export function CosChannelList({
   return (
     <div class="cos-channel-list">
       <div class="cos-channel-list-header">
+        {onToggleVisible && (
+          <button
+            class="cos-channel-list-hamburger"
+            onClick={onToggleVisible}
+            title="Hide channels"
+            aria-label="Hide channels"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <path d="M3 6h18M3 12h18M3 18h18" />
+            </svg>
+          </button>
+        )}
         <button
           class="cos-channel-list-app-name cos-workspace-picker-btn"
           onClick={() => setWorkspacePickerOpen((v) => !v)}
           title={workspaceName}
         >
           {isCosWorkspace ? '\u{2726} ' : ''}{workspaceName}
-          <span class="cos-workspace-caret">{workspacePickerOpen ? '\u25B4' : '\u25BE'}</span>
+          <span class="cos-workspace-caret">{workspacePickerOpen ? '▴' : '▾'}</span>
         </button>
         <div class="cos-channel-list-actions">
           <button
@@ -179,21 +250,85 @@ export function CosChannelList({
         </div>
       )}
 
-      <button
-        class="cos-channel-list-section-toggle"
-        onClick={() => setChannelsExpanded((v) => !v)}
-      >
-        <span class="cos-channel-list-section-caret">{channelsExpanded ? '\u25BE' : '\u25B8'}</span>
-        <span class="cos-channel-list-section-label">Channels</span>
-      </button>
+      {(() => {
+        const hasDms = !!(agents && agents.length > 0);
+        const showSplit = hasDms && channelsExpanded && dmsExpanded;
+        const channelsFlex = showSplit
+          ? { flexGrow: splitRatio, flexBasis: 0, flexShrink: 1 }
+          : (channelsExpanded ? { flex: 1 } : { flex: '0 0 auto' });
+        const dmsFlex = showSplit
+          ? { flexGrow: 1 - splitRatio, flexBasis: 0, flexShrink: 1 }
+          : (dmsExpanded ? { flex: 1 } : { flex: '0 0 auto' });
 
-      {channelsExpanded && (
-        <div class="cos-channel-list-items">
+        return (
+          <div class="cos-channel-list-body" ref={bodyRef}>
+            <div class="cos-channel-list-section" style={channelsFlex as any}>
+              <button
+                class="cos-channel-list-section-toggle"
+                onClick={() => setChannelsExpanded((v) => !v)}
+              >
+                <span class="cos-channel-list-section-caret">{channelsExpanded ? '▾' : '▸'}</span>
+                <span class="cos-channel-list-section-label">Channels</span>
+              </button>
+              {channelsExpanded && (
+                <div class="cos-channel-list-section-scroll">
+                  {renderChannelsItems()}
+                </div>
+              )}
+            </div>
+
+            {showSplit && (
+              <div
+                class="cos-channel-list-split-divider"
+                onMouseDown={onSplitDividerMouseDown}
+                title="Drag to resize"
+              />
+            )}
+
+            {hasDms && (
+              <div class="cos-channel-list-section" style={dmsFlex as any}>
+                <button
+                  class="cos-channel-list-section-toggle"
+                  onClick={() => setDmsExpanded((v) => !v)}
+                >
+                  <span class="cos-channel-list-section-caret">{dmsExpanded ? '▾' : '▸'}</span>
+                  <span class="cos-channel-list-section-label">Direct Messages</span>
+                </button>
+                {dmsExpanded && (
+                  <div class="cos-channel-list-section-scroll">
+                    <div class="cos-channel-list-items">
+                      {agents!.map((a) => (
+                        <button
+                          key={a.id}
+                          class={`cos-channel-item cos-channel-item-dm${a.id === activeAgentId ? ' cos-channel-item-active' : ''}`}
+                          onClick={() => onSelectAgent?.(a.id)}
+                          title={a.name}
+                        >
+                          <span class="cos-channel-item-dm-avatar">
+                            {a.name.charAt(0).toUpperCase()}
+                          </span>
+                          <span class="cos-channel-item-name">{a.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+
+  function renderChannelsItems() {
+    return (
+      <div class="cos-channel-list-items">
           <button
             class={`cos-channel-item${!currentSlug ? ' cos-channel-item-active' : ''}`}
             onClick={() => { activeChannelSlug.value = null; toggleChannelThreads('_all'); }}
           >
-            <span class="cos-channel-item-expand">{expandedChannels.has('_all') ? '\u25BE' : '\u25B8'}</span>
+            <span class="cos-channel-item-expand">{expandedChannels.has('_all') ? '▾' : '▸'}</span>
             <span class="cos-channel-item-icon">{'\u{1F4AC}'}</span>
             <span class="cos-channel-item-name">All threads</span>
           </button>
@@ -214,7 +349,7 @@ export function CosChannelList({
                 onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'; }}
                 onDrop={(e) => handleDrop(e as any, '_unsorted')}
               >
-                <span class="cos-channel-item-expand">{expandedChannels.has('_unsorted') ? '\u25BE' : '\u25B8'}</span>
+                <span class="cos-channel-item-expand">{expandedChannels.has('_unsorted') ? '▾' : '▸'}</span>
                 <span class="cos-channel-item-icon">{'\u{1F4E5}'}</span>
                 <span class="cos-channel-item-name">Unsorted</span>
                 <span class="cos-channel-item-count">{unsorted?.openCount ?? unsorted?.threadCount ?? 0}</span>
@@ -243,9 +378,9 @@ export function CosChannelList({
                     (e.currentTarget as HTMLElement).style.background = '';
                     handleDrop(e as any, ch.id);
                   }}
-                  title={`${ch.name} (${ch.kind})${ch.description ? ' \u2014 ' + ch.description : ''}`}
+                  title={`${ch.name} (${ch.kind})${ch.description ? ' — ' + ch.description : ''}`}
                 >
-                  <span class="cos-channel-item-expand">{isExpanded ? '\u25BE' : '\u25B8'}</span>
+                  <span class="cos-channel-item-expand">{isExpanded ? '▾' : '▸'}</span>
                   <span
                     class="cos-channel-item-dot"
                     style={{ background: KIND_DOT[ch.kind] || '#6b7280' }}
@@ -272,57 +407,22 @@ export function CosChannelList({
               onClick={async () => {
                 if (!appId) return;
                 try {
-                  const result = await api.autoOrganizeChannels(appId);
-                  if (result?.id) {
-                    await api.applyOrgProposal(result.id);
-                    await loadChannels(appId);
-                    // Refresh thread channel assignments
-                    for (const a of chiefOfStaffAgents.value) {
-                      void loadChiefOfStaffHistory(a.id, appId);
-                    }
+                  const result = await api.autoOrganizeChannelsSession(appId);
+                  if (result?.sessionId) {
+                    await loadAllSessions();
+                    openSession(result.sessionId);
                   }
                 } catch { /* toast could go here */ }
               }}
-              title="Auto-sort unsorted threads into channels using AI"
+              title="Launch an agent session that sorts unsorted threads into channels"
             >
               <span class="cos-channel-item-icon">{'\u{2728}'}</span>
               <span class="cos-channel-item-name">Auto-sort threads</span>
             </button>
           )}
         </div>
-      )}
-
-      {/* Direct Messages — agents listed as DMs */}
-      {agents && agents.length > 0 && (
-        <>
-          <button
-            class="cos-channel-list-section-toggle"
-            onClick={() => setDmsExpanded((v) => !v)}
-          >
-            <span class="cos-channel-list-section-caret">{dmsExpanded ? '\u25BE' : '\u25B8'}</span>
-            <span class="cos-channel-list-section-label">Direct Messages</span>
-          </button>
-          {dmsExpanded && (
-            <div class="cos-channel-list-items">
-              {agents.map((a) => (
-                <button
-                  key={a.id}
-                  class={`cos-channel-item cos-channel-item-dm${a.id === activeAgentId ? ' cos-channel-item-active' : ''}`}
-                  onClick={() => onSelectAgent?.(a.id)}
-                  title={a.name}
-                >
-                  <span class="cos-channel-item-dm-avatar">
-                    {a.name.charAt(0).toUpperCase()}
-                  </span>
-                  <span class="cos-channel-item-name">{a.name}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
+    );
+  }
 }
 
 const STATUS_DOT: Record<string, string> = {
@@ -345,7 +445,7 @@ function ChannelThreadList({
   return (
     <div class="cos-channel-thread-list">
       {threads.map((t) => {
-        const isActive = activeThread?.threadKey === t.id;
+        const isActive = activeThread?.agentId === t.agentId && activeThread?.threadKey === `tid:${t.id}`;
         const dotColor = t.sessionStatus ? (STATUS_DOT[t.sessionStatus] || '#3b82f6') : '#3b82f6';
         return (
           <button

@@ -11,7 +11,7 @@ import {
   type ChannelRow,
 } from '../lib/state.js';
 import { cosActiveThread } from '../lib/cos-popout-tree.js';
-import { chiefOfStaffOpen, chiefOfStaffActiveId } from '../lib/chief-of-staff.js';
+import { chiefOfStaffActiveId, ensureChiefOfStaffAgent, loadChiefOfStaffHistory, setChiefOfStaffOpen } from '../lib/chief-of-staff.js';
 
 // Channel detail page: shows the channel's name, kind badge, members, policy
 // summary, and the thread list. Click a thread to open it in the CoS bubble.
@@ -121,9 +121,17 @@ export function ChannelPage() {
         <ThreadList
           threads={threads}
           onOpen={(t) => {
+            ensureChiefOfStaffAgent(t.agentId);
             chiefOfStaffActiveId.value = t.agentId;
-            cosActiveThread.value = { agentId: t.agentId, threadKey: t.id };
-            chiefOfStaffOpen.value = true;
+            cosActiveThread.value = { agentId: t.agentId, threadKey: `tid:${t.id}` };
+            setChiefOfStaffOpen(true);
+            void loadChiefOfStaffHistory(t.agentId, appId).finally(() => {
+              requestAnimationFrame(() => {
+                window.dispatchEvent(new CustomEvent('cos-jump-to-thread', {
+                  detail: { agentId: t.agentId, threadId: t.id },
+                }));
+              });
+            });
           }}
         />
       </div>

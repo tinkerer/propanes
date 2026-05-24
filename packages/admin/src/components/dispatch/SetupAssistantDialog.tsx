@@ -2,7 +2,7 @@ import { signal } from '@preact/signals';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { api } from '../../lib/api.js';
 import { openSession, loadAllSessions } from '../../lib/sessions.js';
-import { cachedTargets, ensureTargetsLoaded, findTargetByKey, parseTargetKey, targetKey } from './DispatchTargetSelect.js';
+import { cachedTargets, ensureTargetsLoaded, findTargetByKey, localTargetLabel, parseTargetKey, targetKey } from './DispatchTargetSelect.js';
 import {
   buildSetupAssistantInstructions,
   type BranchStrategyChoice,
@@ -99,7 +99,7 @@ function SetupAssistantInner({ req, onClose }: { req: SetupAssistantRequest; onC
 
   const targets = cachedTargets.value;
   const selectedTarget = target ? findTargetByKey(targets, target) : null;
-  const targetLabel = selectedTarget ? (selectedTarget.machineName || selectedTarget.name) : 'Local';
+  const targetLabel = selectedTarget ? (selectedTarget.machineName || selectedTarget.name) : localTargetLabel();
   const isBatch = req.feedbackIds.length > 1;
 
   const interactiveAgent = useMemo(() => pickAgent(agents, 'interactive-require', req.appId), [agents, req.appId]);
@@ -299,7 +299,7 @@ function TargetChip({ label, value, onChange }: { label: string; value: string; 
             onChange={(e) => { onChange((e.target as HTMLSelectElement).value); setOpen(false); }}
             autofocus
           >
-            <option value="">Local</option>
+            <option value="">{localTargetLabel()}</option>
             {machines.length > 0 && (
               <optgroup label="Remote Machines">
                 {machines.map(t => (

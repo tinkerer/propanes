@@ -19,12 +19,14 @@ import {
   unregisterLauncher,
   updateHeartbeat,
   removeSessionFromLauncher,
+  addSessionToLauncher,
   startPruneTimer,
   stopPruneTimer,
   resolveLauncherResponse,
   getLauncher,
 } from './launcher-registry.js';
-import type { LauncherToServerMessage, LauncherRegistered } from '@propanes/shared';
+import type { LaunchSession, LauncherToServerMessage, LauncherRegistered } from '@propanes/shared';
+import { ptyColsForProfile } from '@propanes/shared';
 import { registerAutoDispatch } from './auto-dispatch.js';
 import { rearmPendingDispatchesOnStartup } from './voice/deferred-dispatch.js';
 import { updateFeedbackOnSessionEnd, fixStaleDispatchStatuses } from './feedback-status.js';
@@ -34,6 +36,8 @@ import { registerAdminClient, unregisterAdminClient } from './admin-push.js';
 import { startAdminWatcher } from './admin-watcher.js';
 import { dispatchPendingFollowups } from './routes/admin/session-followups.js';
 import { startRetentionSweeper } from './routes/admin/cos-retention.js';
+import { ensureCosThreadsForOrphanSessions } from './cos-inbox.js';
+import { detectClaudeAuthRequired } from './claude-auth-detect.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const LAUNCHER_AUTH_TOKEN = process.env.LAUNCHER_AUTH_TOKEN || '';
@@ -45,6 +49,65 @@ startPruneTimer();
 
 const staleFixed = fixStaleDispatchStatuses();
 if (staleFixed > 0) console.log(`[startup] Fixed ${staleFixed} stale dispatch statuses`);
+
+function maybeOpenLauncherClaudeLoginCompanion(sessionId: string, data?: string): void {
+  if (!data) return;
+
+  const session = db
+    .select()
+    .from(schema.agentSessions)
+    .where(eq(schema.agentSessions.id, sessionId))
+    .get();
+  if (!session) return;
+  if (!detectClaudeAuthRequired(`${session.outputLog || ''}${data}`)) return;
+  if (session.runtime !== 'claude' || session.permissionProfile === 'plain') return;
+  if (!session.launcherId || session.companionSessionId) return;
+
+  const launcher = getLauncher(session.launcherId);
+  if (!launcher || launcher.ws.readyState !== 1) return;
+
+  const companionSessionId = ulid();
+  const now = new Date().toISOString();
+  db.insert(schema.agentSessions)
+    .values({
+      id: companionSessionId,
+      feedbackId: null,
+      agentEndpointId: null,
+      runtime: 'claude',
+      permissionProfile: 'interactive-require',
+      parentSessionId: sessionId,
+      status: 'pending',
+      outputBytes: 0,
+      launcherId: launcher.id,
+      cwd: session.cwd || null,
+      title: `Claude login ${sessionId.slice(-6)}`,
+      createdAt: now,
+    })
+    .run();
+  db.update(schema.agentSessions)
+    .set({ companionSessionId })
+    .where(eq(schema.agentSessions.id, sessionId))
+    .run();
+
+  const msg: LaunchSession = {
+    type: 'launch_session',
+    sessionId: companionSessionId,
+    prompt: '',
+    cwd: session.cwd || '~',
+    runtime: 'claude',
+    permissionProfile: 'interactive-require',
+    cols: ptyColsForProfile('interactive-require'),
+    rows: 40,
+  };
+  launcher.ws.send(JSON.stringify(msg));
+  addSessionToLauncher(launcher.id, companionSessionId);
+  broadcastToLauncherSessionAdmins(sessionId, JSON.stringify({
+    type: 'login_required',
+    sessionId,
+    companionSessionId,
+  }));
+  console.log(`[launcher] Claude auth required for ${sessionId}; spawned login companion ${companionSessionId}`);
+}
 
 // Delay orphan cleanup so the session-service has time to recover tmux sessions
 setTimeout(() => {
@@ -65,6 +128,19 @@ setInterval(() => {
 // Channel retention: every 5 min, archive threads in channels whose
 // policy.retention.archiveAfterDays cutoff has passed.
 startRetentionSweeper();
+
+// Auto-mint a cos_threads row (under SESSIONS_AGENT_ID) for every agent_sessions
+// row that lacks one, so every running session shows up as a thread in the CoS
+// pane. Runs at startup and on a 30s sweep to catch sessions inserted by code
+// paths that don't yet call ensureCosThreadsForOrphanSessions directly.
+ensureCosThreadsForOrphanSessions()
+  .then((n) => { if (n > 0) console.log(`[startup] Auto-minted ${n} session threads`); })
+  .catch((err) => console.error('[startup] ensureCosThreadsForOrphanSessions failed:', err));
+setInterval(() => {
+  ensureCosThreadsForOrphanSessions().catch((err) => {
+    console.error('[cos-inbox] orphan-session sweep failed:', err);
+  });
+}, 30_000);
 
 // Backfill JSONL continuation cache for completed sessions
 setTimeout(() => {
@@ -348,6 +424,7 @@ launcherWss.on('connection', (ws, req) => {
         case 'launcher_session_output': {
           const output = msg.output;
           broadcastToLauncherSessionAdmins(msg.sessionId, JSON.stringify(output));
+          maybeOpenLauncherClaudeLoginCompanion(msg.sessionId, output.content?.data);
 
           // Also accumulate in DB
           if (output.content?.data) {

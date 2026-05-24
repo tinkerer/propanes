@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
 import { ulid } from 'ulidx';
 import { eq } from 'drizzle-orm';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   aggregateQuerySchema,
   planCreateSchema,
@@ -11,6 +13,12 @@ import {
 import type { PermissionProfile } from '@propanes/shared';
 import { db, schema, sqlite } from '../db/index.js';
 import { dispatchAgentSession } from '../dispatch.js';
+import {
+  computeJsonlPath as computeClaudeJsonlPath,
+  computeCodexJsonlPath,
+  findContinuationJsonlsCached,
+  readJsonlWithSubagents,
+} from '../jsonl-utils.js';
 
 export const aggregateRoutes = new Hono();
 
@@ -93,6 +101,471 @@ export function clusterItems(allItems: ClusterItem[], minCount = 2): ClusterGrou
 function slugify(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
 }
+
+function specWikiDir(projectDir: string, appId: string): string {
+  return join(projectDir, 'docs', 'spec-wiki', appId);
+}
+
+function legacySpecWikiDir(projectDir: string): string {
+  return join(projectDir, 'docs', 'spec-wiki');
+}
+
+function selectSpecAgent(appId: string, opts: { preferYolo?: boolean } = {}) {
+  const agents = db.select().from(schema.agentEndpoints).all();
+  const usable = agents.filter((agent) => agent.mode !== 'webhook' || !!agent.url);
+
+  if (opts.preferYolo) {
+    const isYolo = (a: typeof usable[number]) =>
+      typeof a.permissionProfile === 'string' && a.permissionProfile.endsWith('-yolo');
+    for (const profile of ['interactive-yolo', 'headless-yolo', 'headless-stream-yolo'] as const) {
+      const match = (a: typeof usable[number]) => a.permissionProfile === profile;
+      const hit =
+        usable.find((a) => match(a) && a.isDefault && a.appId === appId) ||
+        usable.find((a) => match(a) && a.appId === appId) ||
+        usable.find((a) => match(a) && a.isDefault && !a.appId) ||
+        usable.find(match);
+      if (hit) return hit;
+    }
+    const anyYolo = usable.find(isYolo);
+    if (anyYolo) return anyYolo;
+  }
+
+  return (
+    usable.find((agent) => agent.isDefault && agent.appId === appId) ||
+    usable.find((agent) => agent.appId === appId) ||
+    usable.find((agent) => agent.isDefault && !agent.appId) ||
+    usable[0] ||
+    null
+  );
+}
+
+function buildSpecUpdatePrompt(
+  app: typeof schema.applications.$inferSelect,
+  wikiDir: string,
+  additionalInstructions?: string | null,
+): string {
+  const base = [
+    `Create or update the spec wiki for application ${app.name} (${app.id}).`,
+    '',
+    'Goal: turn tickets, CoS thread inputs, and agent JSONL histories into a spec-driven development wiki.',
+    '',
+    'Write the wiki under this per-application directory:',
+    `- ${wikiDir}`,
+    '',
+    'Required files:',
+    '- index.md: landing/index page with links to the other pages and a concise current snapshot.',
+    '- spec-backbone.md: durable product intent, constraints, architecture decisions, active themes, and development contract.',
+    '- tickets.md: ticket beads consumed, grouped by theme with ticket IDs.',
+    '- operator-inputs.md: relevant CoS/user inputs and the product intent they imply.',
+    '- agent-jsonl-inputs.md: summarized prompts/inputs from agent JSONL histories that led to the current project state.',
+    '',
+    'Sources to inspect:',
+    `- SQLite DB in this repo for feedback_items where app_id = ${app.id}.`,
+    `- cos_threads and cos_messages for app_id = ${app.id}.`,
+    '- agent_sessions linked to those tickets, and sessions whose cwd matches the app project directory.',
+    `- Claude JSONL histories under ~/.claude/projects for projectDir ${app.projectDir}.`,
+    '- Codex rollout histories under ~/.codex/sessions when sessions use runtime=codex.',
+    '',
+    'Implementation notes:',
+    '- Make the wiki useful as the backbone for future spec-driven tickets, not just a dump.',
+    '- Deduplicate repeated requests. Preserve concrete IDs and paths where they matter.',
+    '- Keep each file readable; summarize long JSONL histories instead of pasting raw logs.',
+    '- Do not write outside the per-application spec wiki directory except if you need temporary scratch notes.',
+    '- When complete, report the files written and the major spec themes you extracted.',
+  ];
+  const extra = (additionalInstructions || '').trim();
+  if (extra) {
+    base.push('', '## Additional direction from operator', '', extra);
+  }
+  return base.join('\n');
+}
+
+function escapeMd(text: string | null | undefined): string {
+  return String(text || '').replace(/\r\n/g, '\n').trim();
+}
+
+function truncateText(text: string, max = 4000): string {
+  if (text.length <= max) return text;
+  return text.slice(0, max - 24).trimEnd() + '\n\n[truncated]';
+}
+
+function extractJsonlUserText(line: string): string | null {
+  let obj: any;
+  try { obj = JSON.parse(line); } catch { return null; }
+
+  const candidates = [
+    obj?.message,
+    obj?.payload?.message,
+    obj?.item,
+    obj?.payload?.item,
+    obj,
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate || candidate.role !== 'user') continue;
+    const content = candidate.content;
+    if (typeof content === 'string') return content.trim() || null;
+    if (Array.isArray(content)) {
+      const parts = content
+        .map((part: any) => {
+          if (typeof part === 'string') return part;
+          if (typeof part?.text === 'string') return part.text;
+          if (typeof part?.content === 'string') return part.content;
+          return '';
+        })
+        .filter(Boolean);
+      if (parts.length > 0) return parts.join('\n').trim() || null;
+    }
+  }
+
+  const text = obj?.payload?.text || obj?.text;
+  if ((obj?.type === 'user_message' || obj?.type === 'user_input') && typeof text === 'string') {
+    return text.trim() || null;
+  }
+  return null;
+}
+
+function resolveSessionJsonlPath(row: {
+  projectDir: string | null;
+  cwd: string | null;
+  claudeSessionId: string | null;
+  runtime: string | null;
+  startedAt: string | null;
+}): string | null {
+  if (row.runtime === 'codex') {
+    return computeCodexJsonlPath(row.cwd, row.claudeSessionId, row.startedAt);
+  }
+  const primary = row.claudeSessionId ? computeClaudeJsonlPath(row.projectDir || process.cwd(), row.claudeSessionId) : null;
+  if (primary && existsSync(primary)) return primary;
+  if (row.cwd && row.cwd !== (row.projectDir || process.cwd()) && row.claudeSessionId) {
+    const fallback = computeClaudeJsonlPath(row.cwd, row.claudeSessionId);
+    if (existsSync(fallback)) return fallback;
+  }
+  return primary;
+}
+
+function collectSessionInputs(sessionRows: Array<{
+  id: string;
+  title: string | null;
+  feedbackId: string | null;
+  runtime: string | null;
+  claudeSessionId: string | null;
+  cwd: string | null;
+  startedAt: string | null;
+  projectDir: string | null;
+}>): { sections: string[]; inputCount: number; jsonlCount: number } {
+  const sections: string[] = [];
+  let inputCount = 0;
+  let jsonlCount = 0;
+
+  for (const session of sessionRows) {
+    const jsonlPath = resolveSessionJsonlPath(session);
+    if (!jsonlPath || !existsSync(jsonlPath)) continue;
+    const lines: string[] = [];
+    if (session.runtime === 'codex') {
+      const raw = readFileSync(jsonlPath, 'utf-8');
+      lines.push(...raw.split('\n').filter((line) => line.trim()));
+    } else {
+      const jsonlFiles = [jsonlPath, ...findContinuationJsonlsCached(jsonlPath)];
+      for (const filePath of jsonlFiles) readJsonlWithSubagents(filePath, lines);
+    }
+
+    const inputs = lines.map(extractJsonlUserText).filter((v): v is string => !!v);
+    if (inputs.length === 0) continue;
+    jsonlCount++;
+    inputCount += inputs.length;
+    sections.push([
+      `## Session ${session.id}`,
+      session.title ? `Title: ${session.title}` : '',
+      session.feedbackId ? `Feedback: ${session.feedbackId}` : '',
+      `Runtime: ${session.runtime || 'claude'}`,
+      `JSONL: \`${jsonlPath}\``,
+      '',
+      ...inputs.slice(0, 20).map((input, idx) => `### User input ${idx + 1}\n\n${truncateText(escapeMd(input), 2500)}`),
+      inputs.length > 20 ? `\n_${inputs.length - 20} additional inputs omitted from this generated view._` : '',
+    ].filter(Boolean).join('\n'));
+  }
+
+  return { sections, inputCount, jsonlCount };
+}
+
+aggregateRoutes.post('/spec/update', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const appId = String(body.appId || '');
+  if (!appId) return c.json({ error: 'appId is required' }, 400);
+
+  const additionalInstructions = typeof body.additionalInstructions === 'string'
+    ? body.additionalInstructions
+    : '';
+  const preferYolo = body.preferYolo !== false; // default to YOLO
+
+  const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
+  if (!app) return c.json({ error: 'Application not found' }, 404);
+
+  if (body.mode !== 'generate-now') {
+    const agent = selectSpecAgent(app.id, { preferYolo });
+    if (!agent) return c.json({ error: 'No agent endpoint configured' }, 400);
+
+    const now = new Date().toISOString();
+    const wikiDir = specWikiDir(app.projectDir, app.id);
+    const feedbackId = ulid();
+    const prompt = buildSpecUpdatePrompt(app, wikiDir, additionalInstructions);
+
+    db.insert(schema.feedbackItems).values({
+      id: feedbackId,
+      type: 'programmatic',
+      status: 'dispatched',
+      title: `Update Spec Wiki — ${app.name}`,
+      description: `Generate the per-application spec wiki at ${wikiDir} from tickets, CoS inputs, and JSONL histories.`,
+      appId: app.id,
+      createdAt: now,
+      updatedAt: now,
+    }).run();
+
+    const permissionProfile = (agent.permissionProfile || app.defaultPermissionProfile || 'interactive-require') as PermissionProfile;
+    const { sessionId } = await dispatchAgentSession({
+      feedbackId,
+      agentEndpointId: agent.id,
+      prompt,
+      cwd: app.projectDir || process.cwd(),
+      runtime: (agent.runtime || 'claude') as any,
+      permissionProfile,
+      allowedTools: agent.allowedTools || app.defaultAllowedTools || null,
+      launcherId: agent.preferredLauncherId || undefined,
+    });
+
+    db.update(schema.feedbackItems).set({
+      dispatchedTo: agent.name,
+      dispatchedAt: now,
+      dispatchStatus: 'running',
+      dispatchResponse: `Spec update session: ${sessionId}`,
+      updatedAt: now,
+    }).where(eq(schema.feedbackItems.id, feedbackId)).run();
+
+    return c.json({
+      ok: true,
+      mode: 'session',
+      sessionId,
+      feedbackId,
+      agentEndpointId: agent.id,
+      agentName: agent.name,
+      wikiDir,
+      indexPath: join(wikiDir, 'index.md'),
+      updatedAt: now,
+    });
+  }
+
+  const now = new Date().toISOString();
+  const wikiDir = specWikiDir(app.projectDir, app.id);
+  mkdirSync(wikiDir, { recursive: true });
+
+  const tickets = sqlite.prepare(`
+    SELECT id, title, description, type, status, created_at, updated_at
+    FROM feedback_items
+    WHERE app_id = ?
+    ORDER BY created_at ASC
+  `).all(appId) as Array<{ id: string; title: string; description: string; type: string; status: string; created_at: string; updated_at: string }>;
+
+  const cosMessages = sqlite.prepare(`
+    SELECT t.id as thread_id, t.name as thread_name, m.role, m.text, m.created_at
+    FROM cos_threads t
+    JOIN cos_messages m ON m.thread_id = t.id
+    WHERE t.app_id = ? AND m.role = 'user'
+    ORDER BY m.created_at ASC
+  `).all(appId) as Array<{ thread_id: string; thread_name: string; role: string; text: string; created_at: number }>;
+
+  const sessionRows = sqlite.prepare(`
+    SELECT s.id, s.title, s.feedback_id as feedbackId, s.runtime, s.claude_session_id as claudeSessionId,
+           s.cwd, s.started_at as startedAt, a.project_dir as projectDir
+    FROM agent_sessions s
+    LEFT JOIN feedback_items fi ON fi.id = s.feedback_id
+    LEFT JOIN applications a ON a.id = coalesce(fi.app_id, ?)
+    WHERE fi.app_id = ? OR s.cwd = ?
+    ORDER BY s.created_at ASC
+    LIMIT 300
+  `).all(appId, appId, app.projectDir) as Array<{
+    id: string;
+    title: string | null;
+    feedbackId: string | null;
+    runtime: string | null;
+    claudeSessionId: string | null;
+    cwd: string | null;
+    startedAt: string | null;
+    projectDir: string | null;
+  }>;
+
+  const clusters = clusterItems(tickets.map((ticket) => ({
+    id: ticket.id,
+    title: ticket.title,
+    description: ticket.description,
+    type: ticket.type,
+    status: ticket.status,
+    created_at: ticket.created_at,
+  })), 2);
+  const sessionInputs = collectSessionInputs(sessionRows);
+
+  const ticketMd = [
+    '# Ticket Beads',
+    '',
+    `Generated: ${now}`,
+    `Ticket count: ${tickets.length}`,
+    '',
+    ...tickets.map((ticket) => [
+      `## ${ticket.title}`,
+      '',
+      `- ID: \`${ticket.id}\``,
+      `- Type: ${ticket.type}`,
+      `- Status: ${ticket.status}`,
+      `- Created: ${ticket.created_at}`,
+      `- Updated: ${ticket.updated_at}`,
+      '',
+      escapeMd(ticket.description) || '_No description._',
+    ].join('\n')),
+  ].join('\n');
+
+  const threadMd = [
+    '# Operator Inputs',
+    '',
+    `Generated: ${now}`,
+    `CoS user message count: ${cosMessages.length}`,
+    '',
+    ...cosMessages.map((message) => [
+      `## ${message.thread_name || message.thread_id}`,
+      '',
+      `- Thread: \`${message.thread_id}\``,
+      `- Created: ${new Date(message.created_at).toISOString()}`,
+      '',
+      truncateText(escapeMd(message.text), 2500),
+    ].join('\n')),
+  ].join('\n');
+
+  const agentMd = [
+    '# Agent JSONL Inputs',
+    '',
+    `Generated: ${now}`,
+    `Sessions with JSONL inputs: ${sessionInputs.jsonlCount}`,
+    `Extracted user input count: ${sessionInputs.inputCount}`,
+    '',
+    sessionInputs.sections.join('\n\n') || '_No JSONL user inputs were found for this app._',
+  ].join('\n');
+
+  const architectureMd = [
+    '# Spec Backbone',
+    '',
+    `Generated: ${now}`,
+    '',
+    '## Product Intent',
+    '',
+    escapeMd(app.description) || `${app.name} is tracked by Propanes as an application with ticket, thread, and agent-session history.`,
+    '',
+    '## Active Themes',
+    '',
+    ...(clusters.length > 0
+      ? clusters.map((cluster) => `- ${cluster.sampleTitle} (${cluster.items.length} tickets): ${cluster.items.map((item) => `\`${item.id}\``).join(', ')}`)
+      : ['- No repeated ticket clusters found yet.']),
+    '',
+    '## Development Contract',
+    '',
+    '- Treat tickets and CoS inputs as beads: small observations that should resolve against this spec wiki.',
+    '- Before dispatching implementation work, check this wiki for current intent, active themes, and prior agent prompts.',
+    '- Update this wiki when tickets or agent runs materially change product behavior.',
+  ].join('\n');
+
+  const indexMd = [
+    `# ${app.name} Spec Wiki`,
+    '',
+    `Generated: ${now}`,
+    '',
+    'This wiki aggregates tickets, CoS thread inputs, and agent JSONL user prompts into a spec-driven backbone for future work.',
+    '',
+    '## Pages',
+    '',
+    '- [Spec Backbone](spec-backbone.md)',
+    '- [Ticket Beads](tickets.md)',
+    '- [Operator Inputs](operator-inputs.md)',
+    '- [Agent JSONL Inputs](agent-jsonl-inputs.md)',
+    '',
+    '## Current Snapshot',
+    '',
+    `- Tickets consumed: ${tickets.length}`,
+    `- CoS user messages consumed: ${cosMessages.length}`,
+    `- Agent sessions scanned: ${sessionRows.length}`,
+    `- JSONL files with user inputs: ${sessionInputs.jsonlCount}`,
+    `- JSONL user inputs extracted: ${sessionInputs.inputCount}`,
+    `- Repeated ticket themes: ${clusters.length}`,
+    '',
+    '## Top Themes',
+    '',
+    ...(clusters.slice(0, 12).map((cluster) => `- ${cluster.sampleTitle} (${cluster.items.length})`) || []),
+    clusters.length === 0 ? '- No repeated ticket themes found yet.' : '',
+  ].filter(Boolean).join('\n');
+
+  const files = {
+    'index.md': indexMd,
+    'spec-backbone.md': architectureMd,
+    'tickets.md': ticketMd,
+    'operator-inputs.md': threadMd,
+    'agent-jsonl-inputs.md': agentMd,
+  };
+
+  for (const [file, content] of Object.entries(files)) {
+    writeFileSync(join(wikiDir, file), content.endsWith('\n') ? content : content + '\n', 'utf-8');
+  }
+
+  return c.json({
+    ok: true,
+    wikiDir,
+    indexPath: join(wikiDir, 'index.md'),
+    files: Object.keys(files),
+    ticketCount: tickets.length,
+    cosMessageCount: cosMessages.length,
+    sessionCount: sessionRows.length,
+    jsonlFileCount: sessionInputs.jsonlCount,
+    jsonlInputCount: sessionInputs.inputCount,
+    themeCount: clusters.length,
+    updatedAt: now,
+  });
+});
+
+aggregateRoutes.get('/spec', async (c) => {
+  const appId = c.req.query('appId');
+  const file = c.req.query('file') || 'index.md';
+  if (!appId) return c.json({ error: 'appId is required' }, 400);
+  if (!/^[a-zA-Z0-9._-]+\.md$/.test(file)) return c.json({ error: 'Invalid spec file' }, 400);
+
+  const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
+  if (!app) return c.json({ error: 'Application not found' }, 404);
+
+  const wikiDir = specWikiDir(app.projectDir, app.id);
+  const legacyDir = legacySpecWikiDir(app.projectDir);
+  const filePath = join(wikiDir, file);
+  const legacyPath = join(legacyDir, file);
+  if (!existsSync(filePath)) {
+    if (!existsSync(legacyPath)) {
+      return c.json({ exists: false, wikiDir, file, content: '', files: [] });
+    }
+    const legacyFiles = ['index.md', 'spec-backbone.md', 'tickets.md', 'operator-inputs.md', 'agent-jsonl-inputs.md']
+      .filter((name) => existsSync(join(legacyDir, name)));
+    return c.json({
+      exists: true,
+      wikiDir: legacyDir,
+      file,
+      files: legacyFiles,
+      content: readFileSync(legacyPath, 'utf-8'),
+      legacy: true,
+    });
+  }
+
+  const files = ['index.md', 'spec-backbone.md', 'tickets.md', 'operator-inputs.md', 'agent-jsonl-inputs.md']
+    .filter((name) => existsSync(join(wikiDir, name)));
+  return c.json({
+    exists: true,
+    wikiDir,
+    file,
+    files,
+    content: readFileSync(filePath, 'utf-8'),
+  });
+});
 
 // GET / — group feedback by normalized title
 aggregateRoutes.get('/', async (c) => {

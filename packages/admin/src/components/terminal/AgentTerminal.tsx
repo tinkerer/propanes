@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { lastTerminalInput } from '../../lib/sessions.js';
 import { copyText } from '../../lib/clipboard.js';
 import { openUrlCompanion } from '../../lib/companion-state.js';
+import { recordPerfEntry } from '../../lib/perf.js';
 import type { InputState } from '../../lib/sessions.js';
 
 const MAX_RECONNECT_ATTEMPTS = 10;
@@ -67,6 +68,9 @@ function truncateHistory(data: string): string {
   return data.slice(-MAX_HISTORY_BYTES);
 }
 
+const MAX_TERMINAL_WRITE_BATCH_BYTES = 32_000;
+const SLOW_TERMINAL_WRITE_MS = 80;
+
 // Global resize ownership: only one terminal instance per session sends resize
 // commands to the server. When two AgentTerminals show the same session (e.g.
 // main pane + autojump popout), competing resizes with different dimensions
@@ -79,9 +83,10 @@ interface AgentTerminalProps {
   isActive?: boolean;
   onExit?: (exitCode: number, terminalText: string) => void;
   onInputStateChange?: (state: InputState) => void;
+  onLoginRequired?: (companionSessionId: string) => void;
 }
 
-export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange }: AgentTerminalProps) {
+export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange, onLoginRequired }: AgentTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -90,6 +95,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
   const hasExited = useRef(false);
   const safeFitAndResizeRef = useRef<(bounce?: boolean) => void>(() => {});
   const [mountReady, setMountReady] = useState(false);
+  const [showScrollDown, setShowScrollDown] = useState(false);
 
   // Staggered mount: wait for our turn in the queue. The slot is held for
   // MOUNT_STAGGER_MS after we're allowed to mount, then released so the next
@@ -144,7 +150,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
         green: '#facc15',
         yellow: '#fbbf24',
         blue: '#60a5fa',
-        magenta: '#c084fc',
+        magenta: '#fb923c',
         cyan: '#facc15',
         white: '#e2e8f0',
         brightBlack: '#64748b',
@@ -153,7 +159,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
         brightYellow: '#fde68a',
         brightBlue: '#93c5fd',
         brightMagenta: '#bae6fd',
-        brightCyan: '#67e8f9',
+        brightCyan: '#38bdf8',
         brightWhite: '#f8fafc',
       },
     });
@@ -176,6 +182,54 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
     let reconnectAttempts = 0;
     let gotFirstOutput = false;
     let waitingDots: ReturnType<typeof setInterval> | null = null;
+    let outputQueue = '';
+    let outputWriteActive = false;
+    let outputFlushScheduled = false;
+    let outputFlushRaf = 0;
+    let terminalDisposed = false;
+
+    function scheduleOutputFlush(viaRaf = false) {
+      if (terminalDisposed || outputFlushScheduled || outputWriteActive) return;
+      outputFlushScheduled = true;
+      if (viaRaf) {
+        outputFlushRaf = requestAnimationFrame(flushOutputQueue);
+      } else {
+        queueMicrotask(flushOutputQueue);
+      }
+    }
+
+    function updateScrollState() {
+      if (terminalDisposed) return;
+      const buf = term.buffer.active;
+      setShowScrollDown(buf.baseY - buf.viewportY > 1);
+    }
+
+    function flushOutputQueue() {
+      outputFlushScheduled = false;
+      outputFlushRaf = 0;
+      if (terminalDisposed || outputWriteActive || !outputQueue) return;
+      const chunk = outputQueue.slice(0, MAX_TERMINAL_WRITE_BATCH_BYTES);
+      outputQueue = outputQueue.slice(chunk.length);
+      outputWriteActive = true;
+      const writeStart = performance.now();
+      term.write(chunk, () => {
+        const duration = performance.now() - writeStart;
+        if (duration >= SLOW_TERMINAL_WRITE_MS) {
+          recordPerfEntry(`terminal:write:${Math.ceil(chunk.length / 1024)}KB`, duration);
+        }
+        outputWriteActive = false;
+        updateScrollState();
+        if (!terminalDisposed && outputQueue) scheduleOutputFlush(true);
+      });
+    }
+
+    const scrollDispose = term.onScroll(updateScrollState);
+
+    function writeTerminal(data: string) {
+      if (terminalDisposed || !data) return;
+      outputQueue += data;
+      scheduleOutputFlush(false);
+    }
 
     // Sequenced protocol state
     let lastOutputSeq = 0;
@@ -459,7 +513,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
         // Bounce resize so PTY picks up correct dimensions
         setTimeout(() => safeFitAndResize(true), 80);
       }
-      term.write(data);
+      writeTerminal(data);
     }
 
     function connect() {
@@ -494,14 +548,17 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
                 handleOutput(content.data);
               } else if (content.kind === 'exit') {
                 const paneText = capturePaneText();
-                term.write(`\r\n\x1b[33m--- Session exited (code: ${content.exitCode ?? 'unknown'}) ---\x1b[0m\r\n`);
+                writeTerminal(`\r\n\x1b[33m--- Session exited (code: ${content.exitCode ?? 'unknown'}) ---\x1b[0m\r\n`);
                 hasExited.current = true;
                 onExit?.(content.exitCode ?? -1, paneText);
                 onInputStateChange?.('active');
               } else if (content.kind === 'error' && content.data) {
-                term.write(`\r\n\x1b[31m${content.data}\x1b[0m\r\n`);
+                writeTerminal(`\r\n\x1b[31m${content.data}\x1b[0m\r\n`);
               } else if (content.kind === 'input_state') {
                 onInputStateChange?.(content.state || 'active');
+              } else if (content.kind === 'login_required' && content.companionSessionId) {
+                onInputStateChange?.('waiting');
+                onLoginRequired?.(content.companionSessionId);
               }
               sendOutputAck(seq);
               break;
@@ -524,7 +581,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
               if (msg.data) {
                 if (waitingDots) { clearInterval(waitingDots); waitingDots = null; }
                 gotFirstOutput = true;
-                term.write(truncateHistory(msg.data));
+                writeTerminal(truncateHistory(msg.data));
                 // Popped-out / newly-mounted terminals can open with a 0-size
                 // container (split pane not yet laid out), in which case the
                 // initial fit.fit() in the mount effect was skipped. Once
@@ -545,9 +602,15 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
             case 'output':
               handleOutput(msg.data);
               break;
+            case 'login_required':
+              if (msg.companionSessionId) {
+                onInputStateChange?.('waiting');
+                onLoginRequired?.(msg.companionSessionId);
+              }
+              break;
             case 'exit': {
               const legacyPaneText = capturePaneText();
-              term.write(`\r\n\x1b[33m--- Session exited (code: ${msg.exitCode ?? 'unknown'}) ---\x1b[0m\r\n`);
+              writeTerminal(`\r\n\x1b[33m--- Session exited (code: ${msg.exitCode ?? 'unknown'}) ---\x1b[0m\r\n`);
               hasExited.current = true;
               onExit?.(msg.exitCode ?? -1, legacyPaneText);
               break;
@@ -569,7 +632,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
         }
 
         if (hasExited.current || event.code === 4004 || event.code === 4001) {
-          term.write(`\r\n\x1b[90m--- Disconnected (${event.reason || event.code}) ---\x1b[0m\r\n`);
+          writeTerminal(`\r\n\x1b[90m--- Disconnected (${event.reason || event.code}) ---\x1b[0m\r\n`);
           if (event.code === 4004) onExit?.(-1, capturePaneText());
           return;
         }
@@ -578,12 +641,12 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
         if (event.code === 4010) {
           reconnectAttempts++;
           if (reconnectAttempts > 3) {
-            term.write('\r\n\x1b[90m--- Session service unavailable. Click terminal or press any key to retry. ---\x1b[0m\r\n');
+            writeTerminal('\r\n\x1b[90m--- Session service unavailable. Click terminal or press any key to retry. ---\x1b[0m\r\n');
             const retryHandler = term.onData(() => {
               retryHandler.dispose();
               reconnectAttempts = 0;
               reconnectDelay = 200;
-              term.write('\x1b[90mReconnecting...\x1b[0m\r\n');
+              writeTerminal('\x1b[90mReconnecting...\x1b[0m\r\n');
               connect();
             });
             return;
@@ -594,18 +657,18 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
 
         reconnectAttempts++;
         if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-          term.write('\r\n\x1b[31m--- Connection lost. Click terminal or press any key to retry. ---\x1b[0m\r\n');
+          writeTerminal('\r\n\x1b[31m--- Connection lost. Click terminal or press any key to retry. ---\x1b[0m\r\n');
           const retryHandler = term.onData(() => {
             retryHandler.dispose();
             reconnectAttempts = 0;
             reconnectDelay = 200;
-            term.write('\x1b[90mReconnecting...\x1b[0m\r\n');
+            writeTerminal('\x1b[90mReconnecting...\x1b[0m\r\n');
             connect();
           });
           return;
         }
 
-        term.write('\r\n\x1b[90m--- Disconnected, reconnecting... ---\x1b[0m\r\n');
+        writeTerminal('\r\n\x1b[90m--- Disconnected, reconnecting... ---\x1b[0m\r\n');
         reconnectTimer = setTimeout(() => {
           reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_BACKOFF_CAP_MS);
           connect();
@@ -621,26 +684,12 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
     const TERMINAL_RESPONSE_RE = /\x1b\[\?[\d;]*c|\x1b\[>[\d;]*c|\x1b\[\d+;\d+R/g;
 
     let inputBuffer = '';
-    let inputFlushRaf = 0;
 
     function flushInputBuffer() {
-      inputFlushRaf = 0;
       if (!inputBuffer) return;
       const data = inputBuffer;
       inputBuffer = '';
-      const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        inputSeq++;
-        const msg = JSON.stringify({
-          type: 'sequenced_input',
-          sessionId,
-          seq: inputSeq,
-          content: { kind: 'input', data },
-          timestamp: new Date().toISOString(),
-        });
-        pendingInputs.set(inputSeq, msg);
-        ws.send(msg);
-      }
+      sendRawInput(data);
     }
 
     term.onData((data: string) => {
@@ -648,9 +697,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
       if (!filtered) return;
       lastTerminalInput.value = Date.now();
       inputBuffer += filtered;
-      if (!inputFlushRaf) {
-        inputFlushRaf = requestAnimationFrame(flushInputBuffer);
-      }
+      flushInputBuffer();
     });
 
     function safeFitAndResize(bounce = false) {
@@ -735,6 +782,8 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
     return () => {
       cleanedUp.current = true;
       safeFitAndResizeRef.current = () => {};
+      terminalDisposed = true;
+      outputQueue = '';
       // Release resize ownership if we still hold it
       if (resizeOwners.get(sessionId) === ownerToken) resizeOwners.delete(sessionId);
       onInputStateChange?.('active');
@@ -753,8 +802,10 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
       term.textarea?.removeEventListener('focus', onTermFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('focus', onWindowFocus);
-      if (inputFlushRaf) { cancelAnimationFrame(inputFlushRaf); flushInputBuffer(); }
+      flushInputBuffer();
+      if (outputFlushRaf) cancelAnimationFrame(outputFlushRaf);
       if (resizeRaf) cancelAnimationFrame(resizeRaf);
+      scrollDispose.dispose();
       observer.disconnect();
       wsRef.current?.close();
       term.dispose();
@@ -804,5 +855,26 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange 
     // termRef/fitRef so the initial fit happens even without a tab toggle.
   }, [isActive, mountReady]);
 
-  return <div ref={containerRef} style={{ width: '100%', height: '100%' }} onClick={() => termRef.current?.focus()} />;
+  return (
+    <div class="agent-terminal-wrap" style={{ width: '100%', height: '100%', position: 'relative' }}>
+      <div ref={containerRef} style={{ width: '100%', height: '100%' }} onClick={() => termRef.current?.focus()} />
+      {showScrollDown && (
+        <button
+          type="button"
+          class="cos-scroll-down-btn"
+          onClick={() => {
+            termRef.current?.scrollToBottom();
+            setShowScrollDown(false);
+            termRef.current?.focus();
+          }}
+          title="Scroll to latest"
+          aria-label="Scroll to latest output"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 9l6 6 6-6" />
+          </svg>
+        </button>
+      )}
+    </div>
+  );
 }

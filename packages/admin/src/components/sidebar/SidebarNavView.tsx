@@ -16,7 +16,7 @@ import { Tooltip } from '../ui/Tooltip.js';
 const KIND_DOT: Record<ChannelKind, string> = {
   prod: '#ef4444',
   staging: '#eab308',
-  exploratory: '#22c55e',
+  exploratory: '#1d9bf0',
 };
 
 interface LiveConnection {
@@ -186,6 +186,11 @@ export function SidebarNavView() {
   const selAppId = selectedAppId.value;
   const hasUnlinked = unlinkedCount.value > 0;
   const fbCounts = appFeedbackCounts.value;
+  const channelsSnapshot = channelsByApp.value;
+  const approvalPollingAppIds = apps
+    .filter((app) => (channelsSnapshot[app.id] || []).some((channel) => channel.policy?.requireApproval))
+    .map((app) => app.id);
+  const approvalPollingKey = approvalPollingAppIds.join('|');
 
   useEffect(() => {
     pollLiveConnections(); // initial load
@@ -194,13 +199,15 @@ export function SidebarNavView() {
     });
   }, []);
 
-  // Refresh approval-pending counts per app (sidebar badge) every 30s.
+  // Refresh approval-pending counts only for workspaces that have approval-gated
+  // channels. Most workspaces do not, so polling every app just creates noise.
   useEffect(() => {
-    const refresh = () => { for (const app of apps) loadApprovals(app.id); };
+    if (approvalPollingAppIds.length === 0) return;
+    const refresh = () => { for (const appId of approvalPollingAppIds) loadApprovals(appId); };
     refresh();
     const id = setInterval(() => { if (!document.hidden) refresh(); }, 30_000);
     return () => clearInterval(id);
-  }, [apps.length]);
+  }, [approvalPollingKey]);
 
   return (
     <div class="sidebar-nav-view" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>

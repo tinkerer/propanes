@@ -4,10 +4,12 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import * as pty from 'node-pty';
 import { eq, desc } from 'drizzle-orm';
+import { ulid } from 'ulidx';
 import { db, schema } from './db/index.js';
 import type { AgentRuntime, PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
 import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane } from './tmux-pty.js';
+import { detectClaudeAuthRequired, stripTerminalControl } from './claude-auth-detect.js';
 
 const PORT = parseInt(process.env.SESSION_SERVICE_PORT || '3002', 10);
 
@@ -100,7 +102,9 @@ type InputState = 'active' | 'idle' | 'waiting';
 
 interface AgentProcess {
   sessionId: string;
+  runtime: AgentRuntime;
   permissionProfile: PermissionProfile;
+  cwd: string;
   ptyProcess: pty.IPty;
   outputBuffer: string;
   totalBytes: number;
@@ -117,6 +121,8 @@ interface AgentProcess {
   waitingDebounce: ReturnType<typeof setTimeout> | null;
   /** Timestamp of last state broadcast (for throttling) */
   lastStateBroadcast: number;
+  authCompanionStarted: boolean;
+  suppressAuthCompanion: boolean;
 }
 
 const activeSessions = new Map<string, AgentProcess>();
@@ -195,6 +201,17 @@ const STREAM_PROFILES = new Set<PermissionProfile>([
   'headless-stream-yolo',
   'headless-stream-require',
 ]);
+
+// Stream profiles read stream-json from the PTY; tmux/PTY would hard-wrap
+// lines at the column boundary and fragment each JSON line, making
+// JSON.parse fail downstream (cos-turn-consumer.ts). Use a very wide
+// terminal so individual events stay on one line. Interactive profiles
+// keep a normal width because the user sees the TUI.
+const STREAM_PROFILE_COLS = 32768;
+const DEFAULT_COLS = 120;
+function ptyColsForProfile(profile: PermissionProfile): number {
+  return STREAM_PROFILES.has(profile) ? STREAM_PROFILE_COLS : DEFAULT_COLS;
+}
 
 function buildAgentCommand(
   runtime: AgentRuntime,
@@ -382,8 +399,9 @@ function spawnSession(params: {
   claudeSessionId?: string;
   resumeSessionId?: string;
   appendSystemPrompt?: string;
+  suppressAuthCompanion?: boolean;
 }): void {
-  const { sessionId, prompt = '', cwd, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt } = params;
+  const { sessionId, prompt = '', cwd, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt, suppressAuthCompanion = false } = params;
 
   if (activeSessions.has(sessionId)) {
     throw new Error(`Session ${sessionId} is already running`);
@@ -402,6 +420,7 @@ function spawnSession(params: {
   console.log(`[session-service] Spawning session ${sessionId}: runtime=${runtime}, command=${command}, profile=${permissionProfile}, cwd=${cwd}, tmux=${isTmuxAvailable()}`);
 
   let ptyProcess: pty.IPty;
+  const cols = ptyColsForProfile(permissionProfile);
 
   if (isTmuxAvailable()) {
     const result = spawnInTmux({
@@ -409,7 +428,7 @@ function spawnSession(params: {
       command,
       args,
       cwd,
-      cols: 120,
+      cols,
       rows: 40,
     });
     ptyProcess = result.ptyProcess;
@@ -417,7 +436,7 @@ function spawnSession(params: {
     const { CLAUDECODE, ...cleanedEnv } = process.env as Record<string, string>;
     ptyProcess = pty.spawn(command, args, {
       name: 'xterm-256color',
-      cols: 120,
+      cols,
       rows: 40,
       cwd: safeDir(cwd),
       env: { ...cleanedEnv, TERM: 'xterm-256color' },
@@ -426,7 +445,9 @@ function spawnSession(params: {
 
   const proc: AgentProcess = {
     sessionId,
+    runtime,
     permissionProfile,
+    cwd,
     ptyProcess,
     outputBuffer: '',
     totalBytes: 0,
@@ -440,6 +461,8 @@ function spawnSession(params: {
     lastTitle: '',
     waitingDebounce: null,
     lastStateBroadcast: 0,
+    authCompanionStarted: false,
+    suppressAuthCompanion,
   };
 
   activeSessions.set(sessionId, proc);
@@ -516,7 +539,69 @@ function wireOnData(proc: AgentProcess, ptyProcess: pty.IPty): void {
       }
     }
 
+    maybeOpenClaudeLoginCompanion(proc);
     sendSequenced(proc, { kind: 'output', data });
+  });
+}
+
+function maybeOpenClaudeLoginCompanion(proc: AgentProcess): void {
+  if (proc.runtime !== 'claude') return;
+  if (proc.permissionProfile === 'plain') return;
+  if (proc.suppressAuthCompanion || proc.authCompanionStarted) return;
+  if (!detectClaudeAuthRequired(proc.outputBuffer)) return;
+
+  proc.authCompanionStarted = true;
+  applyInputState(proc, 'waiting');
+
+  const existing = db
+    .select({ companionSessionId: schema.agentSessions.companionSessionId })
+    .from(schema.agentSessions)
+    .where(eq(schema.agentSessions.id, proc.sessionId))
+    .get();
+  if (existing?.companionSessionId) {
+    sendSequenced(proc, {
+      kind: 'login_required',
+      companionSessionId: existing.companionSessionId,
+      data: 'Claude authentication is required. Opened the linked login terminal.',
+    });
+    return;
+  }
+
+  const companionSessionId = ulid();
+  const now = new Date().toISOString();
+  db.insert(schema.agentSessions)
+    .values({
+      id: companionSessionId,
+      feedbackId: null,
+      agentEndpointId: null,
+      runtime: 'claude',
+      permissionProfile: 'interactive-require',
+      parentSessionId: proc.sessionId,
+      status: 'pending',
+      outputBytes: 0,
+      cwd: proc.cwd || null,
+      title: `Claude login ${proc.sessionId.slice(-6)}`,
+      createdAt: now,
+    })
+    .run();
+  db.update(schema.agentSessions)
+    .set({ companionSessionId })
+    .where(eq(schema.agentSessions.id, proc.sessionId))
+    .run();
+
+  console.log(`[session-service] Claude auth required for ${proc.sessionId}; spawned login companion ${companionSessionId}`);
+  sendSequenced(proc, {
+    kind: 'login_required',
+    companionSessionId,
+    data: 'Claude authentication is required. Opened an interactive login terminal.',
+  });
+  spawnSession({
+    sessionId: companionSessionId,
+    prompt: '',
+    cwd: proc.cwd,
+    runtime: 'claude',
+    permissionProfile: 'interactive-require',
+    suppressAuthCompanion: true,
   });
 }
 
@@ -551,7 +636,7 @@ const STARTUP_CHECK_DELAY = 45_000; // 45 seconds
 
 function isSessionHealthy(proc: AgentProcess): boolean {
   // Strip ANSI escape sequences to get visible text
-  const visible = proc.outputBuffer.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+  const visible = stripTerminalControl(proc.outputBuffer);
   if (visible.length > 200) return true;
   if (/Claude|Codex|OpenAI|>|Type your/i.test(visible)) return true;
   return false;
@@ -600,7 +685,12 @@ function killSessionProcess(sessionId: string): boolean {
 function resizeSessionProcess(sessionId: string, cols: number, rows: number): void {
   const proc = activeSessions.get(sessionId);
   if (proc && proc.status === 'running') {
-    proc.ptyProcess.resize(cols, rows);
+    // Stream profiles parse stream-json from PTY output. Narrowing the PTY
+    // would cause tmux to hard-wrap each JSON line at the column boundary,
+    // breaking JSON.parse in cos-turn-consumer.ts. Pin cols to the wide
+    // value regardless of what the frontend xterm requested.
+    const effectiveCols = STREAM_PROFILES.has(proc.permissionProfile) ? STREAM_PROFILE_COLS : cols;
+    proc.ptyProcess.resize(effectiveCols, rows);
   }
 }
 
@@ -626,12 +716,15 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
   console.log(`[session-service] Recovering tmux session for ${session.id}`);
 
   try {
-    const ptyProcess = reattachTmux({ sessionId: session.id, cols: 120, rows: 40 });
+    const recoverProfile = session.permissionProfile as PermissionProfile;
+    const ptyProcess = reattachTmux({ sessionId: session.id, cols: ptyColsForProfile(recoverProfile), rows: 40 });
     const captured = captureTmuxPane(session.id);
 
     const proc: AgentProcess = {
       sessionId: session.id,
+      runtime: session.runtime as AgentRuntime,
       permissionProfile: session.permissionProfile as PermissionProfile,
+      cwd: session.cwd || process.cwd(),
       ptyProcess,
       outputBuffer: captured,
       totalBytes: captured.length,
@@ -645,6 +738,8 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
       lastTitle: '',
       waitingDebounce: null,
       lastStateBroadcast: 0,
+      authCompanionStarted: !!session.companionSessionId,
+      suppressAuthCompanion: false,
     };
 
     activeSessions.set(session.id, proc);

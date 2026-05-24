@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { marked } from 'marked';
-import { selectedAppId } from '../../lib/state.js';
+import { selectedAppId, isCosEmbed, applications } from '../../lib/state.js';
 import {
   chiefOfStaffOpen,
   chiefOfStaffAgents,
@@ -38,6 +38,7 @@ import {
   leavingThreadIds,
   isThreadLeaving,
   loadChiefOfStaffHistory,
+  COS_WORKSPACE_ID,
 } from '../../lib/chief-of-staff.js';
 import { MessageRenderer } from '../terminal/MessageRenderer.js';
 import { layoutTree as layoutTreeSignal, findLeafWithTab, setFocusedLeaf } from '../../lib/pane-tree.js';
@@ -245,6 +246,21 @@ export function ChiefOfStaffToggle() {
 
 export type CosMode = 'popout' | 'pane';
 
+// One-time migration to flip stale 'outside' thread-mode preference (the
+// previous default) to the new 'overlay' default. Users who actively chose
+// 'split' or already have 'overlay' are untouched. Runs once per browser.
+if (typeof localStorage !== 'undefined') {
+  try {
+    const DEFAULTS_KEY = 'pw-cos-defaults-v2';
+    if (localStorage.getItem(DEFAULTS_KEY) !== '1') {
+      if (localStorage.getItem('pw-cos-thread-mode') === 'outside') {
+        localStorage.removeItem('pw-cos-thread-mode');
+      }
+      localStorage.setItem(DEFAULTS_KEY, '1');
+    }
+  } catch { /* ignore */ }
+}
+
 export function ChiefOfStaffBubble({
   floatingButton = true,
   mode = 'popout',
@@ -309,8 +325,7 @@ export function ChiefOfStaffBubble({
   const [threadMode, setThreadMode] = useState<DrawerMode>(() => {
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-thread-mode') : null;
     if (v === 'overlay' || v === 'split' || v === 'outside') return v;
-    const legacy = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-thread-inside') : null;
-    return legacy === '1' ? 'overlay' : 'outside';
+    return 'overlay';
   });
   const [learningsWidth, setLearningsWidth] = useState<number>(() => {
     const v = typeof localStorage !== 'undefined' ? localStorage.getItem('pw-cos-learnings-width') : null;
@@ -448,13 +463,16 @@ export function ChiefOfStaffBubble({
   // Max width depends on side+mode+the live shellRect. Outside-mode is capped
   // to the viewport gap on the chosen side so the drawer never tries to spill
   // past the edge (used to trigger an auto-flip jump mid-drag). Overlay/split
-  // are capped to pane width.
+  // are capped to pane width. In CoS embed, `outside` collapses to `split`
+  // for clamp purposes since the pane fills the viewport.
+  const isCosEmbedView = isCosEmbed.value;
   function clampWidth(px: number, side: 'left' | 'right', mode: DrawerMode): number {
     const rect = shellRectRef.current;
     if (!rect) return Math.max(MIN_DRAWER_WIDTH, Math.min(MAX_DRAWER_WIDTH, px));
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1920;
+    const eMode: DrawerMode = isCosEmbedView && mode === 'outside' ? 'split' : mode;
     let max: number;
-    if (mode === 'outside') {
+    if (eMode === 'outside') {
       max = side === 'right'
         ? Math.max(MIN_DRAWER_WIDTH, vw - (rect.left + rect.width))
         : Math.max(MIN_DRAWER_WIDTH, rect.left);
@@ -493,8 +511,19 @@ export function ChiefOfStaffBubble({
     setThreadHeightOverride(h);
   }, []);
   // Cycle mode: outside → overlay → split → outside.
-  const cycleMode = (m: DrawerMode): DrawerMode =>
-    m === 'outside' ? 'overlay' : m === 'overlay' ? 'split' : 'outside';
+  // In CoS embed (full-window pane), "outside" has no viewport room — skip it
+  // so the cycle button toggles overlay ↔ split instead of dead-ending on a
+  // mode that just falls back to split anyway (see `effectiveDrawerMode`).
+  const cycleMode = (m: DrawerMode): DrawerMode => {
+    if (isCosEmbedView) return m === 'overlay' ? 'split' : 'overlay';
+    return m === 'outside' ? 'overlay' : m === 'overlay' ? 'split' : 'outside';
+  };
+  // The CoS embed window has no room outside the pane (pane fills viewport),
+  // so an `outside` drawer renders off-screen and takes the cycle menu with it.
+  // Treat `outside` as `split` for layout/visual purposes; cycle still skips
+  // outside via `cycleMode` above so the operator can flip back inside.
+  const effectiveDrawerMode = (m: DrawerMode): DrawerMode =>
+    isCosEmbedView && m === 'outside' ? 'split' : m;
   const artifactSideRef = useRef(artifactSide);
   const artifactModeRef = useRef(artifactMode);
   useEffect(() => { artifactSideRef.current = artifactSide; }, [artifactSide]);
@@ -1111,6 +1140,23 @@ export function ChiefOfStaffBubble({
     return () => window.removeEventListener('cos-jump-to-message', onJump as EventListener);
   }, [activeAgent?.id, activeAgent?.messages]);
 
+  // Same pattern, but for jumps from the channel/thread list — caller has the
+  // server-side cosThread id (not a messageId), so find the anchor user message
+  // by threadId and scroll to it.
+  useEffect(() => {
+    if (!activeAgent) return;
+    const agent = activeAgent;
+    function onJump(e: Event) {
+      const detail = (e as CustomEvent).detail as { agentId?: string; threadId?: string } | undefined;
+      if (!detail || detail.agentId !== agent.id || !detail.threadId) return;
+      let idx = agent.messages.findIndex((m) => m.threadId === detail.threadId && m.role === 'user');
+      if (idx < 0) idx = agent.messages.findIndex((m) => m.threadId === detail.threadId);
+      if (idx >= 0) scrollToMessageIdx(idx);
+    }
+    window.addEventListener('cos-jump-to-thread', onJump as EventListener);
+    return () => window.removeEventListener('cos-jump-to-thread', onJump as EventListener);
+  }, [activeAgent?.id, activeAgent?.messages]);
+
   function jumpToThread(t: Thread) {
     const unread = unreadByThread.get(t.userIdx);
     // If there are unread replies, jump to the first unread message (block:'start'
@@ -1618,7 +1664,8 @@ export function ChiefOfStaffBubble({
 
   let learningsDrawerStyle: CosDrawerStyle | null = null;
   if (showLearnings && shellRect) {
-    const placed = placeDrawer(learningsSide, learningsWidth, learningsMode, shellRect);
+    const lMode = effectiveDrawerMode(learningsMode);
+    const placed = placeDrawer(learningsSide, learningsWidth, lMode, shellRect);
     const v = placeVertical(shellRect, learningsTopOffset, learningsHeightOverride);
     const zIdx = !inPane && panel ? getPanelZIndex(panel) + 1 : 50;
     learningsDrawerStyle = {
@@ -1629,24 +1676,25 @@ export function ChiefOfStaffBubble({
       width: placed.width,
       zIndex: zIdx,
       side: placed.side,
-      mode: learningsMode,
+      mode: lMode,
     };
   }
 
   let threadDrawerStyle: CosDrawerStyle | null = null;
   if (showThreadPanel && shellRect) {
+    const tMode = effectiveDrawerMode(threadMode);
     // If learnings is open on the same side and outside, prefer the opposite
     // side for the thread drawer so they don't stack on each other.
     let desiredSide: 'left' | 'right' = threadSide;
     if (
       learningsDrawerStyle &&
       learningsDrawerStyle.mode === 'outside' &&
-      threadMode === 'outside' &&
+      tMode === 'outside' &&
       learningsDrawerStyle.side === desiredSide
     ) {
       desiredSide = desiredSide === 'left' ? 'right' : 'left';
     }
-    const placed = placeDrawer(desiredSide, threadWidth, threadMode, shellRect);
+    const placed = placeDrawer(desiredSide, threadWidth, tMode, shellRect);
     const v = placeVertical(shellRect, threadTopOffset, threadHeightOverride);
     const zIdx = !inPane && panel ? getPanelZIndex(panel) + 1 : 50;
     threadDrawerStyle = {
@@ -1657,7 +1705,7 @@ export function ChiefOfStaffBubble({
       width: placed.width,
       zIndex: zIdx,
       side: placed.side,
-      mode: threadMode,
+      mode: tMode,
     };
   }
 
@@ -1687,14 +1735,15 @@ export function ChiefOfStaffBubble({
     } else {
       // Prefer the side opposite any drawer already on `artifactSide` to
       // keep them from overlapping when both are outside.
+      const aMode = effectiveDrawerMode(artifactMode);
       let desiredSide: 'left' | 'right' = artifactSide;
-      if (artifactMode === 'outside') {
+      if (aMode === 'outside') {
         const occupied = [learningsDrawerStyle, threadDrawerStyle].filter(
           (d) => d && d.mode === 'outside' && d.side === desiredSide,
         );
         if (occupied.length > 0) desiredSide = desiredSide === 'left' ? 'right' : 'left';
       }
-      placed = placeDrawer(desiredSide, artifactWidth, artifactMode, shellRect);
+      placed = placeDrawer(desiredSide, artifactWidth, aMode, shellRect);
       v = placeVertical(shellRect, artifactTopOffset, artifactHeightOverride);
     }
     const zIdx = !inPane && panel ? getPanelZIndex(panel) + 2 : 51;
@@ -1706,7 +1755,7 @@ export function ChiefOfStaffBubble({
       width: placed.width,
       zIndex: zIdx,
       side: placed.side,
-      mode: anchor ? 'outside' : artifactMode,
+      mode: anchor ? 'outside' : effectiveDrawerMode(artifactMode),
     };
   }
 
@@ -1749,7 +1798,7 @@ export function ChiefOfStaffBubble({
           hamburgerPos={learningsHamburgerPos}
           setLearningsSide={setLearningsSide}
           setLearningsMode={(m) => setLearningsMode(m)}
-          cycleLearningsMode={() => setLearningsMode(cycleMode(learningsMode))}
+          cycleLearningsMode={() => setLearningsMode(cycleMode(effectiveDrawerMode(learningsMode)))}
           setLearningsWidthClamped={setLearningsWidthClamped}
           setLearningsBounds={setLearningsBounds}
           onClose={() => setShowLearnings(false)}
@@ -1768,7 +1817,7 @@ export function ChiefOfStaffBubble({
           onClose={() => setShowThreadPanel(false)}
           setThreadSide={setThreadSide}
           setThreadMode={(m) => setThreadMode(m)}
-          cycleThreadMode={() => setThreadMode(cycleMode(threadMode))}
+          cycleThreadMode={() => setThreadMode(cycleMode(effectiveDrawerMode(threadMode)))}
           setThreadWidthClamped={setThreadWidthClamped}
           setThreadBounds={setThreadBounds}
         />
@@ -1780,7 +1829,7 @@ export function ChiefOfStaffBubble({
           artifactId={activeArtifactId}
           hamburgerPos={artifactHamburgerPos}
           setArtifactSide={setArtifactSide}
-          cycleArtifactMode={() => setArtifactMode(cycleMode(artifactMode))}
+          cycleArtifactMode={() => setArtifactMode(cycleMode(effectiveDrawerMode(artifactMode)))}
           setArtifactWidthClamped={setArtifactWidthClamped}
           setArtifactBounds={setArtifactBounds}
           onClose={() => setActiveArtifactId(null)}
@@ -1806,18 +1855,54 @@ export function ChiefOfStaffBubble({
           })}
         >
           <div class="cos-thin-toolbar" onMouseDown={inPane ? undefined : onHeaderDragStart}>
-            <button
-              type="button"
-              class="cos-toolbar-toggle-channels"
-              onClick={() => setChannelListOpen((v) => { try { localStorage.setItem('pw-cos-channels-open', v ? '0' : '1'); } catch {} return !v; })}
-              title={channelListOpen ? 'Hide channels' : 'Show channels'}
-              aria-label={channelListOpen ? 'Hide channels' : 'Show channels'}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                <path d="M3 6h18M3 12h18M3 18h18" />
-              </svg>
-            </button>
-            <span class="cos-toolbar-agent-name" title={activeAgent?.name || ''}>{activeAgent?.name || 'Ops'}</span>
+            {(() => {
+              // Workspace name: the selected app, or "Chief of Staff" for the
+              // virtual CoS workspace.
+              const appId = selectedAppId.value;
+              const isCosWorkspace = appId === COS_WORKSPACE_ID;
+              const app = appId ? applications.value.find((a: any) => a.id === appId) : null;
+              const workspaceLabel = isCosWorkspace ? 'Chief of Staff' : (app?.name || '');
+              // Scope: a channel (#slug) if one is active, otherwise the DM
+              // (@agentName) for the currently focused agent thread.
+              const ch = activeChannel.value;
+              const scopeLabel = ch
+                ? `#${ch.slug}`
+                : activeAgent
+                  ? `@${activeAgent.name}`
+                  : '';
+              // Active thread title (if a thread is selected for this agent).
+              let threadLabel = '';
+              const at = cosActiveThread.value;
+              if (at && activeAgent && at.agentId === activeAgent.id) {
+                const match = threads.find((t) => threadKeyOf(t) === at.threadKey);
+                if (match) threadLabel = threadTitle(match);
+              }
+              const parts = [workspaceLabel, scopeLabel, threadLabel].filter(Boolean);
+              const fullTitle = parts.join(' — ');
+              return (
+                <span
+                  class="cos-toolbar-agent-name cos-toolbar-title"
+                  title={fullTitle}
+                >
+                  {workspaceLabel && (
+                    <span class="cos-toolbar-title-workspace">{workspaceLabel}</span>
+                  )}
+                  {scopeLabel && (
+                    <>
+                      <span class="cos-toolbar-title-sep">{'—'}</span>
+                      <span class="cos-toolbar-title-scope">{scopeLabel}</span>
+                    </>
+                  )}
+                  {threadLabel && (
+                    <>
+                      <span class="cos-toolbar-title-sep">{'—'}</span>
+                      <span class="cos-toolbar-title-thread">{threadLabel}</span>
+                    </>
+                  )}
+                  {parts.length === 0 && 'Ops'}
+                </span>
+              );
+            })()}
             <div class="cos-toolbar-actions">
               <button
                 type="button"
@@ -1856,12 +1941,17 @@ export function ChiefOfStaffBubble({
                 />
               ) : ((() => {
                 const mobileThreadActive = isMobile.value && showThreadPanel && !!cosActiveThread.value;
+                const toggleChannelList = () => setChannelListOpen((v) => {
+                  try { localStorage.setItem('pw-cos-channels-open', v ? '0' : '1'); } catch {}
+                  return !v;
+                });
                 const chatPane = (
                   <div class="cos-chat-pane-with-channels">
                   {channelListOpen && (
                     <CosChannelList
                       agents={agents}
                       activeAgentId={activeId}
+                      onToggleVisible={toggleChannelList}
                       onSelectAgent={(id) => {
                         chiefOfStaffActiveId.value = id;
                         setShowSettings(false);
@@ -1871,6 +1961,19 @@ export function ChiefOfStaffBubble({
                     />
                   )}
                   <div class="cos-chat-pane">
+                    {!channelListOpen && (
+                      <button
+                        type="button"
+                        class="cos-chat-show-channels"
+                        onClick={toggleChannelList}
+                        title="Show channels"
+                        aria-label="Show channels"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                          <path d="M3 6h18M3 12h18M3 18h18" />
+                        </svg>
+                      </button>
+                    )}
                     {mobileThreadActive && (
                       <div class="cos-thread-inline">
                         <ThreadPanel

@@ -282,6 +282,8 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
           className="qdp-unified-composer"
           error={error || null}
           rows={3}
+          autoFocus
+          draftStorage="local"
         />
       </div>
       <div class="qdp-footer">

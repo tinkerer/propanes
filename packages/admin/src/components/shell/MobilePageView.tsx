@@ -11,6 +11,7 @@ import { GettingStartedPage } from '../../pages/GettingStartedPage.js';
 import { SettingsPage } from '../../pages/SettingsPage.js';
 import { WiggumPage } from '../../pages/WiggumPage.js';
 import { StandaloneSessionPage } from '../../pages/StandaloneSessionPage.js';
+import { SpecWikiPage } from '../../pages/SpecWikiPage.js';
 
 function NoApp() {
   return (
@@ -31,6 +32,7 @@ function renderMobileRoute(route: string) {
     if (fbDetail) return <FeedbackDetailPage id={fbDetail[1]} appId={appId} />;
     if (rest === 'sessions') return <SessionsPage appId={appId} />;
     if (rest === 'live') return <LiveConnectionsPage appId={appId} />;
+    if (rest === 'spec') return <SpecWikiPage appId={appId} />;
     if (rest === 'settings' || rest.startsWith('settings/')) return <AppSettingsPage appId={appId} />;
     if (rest === 'wiggum') return <WiggumPage />;
     return <FeedbackListPage appId={appId} />;

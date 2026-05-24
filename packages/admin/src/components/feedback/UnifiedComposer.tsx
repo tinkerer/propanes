@@ -51,11 +51,70 @@ export type UnifiedComposerProps = {
   onEscapeWhenEmpty?: () => void;
   /** Auto-grow textarea row count while typing. Default 1 (matches InterruptBar). */
   rows?: number;
+  autoFocus?: boolean;
+  draftStorage?: 'server' | 'local';
 };
 
 const DRAFT_DEBOUNCE_MS = 300;
+const LOCAL_DRAFT_PREFIX = 'pw-unified-composer-draft:';
+
+type ComposerDraftAttachments = {
+  elements?: SelectedElementInfo[];
+};
+
+function serializeDraftAttachments(elements: SelectedElementInfo[]): string | undefined {
+  if (elements.length === 0) return undefined;
+  return JSON.stringify({ elements });
+}
+
+function parseDraftAttachments(raw: string | null | undefined): ComposerDraftAttachments {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    return {
+      elements: Array.isArray(parsed.elements)
+        ? parsed.elements.filter((el): el is SelectedElementInfo => !!el && typeof el === 'object')
+        : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+type ComposerDraftPayload = { text: string; attachmentsJson?: string };
+
+function localDraftKey(key: string): string {
+  return `${LOCAL_DRAFT_PREFIX}${key}`;
+}
+
+function saveLocalDraft(key: string, payload: ComposerDraftPayload): void {
+  try {
+    if (!payload.text && !payload.attachmentsJson) {
+      localStorage.removeItem(localDraftKey(key));
+      return;
+    }
+    localStorage.setItem(localDraftKey(key), JSON.stringify(payload));
+  } catch { /* best-effort */ }
+}
+
+function readLocalDraft(key: string): { text: string; attachmentsJson: string | null } | null {
+  try {
+    const raw = localStorage.getItem(localDraftKey(key));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return {
+      text: typeof parsed.text === 'string' ? parsed.text : '',
+      attachmentsJson: typeof parsed.attachmentsJson === 'string' ? parsed.attachmentsJson : null,
+    };
+  } catch {
+    return null;
+  }
+}
 
 async function pushDraft(key: string, payload: { text: string; attachmentsJson?: string }): Promise<void> {
+  saveLocalDraft(key, payload);
   try {
     const token = localStorage.getItem('pw-admin-token');
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -68,7 +127,12 @@ async function pushDraft(key: string, payload: { text: string; attachmentsJson?:
   } catch { /* best-effort */ }
 }
 
+function pushLocalDraft(key: string, payload: ComposerDraftPayload): void {
+  saveLocalDraft(key, payload);
+}
+
 async function clearDraftApi(key: string): Promise<void> {
+  saveLocalDraft(key, { text: '' });
   try {
     const token = localStorage.getItem('pw-admin-token');
     const headers: Record<string, string> = {};
@@ -77,7 +141,13 @@ async function clearDraftApi(key: string): Promise<void> {
   } catch { /* best-effort */ }
 }
 
-async function loadDraft(key: string): Promise<{ text: string } | null> {
+function clearLocalDraft(key: string): void {
+  saveLocalDraft(key, { text: '' });
+}
+
+async function loadDraft(key: string): Promise<{ text: string; attachmentsJson: string | null } | null> {
+  const localDraft = readLocalDraft(key);
+  if (localDraft) return localDraft;
   try {
     const token = localStorage.getItem('pw-admin-token');
     const headers: Record<string, string> = {};
@@ -86,7 +156,10 @@ async function loadDraft(key: string): Promise<{ text: string } | null> {
     if (!res.ok) return null;
     const data = await res.json();
     if (data && typeof data === 'object' && data.exists) {
-      return { text: typeof data.text === 'string' ? data.text : '' };
+      return {
+        text: typeof data.text === 'string' ? data.text : '',
+        attachmentsJson: typeof data.attachmentsJson === 'string' ? data.attachmentsJson : null,
+      };
     }
   } catch { /* ignore */ }
   return null;
@@ -105,6 +178,8 @@ export function UnifiedComposer({
   error: externalError,
   onEscapeWhenEmpty,
   rows = 1,
+  autoFocus = false,
+  draftStorage = 'server',
 }: UnifiedComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -124,6 +199,7 @@ export function UnifiedComposer({
   const [menuOpen, setMenuOpen] = useState(false);
   const [pickerActive, setPickerActive] = useState(false);
   const [captureBusy, setCaptureBusy] = useState(false);
+  const [draftHydratedKey, setDraftHydratedKey] = useState<string | null>(null);
 
   // Option state mirroring the widget menus
   const [shotMethod, setShotMethod] = useState<ScreenshotMethod>('html-to-image');
@@ -153,18 +229,36 @@ export function UnifiedComposer({
 
   const error = externalError ?? internalError;
 
+  useEffect(() => {
+    if (!autoFocus) return;
+    const id = requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [autoFocus]);
+
   // Hydrate from draft on mount / when draftKey changes. Only fires once per
   // key — text typed before the load resolves is preserved as the user input
   // wins over the persisted draft.
   useEffect(() => {
-    if (!draftKey) return;
+    if (!draftKey) {
+      draftLoadedKeyRef.current = null;
+      setDraftHydratedKey(null);
+      return;
+    }
     if (draftLoadedKeyRef.current === draftKey) return;
     draftLoadedKeyRef.current = draftKey;
+    setDraftHydratedKey(null);
     let cancelled = false;
     void (async () => {
       const draft = await loadDraft(draftKey);
       if (cancelled) return;
       if (draft && draft.text && !core.text) core.setText(draft.text);
+      const attachments = parseDraftAttachments(draft?.attachmentsJson);
+      if (attachments.elements?.length && core.elements.length === 0) {
+        core.setElements(attachments.elements);
+      }
+      setDraftHydratedKey(draftKey);
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -174,18 +268,36 @@ export function UnifiedComposer({
   // side; the route handles that.
   useEffect(() => {
     if (!draftKey) return;
+    if (draftHydratedKey !== draftKey) return;
     if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current);
     draftSaveTimerRef.current = setTimeout(() => {
       draftSaveTimerRef.current = null;
-      void pushDraft(draftKey, { text: core.text });
+      const payload = {
+        text: core.text,
+        attachmentsJson: serializeDraftAttachments(core.elements),
+      };
+      if (draftStorage === 'local') {
+        pushLocalDraft(draftKey, payload);
+      } else {
+        void pushDraft(draftKey, payload);
+      }
     }, DRAFT_DEBOUNCE_MS);
     return () => {
       if (draftSaveTimerRef.current) {
         clearTimeout(draftSaveTimerRef.current);
         draftSaveTimerRef.current = null;
+        const payload = {
+          text: core.text,
+          attachmentsJson: serializeDraftAttachments(core.elements),
+        };
+        if (draftStorage === 'local') {
+          pushLocalDraft(draftKey, payload);
+        } else {
+          void pushDraft(draftKey, payload);
+        }
       }
     };
-  }, [draftKey, core.text]);
+  }, [draftKey, draftHydratedKey, draftStorage, core.text, core.elements]);
 
   // Click-outside to close the expand menu.
   useEffect(() => {
@@ -359,7 +471,11 @@ export function UnifiedComposer({
           clearTimeout(draftSaveTimerRef.current);
           draftSaveTimerRef.current = null;
         }
-        void clearDraftApi(draftKey);
+        if (draftStorage === 'local') {
+          clearLocalDraft(draftKey);
+        } else {
+          void clearDraftApi(draftKey);
+        }
       }
     } catch (err: any) {
       setInternalError(err?.message || String(err));
