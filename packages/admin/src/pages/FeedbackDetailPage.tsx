@@ -1,5 +1,6 @@
 import { useSignal, useSignalEffect } from '@preact/signals';
 import { useRef, useEffect } from 'preact/hooks';
+import { createPortal } from 'preact/compat';
 import { marked } from 'marked';
 import { api } from '../lib/api.js';
 import { navigate } from '../lib/state.js';
@@ -1043,7 +1044,7 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
         </div>
       </div>
 
-      {lightboxSrc.value && (
+      {lightboxSrc.value && createPortal(
         <div class="sm-lightbox" onClick={() => {
           if (!cropMode.value) {
             lightboxSrc.value = null;
@@ -1088,7 +1089,8 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
               </>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

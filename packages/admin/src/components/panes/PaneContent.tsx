@@ -31,9 +31,11 @@ import { SettingsPage } from '../../pages/SettingsPage.js';
 import { WiggumPage } from '../../pages/WiggumPage.js';
 import { ChannelPage } from '../../pages/ChannelPage.js';
 import { ApprovalQueuePage } from '../../pages/ApprovalQueuePage.js';
+import { SpecWikiPage } from '../../pages/SpecWikiPage.js';
 import {
   getTerminalCompanion,
   getViewMode,
+  setTerminalCompanionAndOpen,
   setSessionInputState,
   markSessionExited,
 } from '../../lib/sessions.js';
@@ -71,6 +73,8 @@ export function renderTabContent(
           <ApprovalQueuePage />
         ) : sid === 'view:app-settings' ? (
           (() => { const aid = selectedAppId.value || applications.value[0]?.id; return aid ? <AppSettingsPage appId={aid} /> : <div style={{ padding: 16, color: 'var(--pw-text-muted)' }}>No apps configured</div>; })()
+        ) : sid === 'view:spec' ? (
+          (() => { const aid = selectedAppId.value || applications.value[0]?.id; return aid ? <SpecWikiPage appId={aid} /> : <div style={{ padding: 16, color: 'var(--pw-text-muted)' }}>No apps configured</div>; })()
         ) : sid === 'view:sessions-list' ? (
           <SessionsListView />
         ) : sid === 'view:terminals' ? (
@@ -198,6 +202,7 @@ export function renderTabContent(
           isActive={isVisible}
           onExit={handleExit}
           onInputStateChange={(s) => setSessionInputState(sid, s)}
+          onLoginRequired={(companionSessionId) => setTerminalCompanionAndOpen(sid, companionSessionId)}
           permissionProfile={sessionMap.get(sid)?.permissionProfile}
           mode={getViewMode(sid)}
         />

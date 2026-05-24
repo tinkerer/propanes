@@ -46,6 +46,7 @@ import {
   ensureAgentSessionForThread,
   cosThreadRoutes,
 } from './cos-thread-routes.js';
+import { broadcastAdmin } from '../../admin-push.js';
 
 export const chiefOfStaffRoutes = new Hono();
 chiefOfStaffRoutes.route('/', cosLocksRoutes);
@@ -693,6 +694,14 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
         db.update(schema.agentSessions).set({
           status: 'running', lastActivityAt: new Date().toISOString(),
         }).where(eq(schema.agentSessions.id, agentSessionIdForCallbacks)).run();
+        // Nudge open admin clients to refetch the agent's CoS history so threads
+        // spawned outside the composer's own SSE channel (widget feedback,
+        // inbox-routed sends from another tab, follow-up dispatches) show their
+        // replies inline without waiting for a page reload.
+        broadcastAdmin({
+          topic: 'cos-message',
+          data: { agentId: agentIdForCallbacks, threadId: threadIdForCallbacks },
+        });
       },
       onCapturedSessionId: (sid) => {
         db.update(schema.cosThreads).set({ claudeSessionId: sid }).where(eq(schema.cosThreads.id, threadIdForCallbacks)).run();
@@ -734,4 +743,6 @@ chiefOfStaffRoutes.post('/chief-of-staff/chat', async (c) => {
 // Run shortly after module load so the db + session-service have time to
 // settle. Best-effort: failures here only delay assistant-row persistence
 // for a single turn and never crash the server.
-setTimeout(() => { void recoverInFlightTurns(); }, 1500);
+if (process.env.NODE_ENV !== 'test') {
+  setTimeout(() => { void recoverInFlightTurns(); }, 1500);
+}

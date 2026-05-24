@@ -60,6 +60,19 @@ export interface CosLeafDragConfig {
   onClickFallback: () => void;
 }
 
+/** Optional edge-crossing flip detection for leaf drags initiated from a
+ *  drawer handle hamburger. When the cursor crosses `flipRect`'s `flipEdge`
+ *  by FLIP_THRESHOLD px in the direction given by `flipDirection`, `onFlip`
+ *  fires and the drag is cancelled (no ghost, no drop). */
+export interface CosLeafDragFlipConfig {
+  flipRect: { top: number; left: number; width: number; height: number };
+  flipEdge: 'left' | 'right' | 'top' | 'bottom';
+  flipDirection: 'outward' | 'inward';
+  onFlip: (ev: MouseEvent) => void;
+}
+
+const FLIP_THRESHOLD = 40;
+
 const DRAG_THRESHOLD = 6;
 const EDGE_FRACTION = 0.18; // 18% strip on each edge counts as edge-dock zone
 
@@ -396,7 +409,7 @@ export function startCosTabDrag(e: MouseEvent, config: CosTabDragConfig): void {
  * tab drag: dropping on the popout's outer resizer docks the entire pane as
  * a companion drawer; dropping on a leaf merges or splits.
  */
-export function startCosLeafDrag(e: MouseEvent, config: CosLeafDragConfig): void {
+export function startCosLeafDrag(e: MouseEvent, config: CosLeafDragConfig, flipConfig?: CosLeafDragFlipConfig): void {
   const target = e.target as HTMLElement;
   if (target.closest('.cos-tree-action-close')) return;
 
@@ -467,14 +480,45 @@ export function startCosLeafDrag(e: MouseEvent, config: CosLeafDragConfig): void
     }
   }
 
+  function checkFlip(ev: MouseEvent): boolean {
+    if (!flipConfig) return false;
+    const { flipRect: fr, flipEdge: fe, flipDirection: fd, onFlip } = flipConfig;
+    const sign = fd === 'inward' ? -1 : 1;
+    let baseSigned: number;
+    switch (fe) {
+      case 'right':  baseSigned = ev.clientX - (fr.left + fr.width); break;
+      case 'left':   baseSigned = fr.left - ev.clientX; break;
+      case 'bottom': baseSigned = ev.clientY - (fr.top + fr.height); break;
+      case 'top':    baseSigned = fr.top - ev.clientY; break;
+    }
+    if (baseSigned * sign > FLIP_THRESHOLD) {
+      onFlip(ev);
+      // Clean up the drag — the flip replaces the drop action.
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (lastHighlighted) lastHighlighted.classList.remove('drop-target');
+      highlightPopoutResizer(null);
+      if (ghost) { ghost.remove(); ghost = null; }
+      dragOverLeafZone.value = null;
+      return true;
+    }
+    return false;
+  }
+
   function onMove(ev: MouseEvent) {
     const dx = ev.clientX - startX;
     const dy = ev.clientY - startY;
     if (!dragging && Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD) {
+      // Check for flip before starting the ghost — the flip fires without
+      // showing a ghost, giving the same seamless feel as the grip-area drag.
+      if (checkFlip(ev)) return;
       dragging = true;
       createGhost();
     }
     if (!dragging) return;
+    // Continue checking for flip during the drag (cursor may cross the
+    // boundary after the ghost is already visible).
+    if (checkFlip(ev)) return;
     updateGhost(ev.clientX, ev.clientY);
     const ext = applyExternalGhostHint(ghost, config.label, ev.clientX, ev.clientY);
     if (ext) {

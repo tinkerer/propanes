@@ -1,3 +1,4 @@
+import { type ComponentChildren } from 'preact';
 import { useState, useMemo } from 'preact/hooks';
 import { MessageRenderer, type ChatRenderOpts } from '../terminal/MessageRenderer.js';
 import { type ParsedMessage } from '../../lib/output-parser.js';
@@ -33,12 +34,18 @@ export interface ConversationViewProps {
   chat?: ChatRenderOpts;
   /** Whether the session is waiting for input */
   isWaiting?: boolean;
+  /** Whether the backing session is still running. */
+  isRunning?: boolean;
   /** Callback for artifact popout */
   onArtifactPopout?: (artifactId: string) => void;
   /** Search highlight text */
   searchHighlight?: string | null;
   /** Show tool calls in bubble mode */
   showTools?: boolean;
+  /** Ref callback for the scrollable message body. */
+  scrollBodyRef?: (el: HTMLDivElement | null) => void;
+  /** Optional content rendered at the top of the scrollable message body. */
+  scrollBodyTop?: ComponentChildren;
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +365,9 @@ export function ConversationView({
   onArtifactPopout,
   searchHighlight,
   showTools = true,
+  isRunning: sessionRunning,
+  scrollBodyRef,
+  scrollBodyTop,
 }: ConversationViewProps) {
   const [filters, setFilters] = useState<ConversationFilters>(DEFAULT_FILTERS);
 
@@ -371,7 +381,16 @@ export function ConversationView({
 
   // Derive input state from the sessionInputStates signal for the input bar
   const inputState = sessionId ? (sessionInputStates.value.get(sessionId) ?? 'idle') : 'idle';
-  const isRunning = isWaiting || inputState === 'active' || inputState === 'waiting';
+  const isRunning = sessionRunning ?? (isWaiting || inputState === 'active' || inputState === 'waiting');
+
+  const inputBar = sessionId ? (
+    <SessionInputBar
+      sessionId={sessionId}
+      lastMessage={lastMsg}
+      inputState={inputState}
+      isRunning={isRunning}
+    />
+  ) : null;
 
   // Compute filtered count for the header
   const hasActiveFilters = isFiltersActive(filters);
@@ -387,19 +406,6 @@ export function ConversationView({
   // Effective search highlight: use filter searchQuery if set, otherwise fall back to prop
   const effectiveHighlight = filters.searchQuery || searchHighlight || null;
 
-  if (messages.length === 0) {
-    return <div class="cv-empty">No messages yet</div>;
-  }
-
-  const inputBar = sessionId ? (
-    <SessionInputBar
-      sessionId={sessionId}
-      lastMessage={lastMsg}
-      inputState={inputState}
-      isRunning={isRunning}
-    />
-  ) : null;
-
   const headerBar = (
     <ConversationFilter
       filters={filters}
@@ -409,11 +415,21 @@ export function ConversationView({
     />
   );
 
+  if (messages.length === 0) {
+    return (
+      <div class="conversation-view conversation-view-empty" style={{ display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}>
+        <div class="cv-empty">No messages yet</div>
+        {inputBar}
+      </div>
+    );
+  }
+
   if (mode === 'bubble') {
     return (
       <div class="conversation-view conversation-view-bubble" style={{ display: 'flex', flexDirection: 'column' }}>
         {headerBar}
-        <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px' }}>
+        <div ref={scrollBodyRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }}>
+          {scrollBodyTop}
           {groups.map((group) => {
             const filtered = { ...group, messages: filterGroupMessages(group.messages, filters) };
             if (filtered.messages.length === 0) return null;
@@ -454,9 +470,10 @@ export function ConversationView({
 
   // mode === 'structured'
   return (
-    <div class="conversation-view conversation-view-structured" style={{ display: 'flex', flexDirection: 'column' }}>
+    <div class="conversation-view conversation-view-structured" style={{ display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}>
       {headerBar}
-      <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px' }}>
+      <div ref={scrollBodyRef} style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 16px' }}>
+        {scrollBodyTop}
         {groups.map((group) => {
           const lastGroupMsg = group.messages[group.messages.length - 1];
           const filteredMsgs = filterGroupMessages(group.messages, filters);
@@ -517,8 +534,8 @@ export function ConversationView({
             </span>
           </div>
         )}
-        {inputBar}
       </div>
+      {inputBar}
     </div>
   );
 }

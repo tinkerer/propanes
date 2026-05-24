@@ -620,6 +620,7 @@ export async function loadAllSessions(includeDeleted = false, isAutoPoll = false
     const sessionsChanged = sessions.length !== prevSessions.length || sessions.some((s, i) => {
       const p = prevSessions[i];
       return !p || s.id !== p.id || s.status !== p.status || s.inputState !== p.inputState
+        || s.companionSessionId !== p.companionSessionId
         || s.paneTitle !== p.paneTitle || s.paneCommand !== p.paneCommand;
     });
     if (sessionsChanged) {
@@ -660,6 +661,7 @@ export function startSessionPolling(): () => void {
     const sessionsChanged = sessions.length !== prevSessions.length || sessions.some((s, i) => {
       const p = prevSessions[i];
       return !p || s.id !== p.id || s.status !== p.status || s.inputState !== p.inputState
+        || s.companionSessionId !== p.companionSessionId
         || s.paneTitle !== p.paneTitle || s.paneCommand !== p.paneCommand;
     });
     if (sessionsChanged) {

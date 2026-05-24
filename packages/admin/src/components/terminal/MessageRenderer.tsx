@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'preact/hooks';
+import { createPortal } from 'preact/compat';
 import { marked } from 'marked';
 import hljs from 'highlight.js/lib/common';
 import type { ParsedMessage } from '../../lib/output-parser.js';
@@ -946,13 +947,14 @@ function ImageViewer({ src }: { src: string }) {
         alt="Image content"
         onClick={() => setLightbox(true)}
       />
-      {lightbox && (
+      {lightbox && createPortal(
         <div class="sm-lightbox" onClick={() => setLightbox(false)}>
           <div class="sm-lightbox-content" onClick={(e) => e.stopPropagation()}>
             <img src={src} alt="Image content (full)" />
             <button class="sm-lightbox-close" onClick={() => setLightbox(false)}>&times;</button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

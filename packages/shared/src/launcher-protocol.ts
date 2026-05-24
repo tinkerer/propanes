@@ -118,7 +118,10 @@ export interface LauncherHealthCheckResult {
   launcherVersion: string;
   platform: string;
   arch: string;
+  cpu: { cores: number; loadAverage: number[] };
   memory: { total: number; free: number };
+  disks?: Array<{ filesystem: string; mount: string; total: number; used: number; available: number; usePercent: number }>;
+  network?: Array<{ interface: string; rxBytes: number; txBytes: number }>;
   activeSessions: number;
   capabilities: LauncherCapabilities;
   claudeCliVersion?: string;

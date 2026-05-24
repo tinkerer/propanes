@@ -184,6 +184,37 @@ const DEFAULT_AGENTS: ChiefOfStaffAgent[] = [
     verbosity: DEFAULT_VERBOSITY,
     style: DEFAULT_STYLE,
   },
+  // Pseudo-persona: widget/admin feedback intake threads are minted under
+  // this id by the server (mintFeedbackThread). Without this local persona,
+  // selecting an inbox thread makes activeAgent null and the CoS shell
+  // appears to close.
+  {
+    id: '__inbox__',
+    name: 'Inbox',
+    systemPrompt:
+      'You are the Inbox overview. Each thread is an intake item from widget or admin feedback. Keep the operator oriented, preserve the original report, and help route or dispatch follow-up work tersely.',
+    model: '',
+    messages: [],
+    verbosity: DEFAULT_VERBOSITY,
+    style: DEFAULT_STYLE,
+  },
+  // Pseudo-persona: every agent_sessions row is auto-minted as a thread under
+  // this id by the server (ensureCosThreadsForOrphanSessions). Selecting this
+  // rail gives the operator a single place to see every running/idle session
+  // as a thread, regardless of whether it originated from CoS chat, feedback,
+  // QuickDispatch, or an API call. The systemPrompt is a placeholder — the
+  // rail is read-mostly; sending a message here will lazy-create a real CoS
+  // thread under this persona just like the other agents.
+  {
+    id: '__sessions__',
+    name: 'Sessions',
+    systemPrompt:
+      'You are the Sessions overview. Each thread here is a real agent_sessions row — the conversation, dispatch history, and exit state of an underlying session. Keep responses terse and operational.',
+    model: '',
+    messages: [],
+    verbosity: DEFAULT_VERBOSITY,
+    style: DEFAULT_STYLE,
+  },
 ];
 
 function loadState(): { agents: ChiefOfStaffAgent[]; activeAgentId: string; open: boolean } {
@@ -225,6 +256,13 @@ function loadState(): { agents: ChiefOfStaffAgent[]; activeAgentId: string; open
       verbosity: a.verbosity === 'normal' || a.verbosity === 'verbose' ? a.verbosity : DEFAULT_VERBOSITY,
       style: a.style === 'neutral' || a.style === 'friendly' ? a.style : DEFAULT_STYLE,
     }));
+    // Merge in any DEFAULT_AGENTS the user is missing. Existing persisted state
+    // bypasses DEFAULT_AGENTS entirely, so without this step new pseudo-personas
+    // (e.g. __sessions__) would never appear for users who already have local
+    // CoS state. Appended at the end so we don't reorder the user's rails.
+    for (const def of DEFAULT_AGENTS) {
+      if (!agents.some((a) => a.id === def.id)) agents.push({ ...def, messages: [] });
+    }
     const activeAgentId = typeof parsed.activeAgentId === 'string' && agents.some((a) => a.id === parsed.activeAgentId)
       ? parsed.activeAgentId
       : agents[0].id;
@@ -287,6 +325,24 @@ export function updateAgent(id: string, mutate: (a: ChiefOfStaffAgent) => ChiefO
   chiefOfStaffAgents.value = chiefOfStaffAgents.value.map((a) => (a.id === id ? mutate(a) : a));
 }
 
+export function ensureChiefOfStaffAgent(id: string, name?: string | null): ChiefOfStaffAgent {
+  const existing = chiefOfStaffAgents.value.find((a) => a.id === id);
+  if (existing) return existing;
+  const label = (name || '').trim() || id.replace(/^__|__$/g, '').replace(/[-_]+/g, ' ') || 'Agent';
+  const agent: ChiefOfStaffAgent = {
+    id,
+    name: label.charAt(0).toUpperCase() + label.slice(1),
+    systemPrompt:
+      'You are an operations assistant for this CoS thread group. Keep responses terse, preserve thread context, and help the operator continue or dispatch the work.',
+    model: '',
+    messages: [],
+    verbosity: DEFAULT_VERBOSITY,
+    style: DEFAULT_STYLE,
+  };
+  chiefOfStaffAgents.value = [...chiefOfStaffAgents.value, agent];
+  return agent;
+}
+
 function serverMessageToClient(m: any): ChiefOfStaffMsg {
   let toolCalls: ChiefOfStaffToolCall[] | undefined;
   if (m?.toolCallsJson) {
@@ -342,7 +398,11 @@ function serverMessageToClient(m: any): ChiefOfStaffMsg {
  */
 export const COS_WORKSPACE_ID = '__cos__';
 
-export async function loadChiefOfStaffHistory(agentId: string, appId: string | null = null): Promise<void> {
+export async function loadChiefOfStaffHistory(
+  agentId: string,
+  appId: string | null = null,
+  opts: { preserveStreaming?: boolean } = {},
+): Promise<void> {
   try {
     const token = localStorage.getItem('pw-admin-token');
     const headers: Record<string, string> = {};
@@ -371,13 +431,31 @@ export async function loadChiefOfStaffHistory(agentId: string, appId: string | n
     // turn offline).
     if (threads.length === 0 && serverMessages.length === 0) return;
 
-    updateAgent(agentId, (a) => ({
-      ...a,
-      messages: serverMessages,
-      // agent.threadId is retained only as a legacy hint; every message now
-      // carries its own threadId and each top-level send mints a fresh one.
-      threadId: undefined,
-    }));
+    updateAgent(agentId, (a) => {
+      // preserveStreaming: refetch was triggered by a live push (e.g. the
+      // cos-message admin-ws topic), and the local log may already hold an
+      // optimistic streaming row from a send-in-progress on this same client.
+      // A hard replace would clobber that row, snapping the chat back to the
+      // pre-stream state until the SSE re-finalized. Instead, keep local rows
+      // the server hasn't acknowledged yet (`streaming` / `sending`) and any
+      // local rows whose `timestamp` is newer than the most recent server
+      // row, so a just-sent message doesn't disappear mid-stream.
+      if (!opts.preserveStreaming) {
+        return { ...a, messages: serverMessages, threadId: undefined };
+      }
+      const serverMaxTs = serverMessages.reduce(
+        (mx, m) => (m.timestamp && m.timestamp > mx ? m.timestamp : mx),
+        0,
+      );
+      const localOnly = a.messages.filter((m) => {
+        if (m.streaming || m.sending) return true;
+        return m.timestamp != null && m.timestamp > serverMaxTs;
+      });
+      const merged = [...serverMessages, ...localOnly].sort(
+        (x, y) => (x.timestamp || 0) - (y.timestamp || 0),
+      );
+      return { ...a, messages: merged, threadId: undefined };
+    });
   } catch {
     /* non-fatal */
   }
@@ -389,6 +467,35 @@ void (async () => {
   for (const agent of chiefOfStaffAgents.value) {
     void loadChiefOfStaffHistory(agent.id);
   }
+})();
+
+// Live refresh: when the server broadcasts that a thread got a new assistant
+// message (see chief-of-staff.ts route, onAssistantText), refetch that agent's
+// history so the thread block picks up the reply count + summary inline. Two
+// guards keep this cheap:
+//   1. Per-agent debounce: bursts of replies from parallel threads coalesce
+//      into a single refetch within DEBOUNCE_MS.
+//   2. preserveStreaming: the in-flight composer SSE keeps its optimistic row
+//      intact across the refetch (the merge in loadChiefOfStaffHistory above).
+const COS_LIVE_REFRESH_DEBOUNCE_MS = 500;
+const pendingCosLiveRefresh = new Map<string, ReturnType<typeof setTimeout>>();
+void (async () => {
+  const { subscribeAdmin } = await import('./admin-ws.js');
+  const { selectedAppId } = await import('./state.js');
+  subscribeAdmin('cos-message', (data: { agentId?: string; threadId?: string } | null) => {
+    const agentId = data?.agentId;
+    if (!agentId) return;
+    // Ignore broadcasts for agents this client hasn't loaded yet — those
+    // will get fetched lazily on first selection.
+    if (!chiefOfStaffAgents.value.some((a) => a.id === agentId)) return;
+    const prev = pendingCosLiveRefresh.get(agentId);
+    if (prev) clearTimeout(prev);
+    const timer = setTimeout(() => {
+      pendingCosLiveRefresh.delete(agentId);
+      void loadChiefOfStaffHistory(agentId, selectedAppId.value, { preserveStreaming: true });
+    }, COS_LIVE_REFRESH_DEBOUNCE_MS);
+    pendingCosLiveRefresh.set(agentId, timer);
+  });
 })();
 
 /**
@@ -895,4 +1002,3 @@ export function dismissFailedAssistantMessage(targetTimestamp: number): void {
     ),
   }));
 }
-

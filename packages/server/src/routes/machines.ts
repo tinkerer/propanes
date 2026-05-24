@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { eq } from 'drizzle-orm';
 import { ulid } from 'ulidx';
+import * as os from 'node:os';
+import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { db, schema } from '../db/index.js';
 import { listLaunchers } from '../launcher-registry.js';
 
@@ -12,6 +15,39 @@ function serializeMachine(row: typeof schema.machines.$inferSelect) {
     capabilities: row.capabilities ? JSON.parse(row.capabilities) : null,
     tags: row.tags ? JSON.parse(row.tags) : [],
   };
+}
+
+function collectDiskStats() {
+  try {
+    const isLinux = process.platform === 'linux';
+    const output = execSync(isLinux ? 'df -B1 -P -x tmpfs -x devtmpfs' : 'df -k -P', { stdio: 'pipe', timeout: 5_000 }).toString();
+    const blockSize = isLinux ? 1 : 1024;
+    return output.trim().split('\n').slice(1).map((line) => {
+      const parts = line.trim().split(/\s+/);
+      return {
+        filesystem: parts[0],
+        total: (Number(parts[1]) || 0) * blockSize,
+        used: (Number(parts[2]) || 0) * blockSize,
+        available: (Number(parts[3]) || 0) * blockSize,
+        usePercent: Number((parts[4] || '').replace('%', '')) || 0,
+        mount: parts.slice(5).join(' '),
+      };
+    }).filter((disk) => disk.mount && disk.total > 0);
+  } catch {
+    return [];
+  }
+}
+
+function collectNetworkStats() {
+  try {
+    return readFileSync('/proc/net/dev', 'utf-8').trim().split('\n').slice(2).map((line) => {
+      const [ifaceRaw, valuesRaw] = line.split(':');
+      const values = valuesRaw.trim().split(/\s+/).map((v) => Number(v) || 0);
+      return { interface: ifaceRaw.trim(), rxBytes: values[0] || 0, txBytes: values[8] || 0 };
+    }).filter((net) => net.interface !== 'lo');
+  } catch {
+    return [];
+  }
 }
 
 app.get('/', (c) => {
@@ -111,6 +147,23 @@ app.get('/:id/admin-health', async (c) => {
   } catch (err: any) {
     return c.json({ alive: false, reason: err.message });
   }
+});
+
+app.get('/:id/system-health', (c) => {
+  const row = db.select().from(schema.machines).where(eq(schema.machines.id, c.req.param('id'))).get();
+  if (!row) return c.json({ error: 'Machine not found' }, 404);
+  if (row.type !== 'local') return c.json({ error: 'System health is available through the connected launcher for remote machines' }, 400);
+
+  return c.json({
+    uptime: os.uptime(),
+    nodeVersion: process.version,
+    platform: os.platform(),
+    arch: os.arch(),
+    cpu: { cores: os.cpus().length, loadAverage: os.loadavg() },
+    memory: { total: os.totalmem(), free: os.freemem() },
+    disks: collectDiskStats(),
+    network: collectNetworkStats(),
+  });
 });
 
 // Start the pw-server on a remote machine via its launcher

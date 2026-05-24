@@ -4,7 +4,7 @@ import { api } from './api.js';
 import { allSessions, exitedSessions } from './sessions.js';
 import { isMobile } from './viewport.js';
 
-const TERMINAL_STATUSES = new Set(['completed', 'exited', 'failed', 'deleted', 'archived']);
+const TERMINAL_STATUSES = new Set(['completed', 'exited', 'failed', 'deleted', 'archived', 'killed']);
 
 export interface UseTranscriptStreamOpts {
   /** When set, pass `?file=` to the JSONL endpoint to filter to one transcript
@@ -54,7 +54,7 @@ export function useTranscriptStream(
   const sessionRecord = allSessions.value.find((s: any) => s.id === sessionId);
   const terminalStatus = sessionRecord?.status && TERMINAL_STATUSES.has(sessionRecord.status);
   const isSessionDone = exitedSessions.value.has(sessionId) || !!terminalStatus;
-  const isRunning = sessionRecord?.status === 'running';
+  const isRunning = sessionRecord?.status === 'running' || sessionRecord?.status === 'pending';
   const runtime = sessionRecord?.runtime;
 
   const fileFilter = opts.fileFilter ?? null;

@@ -46,6 +46,7 @@ export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (sid === 'view:sessions-page') return 'Sessions';
   if (sid === 'view:live') return 'Live';
   if (sid === 'view:app-settings') return 'Settings';
+  if (sid === 'view:spec') return 'Spec Wiki';
   if (sid.startsWith('view:files:')) return 'Files';
   if (sid.startsWith('view:git:')) return 'Git Changes';
   if (sid.startsWith('view:')) return sid.slice(5);
