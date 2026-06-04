@@ -4,6 +4,8 @@ Feedback overlay + agent session bridge for web apps. Drop a script tag into you
 
 Now you're cooking with gases.
 
+![ProPanes admin dashboard](docs/assets/propanes-admin-feedback.png)
+
 ## Packages
 
 | Package | Role |
