@@ -6,6 +6,11 @@ Now you're cooking with gases.
 
 ![ProPanes admin dashboard](docs/assets/propanes-admin-feedback.png)
 
+## Demo videos
+
+- [DOM selection and screenshots](https://www.loom.com/share/7bdf87fc2e764979831ee45b910f669d)
+- [Dragging panes into new windows and loading remote tmux sessions in Terminal.app](https://www.loom.com/share/8f76efc714464f53a37d9a984a765992)
+
 ## Packages
 
 | Package | Role |
