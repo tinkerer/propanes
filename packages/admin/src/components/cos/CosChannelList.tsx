@@ -15,9 +15,9 @@ import { cosActiveThread } from '../../lib/cos-popout-tree.js';
 import { openSession, loadAllSessions } from '../../lib/sessions.js';
 
 const KIND_DOT: Record<ChannelKind, string> = {
-  prod: '#ef4444',
-  staging: '#eab308',
-  exploratory: '#22c55e',
+  prod: 'var(--pw-danger)',
+  staging: 'var(--pw-warning)',
+  exploratory: 'var(--pw-primary)',
 };
 
 const SPLIT_RATIO_KEY = 'pw-cos-channel-list-split-ratio';
@@ -383,7 +383,7 @@ export function CosChannelList({
                   <span class="cos-channel-item-expand">{isExpanded ? '▾' : '▸'}</span>
                   <span
                     class="cos-channel-item-dot"
-                    style={{ background: KIND_DOT[ch.kind] || '#6b7280' }}
+                    style={{ background: KIND_DOT[ch.kind] || 'var(--pw-text-muted)' }}
                   />
                   <span class="cos-channel-item-name">#{ch.slug}</span>
                   {ch.openCount > 0 && (
@@ -426,9 +426,9 @@ export function CosChannelList({
 }
 
 const STATUS_DOT: Record<string, string> = {
-  running: '#22c55e',
-  failed: '#ef4444',
-  completed: '#6b7280',
+  running: 'var(--pw-warning)',
+  failed: 'var(--pw-danger)',
+  completed: 'var(--pw-text-muted)',
 };
 
 function ChannelThreadList({
@@ -446,7 +446,7 @@ function ChannelThreadList({
     <div class="cos-channel-thread-list">
       {threads.map((t) => {
         const isActive = activeThread?.agentId === t.agentId && activeThread?.threadKey === `tid:${t.id}`;
-        const dotColor = t.sessionStatus ? (STATUS_DOT[t.sessionStatus] || '#3b82f6') : '#3b82f6';
+        const dotColor = t.sessionStatus ? (STATUS_DOT[t.sessionStatus] || 'var(--pw-primary)') : 'var(--pw-primary)';
         return (
           <button
             key={t.id}

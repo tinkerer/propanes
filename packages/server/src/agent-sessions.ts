@@ -6,7 +6,7 @@ import {
   spawnSessionRemote,
   killSessionRemote,
   getSessionServiceWsUrl,
-  getSessionServiceActiveSessions,
+  getSessionServiceHealthSnapshot,
 } from './session-service-client.js';
 import { getLauncher, listLaunchers } from './launcher-registry.js';
 import { updateFeedbackOnSessionEnd } from './feedback-status.js';
@@ -36,6 +36,19 @@ const adminBridges = new Map<WsWebSocket, Bridge>();
 
 // Track admin sockets per launcher session so we can push output to them
 const launcherSessionAdmins = new Map<string, Set<WsWebSocket>>();
+
+function appendSessionAuditMarker(sessionId: string, marker: string): void {
+  const session = db
+    .select({ outputLog: schema.agentSessions.outputLog })
+    .from(schema.agentSessions)
+    .where(eq(schema.agentSessions.id, sessionId))
+    .get();
+  const line = `\n\n[propanes ${new Date().toISOString()}] ${marker}\n`;
+  db.update(schema.agentSessions)
+    .set({ outputLog: `${session?.outputLog || ''}${line}`.slice(-500 * 1024) })
+    .where(eq(schema.agentSessions.id, sessionId))
+    .run();
+}
 
 export async function spawnAgentSession(params: {
   sessionId: string;
@@ -230,7 +243,7 @@ export function broadcastToLauncherSessionAdmins(sessionId: string, data: string
   }
 }
 
-export async function killSession(sessionId: string): Promise<boolean> {
+export async function killSession(sessionId: string, reason = 'main-server killSession called'): Promise<boolean> {
   const session = db
     .select()
     .from(schema.agentSessions)
@@ -244,6 +257,7 @@ export async function killSession(sessionId: string): Promise<boolean> {
   // If session is on a sprite, kill via sprite-sessions
   if (session.spriteConfigId && isSpriteSession(sessionId)) {
     killSpriteSession(sessionId);
+    appendSessionAuditMarker(sessionId, `${reason}; sprite session marked killed`);
     db.update(schema.agentSessions)
       .set({ status: 'killed', completedAt: new Date().toISOString() })
       .where(eq(schema.agentSessions.id, sessionId))
@@ -270,6 +284,7 @@ export async function killSession(sessionId: string): Promise<boolean> {
 
   // Always update DB directly so the main server sees 'killed' immediately,
   // even if the session-service already did it (idempotent)
+  appendSessionAuditMarker(sessionId, `${reason}; main-server marked session killed`);
   db.update(schema.agentSessions)
     .set({ status: 'killed', completedAt: new Date().toISOString() })
     .where(eq(schema.agentSessions.id, sessionId))
@@ -305,7 +320,7 @@ export async function cleanupOrphanedSessions(): Promise<void> {
 
   // Check which sessions are still alive in the session-service
   // Returns null if the service is unreachable
-  const activeSvcResult = await getSessionServiceActiveSessions();
+  const serviceHealth = await getSessionServiceHealthSnapshot();
 
   // Check which sessions are on connected launchers
   const launcherSessions = new Set<string>();
@@ -317,19 +332,29 @@ export async function cleanupOrphanedSessions(): Promise<void> {
     }
   }
 
-  const activeSvcSessions = activeSvcResult ? new Set(activeSvcResult) : null;
+  const activeSvcSessions = serviceHealth ? new Set(serviceHealth.sessions || []) : null;
+  const serviceTmuxSessions = serviceHealth?.tmuxSessions ? new Set(serviceHealth.tmuxSessions) : null;
 
   const now = new Date().toISOString();
   for (const session of runningSessions) {
     // Session-service confirms it's alive
     if (activeSvcSessions?.has(session.id)) continue;
+    // Session-service can see the backing tmux session even if it has not
+    // reattached yet. Do not convert that to "failed"; leave it recoverable.
+    if (serviceTmuxSessions?.has(session.id)) continue;
     // Sprite session still active
     if (isSpriteSession(session.id)) continue;
     // Launcher confirms it's alive
     if (session.launcherId && launcherSessions.has(session.id)) continue;
-    // Session-service was unreachable — can't confirm liveness, skip
+    // Session-service was unreachable, or it reports tmux as unavailable.
+    // Both cases are inconclusive, so do not mass-fail running DB rows.
     if (!activeSvcSessions) continue;
+    if (serviceHealth?.tmuxAvailable === false) continue;
 
+    appendSessionAuditMarker(
+      session.id,
+      `main-server cleanupOrphanedSessions marked failed; activeService=false tmuxSession=${serviceTmuxSessions ? 'missing' : 'unknown'} launcherSession=${session.launcherId ? 'missing' : 'none'}`
+    );
     db.update(schema.agentSessions)
       .set({ status: 'failed', completedAt: now })
       .where(eq(schema.agentSessions.id, session.id))

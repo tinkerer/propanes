@@ -40,9 +40,9 @@ type Member = {
 };
 
 const KIND_COLORS: Record<ChannelKind, { dot: string; label: string }> = {
-  prod:        { dot: '#ef4444', label: 'prod' },
-  staging:     { dot: '#eab308', label: 'staging' },
-  exploratory: { dot: '#22c55e', label: 'exploratory' },
+  prod:        { dot: 'var(--pw-danger)', label: 'prod' },
+  staging:     { dot: 'var(--pw-warning)', label: 'staging' },
+  exploratory: { dot: 'var(--pw-primary)', label: 'exploratory' },
 };
 
 export const channelThreads = signal<Record<string, ThreadRow[]>>({});
@@ -175,8 +175,8 @@ function ChannelHeader({
             disabled={organizing}
             style={{
               padding: '6px 12px',
-              background: '#3b82f6',
-              color: '#fff',
+              background: 'var(--pw-primary)',
+              color: 'var(--pw-bg-primary)',
               border: 'none',
               borderRadius: 4,
               cursor: organizing ? 'wait' : 'pointer',
@@ -185,7 +185,7 @@ function ChannelHeader({
           >
             {organizing ? 'Asking Claude (1-3 min)…' : '✨ Auto-organize threads'}
           </button>
-          {orgError && <span style={{ color: '#ef4444', fontSize: 12 }}>{orgError}</span>}
+          {orgError && <span style={{ color: 'var(--pw-danger)', fontSize: 12 }}>{orgError}</span>}
         </div>
       </div>
     );
@@ -216,10 +216,10 @@ function ChannelSettingsHeader({ ch }: { ch: ChannelRow }) {
           {colors.label}
         </span>
         {ch.policy.requireApproval && (
-          <span style={{ fontSize: 11, color: '#fbbf24' }}>🔒 approval required</span>
+          <span style={{ fontSize: 11, color: 'var(--pw-warning)' }}>🔒 approval required</span>
         )}
         {ch.policy.powwow.enabled && (
-          <span style={{ fontSize: 11, color: '#a78bfa' }}>⚡ powwow ({ch.policy.powwow.providers.join('+')})</span>
+          <span style={{ fontSize: 11, color: 'var(--pw-primary-text)' }}>⚡ powwow ({ch.policy.powwow.providers.join('+')})</span>
         )}
         <span style={{ flex: 1 }} />
         <span style={{ color: 'var(--pw-text-muted)', fontSize: 12 }}>
@@ -295,7 +295,7 @@ function ChannelSettingsHeader({ ch }: { ch: ChannelRow }) {
             {!confirmingDelete ? (
               <button
                 onClick={() => setConfirmingDelete(true)}
-                style={{ ...btnGhostStyle, color: '#ef4444' }}
+                style={{ ...btnGhostStyle, color: 'var(--pw-danger)' }}
               >Delete</button>
             ) : (
               <button
@@ -304,7 +304,7 @@ function ChannelSettingsHeader({ ch }: { ch: ChannelRow }) {
                   if (appId) await loadChannels(appId);
                   setEditing(false); setConfirmingDelete(false);
                 }}
-                style={{ ...btnGhostStyle, background: '#7f1d1d', color: '#fee2e2', borderColor: '#ef4444' }}
+                style={{ ...btnGhostStyle, background: 'var(--pw-danger-soft)', color: 'var(--pw-danger)', borderColor: 'var(--pw-danger-border)' }}
               >Click again to delete (threads → unsorted)</button>
             )}
             <span style={{ flex: 1 }} />
@@ -326,8 +326,8 @@ const inputStyle: import('preact').JSX.CSSProperties = {
 };
 
 const btnPrimaryStyle: import('preact').JSX.CSSProperties = {
-  padding: '4px 12px', fontSize: 12, background: '#3b82f6',
-  color: '#fff', border: 'none', borderRadius: 3, cursor: 'pointer',
+  padding: '4px 12px', fontSize: 12, background: 'var(--pw-primary)',
+  color: 'var(--pw-bg-primary)', border: 'none', borderRadius: 3, cursor: 'pointer',
 };
 
 const btnGhostStyle: import('preact').JSX.CSSProperties = {
@@ -378,9 +378,9 @@ function ThreadList({
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{
               width: 8, height: 8, borderRadius: '50%',
-              background: t.sessionStatus === 'running' ? '#22c55e'
-                : t.resolvedAt ? '#6b7280'
-                : t.sessionStatus === 'failed' ? '#ef4444' : '#3b82f6',
+              background: t.sessionStatus === 'running' ? 'var(--pw-warning)'
+                : t.resolvedAt ? 'var(--pw-text-muted)'
+                : t.sessionStatus === 'failed' ? 'var(--pw-danger)' : 'var(--pw-primary)',
             }} />
             <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</span>
             <span style={{ fontSize: 11, color: 'var(--pw-text-muted)' }}>{t.agentId}</span>

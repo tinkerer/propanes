@@ -36,26 +36,66 @@ export function resolveRepoRoot(): string {
 // (running / idle / completed / failed / killed / null=gc'd) without a second
 // round trip. Wrapped in a helper because both /threads and /history return
 // the same shape.
+//
+// `agentSessionId` is the thread's *chat* session (headless-stream-yolo,
+// driven by ensureAgentSessionForThread). `latestAgentSessionId` is the most
+// recent agent_sessions row claiming this thread regardless of profile —
+// dispatched interactive/headless sessions land here too. The UI's Session
+// log button + rail status indicator should prefer `latest*` so a thread
+// that's been dispatched against (but never chatted with) still surfaces
+// its session.
 export async function fetchThreadsWithSessionStatus(
   conditions: ReturnType<typeof eq>[],
   limit?: number,
 ) {
+  const latestSessionIdExpr = sql<string | null>`(
+    SELECT s.id FROM agent_sessions s
+    WHERE s.cos_thread_id = ${schema.cosThreads.id}
+    ORDER BY s.created_at DESC LIMIT 1
+  )`;
+  const latestSessionStatusExpr = sql<string | null>`(
+    SELECT s.status FROM agent_sessions s
+    WHERE s.cos_thread_id = ${schema.cosThreads.id}
+    ORDER BY s.created_at DESC LIMIT 1
+  )`;
+  const latestSessionProfileExpr = sql<string | null>`(
+    SELECT s.permission_profile FROM agent_sessions s
+    WHERE s.cos_thread_id = ${schema.cosThreads.id}
+    ORDER BY s.created_at DESC LIMIT 1
+  )`;
+  const latestSessionExitExpr = sql<number | null>`(
+    SELECT s.exit_code FROM agent_sessions s
+    WHERE s.cos_thread_id = ${schema.cosThreads.id}
+    ORDER BY s.created_at DESC LIMIT 1
+  )`;
+  const latestSessionFeedbackExpr = sql<string | null>`(
+    SELECT s.feedback_id FROM agent_sessions s
+    WHERE s.cos_thread_id = ${schema.cosThreads.id}
+    ORDER BY s.created_at DESC LIMIT 1
+  )`;
+
   const baseQuery = db
     .select({
       id: schema.cosThreads.id,
       agentId: schema.cosThreads.agentId,
       appId: schema.cosThreads.appId,
       channelId: schema.cosThreads.channelId,
-      // Surfaced from the joined agent session — every CoS thread has exactly
-      // one persistent headless-stream session, and feedbackId lives there.
-      // Used by /dispatch and /powwow slash commands + @-mention auto-dispatch
-      // to resolve the policy-gated dispatch target without a second hop.
-      feedbackId: schema.agentSessions.feedbackId,
+      // Prefer the latest-session's feedbackId (covers dispatched sessions
+      // that landed after the chat session was first provisioned); fall back
+      // to the chat session's feedbackId for backward compat.
+      feedbackId: sql<string | null>`COALESCE(${latestSessionFeedbackExpr}, ${schema.agentSessions.feedbackId}, ${schema.cosThreads.feedbackId})`,
       name: schema.cosThreads.name,
       systemPrompt: schema.cosThreads.systemPrompt,
       model: schema.cosThreads.model,
       claudeSessionId: schema.cosThreads.claudeSessionId,
       agentSessionId: schema.cosThreads.agentSessionId,
+      // Most recent agent_session linked to this thread, regardless of
+      // profile. Drives the Session log button + rail status so dispatched
+      // sessions surface even when they're not the chat session.
+      latestAgentSessionId: latestSessionIdExpr,
+      latestAgentSessionStatus: latestSessionStatusExpr,
+      latestAgentSessionPermissionProfile: latestSessionProfileExpr,
+      latestAgentSessionExitCode: latestSessionExitExpr,
       turnStartedAt: schema.cosThreads.turnStartedAt,
       turnStartSeq: schema.cosThreads.turnStartSeq,
       turnUserText: schema.cosThreads.turnUserText,

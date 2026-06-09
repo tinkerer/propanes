@@ -84,12 +84,34 @@ export async function getSessionServiceActiveSessions(): Promise<string[] | null
   }
 }
 
+export interface SessionServiceHealthSnapshot {
+  ok: boolean;
+  activeSessions: number;
+  sessions: string[];
+  tmuxAvailable?: boolean;
+  tmuxSessions?: string[];
+}
+
+export async function getSessionServiceHealthSnapshot(): Promise<SessionServiceHealthSnapshot | null> {
+  try {
+    const res = await fetch(`${SESSION_SERVICE_URL}/health`);
+    if (!res.ok) return null;
+    return await res.json() as SessionServiceHealthSnapshot;
+  } catch {
+    return null;
+  }
+}
+
 export interface SessionStatus {
   status: string;
   active: boolean;
   outputSeq: number;
   totalBytes: number;
   healthy: boolean | null;
+  tmuxAvailable?: boolean;
+  tmuxExists?: boolean;
+  recoveryAttempted?: boolean;
+  recoverySucceeded?: boolean;
 }
 
 export async function getSessionStatus(sessionId: string): Promise<SessionStatus | null> {

@@ -74,7 +74,7 @@ function parseDraftAttachments(raw: string | null | undefined): ComposerDraftAtt
     if (!parsed || typeof parsed !== 'object') return {};
     return {
       elements: Array.isArray(parsed.elements)
-        ? parsed.elements.filter((el): el is SelectedElementInfo => !!el && typeof el === 'object')
+        ? parsed.elements.filter((el: unknown): el is SelectedElementInfo => !!el && typeof el === 'object')
         : undefined,
     };
   } catch {
