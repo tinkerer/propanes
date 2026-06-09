@@ -8,7 +8,7 @@ import { ulid } from 'ulidx';
 import { db, schema } from './db/index.js';
 import type { AgentRuntime, PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
-import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane } from './tmux-pty.js';
+import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, listPwTmuxSessions } from './tmux-pty.js';
 import { detectClaudeAuthRequired, stripTerminalControl } from './claude-auth-detect.js';
 
 const PORT = parseInt(process.env.SESSION_SERVICE_PORT || '3002', 10);
@@ -123,6 +123,7 @@ interface AgentProcess {
   lastStateBroadcast: number;
   authCompanionStarted: boolean;
   suppressAuthCompanion: boolean;
+  tmuxSessionName: string | null;
 }
 
 const activeSessions = new Map<string, AgentProcess>();
@@ -344,6 +345,25 @@ function syncFeedbackDispatchStatus(sessionId: string, sessionStatus: string): v
   }
 }
 
+function appendSessionAuditMarker(sessionId: string, marker: string): void {
+  const existing = db
+    .select({ outputLog: schema.agentSessions.outputLog })
+    .from(schema.agentSessions)
+    .where(eq(schema.agentSessions.id, sessionId))
+    .get();
+  const line = `\n\n[propanes ${new Date().toISOString()}] ${marker}\n`;
+  db.update(schema.agentSessions)
+    .set({ outputLog: `${existing?.outputLog || ''}${line}`.slice(-MAX_OUTPUT_LOG) })
+    .where(eq(schema.agentSessions.id, sessionId))
+    .run();
+}
+
+function appendProcAuditMarker(proc: AgentProcess, marker: string): void {
+  const line = `\n\n[propanes ${new Date().toISOString()}] ${marker}\n`;
+  proc.outputBuffer = `${proc.outputBuffer}${line}`.slice(-MAX_OUTPUT_LOG);
+  proc.totalBytes += Buffer.byteLength(line);
+}
+
 function flushOutput(sessionId: string): void {
   const proc = activeSessions.get(sessionId);
   if (!proc) return;
@@ -420,6 +440,7 @@ function spawnSession(params: {
   console.log(`[session-service] Spawning session ${sessionId}: runtime=${runtime}, command=${command}, profile=${permissionProfile}, cwd=${cwd}, tmux=${isTmuxAvailable()}`);
 
   let ptyProcess: pty.IPty;
+  let tmuxSessionName: string | null = null;
   const cols = ptyColsForProfile(permissionProfile);
 
   if (isTmuxAvailable()) {
@@ -432,6 +453,7 @@ function spawnSession(params: {
       rows: 40,
     });
     ptyProcess = result.ptyProcess;
+    tmuxSessionName = result.tmuxSessionName;
   } else {
     const { CLAUDECODE, ...cleanedEnv } = process.env as Record<string, string>;
     ptyProcess = pty.spawn(command, args, {
@@ -463,6 +485,7 @@ function spawnSession(params: {
     lastStateBroadcast: 0,
     authCompanionStarted: false,
     suppressAuthCompanion,
+    tmuxSessionName,
   };
 
   activeSessions.set(sessionId, proc);
@@ -490,6 +513,7 @@ function spawnSession(params: {
       lastOutputSeq: 0,
       lastInputSeq: 0,
       outputBytes: 0,
+      tmuxSessionName,
     })
     .where(eq(schema.agentSessions.id, sessionId))
     .run();
@@ -649,6 +673,7 @@ function scheduleStartupCheck(sessionId: string): void {
 
     if (!isSessionHealthy(proc)) {
       console.log(`[session-service] Startup check failed for ${sessionId}: ${proc.totalBytes} bytes, no meaningful output — killing`);
+      appendProcAuditMarker(proc, `session-service startup health check killed session; bytes=${proc.totalBytes}`);
       killSessionProcess(sessionId);
     } else {
       console.log(`[session-service] Startup check passed for ${sessionId}: ${proc.totalBytes} bytes`);
@@ -661,6 +686,7 @@ function killSessionProcess(sessionId: string): boolean {
   if (!proc || proc.status !== 'running') return false;
 
   proc.status = 'killed';
+  appendProcAuditMarker(proc, 'session-service killSessionProcess marked session killed');
   proc.ptyProcess.kill();
   clearInterval(proc.flushTimer);
   sendSequenced(proc, { kind: 'exit', exitCode: -1, status: 'killed' });
@@ -740,6 +766,7 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
       lastStateBroadcast: 0,
       authCompanionStarted: !!session.companionSessionId,
       suppressAuthCompanion: false,
+      tmuxSessionName: session.tmuxSessionName || `pw-${session.id}`,
     };
 
     activeSessions.set(session.id, proc);
@@ -754,6 +781,7 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
 
 function markSessionStale(sessionId: string): void {
   const now = new Date().toISOString();
+  appendSessionAuditMarker(sessionId, 'session-service WebSocket attach could not recover running DB row; marked failed');
   db.update(schema.agentSessions)
     .set({ status: 'failed', completedAt: now })
     .where(eq(schema.agentSessions.id, sessionId))
@@ -792,7 +820,17 @@ function attachAdminSocket(sessionId: string, ws: WebSocket): boolean {
         recovered.adminSockets.add(ws);
         return true;
       }
-      // Recovery failed — mark as stale and inform client
+      const tmuxAvailable = isTmuxAvailable();
+      const tmuxExists = tmuxAvailable ? tmuxSessionExists(sessionId) : false;
+      if (!tmuxAvailable || tmuxExists) {
+        appendSessionAuditMarker(
+          sessionId,
+          `session-service WebSocket attach could not recover running DB row; left running because tmuxAvailable=${tmuxAvailable} tmuxExists=${tmuxExists}`
+        );
+        ws.send(JSON.stringify({ type: 'history', data: session.outputLog || '' }));
+        return true;
+      }
+      // Recovery failed and the backing tmux session is definitively gone.
       markSessionStale(sessionId);
       ws.send(JSON.stringify({ type: 'history', data: session.outputLog || '' }));
       ws.send(JSON.stringify({
@@ -843,11 +881,17 @@ function detachAdminSocket(sessionId: string, ws: WebSocket): void {
 
 function recoverSessions(): void {
   if (!isTmuxAvailable()) {
-    // No tmux — mark all DB 'running' sessions as failed
-    db.update(schema.agentSessions)
-      .set({ status: 'failed', completedAt: new Date().toISOString() })
+    // No tmux is an inconclusive service health state, not proof every
+    // persisted session has exited. Leave DB rows running so they can recover
+    // after tmux becomes available; main-server cleanup also treats this as
+    // inconclusive.
+    const runningCount = db.select({ id: schema.agentSessions.id })
+      .from(schema.agentSessions)
       .where(eq(schema.agentSessions.status, 'running'))
-      .run();
+      .all().length;
+    if (runningCount > 0) {
+      console.warn(`[session-service] Recovery skipped: tmux unavailable; leaving ${runningCount} running DB sessions unchanged`);
+    }
     return;
   }
 
@@ -857,19 +901,29 @@ function recoverSessions(): void {
     .all();
 
   let recovered = 0;
+  let markedFailed = 0;
+  let leftRecoverable = 0;
   for (const session of running) {
     if (tryRecoverSession(session)) {
       recovered++;
     } else {
+      const tmuxStillExists = tmuxSessionExists(session.id);
+      if (tmuxStillExists) {
+        appendSessionAuditMarker(session.id, 'session-service startup recovery could not attach, but tmux still exists; left running');
+        leftRecoverable++;
+        continue;
+      }
+      appendSessionAuditMarker(session.id, 'session-service startup recovery found no tmux session; marked failed');
       db.update(schema.agentSessions)
         .set({ status: 'failed', completedAt: new Date().toISOString() })
         .where(eq(schema.agentSessions.id, session.id))
         .run();
+      markedFailed++;
     }
   }
 
   if (running.length > 0) {
-    console.log(`[session-service] Recovery: ${recovered}/${running.length} sessions recovered from tmux`);
+    console.log(`[session-service] Recovery: ${recovered}/${running.length} sessions recovered from tmux; markedFailed=${markedFailed}; leftRecoverable=${leftRecoverable}`);
   }
 }
 
@@ -882,6 +936,8 @@ app.get('/health', (c) => {
     ok: true,
     activeSessions: activeSessions.size,
     sessions: Array.from(activeSessions.keys()),
+    tmuxAvailable: isTmuxAvailable(),
+    tmuxSessions: isTmuxAvailable() ? listPwTmuxSessions() : [],
   });
 });
 
@@ -966,6 +1022,38 @@ app.get('/status/:id', (c) => {
     .where(eq(schema.agentSessions.id, id))
     .get();
   if (session) {
+    if (session.status === 'running') {
+      const recoveryAttempted = true;
+      const tmuxAvailable = isTmuxAvailable();
+      const recoverySucceeded = tryRecoverSession(session);
+      if (recoverySucceeded) {
+        const recovered = activeSessions.get(id)!;
+        return c.json({
+          status: recovered.status,
+          active: true,
+          outputSeq: recovered.outputSeq,
+          totalBytes: recovered.totalBytes,
+          healthy: isSessionHealthy(recovered),
+          inputState: recovered.inputState,
+          tmuxExists: true,
+          tmuxAvailable,
+          recoveryAttempted,
+          recoverySucceeded,
+        });
+      }
+      const tmuxExists = tmuxAvailable ? tmuxSessionExists(id) : undefined;
+      return c.json({
+        status: session.status,
+        active: false,
+        outputSeq: session.lastOutputSeq,
+        totalBytes: session.outputBytes || 0,
+        healthy: tmuxAvailable && tmuxExists === false ? false : null,
+        tmuxAvailable,
+        tmuxExists,
+        recoveryAttempted,
+        recoverySucceeded,
+      });
+    }
     return c.json({
       status: session.status,
       active: false,
@@ -1098,7 +1186,7 @@ function shutdown() {
   for (const [sessionId, proc] of activeSessions) {
     clearInterval(proc.flushTimer);
     flushOutput(sessionId);
-    console.log(`[session-service] Killing session ${sessionId}`);
+    console.log(`[session-service] Detaching PTY client for session ${sessionId}`);
     try { proc.ptyProcess.kill(); } catch { /* already dead */ }
   }
   messageBuffer.destroy();

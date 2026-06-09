@@ -53,6 +53,8 @@ export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, t
 
 export const IMPLEMENTATION_AGENT_PREAMBLE = `[AGENT NOTE]
 IMPORTANT: You are an IMPLEMENTATION AGENT, NOT the Chief of Staff (Ops). The dispatch-only policy in your memory does NOT apply to you — you are the agent that was dispatched to do the work. Implement the requested changes directly in the codebase.
+
+When you finish your turn, your LAST message MUST contain a short summary wrapped in <cos-reply>…</cos-reply> tags. The server only persists wrapped text into the originating Inbox thread; anything outside the tags is dropped from the thread view. One <cos-reply> block per turn, 1–4 sentences, covering what you changed (file paths or commit SHAs), what you verified, and any follow-up the operator should know about.
 [/AGENT NOTE]`;
 
 export const DEFAULT_PROMPT_TEMPLATE = `Feedback: {{feedback.url}}
@@ -404,8 +406,21 @@ export async function dispatchFeedbackToAgent(params: {
     // The thread was minted at feedback-creation time and lives in the per-app
     // #inbox channel; this populates agent_sessions.cos_thread_id so the
     // session shows up in both the feedback view and the CoS thread render.
+    //
+    // Reverse link: we also fill in cos_threads.agent_session_id IF the
+    // thread doesn't already have one (the inbox thread is "passive" until
+    // first chat or dispatch). The Session log button in the chat bubble
+    // requires the reverse link to render. We do NOT overwrite an existing
+    // agent_session_id because that one is the thread's chat session
+    // (headless-stream-yolo, driven by ensureAgentSessionForThread) — the
+    // chat path needs to keep finding it. For post-chat dispatches the
+    // derived `latestAgentSessionId` in fetchThreadsWithSessionStatus is
+    // what surfaces the dispatched session to the UI.
     const linkedThread = db
-      .select({ id: schema.cosThreads.id })
+      .select({
+        id: schema.cosThreads.id,
+        agentSessionId: schema.cosThreads.agentSessionId,
+      })
       .from(schema.cosThreads)
       .where(eq(schema.cosThreads.feedbackId, feedbackId))
       .get();
@@ -414,6 +429,12 @@ export async function dispatchFeedbackToAgent(params: {
         .set({ cosThreadId: linkedThread.id })
         .where(eq(schema.agentSessions.id, sessionId))
         .run();
+      if (!linkedThread.agentSessionId) {
+        db.update(schema.cosThreads)
+          .set({ agentSessionId: sessionId, updatedAt: Date.now() })
+          .where(eq(schema.cosThreads.id, linkedThread.id))
+          .run();
+      }
     }
 
     const now = new Date().toISOString();
