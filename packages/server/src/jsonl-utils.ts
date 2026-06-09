@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { resolve, join, basename, dirname, normalize, isAbsolute } from 'node:path';
-import { existsSync, readFileSync, readdirSync, openSync, readSync, closeSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { sqlite } from './db/index.js';
 
 export function computeJsonlDir(projectDir: string): string {
@@ -17,21 +17,31 @@ export function computeJsonlPath(projectDir: string, claudeSessionId: string): s
 // we have to find the file by scanning. Strategy:
 //   1. If `claudeSessionId` is set (we may have stashed the codex thread id
 //      there after detection), look for rollout-*-${id}.jsonl directly.
-//   2. Otherwise, find the most-recently-modified rollout file whose
-//      session_meta.payload.cwd matches the session's cwd.
+//   2. Otherwise, find a rollout file whose session_meta.payload.cwd matches
+//      the session's cwd. Completed sessions use closest-to-start; live
+//      sessions can opt into newest-by-cwd to follow /clear or compaction.
 // Returns the resolved path or null if nothing matches.
-export function computeCodexJsonlPath(cwd: string | null, codexSessionId: string | null, startedAt?: string | null): string | null {
+export function computeCodexJsonlPath(
+  cwd: string | null,
+  codexSessionId: string | null,
+  startedAt?: string | null,
+  preferLatestByCwd = false,
+): string | null {
   const codexRoot = join(homedir(), '.codex', 'sessions');
   if (!existsSync(codexRoot)) return null;
 
   // Direct lookup by id — rollout files embed the UUID in the filename.
+  let direct: string | null = null;
   if (codexSessionId) {
-    const found = findRolloutByCodexId(codexRoot, codexSessionId);
-    if (found) return found;
+    direct = findRolloutByCodexId(codexRoot, codexSessionId);
+    if (direct && !preferLatestByCwd) return direct;
   }
 
-  if (!cwd) return null;
-  return findRolloutByCwd(codexRoot, cwd, startedAt);
+  if (!cwd) return direct;
+  if (preferLatestByCwd) {
+    return findLatestRolloutByCwd(codexRoot, cwd, startedAt) || direct;
+  }
+  return direct || findRolloutByCwd(codexRoot, cwd, startedAt);
 }
 
 function findRolloutByCodexId(codexRoot: string, sessionId: string): string | null {
@@ -82,18 +92,39 @@ function readFirstLine(filePath: string): string | null {
 }
 
 function findRolloutByCwd(codexRoot: string, cwd: string, startedAt?: string | null): string | null {
-  // Search recent days (up to 7) for a rollout whose session_meta.cwd matches.
-  // Codex sessions are typically active within minutes of startedAt; cap how
-  // far back we look to bound IO.
+  const candidates = findRolloutsByCwd(codexRoot, cwd, startedAt);
+  if (candidates.length === 0) return null;
+  // Pick the candidate closest in time to startedAt.
+  const startTs = startedAt ? Date.parse(startedAt) : Date.now();
+  const targetTs = isNaN(startTs) ? Date.now() : startTs;
+  candidates.sort((a, b) => Math.abs(a.mtime - targetTs) - Math.abs(b.mtime - targetTs));
+  return candidates[0].path;
+}
+
+function findLatestRolloutByCwd(codexRoot: string, cwd: string, startedAt?: string | null): string | null {
+  const candidates = findRolloutsByCwd(codexRoot, cwd, startedAt);
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => b.mtime - a.mtime);
+  return candidates[0].path;
+}
+
+function findRolloutsByCwd(codexRoot: string, cwd: string, startedAt?: string | null): { path: string; mtime: number }[] {
+  // Search recent days around/after startedAt for rollouts whose session_meta.cwd
+  // matches. Live Codex threads can rotate to a new rollout after /clear or
+  // compaction, so callers may choose newest instead of closest-to-start.
   const startTs = startedAt ? Date.parse(startedAt) : Date.now();
   const startDate = isNaN(startTs) ? new Date() : new Date(startTs);
   const candidates: { path: string; mtime: number }[] = [];
+  const seenDays = new Set<string>();
 
-  for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+  for (let dayOffset = -1; dayOffset < 7; dayOffset++) {
     const d = new Date(startDate.getTime() - dayOffset * 86400000);
     const yyyy = String(d.getUTCFullYear());
     const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
     const dd = String(d.getUTCDate()).padStart(2, '0');
+    const dayKey = `${yyyy}/${mm}/${dd}`;
+    if (seenDays.has(dayKey)) continue;
+    seenDays.add(dayKey);
     const dayDir = join(codexRoot, yyyy, mm, dd);
     if (!existsSync(dayDir)) continue;
     let entries: string[] = [];
@@ -109,16 +140,13 @@ function findRolloutByCwd(codexRoot: string, cwd: string, startedAt?: string | n
         const fileCwd = obj?.payload?.cwd;
         if (fileCwd !== cwd) continue;
         const ts = Date.parse(obj?.payload?.timestamp || obj?.timestamp || '');
-        candidates.push({ path: filePath, mtime: isNaN(ts) ? 0 : ts });
+        const mtime = isNaN(ts) ? statSync(filePath).mtimeMs : ts;
+        candidates.push({ path: filePath, mtime });
       } catch { /* skip unreadable */ }
     }
   }
 
-  if (candidates.length === 0) return null;
-  // Pick the candidate closest in time to startedAt.
-  const targetTs = isNaN(startTs) ? Date.now() : startTs;
-  candidates.sort((a, b) => Math.abs(a.mtime - targetTs) - Math.abs(b.mtime - targetTs));
-  return candidates[0].path;
+  return candidates;
 }
 
 // Find continuation JSONL files when Claude Code rotates sessionId mid-conversation.

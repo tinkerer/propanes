@@ -404,7 +404,7 @@ export function getWorktreeLabel(session: any): string | null {
 
 export const SESSION_COLOR_PRESETS = [
   '#ef4444', '#f97316', '#eab308', '#eab308',
-  '#3b82f6', '#a855f7', '#dc2626', '#06b6d4',
+  '#3b82f6', '#60a5fa', '#dc2626', '#f59e0b',
 ];
 
 export const sessionColors = signal<Record<string, string>>(loadJson('pw-session-colors', {}));
