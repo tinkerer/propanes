@@ -34,9 +34,10 @@ function resolveJsonlPath(
   claudeSessionId: string | null,
   runtime?: string | null,
   startedAt?: string | null,
+  status?: string | null,
 ): string | null {
   if (runtime === 'codex') {
-    return computeCodexJsonlPath(sessionCwd, claudeSessionId, startedAt);
+    return computeCodexJsonlPath(sessionCwd, claudeSessionId, startedAt, status === 'running' || status === 'pending');
   }
   const primary = computeJsonlPath(appProjectDir || process.cwd(), claudeSessionId);
   if (primary && existsSync(primary)) return primary;
@@ -451,7 +452,7 @@ async function enrichSessions(rows: SessionRow[]) {
       paneTitle: live?.paneTitle || null,
       paneCommand: live?.paneCommand || null,
       panePath: live?.panePath || null,
-      jsonlPath: resolveJsonlPath(r.appProjectDir, r.cwd, r.claudeSessionId, r.runtime, r.startedAt),
+      jsonlPath: resolveJsonlPath(r.appProjectDir, r.cwd, r.claudeSessionId, r.runtime, r.startedAt, r.status),
       launcherName,
       launcherHostname,
       machineName,
@@ -713,6 +714,7 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
     .select({
       claudeSessionId: schema.agentSessions.claudeSessionId,
       runtime: sql<string>`coalesce(${schema.agentEndpoints.runtime}, ${schema.agentSessions.runtime}, 'claude')`,
+      status: schema.agentSessions.status,
       cwd: schema.agentSessions.cwd,
       startedAt: schema.agentSessions.startedAt,
       appProjectDir: schema.applications.projectDir,
@@ -728,7 +730,7 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
     return c.json({ error: 'Session not found' }, 404);
   }
 
-  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt);
+  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt, row.status);
   if (!jsonlPath) {
     return c.json({ error: 'No JSONL path available' }, 400);
   }
@@ -736,13 +738,16 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
   // Codex sessions don't have continuations or subagents — there's just one
   // rollout file per session. List it directly.
   const isCodex = row.runtime === 'codex';
+  const resolvedCodexSessionId = isCodex && jsonlPath
+    ? basename(jsonlPath, '.jsonl').replace(/^rollout-\d{4}-\d{2}-\d{2}T[\d-]+-/, '')
+    : row.claudeSessionId;
   const files = existsSync(jsonlPath)
     ? (isCodex
-        ? [{ id: `main:${row.claudeSessionId || basename(jsonlPath, '.jsonl')}`, claudeSessionId: row.claudeSessionId || basename(jsonlPath, '.jsonl'), type: 'main' as const, label: `Codex: ${basename(jsonlPath)}`, filePath: jsonlPath, order: 0, parentSessionId: undefined, agentId: undefined }]
+        ? [{ id: `main:${resolvedCodexSessionId || basename(jsonlPath, '.jsonl')}`, claudeSessionId: resolvedCodexSessionId || basename(jsonlPath, '.jsonl'), type: 'main' as const, label: `Codex: ${basename(jsonlPath)}`, filePath: jsonlPath, order: 0, parentSessionId: undefined, agentId: undefined }]
         : listJsonlFiles(jsonlPath))
     : [];
   return c.json({
-    claudeSessionId: row.claudeSessionId,
+    claudeSessionId: resolvedCodexSessionId,
     runtime: row.runtime || 'claude',
     files: files.map(f => ({
       id: f.id,
@@ -805,6 +810,7 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
     .select({
       claudeSessionId: schema.agentSessions.claudeSessionId,
       cwd: schema.agentSessions.cwd,
+      status: schema.agentSessions.status,
       runtime: sql<string>`coalesce(${schema.agentEndpoints.runtime}, ${schema.agentSessions.runtime}, 'claude')`,
       startedAt: schema.agentSessions.startedAt,
       appProjectDir: schema.applications.projectDir,
@@ -820,7 +826,7 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
     return c.json({ error: 'Session not found' }, 404);
   }
 
-  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt);
+  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt, row.status);
   if (!jsonlPath) {
     return c.json({ error: 'No JSONL path available' }, 400);
   }
@@ -881,6 +887,7 @@ agentSessionRoutes.post('/:id/tail-jsonl', async (c) => {
     .select({
       claudeSessionId: schema.agentSessions.claudeSessionId,
       cwd: schema.agentSessions.cwd,
+      status: schema.agentSessions.status,
       runtime: sql<string>`coalesce(${schema.agentEndpoints.runtime}, ${schema.agentSessions.runtime}, 'claude')`,
       startedAt: schema.agentSessions.startedAt,
       appProjectDir: schema.applications.projectDir,
@@ -896,7 +903,7 @@ agentSessionRoutes.post('/:id/tail-jsonl', async (c) => {
     return c.json({ error: 'Session not found' }, 404);
   }
 
-  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt);
+  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt, row.status);
   if (!jsonlPath) {
     return c.json({ error: 'No JSONL path available (missing projectDir or claudeSessionId)' }, 400);
   }

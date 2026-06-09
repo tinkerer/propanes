@@ -543,6 +543,12 @@ export async function fetchJsonlFiles(sessionId: string, force = false): Promise
   const result = await api.getJsonlFiles(sessionId);
   const entry = { files: result.files, claudeSessionId: result.claudeSessionId, runtime: result.runtime || 'claude' };
   jsonlFilesCache.value = new Map([...jsonlFilesCache.value, [sessionId, entry]]);
+  const selected = jsonlSelectedFile.value.get(sessionId);
+  if (selected && !entry.files.some((f) => f.id === selected)) {
+    const next = new Map(jsonlSelectedFile.value);
+    next.delete(sessionId);
+    jsonlSelectedFile.value = next;
+  }
   return entry;
 }
 
