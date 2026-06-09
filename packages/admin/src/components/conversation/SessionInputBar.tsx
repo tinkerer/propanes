@@ -164,21 +164,32 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
     }
   }, [isWaiting, !!askQuestion]);
 
-  async function sendText(value: string) {
+  async function sendTerminalText(value: string) {
     if (!value.trim() || submitting || stopping) return;
     setSubmitting(true);
     setError(null);
     try {
-      if (isRunning) {
-        const result = await api.sendKeys(sessionId, { keys: value, enter: true });
-        if (!result.ok) throw new Error(result.error || 'send-keys failed');
-      } else {
-        const newId = await resumeSession(sessionId, { additionalPrompt: value.trim() });
-        if (!newId) {
-          const real = lastResumeError.value;
-          const realMsg = real && real.sessionId === sessionId ? real.message : null;
-          throw new Error(realMsg ? `Resume failed: ${realMsg}` : 'Resume failed');
-        }
+      const result = await api.sendKeys(sessionId, { keys: value, enter: true });
+      if (!result.ok) throw new Error(result.error || 'send-keys failed');
+      setText('');
+    } catch (err: any) {
+      setError(err.message || String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function submitPrompt(value: string) {
+    const additionalPrompt = value.trim();
+    if (!additionalPrompt || submitting || stopping) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const newId = await resumeSession(sessionId, { additionalPrompt });
+      if (!newId) {
+        const real = lastResumeError.value;
+        const realMsg = real && real.sessionId === sessionId ? real.message : null;
+        throw new Error(realMsg ? `Resume failed: ${realMsg}` : 'Resume failed');
       }
       setText('');
     } catch (err: any) {
@@ -239,10 +250,21 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
     }
   }
 
-  function onInputKeyDown(ev: KeyboardEvent) {
+  function onTerminalInputKeyDown(ev: KeyboardEvent) {
     if (ev.key === 'Enter' && !ev.shiftKey) {
       ev.preventDefault();
-      sendText(text);
+      sendTerminalText(text);
+    }
+  }
+
+  function onGeneralInputKeyDown(ev: KeyboardEvent) {
+    if (ev.key === 'Enter' && !ev.shiftKey) {
+      ev.preventDefault();
+      if (isRunning) {
+        sendTerminalText(text);
+      } else {
+        submitPrompt(text);
+      }
     }
   }
 
@@ -373,7 +395,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
             value={text}
             disabled={submitting || stopping}
             onInput={(e) => setText((e.target as HTMLInputElement).value)}
-            onKeyDown={onInputKeyDown}
+            onKeyDown={onTerminalInputKeyDown}
           />
           {isRunning && (
             <button
@@ -390,7 +412,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
             type="button"
             class="conv-input-bar-send"
             disabled={!text.trim() || submitting || stopping}
-            onClick={() => sendText(text)}
+            onClick={() => sendTerminalText(text)}
           >
             Send
           </button>
@@ -408,11 +430,11 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
           ref={inputRef}
           type="text"
           class="conv-input-bar-input"
-          placeholder={isRunning ? 'Send input to session...' : 'Resume with a follow-up...'}
+          placeholder={isRunning ? 'Send prompt to session...' : 'Resume with a follow-up...'}
           value={text}
           disabled={submitting || stopping}
           onInput={(e) => setText((e.target as HTMLInputElement).value)}
-          onKeyDown={onInputKeyDown}
+          onKeyDown={onGeneralInputKeyDown}
         />
         {isRunning && (
           <button
@@ -429,7 +451,8 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
           type="button"
           class="conv-input-bar-send"
           disabled={!text.trim() || submitting || stopping}
-          onClick={() => sendText(text)}
+          onClick={() => isRunning ? sendTerminalText(text) : submitPrompt(text)}
+          title={isRunning ? 'Send this text to the running session' : 'Resume with this prompt'}
         >
           {isRunning ? 'Send' : 'Resume'}
         </button>

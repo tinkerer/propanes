@@ -186,6 +186,7 @@ export function runMigrations() {
     `ALTER TABLE cos_messages ADD COLUMN attachments_json TEXT`,
     `ALTER TABLE cos_learnings ADD COLUMN tags TEXT`,
     `ALTER TABLE agent_sessions ADD COLUMN cos_thread_id TEXT`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_sessions_thread_created ON agent_sessions(cos_thread_id, created_at)`,
     `ALTER TABLE agent_sessions ADD COLUMN title TEXT`,
     `ALTER TABLE cos_threads ADD COLUMN agent_session_id TEXT`,
     `ALTER TABLE cos_threads ADD COLUMN turn_started_at INTEGER`,
@@ -864,6 +865,48 @@ export function runMigrations() {
         .run(row.sessionId, row.threadId);
     }
   } catch { /* table may not exist yet on very fresh DBs */ }
+
+  // Unify ticket/session/thread linkage: pre-bi-directional-link dispatches
+  // wrote agent_sessions.feedback_id but never agent_sessions.cos_thread_id,
+  // so the conversation in the CoS bubble couldn't surface the session log
+  // for the dispatched run. Walk every dispatched session whose feedback has
+  // a minted cos_thread, and link the two. Then run the inverse pass: for any
+  // cos_threads that still have no agent_session_id but now have a backing
+  // session via cos_thread_id, set agent_session_id to the latest such row.
+  // Both passes are idempotent (re-running is a no-op once linkage is in).
+  try {
+    sqlite.exec(`
+      UPDATE agent_sessions
+         SET cos_thread_id = (
+           SELECT t.id FROM cos_threads t
+           WHERE t.feedback_id = agent_sessions.feedback_id
+           LIMIT 1
+         )
+       WHERE cos_thread_id IS NULL
+         AND feedback_id IS NOT NULL
+         AND EXISTS (
+           SELECT 1 FROM cos_threads t WHERE t.feedback_id = agent_sessions.feedback_id
+         );
+    `);
+    const stillOrphanThreads = sqlite.prepare(
+      `SELECT t.id AS threadId, (
+         SELECT s.id FROM agent_sessions s
+         WHERE s.cos_thread_id = t.id
+         ORDER BY s.created_at DESC LIMIT 1
+       ) AS sessionId
+       FROM cos_threads t
+       WHERE t.agent_session_id IS NULL
+         AND EXISTS (SELECT 1 FROM agent_sessions s WHERE s.cos_thread_id = t.id)`
+    ).all() as { threadId: string; sessionId: string | null }[];
+    for (const row of stillOrphanThreads) {
+      if (!row.sessionId) continue;
+      sqlite.prepare(
+        `UPDATE cos_threads SET agent_session_id = ? WHERE id = ? AND agent_session_id IS NULL`
+      ).run(row.sessionId, row.threadId);
+    }
+  } catch (err) {
+    console.error('[db] dispatched-session/thread backfill failed', err);
+  }
 
   // Provision a persistent headless-stream agent session for any cos_threads
   // that still have none. Post-this-migration every CoS thread shows up as

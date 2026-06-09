@@ -440,11 +440,16 @@ async function handleDispatch(c: any, payload: unknown) {
 
           if (ageMs > 30_000) {
             const status = await getSessionStatus(existing.id);
-            const stuck = !status || status.healthy === false || (status.totalBytes ?? 0) < 15_000;
+            const livenessUnknown =
+              !status ||
+              (status.active === false && status.recoveryAttempted && status.tmuxExists === undefined);
+            const confirmedMissing = status?.tmuxExists === false || status?.healthy === false;
+            const lowOutputStuck = confirmedMissing && (status?.totalBytes ?? 0) < 15_000;
+            const stuck = !livenessUnknown && (confirmedMissing || lowOutputStuck);
 
             if (stuck) {
-              console.log(`[admin] Stuck session detected: ${existing.id} (age=${Math.round(ageMs / 1000)}s, bytes=${status?.totalBytes ?? 0}, healthy=${status?.healthy}) — killing`);
-              await killSession(existing.id);
+              console.log(`[admin] Stuck session detected: ${existing.id} (age=${Math.round(ageMs / 1000)}s, bytes=${status?.totalBytes ?? 0}, healthy=${status?.healthy}, tmuxExists=${status?.tmuxExists ?? 'unknown'}) — killing`);
+              await killSession(existing.id, `admin dispatch duplicate guard killed stuck session; ageSeconds=${Math.round(ageMs / 1000)} bytes=${status?.totalBytes ?? 0} healthy=${status?.healthy ?? 'unknown'} tmuxExists=${status?.tmuxExists ?? 'unknown'}`);
             } else {
               return c.json({
                 dispatched: true,

@@ -24,14 +24,22 @@ export const cosThreadSessions = signal<Record<string, string>>({});
 export const cosThreadChannels = signal<Record<string, string | null>>({});
 
 export function mergeThreadSessions(
-  threads: Array<{ id?: unknown; agentSessionId?: unknown }>,
+  threads: Array<{ id?: unknown; agentSessionId?: unknown; latestAgentSessionId?: unknown }>,
 ): void {
   if (!Array.isArray(threads) || threads.length === 0) return;
   const next = { ...cosThreadSessions.value };
   let changed = false;
   for (const t of threads) {
     const tid = typeof t?.id === 'string' ? t.id : null;
-    const sid = typeof t?.agentSessionId === 'string' ? t.agentSessionId : null;
+    // Prefer the latest-activity session (most recent dispatch or chat) over
+    // the thread's chat-session pointer. Inbox threads that were dispatched
+    // against — but never chatted with — only have the latest field set; the
+    // legacy agentSessionId pointer stays null until ensureAgentSessionForThread
+    // runs. Falling back keeps older payloads working.
+    const sid =
+      (typeof t?.latestAgentSessionId === 'string' && t.latestAgentSessionId) ||
+      (typeof t?.agentSessionId === 'string' && t.agentSessionId) ||
+      null;
     if (tid && sid && next[tid] !== sid) {
       next[tid] = sid;
       changed = true;
@@ -91,6 +99,8 @@ export function mergeThreadMeta(
     resolvedAt?: unknown;
     archivedAt?: unknown;
     sessionPermissionProfile?: unknown;
+    latestAgentSessionStatus?: unknown;
+    latestAgentSessionPermissionProfile?: unknown;
   }>,
 ): void {
   if (!Array.isArray(threads) || threads.length === 0) return;
@@ -99,11 +109,18 @@ export function mergeThreadMeta(
   for (const t of threads) {
     const tid = typeof t?.id === 'string' ? t.id : null;
     if (!tid) continue;
-    const sessionStatus = typeof t.sessionStatus === 'string' ? t.sessionStatus : null;
+    // Prefer the latest agent session's status/profile so the rail dot
+    // reflects active dispatched work even when the chat session is idle.
+    const sessionStatus =
+      (typeof t.latestAgentSessionStatus === 'string' && t.latestAgentSessionStatus) ||
+      (typeof t.sessionStatus === 'string' && t.sessionStatus) ||
+      null;
     const resolvedAt = typeof t.resolvedAt === 'number' ? t.resolvedAt : null;
     const archivedAt = typeof t.archivedAt === 'number' ? t.archivedAt : null;
     const sessionPermissionProfile =
-      typeof t.sessionPermissionProfile === 'string' ? t.sessionPermissionProfile : null;
+      (typeof t.latestAgentSessionPermissionProfile === 'string' && t.latestAgentSessionPermissionProfile) ||
+      (typeof t.sessionPermissionProfile === 'string' && t.sessionPermissionProfile) ||
+      null;
     const prev = next[tid];
     if (
       !prev ||

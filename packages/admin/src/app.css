@@ -3359,6 +3359,56 @@ select:focus, textarea:focus {
   min-height: 0;
 }
 
+.session-view-toggle {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+.view-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  min-height: 0;
+}
+
+.view-content.resizing-session-split {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.view-content.resizing-session-split .agent-terminal-wrap {
+  pointer-events: none;
+}
+
+.session-view-pane {
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.session-view-pane-full {
+  width: 100%;
+}
+
+.session-view-split-divider {
+  width: 5px;
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: var(--pw-border);
+  border-left: 1px solid var(--pw-bg-secondary);
+  border-right: 1px solid var(--pw-bg-secondary);
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.session-view-split-divider:hover,
+.view-content.resizing-session-split .session-view-split-divider {
+  background: var(--pw-primary);
+  border-color: var(--pw-primary);
+}
+
 /* Split pane layout */
 .terminal-split-container {
   flex: 1;

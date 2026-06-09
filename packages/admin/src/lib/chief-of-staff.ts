@@ -32,6 +32,8 @@ import {
   dockCosToLeaf,
   COS_PANE_TAB_ID,
 } from './cos-pane.js';
+import { subscribeAdmin } from './admin-ws.js';
+import { activeChannel, selectedAppId } from './state.js';
 
 export { type ChiefOfStaffToolCall, type DispatchInfo, extractDispatchInfo };
 export {
@@ -480,8 +482,6 @@ void (async () => {
 const COS_LIVE_REFRESH_DEBOUNCE_MS = 500;
 const pendingCosLiveRefresh = new Map<string, ReturnType<typeof setTimeout>>();
 void (async () => {
-  const { subscribeAdmin } = await import('./admin-ws.js');
-  const { selectedAppId } = await import('./state.js');
   subscribeAdmin('cos-message', (data: { agentId?: string; threadId?: string } | null) => {
     const agentId = data?.agentId;
     if (!agentId) return;
@@ -515,11 +515,7 @@ async function createCosThread(
 
     const trimmedHint = nameHint.trim();
     const name = (trimmedHint ? trimmedHint.slice(0, 80) : agent.name) || 'New thread';
-    // Import activeChannel inline to avoid circular deps — state.ts imports
-    // from chief-of-staff.ts indirectly. Reading .value here is fine because
-    // createCosThread is only called in event handlers (not render).
-    const { activeChannel: activeChannelSig } = await import('./state.js');
-    const channelId = activeChannelSig.value?.id ?? undefined;
+    const channelId = activeChannel.value?.id ?? undefined;
 
     const res = await fetch('/api/v1/admin/chief-of-staff/threads', {
       method: 'POST',
