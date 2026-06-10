@@ -12,6 +12,7 @@ import { useEffect, useRef } from 'preact/hooks';
 import { marked } from 'marked';
 import { api } from '../../lib/api.js';
 import { formatDate } from '../../lib/date-utils.js';
+import { stripAgentNote } from '../../lib/agent-note.js';
 
 type ThreadMessage = {
   id: string;
@@ -49,16 +50,17 @@ function parseAttachments(raw: string | null): { images?: { dataUrl: string }[] 
 }
 
 // Strip <cos-reply>…</cos-reply> wrappers that the agent uses to demarcate
-// its conversational reply from tool-output noise. Operators don't care
-// about the markers in this view.
-function stripCosReply(text: string): string {
-  return text.replace(/<\/?cos-reply>/g, '').trim();
+// its conversational reply from tool-output noise, and the [AGENT NOTE]
+// dispatch preamble prepended to dispatched prompts (see lib/agent-note.ts).
+// Both are machine-facing markers; operators don't care about them here.
+function stripAgentMarkers(text: string): string {
+  return stripAgentNote(text.replace(/<\/?cos-reply>/g, ''));
 }
 
 function MessageRow({ msg }: { msg: ThreadMessage }) {
   const attachments = parseAttachments(msg.attachmentsJson);
   const images = attachments.images ?? [];
-  const cleaned = stripCosReply(msg.text || '');
+  const cleaned = stripAgentMarkers(msg.text || '');
   const html = cleaned ? (marked.parse(cleaned, { gfm: true, breaks: true, async: false }) as string) : '';
   const author = msg.role === 'user' ? 'Operator' : msg.role === 'assistant' ? 'Agent' : 'System';
   return (
