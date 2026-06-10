@@ -4,6 +4,7 @@ import { marked } from 'marked';
 import hljs from 'highlight.js/lib/common';
 import type { ParsedMessage } from '../../lib/output-parser.js';
 import { openFileViewer } from '../../lib/file-viewer.js';
+import { stripAgentNote } from '../../lib/agent-note.js';
 import { isMobile, useNarrow } from '../../lib/viewport.js';
 import { CopyCommand } from '../ui/CopyCommand.js';
 import { AskUserQuestionPrompt, type Question } from './InteractivePrompt.js';
@@ -1023,18 +1024,6 @@ function formatMsgTime(ts: number): string | null {
   const mm = String(d.getMinutes()).padStart(2, '0');
   const ss = String(d.getSeconds()).padStart(2, '0');
   return `${hh}:${mm}:${ss}`;
-}
-
-// Dispatched sessions get an [AGENT NOTE]…[/AGENT NOTE] preamble prepended to
-// their prompt (IMPLEMENTATION_AGENT_PREAMBLE in server dispatch.ts). It's
-// machine-facing boilerplate — hide it from the rendered user bubble.
-const AGENT_NOTE_RE = /\[AGENT NOTE\][\s\S]*?\[\/AGENT NOTE\]\s*/g;
-
-function stripAgentNote(content: string): string {
-  const stripped = content.replace(AGENT_NOTE_RE, '').trim();
-  // If the message was nothing but the note, keep the original rather than
-  // rendering an empty bubble.
-  return stripped || content;
 }
 
 function UserInputMessage({ message }: { message: ParsedMessage }) {
