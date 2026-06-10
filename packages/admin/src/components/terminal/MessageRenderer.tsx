@@ -1025,9 +1025,21 @@ function formatMsgTime(ts: number): string | null {
   return `${hh}:${mm}:${ss}`;
 }
 
+// Dispatched sessions get an [AGENT NOTE]…[/AGENT NOTE] preamble prepended to
+// their prompt (IMPLEMENTATION_AGENT_PREAMBLE in server dispatch.ts). It's
+// machine-facing boilerplate — hide it from the rendered user bubble.
+const AGENT_NOTE_RE = /\[AGENT NOTE\][\s\S]*?\[\/AGENT NOTE\]\s*/g;
+
+function stripAgentNote(content: string): string {
+  const stripped = content.replace(AGENT_NOTE_RE, '').trim();
+  // If the message was nothing but the note, keep the original rather than
+  // rendering an empty bubble.
+  return stripped || content;
+}
+
 function UserInputMessage({ message }: { message: ParsedMessage }) {
   const containerNarrow = useNarrow(); const narrow = isMobile.value || containerNarrow;
-  const content = message.content || '';
+  const content = stripAgentNote(message.content || '');
   const lines = content.split('\n');
   const longChars = narrow ? 280 : 800;
   const longLines = narrow ? 5 : 14;
