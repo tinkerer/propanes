@@ -61,7 +61,7 @@ These came up repeatedly in the operator's prompts; they are the operating manua
 - "Rename X throughout propanes" doesn't include API or DB or widget contracts ([[feedback_rename_scope]]).
 
 ### "Implementation agents act; CoS chat dispatches"
-- The `[AGENT NOTE]` preamble overrides the dispatch-only rule for implementation agents ([[feedback_dispatch_only]]).
+- A dispatch-shaped prompt (feedback template + trailing `<cos-reply>` hint) overrides the dispatch-only rule for implementation agents ([[feedback_dispatch_only]]); the old `[AGENT NOTE]` preamble was removed 2026-06-11.
 
 ## Feedback patterns to expect
 

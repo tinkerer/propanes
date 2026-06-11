@@ -26,7 +26,7 @@ The Preact SPA dashboard at `packages/admin/` that drives the propanes operator 
 - **[infra-onboarding.md](infra-onboarding.md)** — infrastructure health checks (disk, CLI presence, login state, version drift) and the contributor onboarding path (fresh box → running propanes → PR back to upstream). Read this before touching the session-service lifecycle, before adding new spawn paths, or when a contributor asks how to start.
 - **[tickets.md](tickets.md)** — deduplicated catalogue of operator tickets grouped by surface, with status and ULIDs preserved.
 - **[operator-inputs.md](operator-inputs.md)** — recurring operator preferences, vocabulary, and recurring patterns of feedback (what the operator keeps asking for and why).
-- **[agent-jsonl-inputs.md](agent-jsonl-inputs.md)** — how dispatched agents actually get driven: prompt shapes, the `[AGENT NOTE]` preamble, `[TURN requestId=…]` envelopes, DOM-selection and image-attach payloads, common follow-up patterns.
+- **[agent-jsonl-inputs.md](agent-jsonl-inputs.md)** — how dispatched agents actually get driven: prompt shapes, the trailing `<cos-reply>` dispatch hint (ex-`[AGENT NOTE]` preamble, removed 2026-06-11), `[TURN requestId=…]` envelopes, DOM-selection and image-attach payloads, common follow-up patterns.
 
 ## Snapshot of the queue (at wiki generation, 2026-05-19)
 

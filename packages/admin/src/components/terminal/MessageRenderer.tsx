@@ -4,7 +4,7 @@ import { marked } from 'marked';
 import hljs from 'highlight.js/lib/common';
 import type { ParsedMessage } from '../../lib/output-parser.js';
 import { openFileViewer } from '../../lib/file-viewer.js';
-import { stripAgentNote } from '../../lib/agent-note.js';
+import { stripDispatchBoilerplate } from '../../lib/dispatch-boilerplate.js';
 import { isMobile, useNarrow } from '../../lib/viewport.js';
 import { CopyCommand } from '../ui/CopyCommand.js';
 import { AskUserQuestionPrompt, type Question } from './InteractivePrompt.js';
@@ -1041,7 +1041,7 @@ function formatMsgTime(ts: number): string | null {
 
 function UserInputMessage({ message }: { message: ParsedMessage }) {
   const containerNarrow = useNarrow(); const narrow = isMobile.value || containerNarrow;
-  const content = stripAgentNote(message.content || '');
+  const content = stripDispatchBoilerplate(message.content || '');
   const lines = content.split('\n');
   const longChars = narrow ? 280 : 800;
   const longLines = narrow ? 5 : 14;
