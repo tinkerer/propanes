@@ -152,7 +152,8 @@ agentRoutes.post('/agents', async (c) => {
     isDefault: parsed.data.isDefault,
     appId: parsed.data.appId || null,
     promptTemplate: parsed.data.promptTemplate || null,
-    mode: parsed.data.mode || 'webhook',
+    // 'webhook' only makes sense with a URL; URL-less endpoints spawn sessions.
+    mode: parsed.data.mode || (parsed.data.url ? 'webhook' : 'interactive'),
     runtime: parsed.data.runtime || 'claude',
     permissionProfile: parsed.data.permissionProfile || 'interactive-require',
     allowedTools: parsed.data.allowedTools || null,
@@ -199,7 +200,7 @@ agentRoutes.patch('/agents/:id', async (c) => {
     isDefault: parsed.data.isDefault,
     appId: parsed.data.appId || null,
     promptTemplate: parsed.data.promptTemplate || null,
-    mode: parsed.data.mode || 'webhook',
+    mode: parsed.data.mode || (parsed.data.url ? 'webhook' : 'interactive'),
     runtime: parsed.data.runtime || 'claude',
     permissionProfile: parsed.data.permissionProfile || 'interactive-require',
     allowedTools: parsed.data.allowedTools || null,

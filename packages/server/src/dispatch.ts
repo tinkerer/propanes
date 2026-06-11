@@ -25,7 +25,7 @@ import { spawnAgentSession } from './agent-sessions.js';
 import { getLauncher, addSessionToLauncher, sendAndWait } from './launcher-registry.js';
 import { feedbackEvents } from './events.js';
 import { getSession } from './sessions.js';
-import { inputSessionRemote } from './session-service-client.js';
+import { inputSessionRemote, sendKeysSessionRemote } from './session-service-client.js';
 import { extractArtifactPaths, exportSessionFiles } from './jsonl-utils.js';
 import { launchSpriteSession } from './sprite-sessions.js';
 
@@ -106,7 +106,7 @@ async function sendKeysToSession(sessionId: string, launcherId: string | null | 
     }
   }
 
-  await inputSessionRemote(sessionId, keys + (enter ? '\r' : ''));
+  await sendKeysSessionRemote(sessionId, keys, enter);
   return true;
 }
 
@@ -331,7 +331,15 @@ export async function dispatchFeedbackToAgent(params: {
     }
   }
 
-  const mode = (agent.mode || 'webhook') as 'webhook' | 'headless' | 'interactive';
+  // Endpoints created without an explicit mode get the schema column default
+  // ('webhook') even when no URL was ever configured. A webhook dispatch can
+  // never succeed without a URL, so treat such rows as session-spawning
+  // endpoints (their permission profile says which flavor) instead of
+  // failing with "mode webhook but no URL configured".
+  const rawMode = (agent.mode || 'webhook') as 'webhook' | 'headless' | 'interactive';
+  const mode = rawMode === 'webhook' && !agent.url
+    ? ((agent.permissionProfile || '').startsWith('headless') ? 'headless' : 'interactive')
+    : rawMode;
   const runtime = (agent.runtime || 'claude') as AgentRuntime;
 
   if (mode !== 'webhook') {
