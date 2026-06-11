@@ -12,7 +12,7 @@ import { useEffect, useRef } from 'preact/hooks';
 import { marked } from 'marked';
 import { api } from '../../lib/api.js';
 import { formatDate } from '../../lib/date-utils.js';
-import { stripAgentNote } from '../../lib/agent-note.js';
+import { stripDispatchBoilerplate } from '../../lib/dispatch-boilerplate.js';
 
 type ThreadMessage = {
   id: string;
@@ -50,11 +50,11 @@ function parseAttachments(raw: string | null): { images?: { dataUrl: string }[] 
 }
 
 // Strip <cos-reply>…</cos-reply> wrappers that the agent uses to demarcate
-// its conversational reply from tool-output noise, and the [AGENT NOTE]
-// dispatch preamble prepended to dispatched prompts (see lib/agent-note.ts).
+// its conversational reply from tool-output noise, plus the dispatch
+// boilerplate appended to dispatched prompts (see lib/dispatch-boilerplate.ts).
 // Both are machine-facing markers; operators don't care about them here.
 function stripAgentMarkers(text: string): string {
-  return stripAgentNote(text.replace(/<\/?cos-reply>/g, ''));
+  return stripDispatchBoilerplate(text.replace(/<\/?cos-reply>/g, ''));
 }
 
 function MessageRow({ msg }: { msg: ThreadMessage }) {

@@ -246,7 +246,7 @@ The work list (what's missing today vs the existing primitives) is itemized in [
 - **Tab mounting** is strict-active-only per container in `LeafPane` / `GlobalTerminalPanel` / `PopoutPanel`.
 - **Floating overlays** are always opaque (`#1e293b` for popups, `#0b1220` for full-viewport modals/lightboxes) — never `var(--pw-bg-surface)`. Full-viewport overlays portal to `document.body`. See [[style-guide]].
 - **Never** use `window.prompt` / `alert` / `confirm` — use modals or the `TerminalPicker` spotlight (`packages/admin/src/components/TerminalPicker.tsx`).
-- **CoS-only dispatch rule** applies to *Ops chat*; implementation agents with `[AGENT NOTE]` preamble act directly ([[feedback_dispatch_only]]).
+- **CoS-only dispatch rule** applies to *Ops chat*; dispatched implementation agents (dispatch-shaped prompt; ex-`[AGENT NOTE]` preamble, removed 2026-06-11) act directly ([[feedback_dispatch_only]]).
 - **Don't curl-POST `<cos-reply>`** — stream output is auto-persisted ([[feedback_no_curl_post_replies]]).
 
 ## 4. Agents and permission profiles

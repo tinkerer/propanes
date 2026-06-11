@@ -51,11 +51,12 @@ export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, t
   };
 }
 
-export const IMPLEMENTATION_AGENT_PREAMBLE = `[AGENT NOTE]
-IMPORTANT: You are an IMPLEMENTATION AGENT, NOT the Chief of Staff (Ops). The dispatch-only policy in your memory does NOT apply to you — you are the agent that was dispatched to do the work. Implement the requested changes directly in the codebase.
-
-When you finish your turn, your LAST message MUST contain a short summary wrapped in <cos-reply>…</cos-reply> tags. The server only persists wrapped text into the originating Inbox thread; anything outside the tags is dropped from the thread view. One <cos-reply> block per turn, 1–4 sentences, covering what you changed (file paths or commit SHAs), what you verified, and any follow-up the operator should know about.
-[/AGENT NOTE]`;
+// Single trailing line appended to dispatched prompts. This replaced the old
+// multi-line "[AGENT NOTE] … [/AGENT NOTE]" preamble (removed 2026-06-11) —
+// the only load-bearing part was the <cos-reply> protocol, which the Inbox
+// thread persistence and the slack-bot extract from session output. Keep it
+// one sentence: it shows up verbatim in the session's first user message.
+export const COS_REPLY_DISPATCH_HINT = `(Implement directly. When done, wrap a 1–4 sentence summary — changed files/commits, what you verified, follow-ups — in <cos-reply>…</cos-reply> tags; only wrapped text reaches the Inbox thread.)`;
 
 export const DEFAULT_PROMPT_TEMPLATE = `Feedback: {{feedback.url}}
 
@@ -587,8 +588,8 @@ export async function dispatchAgentSession(params: {
   const now = new Date().toISOString();
   const claudeSessionId = crypto.randomUUID();
 
-  if (params.prompt && params.prompt.trim() && !params.prompt.includes(IMPLEMENTATION_AGENT_PREAMBLE)) {
-    params = { ...params, prompt: `${IMPLEMENTATION_AGENT_PREAMBLE}\n\n${params.prompt}` };
+  if (params.prompt && params.prompt.trim() && !params.prompt.includes(COS_REPLY_DISPATCH_HINT)) {
+    params = { ...params, prompt: `${params.prompt}\n\n${COS_REPLY_DISPATCH_HINT}` };
   }
 
   // Check if explicit launcherId is a sprite target
