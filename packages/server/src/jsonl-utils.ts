@@ -324,6 +324,75 @@ export function readJsonlWithSubagents(filePath: string, out: string[]): void {
   }
 }
 
+// A "unit" is one physical transcript file in the merged stream, in merge
+// order: each main/continuation file followed by its subagent files (sorted
+// by filename) — the same order readJsonlWithSubagents emits. `key` is the
+// path relative to the main JSONL's directory, used as the stable identifier
+// in differential-update cursors (short, and stable across requests).
+export interface JsonlUnit {
+  key: string;
+  path: string;
+  subagentId?: string;
+}
+
+export function collectJsonlUnits(mainJsonlPath: string, isCodex: boolean): JsonlUnit[] {
+  const baseDir = dirname(mainJsonlPath);
+  const toKey = (p: string) => p.startsWith(baseDir + '/') ? p.slice(baseDir.length + 1) : p;
+  if (isCodex) {
+    return existsSync(mainJsonlPath) ? [{ key: toKey(mainJsonlPath), path: mainJsonlPath }] : [];
+  }
+  const files = [mainJsonlPath, ...findContinuationJsonlsCached(mainJsonlPath)];
+  const units: JsonlUnit[] = [];
+  for (const fp of files) {
+    if (!existsSync(fp)) continue;
+    units.push({ key: toKey(fp), path: fp });
+    const subagentDir = fp.replace(/\.jsonl$/, '') + '/subagents';
+    if (!existsSync(subagentDir)) continue;
+    try {
+      const subs = readdirSync(subagentDir).filter(f => f.endsWith('.jsonl')).sort();
+      for (const f of subs) {
+        const p = join(subagentDir, f);
+        units.push({ key: toKey(p), path: p, subagentId: f.replace(/^agent-/, '').replace(/\.jsonl$/, '') });
+      }
+    } catch { /* ignore */ }
+  }
+  return units;
+}
+
+// Read the bytes appended past `fromOffset`, consuming only complete
+// (newline-terminated) lines so a mid-write partial line stays unread until
+// the writer finishes it. `consumePartial` (terminal-status sessions) takes
+// the remainder even without a trailing newline — no more writes are coming,
+// so a held-back final line would otherwise never be delivered. `shrunk`
+// means the file got smaller than the cursor (truncation/rotation); the
+// caller should fall back to a full snapshot.
+export function readJsonlFileDelta(
+  path: string,
+  fromOffset: number,
+  consumePartial: boolean,
+): { text: string; newOffset: number; shrunk: boolean } {
+  let size = 0;
+  try {
+    size = statSync(path).size;
+  } catch {
+    return { text: '', newOffset: 0, shrunk: fromOffset > 0 };
+  }
+  if (size < fromOffset) return { text: '', newOffset: 0, shrunk: true };
+  if (size === fromOffset) return { text: '', newOffset: fromOffset, shrunk: false };
+  const fd = openSync(path, 'r');
+  try {
+    const buf = Buffer.alloc(size - fromOffset);
+    const read = readSync(fd, buf, 0, buf.length, fromOffset);
+    const chunk = buf.subarray(0, read);
+    const lastNl = chunk.lastIndexOf(0x0a);
+    if (lastNl === -1 && !consumePartial) return { text: '', newOffset: fromOffset, shrunk: false };
+    const end = consumePartial && lastNl < read - 1 ? read : lastNl + 1;
+    return { text: chunk.subarray(0, end).toString('utf-8'), newOffset: fromOffset + end, shrunk: false };
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export interface JsonlFileInfo {
   id: string; // unique identifier for selection: "main:<uuid>", "cont:<uuid>", "sub:<parentUuid>:<agentId>"
   claudeSessionId: string;
