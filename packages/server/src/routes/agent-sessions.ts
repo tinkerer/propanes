@@ -5,7 +5,7 @@ import { basename } from 'node:path';
 import { db, schema } from '../db/index.js';
 import { killSession } from '../agent-sessions.js';
 import { resumeAgentSession, dispatchTerminalSession, transferSession, getTransfer } from '../dispatch.js';
-import { getSessionLiveStates, inputSessionRemote } from '../session-service-client.js';
+import { getSessionLiveStates, inputSessionRemote, sendKeysSessionRemote } from '../session-service-client.js';
 import { getLauncher, sendAndWait } from '../launcher-registry.js';
 import { listSessions, sendCommand } from '../sessions.js';
 import {
@@ -663,8 +663,7 @@ agentSessionRoutes.post('/:id/send-keys', async (c) => {
 
   // Local — write to PTY via session-service
   try {
-    const data = keys + (enter !== false ? '\r' : '');
-    await inputSessionRemote(id, data);
+    await sendKeysSessionRemote(id, keys, enter !== false);
     return c.json({ ok: true });
   } catch (err: any) {
     return c.json({ ok: false, error: err.message }, 500);
@@ -767,8 +766,10 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
 // The admin client never reads this field, so drop it unconditionally.
 // On mobile (tail requested) we also elide inline base64 image `source.data`:
 // a transcript with 100+ screenshots easily crosses the 5MB mark even after
-// tailing, and the client replaces the payload with a short placeholder.
-function redactJsonlLine(line: string, dropImageData: boolean): string {
+// tailing. Instead of dropping the image entirely, we replace the payload
+// with a `_redacted.url` pointing at /:id/jsonl-image/:uuid/:imgIndex so the
+// client can lazy-load each image individually via a plain <img src>.
+function redactJsonlLine(line: string, dropImageData: boolean, sessionId: string): string {
   if (line.length < 8192) return line;
   let obj: any;
   try { obj = JSON.parse(line); } catch { return line; }
@@ -778,22 +779,32 @@ function redactJsonlLine(line: string, dropImageData: boolean): string {
     mutated = true;
   }
   if (dropImageData && obj && Array.isArray(obj.message?.content)) {
+    // imgIdx counts every base64 image block in document order — the
+    // jsonl-image endpoint must walk the same order to resolve the index.
+    let imgIdx = 0;
     for (const block of obj.message.content) {
       if (!block || typeof block !== 'object' || !Array.isArray(block.content)) continue;
       for (const inner of block.content) {
-        if (inner?.type === 'image' && inner.source?.type === 'base64' && typeof inner.source.data === 'string' && inner.source.data.length > 0) {
-          inner._redacted = { originalSize: inner.source.data.length };
+        if (inner?.type !== 'image' || inner.source?.type !== 'base64') continue;
+        if (typeof inner.source.data === 'string' && inner.source.data.length > 0) {
+          inner._redacted = {
+            originalSize: inner.source.data.length,
+            ...(typeof obj.uuid === 'string' && obj.uuid
+              ? { url: `/api/v1/admin/agent-sessions/${sessionId}/jsonl-image/${obj.uuid}/${imgIdx}` }
+              : {}),
+          };
           inner.source.data = '';
           mutated = true;
         }
+        imgIdx++;
       }
     }
   }
   return mutated ? JSON.stringify(obj) : line;
 }
 
-function redactLines(lines: string[], dropImageData: boolean): string[] {
-  return lines.map(l => redactJsonlLine(l, dropImageData));
+function redactLines(lines: string[], dropImageData: boolean, sessionId: string): string[] {
+  return lines.map(l => redactJsonlLine(l, dropImageData, sessionId));
 }
 
 agentSessionRoutes.get('/:id/jsonl', async (c) => {
@@ -843,7 +854,7 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
       const raw = readFileSync(jsonlPath, 'utf-8');
       const lines = raw.split('\n').filter(l => l.trim());
       const out = tailN > 0 ? lines.slice(-tailN) : lines;
-      return c.text(redactLines(out, dropImageData).join('\n'));
+      return c.text(redactLines(out, dropImageData, id).join('\n'));
     }
     const allFiles = listJsonlFiles(jsonlPath);
     const target = allFiles.find(f => f.id === fileFilter);
@@ -856,7 +867,7 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
     const raw = readFileSync(target.filePath, 'utf-8');
     const lines = filterJsonlLines(raw);
     const out = tailN > 0 ? lines.slice(-tailN) : lines;
-    return c.text(redactLines(out, dropImageData).join('\n'));
+    return c.text(redactLines(out, dropImageData, id).join('\n'));
   }
 
   // Default: merged view (all files). Codex doesn't have continuations or
@@ -878,7 +889,82 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
   }
 
   const out = tailN > 0 ? allLines.slice(-tailN) : allLines;
-  return c.text(redactLines(out, dropImageData).join('\n'));
+  return c.text(redactLines(out, dropImageData, id).join('\n'));
+});
+
+// Serve a single inline image out of a session's JSONL transcript. The mobile
+// tail path above elides base64 payloads and stamps each with a URL pointing
+// here, so the browser lazy-loads images one at a time instead of parsing
+// them all inside one multi-MB JSONL response. `uuid` is the JSONL line's
+// message uuid; `imgIndex` is the image's document-order position within that
+// line (same walk order as redactJsonlLine).
+agentSessionRoutes.get('/:id/jsonl-image/:uuid/:imgIndex', async (c) => {
+  const id = c.req.param('id');
+  const uuid = c.req.param('uuid');
+  const imgIndex = parseInt(c.req.param('imgIndex'), 10);
+  if (!/^[A-Za-z0-9_-]+$/.test(uuid) || !Number.isInteger(imgIndex) || imgIndex < 0) {
+    return c.json({ error: 'Bad image reference' }, 400);
+  }
+  const row = db
+    .select({
+      claudeSessionId: schema.agentSessions.claudeSessionId,
+      cwd: schema.agentSessions.cwd,
+      status: schema.agentSessions.status,
+      runtime: sql<string>`coalesce(${schema.agentEndpoints.runtime}, ${schema.agentSessions.runtime}, 'claude')`,
+      startedAt: schema.agentSessions.startedAt,
+      appProjectDir: schema.applications.projectDir,
+    })
+    .from(schema.agentSessions)
+    .leftJoin(schema.feedbackItems, eq(schema.agentSessions.feedbackId, schema.feedbackItems.id))
+    .leftJoin(schema.agentEndpoints, eq(schema.agentSessions.agentEndpointId, schema.agentEndpoints.id))
+    .leftJoin(schema.applications, eq(schema.feedbackItems.appId, schema.applications.id))
+    .where(eq(schema.agentSessions.id, id))
+    .get();
+
+  if (!row) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+
+  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt, row.status);
+  if (!jsonlPath || !existsSync(jsonlPath)) {
+    return c.json({ error: 'JSONL file not found' }, 404);
+  }
+
+  // Codex rollout lines never get image-redaction URLs (different shape).
+  const allLines: string[] = [];
+  if (row.runtime === 'codex') {
+    return c.json({ error: 'Not available for codex sessions' }, 404);
+  }
+  const jsonlFiles = [jsonlPath, ...findContinuationJsonlsCached(jsonlPath)];
+  for (const filePath of jsonlFiles) {
+    readJsonlWithSubagents(filePath, allLines);
+  }
+
+  for (const line of allLines) {
+    if (!line.includes(uuid)) continue;
+    let obj: any;
+    try { obj = JSON.parse(line); } catch { continue; }
+    if (obj?.uuid !== uuid || !Array.isArray(obj.message?.content)) continue;
+    let imgIdx = 0;
+    for (const block of obj.message.content) {
+      if (!block || typeof block !== 'object' || !Array.isArray(block.content)) continue;
+      for (const inner of block.content) {
+        if (inner?.type !== 'image' || inner.source?.type !== 'base64') continue;
+        if (imgIdx === imgIndex) {
+          const data = typeof inner.source.data === 'string' ? inner.source.data : '';
+          if (!data) return c.json({ error: 'Image data missing' }, 404);
+          c.header('Content-Type', inner.source.media_type || 'image/png');
+          // JSONL lines are append-only — once written the payload never
+          // changes, so the browser can cache aggressively across polls.
+          c.header('Cache-Control', 'private, max-age=86400, immutable');
+          return c.body(new Uint8Array(Buffer.from(data, 'base64')));
+        }
+        imgIdx++;
+      }
+    }
+    return c.json({ error: `Image index ${imgIndex} not found in message` }, 404);
+  }
+  return c.json({ error: 'Message not found' }, 404);
 });
 
 agentSessionRoutes.post('/:id/tail-jsonl', async (c) => {
