@@ -436,6 +436,35 @@ export const api = {
       method: 'DELETE',
     }),
 
+  // Differential JSONL fetch: pass the cursor from the previous response (or
+  // omit for the initial snapshot) and the server returns only the lines
+  // appended since, keyed by physical file. `order` is the merge order; the
+  // caller keeps per-key buffers and rebuilds the merged transcript locally.
+  // `reset: true` means previous buffers are stale and must be discarded.
+  getJsonlDelta: async (
+    id: string,
+    opts: { fileFilter?: string; tail?: number; cursor?: string | null } = {},
+  ): Promise<{ cursor: string; reset: boolean; order: string[]; files: Array<{ key: string; lines: string }> }> => {
+    const params: string[] = [`cursor=${encodeURIComponent(opts.cursor || 'init')}`];
+    if (opts.fileFilter) params.push(`file=${encodeURIComponent(opts.fileFilter)}`);
+    if (opts.tail && opts.tail > 0) params.push(`tail=${opts.tail}`);
+    const res = await authFetch(`/admin/agent-sessions/${id}/jsonl?${params.join('&')}`);
+    if (!res.ok) {
+      let detail = `HTTP ${res.status}`;
+      try {
+        const body = await res.clone().json();
+        if (body?.error) detail = body.error;
+      } catch {
+        const text = await res.text().catch(() => '');
+        if (text) detail = text.slice(0, 200);
+      }
+      const err = new Error(detail) as Error & { status?: number };
+      err.status = res.status;
+      throw err;
+    }
+    return res.json();
+  },
+
   getJsonl: async (id: string, fileFilter?: string, tail?: number): Promise<string> => {
     const params: string[] = [];
     if (fileFilter) params.push(`file=${encodeURIComponent(fileFilter)}`);

@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { eq, desc, ne, and, inArray, or, sql } from 'drizzle-orm';
-import { existsSync, readFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 import { db, schema } from '../db/index.js';
 import { killSession } from '../agent-sessions.js';
 import { resumeAgentSession, dispatchTerminalSession, transferSession, getTransfer } from '../dispatch.js';
@@ -18,6 +19,9 @@ import {
   extractArtifactPaths,
   exportSessionFiles,
   listJsonlFiles,
+  collectJsonlUnits,
+  readJsonlFileDelta,
+  type JsonlUnit,
 } from '../jsonl-utils.js';
 
 function computeJsonlPath(projectDir: string | null, claudeSessionId: string | null): string | null {
@@ -807,6 +811,51 @@ function redactLines(lines: string[], dropImageData: boolean, sessionId: string)
   return lines.map(l => redactJsonlLine(l, dropImageData, sessionId));
 }
 
+// Decode a differential-update cursor (opaque base64url of {v:1, o:{key:byteOffset}}).
+// Returns null for 'init' / malformed cursors — callers fall back to a full snapshot.
+function decodeJsonlCursor(cursorParam: string): Record<string, number> | null {
+  if (cursorParam === 'init') return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(cursorParam, 'base64url').toString('utf-8'));
+    if (decoded?.v === 1 && decoded.o && typeof decoded.o === 'object') {
+      const offsets: Record<string, number> = {};
+      for (const [k, v] of Object.entries(decoded.o)) {
+        if (typeof v === 'number' && Number.isFinite(v) && v >= 0) offsets[k] = v;
+      }
+      return offsets;
+    }
+  } catch { /* malformed → full snapshot */ }
+  return null;
+}
+
+function injectSubagentId(line: string, agentId: string | undefined): string {
+  if (!agentId) return line;
+  try {
+    const obj = JSON.parse(line);
+    obj._subagentId = agentId;
+    return JSON.stringify(obj);
+  } catch {
+    return line;
+  }
+}
+
+// Weak ETag over the involved files' identity + size + mtime, so unchanged
+// polls in the legacy full-text mode can be answered with an empty 304
+// instead of re-shipping a multi-MB body.
+function computeJsonlEtag(units: JsonlUnit[], tailN: number): string {
+  const h = createHash('sha1');
+  for (const u of units) {
+    try {
+      const s = statSync(u.path);
+      h.update(`${u.key}:${s.size}:${s.mtimeMs};`);
+    } catch {
+      h.update(`${u.key}:gone;`);
+    }
+  }
+  h.update(`tail=${tailN}`);
+  return `W/"${h.digest('hex')}"`;
+}
+
 agentSessionRoutes.get('/:id/jsonl', async (c) => {
   const id = c.req.param('id');
   const fileFilter = c.req.query('file'); // optional: specific file id like "main:uuid", "cont:uuid", "sub:uuid:agentId"
@@ -817,6 +866,10 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
   const tailN = tailParam ? Math.max(0, parseInt(tailParam, 10) || 0) : 0;
   // Treat any tail request as a mobile client for redaction purposes.
   const dropImageData = tailN > 0;
+  // Differential updates: ?cursor=init (first poll) or an opaque cursor from a
+  // previous response. Switches the response to JSON with only the bytes
+  // appended since the cursor, instead of the entire merged transcript.
+  const cursorParam = c.req.query('cursor');
   const row = db
     .select({
       claudeSessionId: schema.agentSessions.claudeSessionId,
@@ -846,16 +899,15 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
   }
 
   const isCodex = row.runtime === 'codex';
+  const isLive = row.status === 'running' || row.status === 'pending';
+  // Codex rollout lines are served unfiltered (no progress/file-history-snapshot
+  // noise to strip); claude transcripts go through filterJsonlLines.
+  const splitLines = (text: string) =>
+    isCodex ? text.split('\n').filter(l => l.trim()) : filterJsonlLines(text);
 
-  // If a specific file is requested, load just that one
-  if (fileFilter) {
-    if (isCodex) {
-      // Codex has only the single rollout file; fileFilter refers to it.
-      const raw = readFileSync(jsonlPath, 'utf-8');
-      const lines = raw.split('\n').filter(l => l.trim());
-      const out = tailN > 0 ? lines.slice(-tailN) : lines;
-      return c.text(redactLines(out, dropImageData, id).join('\n'));
-    }
+  // Resolve the ordered list of physical files in merge order.
+  let units: JsonlUnit[];
+  if (fileFilter && !isCodex) {
     const allFiles = listJsonlFiles(jsonlPath);
     const target = allFiles.find(f => f.id === fileFilter);
     if (!target) {
@@ -864,31 +916,102 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
     if (!existsSync(target.filePath)) {
       return c.json({ error: `File missing on disk: ${target.filePath}` }, 404);
     }
-    const raw = readFileSync(target.filePath, 'utf-8');
-    const lines = filterJsonlLines(raw);
-    const out = tailN > 0 ? lines.slice(-tailN) : lines;
-    return c.text(redactLines(out, dropImageData, id).join('\n'));
-  }
-
-  // Default: merged view (all files). Codex doesn't have continuations or
-  // subagent JSONLs, just one rollout file.
-  const allLines: string[] = [];
-  if (isCodex) {
-    const raw = readFileSync(jsonlPath, 'utf-8');
-    for (const line of raw.split('\n')) {
-      if (line.trim()) allLines.push(line);
-    }
+    // Single file, no _subagentId injection — matches the legacy ?file= behavior.
+    const baseDir = dirname(jsonlPath);
+    const key = target.filePath.startsWith(baseDir + '/')
+      ? target.filePath.slice(baseDir.length + 1)
+      : target.filePath;
+    units = [{ key, path: target.filePath }];
   } else {
-    const continuations = findContinuationJsonlsCached(jsonlPath);
-    console.log(`[jsonl] ${id}: main=${jsonlPath}, continuations=${continuations.length}`, continuations);
-    const jsonlFiles = [jsonlPath, ...continuations];
-    for (const filePath of jsonlFiles) {
-      readJsonlWithSubagents(filePath, allLines);
-    }
-    console.log(`[jsonl] ${id}: total lines=${allLines.length}`);
+    // Merged view (codex always has just the one rollout file).
+    units = collectJsonlUnits(jsonlPath, isCodex);
   }
 
+  // Differential mode: ship only bytes appended past the cursor's per-file
+  // offsets. The merged stream is NOT append-only (subagent lines interleave
+  // after each file's lines), so the cursor tracks byte offsets per physical
+  // file and the client rebuilds the merge locally from `order`.
+  if (cursorParam !== undefined && cursorParam !== '') {
+    // For terminal-status sessions consume a trailing partial line too —
+    // nothing will ever complete it.
+    const consumePartial = !isLive;
+    const offsets = decodeJsonlCursor(cursorParam);
+    let reset = offsets === null;
+
+    const readUnits = () => {
+      const newOffsets: Record<string, number> = {};
+      const chunks: Array<{ unit: JsonlUnit; lines: string[] }> = [];
+      for (const u of units) {
+        const from = !reset && offsets && typeof offsets[u.key] === 'number' ? offsets[u.key] : 0;
+        const d = readJsonlFileDelta(u.path, from, consumePartial);
+        if (d.shrunk) return { newOffsets, chunks, shrunk: true };
+        newOffsets[u.key] = d.newOffset;
+        if (d.text) {
+          const lines = splitLines(d.text);
+          if (lines.length) chunks.push({ unit: u, lines });
+        }
+      }
+      return { newOffsets, chunks, shrunk: false };
+    };
+
+    let result = readUnits();
+    if (result.shrunk) {
+      // A file got truncated/rotated under the cursor — resend everything.
+      reset = true;
+      result = readUnits();
+    }
+
+    // Tail applies only to the snapshot (reset) response; subsequent deltas
+    // are naturally small. Trim from the front across units in merge order.
+    if (reset && tailN > 0) {
+      let remaining = tailN;
+      for (let i = result.chunks.length - 1; i >= 0; i--) {
+        const arr = result.chunks[i].lines;
+        if (remaining <= 0) {
+          result.chunks[i].lines = [];
+        } else if (arr.length > remaining) {
+          result.chunks[i].lines = arr.slice(-remaining);
+          remaining = 0;
+        } else {
+          remaining -= arr.length;
+        }
+      }
+    }
+
+    const files = result.chunks
+      .filter(ch => ch.lines.length > 0)
+      .map(ch => ({
+        key: ch.unit.key,
+        lines: redactLines(
+          ch.lines.map(l => injectSubagentId(l, ch.unit.subagentId)),
+          dropImageData,
+          id,
+        ).join('\n'),
+      }));
+
+    const cursor = Buffer.from(JSON.stringify({ v: 1, o: result.newOffsets })).toString('base64url');
+    return c.json({ cursor, reset, order: units.map(u => u.key), files });
+  }
+
+  // Legacy full-text mode (one-shot consumers like the session summary view).
+  // A stat-based weak ETag lets unchanged re-fetches answer with an empty 304.
+  const etag = computeJsonlEtag(units, tailN);
+  if (c.req.header('if-none-match') === etag) {
+    c.header('ETag', etag);
+    return c.body(null, 304);
+  }
+  const allLines: string[] = [];
+  for (const u of units) {
+    let raw: string;
+    try {
+      raw = readFileSync(u.path, 'utf-8');
+    } catch {
+      continue; // vanished between collect and read
+    }
+    for (const line of splitLines(raw)) allLines.push(injectSubagentId(line, u.subagentId));
+  }
   const out = tailN > 0 ? allLines.slice(-tailN) : allLines;
+  c.header('ETag', etag);
   return c.text(redactLines(out, dropImageData, id).join('\n'));
 });
 

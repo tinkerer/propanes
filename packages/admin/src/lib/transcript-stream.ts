@@ -13,7 +13,9 @@ export interface UseTranscriptStreamOpts {
   /** Override the polling interval (ms). Defaults: 3000 desktop / 5000 mobile.
    *  Pass 0 to disable polling entirely (one-shot fetch). */
   pollMs?: number;
-  /** Override the tail line cap. Defaults: 0 (full file) desktop, 500 mobile. */
+  /** Override the tail line cap, applied to the initial snapshot (subsequent
+   *  differential polls only carry new lines anyway). Defaults: 0 (full
+   *  history) desktop, 500 mobile. */
   tailLines?: number;
 }
 
@@ -36,8 +38,12 @@ export interface TranscriptStreamState {
  *  - JSONL is missing for the first few seconds while the agent spins up.
  *    A 404 isn't an error then; it's "not written yet". 400 happens for
  *    sessions with no resolvable project_dir (plain terminals) — also benign.
- *  - On mobile we tail the file and poll less aggressively; multi-MB JSONL
- *    parses freeze Safari.
+ *  - On mobile we tail the initial snapshot and poll less aggressively;
+ *    multi-MB JSONL parses freeze Safari.
+ *  - Polls are differential: an opaque per-file byte-offset cursor is sent
+ *    back to the server, which returns only newly appended lines. The merged
+ *    transcript is rebuilt locally from per-file buffers because subagent
+ *    lines interleave mid-stream (the merge is not append-only).
  *  - In-flight guard prevents request stacking on slow servers — the JSONL
  *    endpoint walks all continuations + subagents per call.
  */
@@ -48,8 +54,12 @@ export function useTranscriptStream(
   const [messages, setMessages] = useState<ParsedMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const lastLength = useRef(0);
-  const lastFileFilter = useRef<string | null | undefined>(undefined);
+  // Differential-update state: per-file line buffers + the server's merge
+  // order + the opaque cursor. The merged transcript is rebuilt locally from
+  // these, so each poll only downloads lines appended since the last one.
+  const buffers = useRef<Map<string, string>>(new Map());
+  const order = useRef<string[]>([]);
+  const cursor = useRef<string | null>(null);
 
   const sessionRecord = allSessions.value.find((s: any) => s.id === sessionId);
   const terminalStatus = sessionRecord?.status && TERMINAL_STATUSES.has(sessionRecord.status);
@@ -67,8 +77,9 @@ export function useTranscriptStream(
 
     // Reset on identity change so the previous session's tail doesn't bleed
     // into the new one mid-fetch.
-    lastLength.current = 0;
-    lastFileFilter.current = fileFilter;
+    buffers.current = new Map();
+    order.current = [];
+    cursor.current = null;
     setMessages([]);
     setLoading(true);
     setError(null);
@@ -77,17 +88,28 @@ export function useTranscriptStream(
       if (inFlight) return;
       inFlight = true;
       try {
-        if (fileFilter !== lastFileFilter.current) {
-          lastFileFilter.current = fileFilter;
-          lastLength.current = 0;
-        }
-        const text = await api.getJsonl(sessionId, fileFilter || undefined, tailLines);
+        const delta = await api.getJsonlDelta(sessionId, {
+          fileFilter: fileFilter || undefined,
+          tail: tailLines,
+          cursor: cursor.current,
+        });
         if (cancelled) return;
-        if (text.length === lastLength.current) {
+        cursor.current = delta.cursor;
+        order.current = delta.order;
+        if (delta.reset) buffers.current = new Map();
+        for (const f of delta.files) {
+          const prev = buffers.current.get(f.key);
+          buffers.current.set(f.key, prev ? prev + '\n' + f.lines : f.lines);
+        }
+        if (!delta.reset && delta.files.length === 0) {
+          // Nothing appended since the last poll — keep the current parse.
           setLoading(false);
           return;
         }
-        lastLength.current = text.length;
+        const text = order.current
+          .map(k => buffers.current.get(k))
+          .filter(Boolean)
+          .join('\n');
         const parser = runtime === 'codex'
           ? new CodexOutputParser()
           : new JsonOutputParser();
