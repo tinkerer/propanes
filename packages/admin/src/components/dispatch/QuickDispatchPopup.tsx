@@ -75,6 +75,17 @@ interface Props {
   initialDispatchType?: DispatchType;
 }
 
+function isComposerFloatingChrome(target: EventTarget | null): boolean {
+  return !!(
+    target instanceof Element
+    && target.closest('.interrupt-bar-expand-menu, .cos-tool-menu')
+  );
+}
+
+function isElementPickerActive(): boolean {
+  return document.body.classList.contains('pw-element-picker-active');
+}
+
 export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, initialDispatchType }: Props) {
   const settings = loadSettings(appKey);
   const [dispatchType, setDispatchType] = useState<DispatchType>(
@@ -152,11 +163,13 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
   // Click-away close
   useEffect(() => {
     function onMouseDown(e: MouseEvent) {
+      if (isElementPickerActive() || isComposerFloatingChrome(e.target)) return;
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
         onClose();
       }
     }
     function onFocusIn(e: FocusEvent) {
+      if (isElementPickerActive() || isComposerFloatingChrome(e.target)) return;
       const target = e.target as Node | null;
       if (!target || !panelRef.current) return;
       if (!panelRef.current.contains(target)) onClose();
@@ -200,9 +213,11 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
       }
 
       // YOLO mode auto-picks a skip-permissions agent, ignoring the manual selection.
+      // Fallbacks skip webhook endpoints with no URL — those can't dispatch.
+      const usable = agents.filter((a: any) => a.mode !== 'webhook' || !!a.url);
       const agent = dispatchType === 'yolo'
-        ? (pickYoloAgent(agents, appId) || agents.find((a: any) => a.id === selectedAgentId) || agents[0])
-        : (agents.find((a: any) => a.id === selectedAgentId) || agents[0]);
+        ? (pickYoloAgent(agents, appId) || usable.find((a: any) => a.id === selectedAgentId) || usable[0])
+        : (agents.find((a: any) => a.id === selectedAgentId) || usable[0]);
       if (!agent) throw new Error('No agent endpoints configured');
       if (dispatchType === 'yolo' && typeof agent.permissionProfile === 'string' && !agent.permissionProfile.endsWith('-yolo')) {
         throw new Error('No skip-permissions (*-yolo) agent configured');

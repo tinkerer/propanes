@@ -207,7 +207,9 @@ export const agentEndpointSchema = z.object({
   isDefault: z.boolean().default(false),
   appId: z.string().optional(),
   promptTemplate: z.string().max(10000).optional(),
-  mode: z.enum(DISPATCH_MODES).default('webhook'),
+  // No default — the server picks 'webhook' vs 'interactive' based on
+  // whether a URL is configured (webhook without a URL can never dispatch).
+  mode: z.enum(DISPATCH_MODES).optional(),
   runtime: z.enum(AGENT_RUNTIMES).default('claude'),
   permissionProfile: z.enum(PERMISSION_PROFILES).default('interactive-require'),
   allowedTools: z.string().max(5000).optional(),

@@ -843,6 +843,16 @@ export function runMigrations() {
              )
        WHERE prompt_template LIKE '%' || char(10) || char(10)
                                 || 'consider screenshots if available in feedback.';
+
+      -- Step 5: endpoints stuck on the schema's mode default ('webhook')
+      -- with no URL can never dispatch ("Agent endpoint has mode webhook
+      -- but no URL configured"). They were always meant to spawn sessions —
+      -- realign mode with the permission profile.
+      UPDATE agent_endpoints SET mode = 'headless'
+        WHERE mode = 'webhook' AND (url IS NULL OR url = '')
+          AND permission_profile LIKE 'headless%';
+      UPDATE agent_endpoints SET mode = 'interactive'
+        WHERE mode = 'webhook' AND (url IS NULL OR url = '');
     `);
   } catch {
     // Tables/columns may not all exist on very fresh DBs; alter statements
