@@ -11,7 +11,7 @@ Observations from the 573 JSONL session files under `/home/azureuser/.claude/pro
 
 ### Codex rollouts
 
-Codex sessions write rollout JSONL under `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`. They have a different shape from Claude — line types include `session_meta`, `event_msg`, `response_item`, `turn_context`, `token_count`. The first user prompt for a Codex session uses the same `[AGENT NOTE]` / `do feedback item …` / `[TURN requestId=…]` envelopes as Claude (because the dispatcher emits identical text), but the surrounding system prompt embeds the Codex personality + the project's `AGENTS.md` instructions verbatim (palette rules, no `window.prompt`, lazy tab rendering, `pw screenshot` ground-truth). 38 rollouts under `~/.codex/sessions/2026/` at this regeneration; corresponds to 35 `agent_sessions.runtime='codex'` rows (vs 985 claude).
+Codex sessions write rollout JSONL under `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`. They have a different shape from Claude — line types include `session_meta`, `event_msg`, `response_item`, `turn_context`, `token_count`. The first user prompt for a Codex session uses the same `do feedback item …` / `[TURN requestId=…]` envelopes as Claude (because the dispatcher emits identical text; the legacy `[AGENT NOTE]` preamble was removed 2026-06-11 in favor of a one-line `<cos-reply>` hint), but the surrounding system prompt embeds the Codex personality + the project's `AGENTS.md` instructions verbatim (palette rules, no `window.prompt`, lazy tab rendering, `pw screenshot` ground-truth). 38 rollouts under `~/.codex/sessions/2026/` at this regeneration; corresponds to 35 `agent_sessions.runtime='codex'` rows (vs 985 claude).
 
 ### Other line types in Claude JSONL
 
@@ -89,14 +89,11 @@ The prompt-widget server is at <URL>. The browser session may still be live — 
 
 Available hooks the app exposes: [...]
 
-[AGENT NOTE]
-IMPORTANT: You are an IMPLEMENTATION AGENT, NOT the Chief of Staff (Ops). The dispatch-only policy in your memory does NOT apply to you — you are the agent that was dispatched to do the work. Implement the requested changes directly in the codebase.
-[/AGENT NOTE]
+(Implement directly. When done, wrap a 1–4 sentence summary — changed files/commits, what you verified, follow-ups — in <cos-reply>…</cos-reply> tags; only wrapped text reaches the Inbox thread.)
 ```
 
 - This shape is what `launchSpecUpdate` (and most "implement this ticket" dispatches) sends.
-- The `[AGENT NOTE]` preamble is the canonical override for the dispatch-only memory rule — implementation agents must act, not delegate.
-- The operator has expressed wanting to trim or remove the `AGENT NOTE` body (ticket `01KRRX5QX1`); the boundary tags `[AGENT NOTE]` … `[/AGENT NOTE]` are stable but the prose inside is open for editing.
+- The `[AGENT NOTE]` preamble was removed 2026-06-11 (ticket `01KRRX5QX1`): the dispatcher now appends only the single trailing `COS_REPLY_DISPATCH_HINT` line above (`dispatch.ts`), preserving the `<cos-reply>` protocol. Historical JSONL/threads still contain the old block; the admin UI strips both formats via `lib/dispatch-boilerplate.ts`.
 
 ## Resume / continuation envelopes
 
@@ -149,7 +146,7 @@ Attached images from the operator (use the Read tool on these absolute paths to 
 |---|---|
 | A (do feedback item) | Read the ticket via `curl /api/v1/admin/feedback/<id>`, follow the description, fix code, run the relevant tests / `pw screenshot` to verify, then optionally `PATCH …/feedback/<id>` to mark resolved (don't assume — confirm with the operator unless the ticket is unambiguous). |
 | B (TURN envelope) | Reply with `<cos-reply>…</cos-reply>` text. If the operator's intent is clearly to act, dispatch a child session via `/api/v1/admin/feedback/<id>` + dispatch — don't ask twice. |
-| C (implementation agent) | Act. Don't delegate. Use Playwright for UI verification. The `[AGENT NOTE]` block overrides the dispatch-only memory rule. |
+| C (implementation agent) | Act. Don't delegate. Use Playwright for UI verification. A dispatch-shaped prompt (feedback template + trailing `<cos-reply>` hint) overrides the dispatch-only memory rule. |
 
 ## Common attachments seen in implementation prompts
 
@@ -176,7 +173,7 @@ The operator was looking at a previous CoS thread describing the freeze when the
 
 Every codex session in `~/.codex/sessions/` begins by injecting the project's `AGENTS.md` verbatim into the system prompt (visible as the leading `# AGENTS.md instructions for /home/azureuser/propanes` block in every rollout). This means codex sessions enforce the palette / lazy-tab / `pw screenshot` rules without the dispatcher having to repeat them; if you need to change the rules for codex, edit `/home/azureuser/propanes/AGENTS.md`, not the dispatch prompt.
 
-Claude sessions do not get the same automatic injection — claude reads `CLAUDE.md` from the cwd when the cwd-aware Read tool is used, but the system prompt itself does not embed it. The dispatch path's `[AGENT NOTE]` block is the only place CLAUDE-side rules are forced into context.
+Claude sessions do not get the same automatic injection — claude reads `CLAUDE.md` from the cwd when the cwd-aware Read tool is used, but the system prompt itself does not embed it. The dispatch path's trailing `COS_REPLY_DISPATCH_HINT` line is the only dispatcher-forced instruction in CLAUDE-side context (the old `[AGENT NOTE]` block was removed 2026-06-11).
 
 ## How this wiki page was generated
 
