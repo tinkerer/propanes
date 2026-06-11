@@ -833,6 +833,10 @@ function extractImageUrls(content: string): string[] {
   while ((m = b64re.exec(content)) !== null) urls.push(m[0]);
   const urlre = /https?:\/\/[^\s"'<>]+\.(?:png|jpg|jpeg|gif|webp|svg|bmp)/gi;
   while ((m = urlre.exec(content)) !== null) urls.push(m[0]);
+  // Server-redacted inline images (mobile tail mode) — the JSONL payload is
+  // replaced with a relative lazy-load URL by routes/agent-sessions.ts.
+  const jsonlImgRe = /\/api\/v1\/admin\/agent-sessions\/[\w-]+\/jsonl-image\/[\w-]+\/\d+/g;
+  while ((m = jsonlImgRe.exec(content)) !== null) urls.push(m[0]);
   return urls;
 }
 
@@ -846,7 +850,17 @@ function stripLineNumbers(content: string): string {
 
 function ToolResultMessage({ message, prevToolUse }: { message: ParsedMessage; prevToolUse?: ParsedMessage }) {
   const isError = message.isError;
-  const content = message.content;
+  const rawContent = message.content;
+  const imageUrls = useMemo(() => extractImageUrls(rawContent), [rawContent]);
+  // Strip extracted image URIs from the text body — they render as
+  // thumbnails below, and a raw data-URI / lazy-load path adds nothing
+  // as text (on mobile it used to show as an "[image elided]" line).
+  const content = useMemo(() => {
+    if (imageUrls.length === 0) return rawContent;
+    let stripped = rawContent;
+    for (const url of imageUrls) stripped = stripped.split(url).join('');
+    return stripped.trim();
+  }, [rawContent, imageUrls]);
   const lines = content.split('\n');
   const containerNarrow = useNarrow(); const narrow = isMobile.value || containerNarrow;
   const longLineThreshold = narrow ? 4 : 12;
@@ -856,7 +870,6 @@ function ToolResultMessage({ message, prevToolUse }: { message: ParsedMessage; p
   const [expanded, setExpanded] = useState(!isLong);
   const [viewMode, setViewMode] = useState<'raw' | 'highlighted' | 'markdown'>('highlighted');
 
-  const imageUrls = extractImageUrls(content);
   const displayContent = expanded
     ? content
     : lines.slice(0, previewLineCount).join('\n') + (lines.length > previewLineCount ? '\n...' : '');
@@ -912,7 +925,7 @@ function ToolResultMessage({ message, prevToolUse }: { message: ParsedMessage; p
           {imageUrls.map((url, i) => <ImageViewer key={i} src={url} />)}
         </div>
       )}
-      {showMarkdown && expanded ? (
+      {content.length === 0 && imageUrls.length > 0 ? null : showMarkdown && expanded ? (
         <div class="sm-result-markdown">{renderMarkdown(cleanContent)}</div>
       ) : showHighlighted && (expanded || !isLong) ? (
         <HighlightedCode content={cleanContent} lang={lang} />

@@ -43,7 +43,10 @@ export interface ParsedMessage {
 // so MessageRenderer.extractImageUrls picks them up — without this, the parser
 // would `JSON.stringify` the whole block and the 200KB base64 payload would
 // render as an unreadable wall of text (and lock up mobile Safari).
-// Redacted images (server-elided for mobile) land as a short placeholder.
+// Redacted images (server-elided for mobile) carry a `_redacted.url` that
+// points at the jsonl-image endpoint — emit it so MessageRenderer lazy-loads
+// the image via <img src>. Only legacy lines without a url fall back to the
+// short text placeholder.
 function formatInnerContentBlock(c: any): string {
   if (typeof c === 'string') return c;
   if (!c || typeof c !== 'object') return String(c ?? '');
@@ -52,6 +55,7 @@ function formatInnerContentBlock(c: any): string {
     const mime = c.source.media_type || 'image/png';
     const data = typeof c.source.data === 'string' ? c.source.data : '';
     if (!data) {
+      if (typeof c._redacted?.url === 'string') return c._redacted.url;
       const size = c._redacted?.originalSize;
       return size ? `[image elided: ${mime}, ${size.toLocaleString()} bytes]` : `[image: ${mime}]`;
     }
