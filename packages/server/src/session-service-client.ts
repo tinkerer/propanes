@@ -57,6 +57,10 @@ export async function inputSessionRemote(sessionId: string, data: string): Promi
   await post(`/input/${sessionId}`, { data });
 }
 
+export async function sendKeysSessionRemote(sessionId: string, keys: string, enter = true): Promise<void> {
+  await post(`/send-keys/${sessionId}`, { keys, enter });
+}
+
 export async function captureSessionOutput(sessionId: string): Promise<string> {
   const res = await fetch(`${SESSION_SERVICE_URL}/capture/${sessionId}`);
   if (!res.ok) throw new Error(`Capture failed: ${res.statusText}`);

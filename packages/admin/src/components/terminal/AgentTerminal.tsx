@@ -709,6 +709,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       if (!isResizeOwner()) return;
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
+        if (term.cols > 300 || term.rows > 120) return;
         // On macOS, TIOCSWINSZ skips SIGWINCH when size is unchanged.
         // "Bounce" by sending rows-1 first to guarantee the PTY gets a real
         // SIGWINCH and re-renders when we send the correct size immediately after.

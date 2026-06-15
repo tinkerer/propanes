@@ -4,7 +4,9 @@ import { captureScreenshot, type ScreenshotMethod } from '@propanes/widget/scree
 import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-picker';
 import { VoiceRecorder, type VoiceRecordingResult } from '@propanes/widget/voice-recorder';
 import { snapshotConsole, type ConsoleEntry } from '../../lib/console-buffer.js';
-import { useComposerCore, type ComposerImage } from '../../lib/use-composer-core.js';
+import { useComposerCore, type ComposerImage, type ComposerFileUploadResult } from '../../lib/use-composer-core.js';
+import { api } from '../../lib/api.js';
+import { copyWithTooltip } from '../../lib/clipboard.js';
 
 // Single composer used by InterruptBar (resume/interrupt session) and
 // QuickDispatchPopup. Owns:
@@ -25,10 +27,20 @@ import { useComposerCore, type ComposerImage } from '../../lib/use-composer-core
 
 export type SubmitIcon = 'send' | 'interrupt';
 
+export type UnifiedComposerFile = {
+  id: string;
+  name: string;
+  path: string;
+  url?: string;
+  size: number;
+  mimeType: string;
+};
+
 export type UnifiedComposerData = {
   text: string;
   images: Blob[];
   imageNames: string[];
+  files: UnifiedComposerFile[];
   elements: SelectedElementInfo[];
   consoleEntries: ConsoleEntry[] | null;
   voice: VoiceRecordingResult | null;
@@ -53,6 +65,8 @@ export type UnifiedComposerProps = {
   rows?: number;
   autoFocus?: boolean;
   draftStorage?: 'server' | 'local';
+  /** Context attached to dragged-file uploads (resolves appId server-side). */
+  uploadMeta?: { sessionId?: string; appId?: string };
 };
 
 const DRAFT_DEBOUNCE_MS = 300;
@@ -180,8 +194,24 @@ export function UnifiedComposer({
   rows = 1,
   autoFocus = false,
   draftStorage = 'server',
+  uploadMeta,
 }: UnifiedComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  // Eager uploader for dragged non-image files — stores in /tmp and returns
+  // the path so the chip can offer "copy path" immediately.
+  async function uploadFile(file: File): Promise<ComposerFileUploadResult> {
+    const res = await api.uploadFiles([file], {
+      sessionId: uploadMeta?.sessionId,
+      appId: uploadMeta?.appId,
+      sourceUrl: typeof window !== 'undefined' ? window.location.href : undefined,
+    });
+    const up = res.files[0];
+    if (!up) throw new Error('Upload failed');
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    return { id: up.id, path: up.path, url: `${origin}/api/v1/uploads/${up.id}` };
+  }
 
   // Core composer state from shared hook (text, images, elements, submit guard,
   // paste, keyboard). UnifiedComposer uses blob-mode images and manages its own
@@ -193,6 +223,7 @@ export function UnifiedComposer({
     textareaRef,
     imageMode: 'blob',
     contextHasContent: (ctx) => !!(ctx && ctx.length > 0),
+    uploadFile,
   });
 
   const [internalError, setInternalError] = useState<string | null>(null);
@@ -455,10 +486,23 @@ export function UnifiedComposer({
           names.push(img.name);
         }
       }
+      // Only forward fully-uploaded files (those with a resolved /tmp path).
+      const uploadedFiles = core.files
+        .filter((f) => f.status === 'done' && f.path)
+        .map((f) => ({
+          id: f.uploadId || f.id,
+          name: f.name,
+          path: f.path as string,
+          url: f.url,
+          size: f.size,
+          mimeType: f.mimeType,
+        }));
+
       await onSubmit({
         text: core.text.trim(),
         images: blobs,
         imageNames: names,
+        files: uploadedFiles,
         elements: core.elements,
         consoleEntries: core.context,
         voice: voiceResult,
@@ -492,17 +536,53 @@ export function UnifiedComposer({
   const consoleCap = core.context;
   const consoleCount = consoleCap?.length ?? 0;
   const showChips = core.images.length > 0
+    || core.files.length > 0
     || core.elements.length > 0
     || consoleCap !== null
     || !!voiceResult
     || micRecording;
+
+  // Drag-and-drop: highlight on dragover, route files through the core handler.
+  function onDragOver(ev: DragEvent) {
+    if (!ev.dataTransfer) return;
+    const hasFiles = Array.from(ev.dataTransfer.types || []).includes('Files');
+    if (!hasFiles) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'copy';
+    if (!dragOver) setDragOver(true);
+  }
+  function onDragLeave(ev: DragEvent) {
+    // Only clear when leaving the container itself (not bubbling from children).
+    if (ev.currentTarget === ev.target) setDragOver(false);
+  }
+  function onDrop(ev: DragEvent) {
+    setDragOver(false);
+    core.onDrop(ev);
+  }
+
+  function formatSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
 
   const voiceFinalCount = voiceResult?.transcript.filter((t) => t.isFinal).length ?? 0;
   const voiceIxCount = voiceResult?.interactions.length ?? 0;
   const voiceShotCount = voiceResult?.screenshots.length ?? 0;
 
   return (
-    <div class={className} ref={containerRef}>
+    <div
+      class={`${className || ''}${dragOver ? ' is-drag-over' : ''}`}
+      ref={containerRef}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {dragOver && (
+        <div class="interrupt-bar-dropzone" aria-hidden="true">
+          <span>Drop files to attach</span>
+        </div>
+      )}
       {error && <div class="interrupt-bar-error">{error}</div>}
       {showChips && (
         <div class="interrupt-bar-chips">
@@ -515,6 +595,49 @@ export function UnifiedComposer({
                 onClick={() => core.removeImage(img.id)}
                 title="Remove image"
                 aria-label="Remove image"
+              >&times;</button>
+            </div>
+          ))}
+          {core.files.map((f) => (
+            <div
+              class={`cos-file-chip${f.status === 'error' ? ' is-error' : ''}${f.status === 'uploading' ? ' is-uploading' : ''}`}
+              key={f.id}
+              title={f.status === 'error' ? (f.error || 'Upload failed') : (f.path || f.name)}
+            >
+              {f.status === 'uploading' ? (
+                <svg class="cos-file-spin" width="11" height="11" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" fill="none" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56">
+                    <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.9s" repeatCount="indefinite" />
+                  </path>
+                </svg>
+              ) : (
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+                  <polyline points="13 2 13 9 20 9" />
+                </svg>
+              )}
+              <code class="cos-file-name">{f.name}</code>
+              <span class="cos-file-size">{f.status === 'error' ? 'failed' : formatSize(f.size)}</span>
+              {f.status === 'done' && f.path && (
+                <button
+                  type="button"
+                  class="cos-file-copy"
+                  onClick={(e) => copyWithTooltip(f.path as string, e as unknown as MouseEvent)}
+                  title={`Copy path: ${f.path}`}
+                  aria-label="Copy file path"
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                </button>
+              )}
+              <button
+                type="button"
+                class="cos-attach-remove"
+                onClick={() => core.removeFile(f.id)}
+                title="Remove file"
+                aria-label="Remove file"
               >&times;</button>
             </div>
           ))}
@@ -644,6 +767,8 @@ export function UnifiedComposer({
               role="menu"
               ref={menuRef}
               style={{ position: 'fixed', bottom: `${menuPos.bottom}px`, right: `${menuPos.right}px`, zIndex: 10000 }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
             >
               {/* Screenshot group */}
               <div class="interrupt-bar-expand-group">
@@ -693,7 +818,10 @@ export function UnifiedComposer({
                 <button
                   type="button"
                   class="interrupt-bar-expand-item"
-                  onClick={startDomPicker}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    startDomPicker();
+                  }}
                   disabled={pickerActive}
                   role="menuitem"
                 >

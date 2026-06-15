@@ -246,7 +246,10 @@ function spawnSession(params: {
   cols: number;
   rows: number;
 }): void {
-  const { sessionId, prompt, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId, cols, rows } = params;
+  const { sessionId, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId, cols, rows } = params;
+  // NFC-normalize: decomposed unicode (NFD) crossing a wrap boundary crashes
+  // Claude Code's TUI with "Failed to find wrapped line in text".
+  const prompt = (params.prompt || '').normalize('NFC');
   // Resolve ~ to actual home directory, and fall back to home if cwd doesn't exist
   let cwd = params.cwd;
   if (cwd === '~' || cwd.startsWith('~/')) {
@@ -747,7 +750,10 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
     case 'send_keys': {
       const targetSession = sessions.get(msg.targetSessionId);
       if (targetSession && targetSession.status === 'running') {
-        targetSession.ptyProcess.write(msg.keys + (msg.enter !== false ? '\r' : ''));
+        targetSession.ptyProcess.write(msg.keys.normalize('NFC'));
+        if (msg.enter !== false) {
+          setTimeout(() => targetSession.ptyProcess.write('\r'), 150);
+        }
         const result: SendKeysResult = { type: 'send_keys_result', sessionId: msg.sessionId, ok: true };
         sendToServer(result);
       } else {

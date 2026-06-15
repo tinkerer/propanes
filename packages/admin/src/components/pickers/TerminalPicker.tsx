@@ -315,8 +315,34 @@ export function TerminalPicker({ mode, onClose }: Props) {
   ];
   // Add per-app file/git views
   for (const app of applications.value) {
+    viewItems.push({ id: `view:feedback:app:${app.id}`, label: `Tickets: ${app.name}`, icon: '\u{1F4AC}' });
     viewItems.push({ id: `view:files:${app.id}`, label: `Files: ${app.name}`, icon: '\u{1F4C2}' });
     viewItems.push({ id: `view:git:${app.id}`, label: `Git: ${app.name}`, icon: '\u{1F500}' });
+  }
+  {
+    const seenMachineIds = new Set<string>();
+    for (const t of machines) {
+      if (!t.machineId || seenMachineIds.has(t.machineId)) continue;
+      seenMachineIds.add(t.machineId);
+      viewItems.push({
+        id: `view:sessions-list:machine:${t.machineId}`,
+        label: `Sessions: ${t.machineName || t.name}`,
+        icon: '\u{1F5A5}\uFE0F',
+      });
+      const appIds = new Set(
+        sessions
+          .filter((s: any) => s.status !== 'deleted' && s.machineId === t.machineId && s.appId)
+          .map((s: any) => s.appId as string),
+      );
+      for (const appId of appIds) {
+        const app = applications.value.find((a: any) => a.id === appId);
+        viewItems.push({
+          id: `view:sessions-list:machine:${t.machineId}:app:${appId}`,
+          label: `Sessions: ${t.machineName || t.name} / ${app?.name || appId.slice(-8)}`,
+          icon: '\u{1F5A5}\uFE0F',
+        });
+      }
+    }
   }
   for (const vi of viewItems) {
     const alreadyOpen = !!findLeafWithTab(vi.id);

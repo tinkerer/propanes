@@ -49,7 +49,7 @@ export function InterruptBar({ sessionId, permissionProfile }: Props) {
 
   async function handleSubmit(data: UnifiedComposerData) {
     setError(null);
-    const { text, images, imageNames, elements, consoleEntries, voice } = data;
+    const { text, images, imageNames, files, elements, consoleEntries, voice } = data;
     const extras: string[] = [];
 
     // Pull voice screenshot blobs into the same upload batch as regular images
@@ -83,6 +83,14 @@ export function InterruptBar({ sessionId, permissionProfile }: Props) {
         ? `\nLocal tmp paths (if agent is on the server host):\n${pastedPaths.map((p) => `- ${p}`).join('\n')}`
         : '';
       extras.push(`Attached screenshots (GET to fetch PNG):\n${pastedUrls.map((u) => `- ${u}`).join('\n')}${pathBlock}`);
+    }
+
+    if (files.length > 0) {
+      const lines = files.map((f) => {
+        const urlPart = f.url ? ` (download: ${f.url})` : '';
+        return `- ${f.path}${urlPart}`;
+      }).join('\n');
+      extras.push(`Attached files (read from these local paths if you are on the server host):\n${lines}`);
     }
 
     if (elements.length > 0) {
@@ -167,6 +175,7 @@ export function InterruptBar({ sessionId, permissionProfile }: Props) {
       submitIcon={mode === 'interrupt' ? 'interrupt' : 'send'}
       submitAriaLabel={mode === 'interrupt' ? 'Interrupt' : 'Resume'}
       draftKey={`interrupt:${sessionId}`}
+      uploadMeta={{ sessionId, appId: sess?.appId || undefined }}
       error={error}
       onSubmit={handleSubmit}
     />

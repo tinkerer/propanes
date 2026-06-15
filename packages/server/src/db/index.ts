@@ -531,6 +531,25 @@ export function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_screenshots_created ON screenshots(created_at);
   `);
 
+  // Standalone arbitrary-file uploads (drag-and-drop into the admin composer)
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS uploads (
+      id TEXT PRIMARY KEY,
+      app_id TEXT REFERENCES applications(id) ON DELETE SET NULL,
+      session_id TEXT,
+      user_id TEXT,
+      source_url TEXT,
+      filename TEXT NOT NULL,
+      original_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_uploads_app ON uploads(app_id);
+    CREATE INDEX IF NOT EXISTS idx_uploads_created ON uploads(created_at);
+  `);
+
   // JSONL continuation tracking
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS jsonl_continuations (

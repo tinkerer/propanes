@@ -68,6 +68,20 @@ export const screenshots = sqliteTable('screenshots', {
   createdAt: text('created_at').notNull(),
 });
 
+// Standalone arbitrary-file uploads (drag-and-drop into the admin composer).
+export const uploads = sqliteTable('uploads', {
+  id: text('id').primaryKey(),
+  appId: text('app_id').references(() => applications.id, { onDelete: 'set null' }),
+  sessionId: text('session_id'),
+  userId: text('user_id'),
+  sourceUrl: text('source_url'),
+  filename: text('filename').notNull(),
+  originalName: text('original_name').notNull(),
+  mimeType: text('mime_type').notNull(),
+  size: integer('size').notNull(),
+  createdAt: text('created_at').notNull(),
+});
+
 export const feedbackAudio = sqliteTable('feedback_audio', {
   id: text('id').primaryKey(),
   feedbackId: text('feedback_id')

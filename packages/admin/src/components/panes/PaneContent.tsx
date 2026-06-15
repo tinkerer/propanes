@@ -24,7 +24,7 @@ import { SessionsPage } from '../../pages/SessionsPage.js';
 import { LiveConnectionsPage } from '../../pages/LiveConnectionsPage.js';
 import { AppSettingsPage } from '../../pages/AppSettingsPage.js';
 import { AgentsPage } from '../../pages/AgentsPage.js';
-import { InfrastructurePage } from '../../pages/InfrastructurePage.js';
+import { InfrastructurePage, machines } from '../../pages/InfrastructurePage.js';
 import { UserGuidePage } from '../../pages/UserGuidePage.js';
 import { GettingStartedPage } from '../../pages/GettingStartedPage.js';
 import { SettingsPage } from '../../pages/SettingsPage.js';
@@ -61,6 +61,11 @@ export function renderTabContent(
             if (!aid) return <div style={{ padding: 16, color: 'var(--pw-text-muted)' }}>No apps configured</div>;
             return <FeedbackListPage appId={aid} />;
           })()
+        ) : sid.startsWith('view:feedback:app:') ? (
+          (() => {
+            const aid = sid.slice('view:feedback:app:'.length);
+            return <FeedbackListPage appId={aid} />;
+          })()
         ) : sid === 'view:sessions-page' ? (
           <SessionsPage appId={selectedAppId.value} />
         ) : sid === 'view:live' ? (
@@ -77,6 +82,14 @@ export function renderTabContent(
           (() => { const aid = selectedAppId.value || applications.value[0]?.id; return aid ? <SpecWikiPage appId={aid} /> : <div style={{ padding: 16, color: 'var(--pw-text-muted)' }}>No apps configured</div>; })()
         ) : sid === 'view:sessions-list' ? (
           <SessionsListView />
+        ) : sid.startsWith('view:sessions-list:machine:') ? (
+          (() => {
+            const rest = sid.slice('view:sessions-list:machine:'.length);
+            const [machineId, appId] = rest.split(':app:');
+            const machine = machines.value.find(m => m.id === machineId);
+            const app = appId ? applications.value.find(a => a.id === appId) : null;
+            return <SessionsListView machineId={machineId} machineName={machine?.name || null} appId={appId || null} appName={app?.name || null} />;
+          })()
         ) : sid === 'view:terminals' ? (
           <TerminalsListView />
         ) : sid === 'view:files' ? (
