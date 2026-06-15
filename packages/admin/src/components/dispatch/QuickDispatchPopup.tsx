@@ -73,6 +73,18 @@ interface Props {
   /** Called after successful submit — use to clear persistent open state */
   onSubmitClose?: () => void;
   initialDispatchType?: DispatchType;
+  /** Screen coords of the triggering [+] button, to anchor the popup near it. */
+  anchor?: { x: number; y: number } | null;
+}
+
+const PANEL_W = 400;
+const PANEL_H = 220;
+
+// Keep a point within the viewport so the popup can't open off-screen.
+function clampToViewport(x: number, y: number): { x: number; y: number } {
+  const maxX = Math.max(8, window.innerWidth - PANEL_W - 8);
+  const maxY = Math.max(8, window.innerHeight - PANEL_H - 8);
+  return { x: Math.min(Math.max(8, x), maxX), y: Math.min(Math.max(8, y), maxY) };
 }
 
 function isComposerFloatingChrome(target: EventTarget | null): boolean {
@@ -86,7 +98,7 @@ function isElementPickerActive(): boolean {
   return document.body.classList.contains('pw-element-picker-active');
 }
 
-export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, initialDispatchType }: Props) {
+export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, initialDispatchType, anchor }: Props) {
   const settings = loadSettings(appKey);
   const [dispatchType, setDispatchType] = useState<DispatchType>(
     settings?.dispatchType || initialDispatchType || 'agent'
@@ -95,10 +107,16 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
   const [error, setError] = useState('');
   const [agents, setAgents] = useState<any[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>(settings?.agentId || '');
-  const [pos, setPos] = useState<{ x: number; y: number }>(() => ({
-    x: settings?.posX ?? Math.round(window.innerWidth / 2 - 200),
-    y: settings?.posY ?? Math.round(window.innerHeight * 0.3),
-  }));
+  const [pos, setPos] = useState<{ x: number; y: number }>(() => {
+    // Anchor next to the [+] that opened us. The button position is the user's
+    // point of focus, so the composer appears right where they clicked instead
+    // of stranded at screen-center or a stale dragged-off-screen position.
+    if (anchor) return clampToViewport(anchor.x, anchor.y);
+    if (settings?.posX != null && settings?.posY != null) {
+      return clampToViewport(settings.posX, settings.posY);
+    }
+    return clampToViewport(Math.round(window.innerWidth / 2 - PANEL_W / 2), Math.round(window.innerHeight * 0.3));
+  });
   const dragging = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
