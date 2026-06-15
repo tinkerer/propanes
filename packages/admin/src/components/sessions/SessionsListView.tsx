@@ -52,7 +52,7 @@ import { api } from '../../lib/api.js';
 import { setFocusedLeaf } from '../../lib/pane-tree.js';
 import { ctrlShiftHeld } from '../../lib/shortcuts.js';
 import { autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce } from '../../lib/settings.js';
-import { selectedAppId, applications, navigate } from '../../lib/state.js';
+import { selectedAppId, applications, navigate, loadChannels, channelsByApp, activeChannelSlug, COS_WORKSPACE_ID } from '../../lib/state.js';
 import { PopupMenu } from '../pickers/PopupMenu.js';
 import { QuickDispatchPopup, type DispatchType } from '../dispatch/QuickDispatchPopup.js';
 import { loadCosDispatches, cosGroupForSession } from '../../lib/cos-dispatches.js';
@@ -152,8 +152,21 @@ function highlightMatch(text: string, query: string) {
   );
 }
 
-export function SessionsListView() {
-  const sessions = allSessions.value;
+type SessionsListViewProps = {
+  machineId?: string | null;
+  machineName?: string | null;
+  appId?: string | null;
+  appName?: string | null;
+};
+
+export function SessionsListView({ machineId = null, machineName = null, appId = null, appName = null }: SessionsListViewProps = {}) {
+  const sessions = allSessions.value.filter((s: any) => {
+    const machineMatches = !machineId && !machineName
+      ? true
+      : s.machineId === machineId || (!!machineName && s.machineName === machineName);
+    const appMatches = !appId ? true : s.appId === appId;
+    return machineMatches && appMatches;
+  });
   const tabs = openTabs.value;
   const tabSet = new Set(tabs);
   for (const panel of popoutPanels.value) {
@@ -384,6 +397,23 @@ export function SessionsListView() {
 
   return (
     <div class="sessions-list-view" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflow: 'hidden' }}>
+      {(machineId || machineName || appId) && (
+        <div class="sidebar-sessions-scope">
+          {(machineId || machineName) && (
+            <>
+              <span class="sidebar-sessions-scope-label">Machine</span>
+              <span class="sidebar-sessions-scope-name">{machineName || machineId}</span>
+            </>
+          )}
+          {appId && (
+            <>
+              <span class="sidebar-sessions-scope-label">App</span>
+              <span class="sidebar-sessions-scope-name">{appName || appId}</span>
+            </>
+          )}
+          <span class="sidebar-sessions-scope-count">{runningSessions} running · {nonDeletedSessions.length} total</span>
+        </div>
+      )}
       <div class="sidebar-sessions-filters">
         <input
           type="text"
@@ -530,14 +560,19 @@ export function SessionsListView() {
           const childrenByParent = new Map<string, any[]>();
           const childIds = new Set<string>();
 
-          // Group by swarmId, wiggumRunId, or CoS agent (one root per agent — all
-          // threads belonging to the same agent collapse into a single hierarchy).
-          const swarmGroups = new Map<string, { label: string; type: string; children: any[] }>();
+          // Group by swarmId, wiggumRunId, or CoS agent+app. CoS sessions split
+          // per (agentId, appId) so work for different apps lands under its own
+          // app instead of all collapsing into one cross-app "Inbox".
+          const swarmGroups = new Map<string, { label: string; type: string; children: any[]; appId: string | null }>();
           const swarmChildIds = new Set<string>();
           const cosAgents = chiefOfStaffAgents.value;
           const cosAgentLabel = (agentId: string) => {
             const found = cosAgents.find((a) => a.id === agentId);
             return found?.name || 'Ops';
+          };
+          const resolveAppName = (id: string | null | undefined) => {
+            if (!id || id === '__unlinked__') return 'Unlinked';
+            return applications.value.find((a: any) => a.id === id)?.name || id.slice(-8);
           };
 
           for (const s of restAgents) {
@@ -545,7 +580,7 @@ export function SessionsListView() {
               const key = `swarm:${s.swarmId}`;
               let grp = swarmGroups.get(key);
               if (!grp) {
-                grp = { label: `\uD83E\uDDEC ${s.swarmName || s.swarmId.slice(-8)}`, type: 'swarm', children: [] };
+                grp = { label: `\uD83E\uDDEC ${s.swarmName || s.swarmId.slice(-8)}`, type: 'swarm', children: [], appId: s.appId || null };
                 swarmGroups.set(key, grp);
               }
               grp.children.push(s);
@@ -554,7 +589,7 @@ export function SessionsListView() {
               const key = `wiggum:${s.wiggumRunId}`;
               let grp = swarmGroups.get(key);
               if (!grp) {
-                grp = { label: `\uD83D\uDD04 Wiggum ${s.wiggumRunId.slice(-8)}`, type: 'wiggum', children: [] };
+                grp = { label: `\uD83D\uDD04 Wiggum ${s.wiggumRunId.slice(-8)}`, type: 'wiggum', children: [], appId: s.appId || null };
                 swarmGroups.set(key, grp);
               }
               grp.children.push(s);
@@ -563,10 +598,11 @@ export function SessionsListView() {
               const cos = cosGroupForSession(s);
               if (cos) {
                 const agentId = cos.agentId || 'default';
-                const key = `cos:${agentId}`;
+                const appKey = s.appId || '__unlinked__';
+                const key = `cos:${agentId}:${appKey}`;
                 let grp = swarmGroups.get(key);
                 if (!grp) {
-                  grp = { label: cosAgentLabel(agentId), type: 'cos', children: [] };
+                  grp = { label: cosAgentLabel(agentId), type: 'cos', children: [], appId: s.appId || null };
                   swarmGroups.set(key, grp);
                 }
                 grp.children.push(s);
@@ -630,13 +666,37 @@ export function SessionsListView() {
                           setTimeout(() => focusSessionTerminal(backingSid), 100);
                         }
                       }
-                      void loadChiefOfStaffHistory(agentId, selectedAppId.value).finally(() => {
+                      // The thread may live in a different workspace/channel
+                      // than the one currently selected — resolve it first so
+                      // the CoS chat actually contains the thread (history is
+                      // appId-filtered), then jump and open the reply pane.
+                      void (async () => {
+                        try {
+                          const t = await api.getCosThread(tid);
+                          const threadAppId = t.appId || COS_WORKSPACE_ID;
+                          if (selectedAppId.value !== threadAppId) {
+                            selectedAppId.value = threadAppId;
+                          }
+                          if (t.channelId && threadAppId !== COS_WORKSPACE_ID) {
+                            if (!(channelsByApp.value[threadAppId] || []).length) {
+                              await loadChannels(threadAppId);
+                            }
+                            const ch = (channelsByApp.value[threadAppId] || []).find((c) => c.id === t.channelId);
+                            activeChannelSlug.value = ch ? ch.slug : null;
+                          } else {
+                            activeChannelSlug.value = null;
+                          }
+                        } catch {
+                          // Thread lookup failed — fall through and jump
+                          // within the currently selected workspace.
+                        }
+                        await loadChiefOfStaffHistory(agentId, selectedAppId.value).catch(() => {});
                         requestAnimationFrame(() => {
                           window.dispatchEvent(new CustomEvent('cos-jump-to-thread', {
-                            detail: { agentId, threadId: tid },
+                            detail: { agentId, threadId: tid, openReplyPane: true },
                           }));
                         });
-                      });
+                      })();
                     }}
                     onMouseDown={(e) => {
                       e.preventDefault();
@@ -750,14 +810,14 @@ export function SessionsListView() {
                         if (appId) navigate(`/app/${appId}/wiggum`);
                       }}
                     >
-                      {grp.label}
+                      {isCos ? `${grp.label} · ${resolveAppName(grp.appId)}` : grp.label}
                       {activeCount > 0 && <span style={{ color: 'var(--pw-success)', marginLeft: 4, fontWeight: 400 }}>{activeCount} running</span>}
                     </span>
                     <button
                       class="sidebar-new-terminal-btn"
                       onClick={(e) => {
                         e.stopPropagation();
-                        const groupAppId = grp.children[0]?.appId || selectedAppId.value || '__unlinked__';
+                        const groupAppId = grp.appId || selectedAppId.value || '__unlinked__';
                         quickDispatchInitialType.value = isCos ? 'powwow' : 'wiggum';
                         quickDispatchAppKey.value = quickDispatchAppKey.value === groupAppId ? null : groupAppId;
                       }}
@@ -777,7 +837,7 @@ export function SessionsListView() {
           if (sessionGroupByApp.value) {
             // Group by app — include swarm groups within each app section
             const appMap = new Map<string, any[]>();
-            const appSwarmMap = new Map<string, Map<string, { label: string; type: string; children: any[] }>>();
+            const appSwarmMap = new Map<string, Map<string, { label: string; type: string; children: any[]; appId: string | null }>>();
             for (const s of topLevel) {
               const key = s.appId || '__unlinked__';
               const arr = appMap.get(key) || [];
@@ -786,7 +846,7 @@ export function SessionsListView() {
             }
             // Distribute swarm groups to their app
             for (const [sgKey, grp] of swarmGroups) {
-              const appKey = grp.children[0]?.appId || '__unlinked__';
+              const appKey = grp.appId || '__unlinked__';
               let appSwarms = appSwarmMap.get(appKey);
               if (!appSwarms) { appSwarms = new Map(); appSwarmMap.set(appKey, appSwarms); }
               appSwarms.set(sgKey, grp);
@@ -867,7 +927,7 @@ export function SessionsListView() {
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   if (isCos) { toggleExpandedParent(key); return; }
-                                  const swarmAppId = grp.children[0]?.appId || appKey;
+                                  const swarmAppId = grp.appId || appKey;
                                   if (swarmAppId && swarmAppId !== '__unlinked__') navigate(`/app/${swarmAppId}/wiggum`);
                                 }}>
                                 {grp.label}

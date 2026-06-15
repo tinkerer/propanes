@@ -187,9 +187,12 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
     setSubmitting(true);
     setError('');
     try {
+      const fileBlock = data.files.length > 0
+        ? `\n\n---\nAttached files (read from these local paths if you are on the server host):\n${data.files.map((f) => `- ${f.path}${f.url ? ` (download: ${f.url})` : ''}`).join('\n')}`
+        : '';
       const fb = await api.createFeedback({
         title: data.text.trim().slice(0, 200),
-        description: data.text.trim(),
+        description: `${data.text.trim()}${fileBlock}`,
         type: 'manual',
         appId,
         tags: dispatchType === 'agent' ? [] : [dispatchType],
@@ -299,6 +302,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
           rows={3}
           autoFocus
           draftStorage="local"
+          uploadMeta={{ appId }}
         />
       </div>
       <div class="qdp-footer">

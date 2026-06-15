@@ -391,6 +391,22 @@ function serverMessageToClient(m: any): ChiefOfStaffMsg {
   };
 }
 
+function synthesizeThreadAnchorMessage(thread: any): ChiefOfStaffMsg | null {
+  const id = typeof thread?.id === 'string' ? thread.id : null;
+  if (!id) return null;
+  const name = typeof thread?.name === 'string' && thread.name.trim()
+    ? thread.name.trim()
+    : 'Session thread';
+  return {
+    role: 'user',
+    text: name,
+    timestamp: Number(thread?.createdAt) || Number(thread?.updatedAt) || Date.now(),
+    threadId: id,
+    serverId: `synthetic:${id}`,
+    streaming: false,
+  };
+}
+
 /**
  * Fetch ALL server-side threads + messages for an agent and replace the
  * local in-memory message log. Messages are interleaved across threads and
@@ -427,11 +443,26 @@ export async function loadChiefOfStaffHistory(
     const serverMessages: ChiefOfStaffMsg[] = Array.isArray(data?.messages)
       ? data.messages.map(serverMessageToClient)
       : [];
+    const threadIdsWithMessages = new Set(
+      serverMessages
+        .map((m) => m.threadId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    );
+    const syntheticAnchors = threads
+      .filter((t: any) => {
+        const tid = typeof t?.id === 'string' ? t.id : null;
+        return tid && !threadIdsWithMessages.has(tid);
+      })
+      .map(synthesizeThreadAnchorMessage)
+      .filter((m: ChiefOfStaffMsg | null): m is ChiefOfStaffMsg => !!m);
+    const messages = [...serverMessages, ...syntheticAnchors].sort(
+      (a, b) => (a.timestamp || 0) - (b.timestamp || 0),
+    );
 
     // Only replace the local log if the server has something. Otherwise
     // leave locally-cached messages untouched (e.g. if the user wrote a
     // turn offline).
-    if (threads.length === 0 && serverMessages.length === 0) return;
+    if (threads.length === 0 && messages.length === 0) return;
 
     updateAgent(agentId, (a) => {
       // preserveStreaming: refetch was triggered by a live push (e.g. the
@@ -443,9 +474,9 @@ export async function loadChiefOfStaffHistory(
       // local rows whose `timestamp` is newer than the most recent server
       // row, so a just-sent message doesn't disappear mid-stream.
       if (!opts.preserveStreaming) {
-        return { ...a, messages: serverMessages, threadId: undefined };
+        return { ...a, messages, threadId: undefined };
       }
-      const serverMaxTs = serverMessages.reduce(
+      const serverMaxTs = messages.reduce(
         (mx, m) => (m.timestamp && m.timestamp > mx ? m.timestamp : mx),
         0,
       );
@@ -453,7 +484,7 @@ export async function loadChiefOfStaffHistory(
         if (m.streaming || m.sending) return true;
         return m.timestamp != null && m.timestamp > serverMaxTs;
       });
-      const merged = [...serverMessages, ...localOnly].sort(
+      const merged = [...messages, ...localOnly].sort(
         (x, y) => (x.timestamp || 0) - (y.timestamp || 0),
       );
       return { ...a, messages: merged, threadId: undefined };

@@ -382,6 +382,30 @@ function getSingletonMeta(sid: string): SingletonMeta {
   const appId = selectedAppId.value;
   const app = appId ? applications.value.find((a: any) => a.id === appId) : null;
 
+  if (sid.startsWith('view:sessions-list:machine:')) {
+    const rest = sid.slice('view:sessions-list:machine:'.length);
+    const [machineId, appId] = rest.split(':app:');
+    const machineSession = allSessions.value.find((s: any) => s.machineId === machineId && s.machineName);
+    const app = appId ? applications.value.find((a: any) => a.id === appId) : null;
+    return {
+      label: `${app ? `${app.name} ` : ''}Sessions: ${machineSession?.machineName || machineId.slice(-8)}`,
+      plusKind: 'claude',
+      countSuffix: () => {
+        const count = allSessions.value.filter((s: any) => (
+          s.status !== 'deleted'
+          && s.machineId === machineId
+          && (!appId || s.appId === appId)
+        )).length;
+        return ` (${count})`;
+      },
+    };
+  }
+  if (sid.startsWith('view:feedback:app:')) {
+    const appId = sid.slice('view:feedback:app:'.length);
+    const app = applications.value.find((a: any) => a.id === appId);
+    return { label: `${app?.name || appId.slice(-8)} Tickets`, plusKind: 'new' };
+  }
+
   switch (sid) {
     case 'view:sessions-list': {
       return {
@@ -470,10 +494,22 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   // View tabs
   if (sid === 'view:page') return 'Page';
   if (sid === 'view:sessions-list') return 'Sessions';
+  if (sid.startsWith('view:sessions-list:machine:')) {
+    const rest = sid.slice('view:sessions-list:machine:'.length);
+    const [machineId, appId] = rest.split(':app:');
+    const machineSession = allSessions.value.find((s: any) => s.machineId === machineId && s.machineName);
+    const app = appId ? applications.value.find((a: any) => a.id === appId) : null;
+    return `${app ? `${app.name} ` : ''}Sessions: ${machineSession?.machineName || machineId.slice(-8)}`;
+  }
   if (sid === 'view:terminals') return 'Terminals';
   if (sid === 'view:files') return 'Files';
   if (sid === 'view:nav') return 'Nav';
   if (sid === 'view:feedback') return 'Tickets';
+  if (sid.startsWith('view:feedback:app:')) {
+    const appId = sid.slice('view:feedback:app:'.length);
+    const app = applications.value.find((a: any) => a.id === appId);
+    return `${app?.name || appId.slice(-8)} Tickets`;
+  }
   if (sid === 'view:sessions-page') return 'Sessions';
   if (sid === 'view:live') return 'Live';
   if (sid === 'view:app-settings') return 'Settings';

@@ -5,6 +5,7 @@ dist/
 *.db-wal
 *.db-shm
 *.sqlite
+*.log
 uploads/
 .env
 .env.local

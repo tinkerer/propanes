@@ -2374,8 +2374,8 @@ select:focus, textarea:focus {
 }
 
 .agent-meta-tag--distilled {
-  background: rgba(168, 85, 247, 0.12);
-  color: #a855f7;
+  background: var(--pw-primary-soft);
+  color: var(--pw-primary-text);
   border-color: transparent;
 }
 
@@ -2461,6 +2461,96 @@ select:focus, textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.infra-machine-sessions {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.infra-machine-app-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0;
+  flex-wrap: wrap;
+}
+
+.infra-machine-app-main,
+.infra-machine-app-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.infra-machine-app-main {
+  flex: 1 1 220px;
+}
+
+.infra-machine-app-actions {
+  flex-shrink: 0;
+}
+
+.infra-machine-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 5px;
+  color: var(--pw-text);
+  font-weight: 500;
+}
+
+.infra-machine-session-list {
+  display: grid;
+  gap: 4px;
+}
+
+.infra-machine-session-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 7px;
+  border: 1px solid var(--pw-border-light);
+  border-radius: 6px;
+  background: var(--pw-bg-raised);
+  color: var(--pw-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.infra-machine-session-row:hover {
+  border-color: var(--pw-primary);
+  background: var(--pw-bg-hover);
+}
+
+.infra-machine-session-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.infra-machine-session-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.infra-machine-session-meta,
+.infra-machine-session-status {
+  color: var(--pw-text-faint);
+  font-size: 11px;
+}
+
+.infra-machine-session-status {
+  text-transform: capitalize;
 }
 
 .agent-modal {
@@ -3892,7 +3982,7 @@ select:focus, textarea:focus {
 .sidebar-tree-count {
   font-size: 10px;
   color: var(--pw-text);
-  background: rgba(124, 58, 237, 0.2);
+  background: var(--pw-primary-soft);
   padding: 1px 5px;
   border-radius: 8px;
   flex-shrink: 0;
@@ -3904,20 +3994,20 @@ select:focus, textarea:focus {
 
 .sidebar-session-tree-children {
   padding-left: 16px;
-  border-left: 1px solid rgba(124, 58, 237, 0.3);
+  border-left: 1px solid var(--pw-border);
   margin-left: 7px;
 }
 
-/* Chief-of-Staff–dispatched sidebar group: teal accent to match SessionsPage. */
+/* Chief-of-Staff-dispatched sidebar group. */
 .sidebar-session-tree.sidebar-cos-group .sidebar-session-tree-children {
-  border-left-color: rgba(20, 184, 166, 0.45);
+  border-left-color: var(--pw-primary);
 }
 
 .sidebar-cos-badge {
   font-size: 9px;
   font-weight: 700;
   color: #fff;
-  background: #0d9488;
+  background: var(--pw-primary);
   padding: 1px 5px;
   border-radius: 3px;
   margin-right: 4px;
@@ -3945,6 +4035,36 @@ select:focus, textarea:focus {
 .sidebar-app-group-label .sidebar-new-terminal-btn {
   margin-left: auto;
   flex-shrink: 0;
+}
+
+.sidebar-sessions-scope {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--pw-border);
+  background: var(--pw-bg-raised);
+  font-size: 11px;
+}
+
+.sidebar-sessions-scope-label {
+  color: var(--pw-text-faint);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.sidebar-sessions-scope-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--pw-text);
+  font-weight: 600;
+}
+
+.sidebar-sessions-scope-count {
+  grid-column: 1 / -1;
+  color: var(--pw-text-muted);
 }
 
 /* Quick Dispatch Panel (draggable floating panel) */
@@ -4446,7 +4566,7 @@ select:focus, textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  border-left: 2px solid #7c3aed;
+  border-left: 2px solid var(--pw-warning);
   border-radius: 8px;
   padding-left: 8px;
   margin-left: 0;
@@ -4454,7 +4574,7 @@ select:focus, textarea:focus {
 
 .session-card-orchestrator {
   background: linear-gradient(180deg, var(--pw-bg-raised), var(--pw-bg-surface));
-  border: 1px solid rgba(124, 58, 237, 0.35);
+  border: 1px solid var(--pw-warning-soft);
 }
 
 .session-card-indent {
@@ -4480,7 +4600,7 @@ select:focus, textarea:focus {
   font-weight: 700;
   padding: 1px 5px;
   border-radius: 3px;
-  background: #7c3aed;
+  background: var(--pw-warning);
   color: #fff;
   margin-right: 4px;
   letter-spacing: 0.5px;
@@ -4498,18 +4618,18 @@ select:focus, textarea:focus {
   border-left-color: var(--pw-border);
 }
 
-/* Chief-of-Staff–dispatched group: teal accent to distinguish from FAFO/wiggum (purple). */
+/* Chief-of-Staff-dispatched group. */
 .session-swarm-group.session-cos-group {
-  border-left-color: #14b8a6;
+  border-left-color: var(--pw-primary);
 }
 
 .session-orchestrator-badge.session-cos-badge {
-  background: #0d9488;
+  background: var(--pw-primary);
 }
 
-/* Sidebar CoS badge + tree accent — mirrors the sessions page treatment. */
+/* Sidebar CoS badge + tree accent mirrors the sessions page treatment. */
 .sidebar-session-tree.sidebar-cos-group .sidebar-session-tree-children {
-  border-left-color: rgba(20, 184, 166, 0.45);
+  border-left-color: var(--pw-primary);
 }
 
 .sidebar-cos-badge {
@@ -4518,7 +4638,7 @@ select:focus, textarea:focus {
   font-weight: 700;
   letter-spacing: 0.5px;
   color: #fff;
-  background: #0d9488;
+  background: var(--pw-primary);
   border-radius: 3px;
   padding: 1px 5px;
   margin-right: 4px;
@@ -4530,12 +4650,12 @@ select:focus, textarea:focus {
    Multiple feedback items sharing a voiceSessionId collapse under one parent row. */
 .feedback-row-brainstorm-header {
   cursor: pointer;
-  background: linear-gradient(180deg, rgba(124, 58, 237, 0.08), rgba(124, 58, 237, 0.04));
-  border-top: 1px solid rgba(124, 58, 237, 0.25);
+  background: linear-gradient(180deg, var(--pw-primary-soft), var(--pw-bg-raised));
+  border-top: 1px solid var(--pw-primary-soft);
 }
 
 .feedback-row-brainstorm-header:hover {
-  background: linear-gradient(180deg, rgba(124, 58, 237, 0.14), rgba(124, 58, 237, 0.06));
+  background: linear-gradient(180deg, var(--pw-primary-soft), var(--pw-bg-hover));
 }
 
 .feedback-row-brainstorm-header > td {
@@ -4551,7 +4671,7 @@ select:focus, textarea:focus {
 }
 
 .feedback-brainstorm-badge {
-  background: #7c3aed;
+  background: var(--pw-primary);
 }
 
 .feedback-brainstorm-label {
@@ -4578,24 +4698,23 @@ select:focus, textarea:focus {
 }
 
 .feedback-row-brainstorm-child > td {
-  background: rgba(124, 58, 237, 0.03);
+  background: var(--pw-bg-raised);
 }
 
 .feedback-brainstorm-indent {
   display: inline-block;
   width: 18px;
-  border-left: 2px solid rgba(124, 58, 237, 0.4);
+  border-left: 2px solid var(--pw-primary);
   margin-right: 8px;
   height: 1em;
   vertical-align: middle;
 }
 
-/* Per-thread caption inside a CoS agent group — separates rows that belong to
-   different threads of the same agent. Subtle teal-tinted label, no row chrome. */
+/* Per-thread caption inside a CoS agent group. */
 .sidebar-cos-thread-divider {
   font-size: 10px;
   font-weight: 600;
-  color: rgba(20, 184, 166, 0.85);
+  color: var(--pw-primary);
   padding: 4px 4px 2px;
   margin-top: 2px;
   text-transform: none;
@@ -4608,12 +4727,12 @@ select:focus, textarea:focus {
 }
 
 .sidebar-cos-thread-divider:hover {
-  color: rgba(20, 184, 166, 1);
-  background: rgba(20, 184, 166, 0.1);
+  color: var(--pw-primary-hover);
+  background: var(--pw-primary-soft);
 }
 
 .sidebar-cos-thread-divider:focus-visible {
-  outline: 1px solid rgba(20, 184, 166, 0.6);
+  outline: 1px solid var(--pw-primary);
   outline-offset: -1px;
 }
 
@@ -13841,20 +13960,18 @@ body.pw-isolate {
 .cos-thread-rail-btn-failed {
   border-color: rgba(229, 72, 77, 0.6);
 }
-/* Interactive (live TTY) — distinct cyan dot with a soft glow so the operator
-   can spot driveable threads at a glance, separate from headless 'streaming'. */
+/* Interactive live TTY dot with a soft glow. */
 .cos-thread-rail-btn-interactive .cos-thread-rail-status {
-  background: #22d3ee;
+  background: var(--pw-primary);
   box-shadow:
     0 0 0 1.5px var(--pw-bg-surface),
-    0 0 6px rgba(34, 211, 238, 0.75);
+    0 0 6px var(--pw-primary-soft);
 }
 .cos-thread-rail-btn-interactive {
-  border-color: rgba(34, 211, 238, 0.45);
+  border-color: var(--pw-primary-soft);
 }
 
-/* Per-row "open as interactive" hover-action — same footprint as the
-   resolve/archive twins so the action column stays uniform. */
+/* Per-row "open as interactive" hover action. */
 .cos-thread-rail-interactive {
   width: 18px;
   height: 14px;
@@ -13873,8 +13990,8 @@ body.pw-isolate {
 .cos-thread-rail-interactive:hover,
 .cos-thread-rail-interactive:focus-visible {
   opacity: 1;
-  color: #22d3ee;
-  border-color: #22d3ee;
+  color: var(--pw-primary);
+  border-color: var(--pw-primary);
   outline: none;
 }
 .cos-thread-rail-interactive:disabled {
@@ -15375,6 +15492,97 @@ body.pw-mobile .cos-thread-reply-btn {
 .cos-element-chip .cos-attach-remove:hover {
   background: rgba(220, 53, 69, 0.15);
   color: #dc3545;
+}
+
+/* ── Dragged-file attachment chip ─────────────────────────────────── */
+.cos-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 26px 4px 8px;
+  border: 1px solid var(--pw-border);
+  border-radius: 999px;
+  background: var(--pw-bg-surface);
+  font-size: 11px;
+  color: var(--pw-text-secondary, var(--pw-text-primary));
+  position: relative;
+  height: 24px;
+  box-sizing: border-box;
+}
+.cos-file-chip.is-uploading { opacity: 0.75; }
+.cos-file-chip.is-error {
+  border-color: rgba(220, 53, 69, 0.5);
+  color: #dc3545;
+}
+.cos-file-chip .cos-file-spin path { fill: none; }
+.cos-file-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--pw-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+.cos-file-size {
+  font-size: 10px;
+  color: var(--pw-text-secondary, var(--pw-text-muted));
+  opacity: 0.8;
+  flex: 0 0 auto;
+}
+.cos-file-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--pw-text-secondary, var(--pw-text-primary));
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.cos-file-copy:hover {
+  background: rgba(59, 130, 246, 0.18);
+  color: var(--pw-text-primary);
+}
+.cos-file-chip .cos-attach-remove {
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  background: transparent;
+  color: var(--pw-text-secondary, var(--pw-text-primary));
+  width: 14px;
+  height: 14px;
+  font-size: 13px;
+}
+.cos-file-chip .cos-attach-remove:hover {
+  background: rgba(220, 53, 69, 0.15);
+  color: #dc3545;
+}
+
+/* Drag-over dropzone overlay for the composer */
+.interrupt-bar.is-drag-over,
+.qdp-unified-composer.is-drag-over {
+  position: relative;
+}
+.interrupt-bar-dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--pw-accent, #3b82f6);
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--pw-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
 }
 
 /* ── Inline-element-chip composer (experimental) ─────────────────────

@@ -82,6 +82,21 @@ interface SelectionHighlight {
   info: SelectedElementInfo;
 }
 
+let activePickerCount = 0;
+const ACTIVE_PICKER_CLASS = 'pw-element-picker-active';
+
+function markPickerActive() {
+  activePickerCount += 1;
+  document.body.classList.add(ACTIVE_PICKER_CLASS);
+}
+
+function unmarkPickerActive() {
+  activePickerCount = Math.max(0, activePickerCount - 1);
+  if (activePickerCount === 0) {
+    document.body.classList.remove(ACTIVE_PICKER_CLASS);
+  }
+}
+
 export function startPicker(
   callback: (infos: SelectedElementInfo[]) => void,
   widgetHost: Element,
@@ -92,6 +107,9 @@ export function startPicker(
   const includeChildren = options?.includeChildren ?? false;
   const onSelectionChange = options?.onSelectionChange;
   const selected: SelectionHighlight[] = [];
+  let cleaned = false;
+
+  markPickerActive();
 
   const highlight = document.createElement('div');
   Object.assign(highlight.style, {
@@ -393,10 +411,13 @@ export function startPicker(
   }
 
   function cleanup() {
+    if (cleaned) return;
+    cleaned = true;
     document.removeEventListener('mousemove', onMouseMove, true);
     document.removeEventListener('click', onClick, true);
     document.removeEventListener('keydown', onKeyDown, true);
     window.removeEventListener('scroll', onScroll, true);
+    unmarkPickerActive();
     highlight.remove();
     label.remove();
     bar.remove();

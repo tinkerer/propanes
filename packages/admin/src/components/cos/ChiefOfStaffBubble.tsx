@@ -747,6 +747,10 @@ export function ChiefOfStaffBubble({
   // default mode — they can't have meta.
   function isThreadVisible(t: Thread): boolean {
     const tid = threadServerIdFor(t);
+    const activeThread = cosActiveThread.value;
+    if (activeThread && activeThread.agentId === activeId && activeThread.threadKey === threadKeyOf(t)) {
+      return true;
+    }
     // Keep threads currently animating out mounted regardless of meta — the
     // CSS collapse transition needs the row in the DOM until it finishes.
     if (tid && isThreadLeaving(tid)) return true;
@@ -1142,16 +1146,23 @@ export function ChiefOfStaffBubble({
 
   // Same pattern, but for jumps from the channel/thread list — caller has the
   // server-side cosThread id (not a messageId), so find the anchor user message
-  // by threadId and scroll to it.
+  // by threadId and scroll to it. openReplyPane additionally docks the thread
+  // reply companion (drawer in pane mode, popout-tree tab otherwise) so the
+  // conversation is readable immediately.
   useEffect(() => {
     if (!activeAgent) return;
     const agent = activeAgent;
     function onJump(e: Event) {
-      const detail = (e as CustomEvent).detail as { agentId?: string; threadId?: string } | undefined;
+      const detail = (e as CustomEvent).detail as { agentId?: string; threadId?: string; openReplyPane?: boolean } | undefined;
       if (!detail || detail.agentId !== agent.id || !detail.threadId) return;
       let idx = agent.messages.findIndex((m) => m.threadId === detail.threadId && m.role === 'user');
       if (idx < 0) idx = agent.messages.findIndex((m) => m.threadId === detail.threadId);
       if (idx >= 0) scrollToMessageIdx(idx);
+      if (detail.openReplyPane) {
+        cosActiveThread.value = { agentId: agent.id, threadKey: `tid:${detail.threadId}` };
+        if (inPane || isMobile.value) setShowThreadPanel(true);
+        else cosOpenThreadTab('right');
+      }
     }
     window.addEventListener('cos-jump-to-thread', onJump as EventListener);
     return () => window.removeEventListener('cos-jump-to-thread', onJump as EventListener);
@@ -2417,4 +2428,3 @@ export function ChiefOfStaffBubble({
     </>
   );
 }
-

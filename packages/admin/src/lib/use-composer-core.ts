@@ -45,6 +45,35 @@ export function nextImageId(): string {
   return `cimg-${Date.now()}-${imageIdCounter}`;
 }
 
+// ---------------------------------------------------------------------------
+// Generic (non-image) file attachment — dragged into the composer and eagerly
+// uploaded so a /tmp path is available immediately (for "copy path" + submit).
+// ---------------------------------------------------------------------------
+export interface ComposerFile {
+  id: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  status: 'uploading' | 'done' | 'error';
+  uploadId?: string;
+  path?: string;
+  url?: string;
+  error?: string;
+}
+
+let fileIdCounter = 0;
+function nextFileId(): string {
+  fileIdCounter += 1;
+  return `cfile-${Date.now()}-${fileIdCounter}`;
+}
+
+/** Result returned by an injected file uploader. */
+export interface ComposerFileUploadResult {
+  id: string;
+  path: string;
+  url?: string;
+}
+
 function blobToDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -76,6 +105,12 @@ export interface UseComposerCoreOptions<TElement, TContext> {
   onEscapeWhenEmpty?: () => void;
   /** Called on Escape unconditionally (before default handling). Return true to suppress default. */
   onEscape?: () => boolean;
+  /**
+   * Eager uploader for dragged non-image files. When provided, dropped files
+   * that aren't images are uploaded immediately and tracked as file chips with
+   * a /tmp path; without it, file drops are ignored (images still paste/drop).
+   */
+  uploadFile?: (file: File) => Promise<ComposerFileUploadResult>;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +133,11 @@ export interface ComposerCoreState<TElement, TContext> {
   removeImage: (id: string) => void;
   updateImageDataUrl: (id: string, dataUrl: string) => void;
 
+  // Files (generic non-image attachments)
+  files: ComposerFile[];
+  addFiles: (list: FileList | File[]) => void;
+  removeFile: (id: string) => void;
+
   // Elements
   elements: TElement[];
   setElements: (updater: TElement[] | ((prev: TElement[]) => TElement[])) => void;
@@ -112,6 +152,7 @@ export interface ComposerCoreState<TElement, TContext> {
   // Actions
   clearAll: () => void;
   onPaste: (ev: ClipboardEvent) => void;
+  onDrop: (ev: DragEvent) => void;
   onKeyDown: (ev: KeyboardEvent, opts?: { mentionActive?: boolean; onMentionKey?: (ev: KeyboardEvent) => boolean; submit?: () => void }) => void;
 
   // Draft
@@ -134,14 +175,21 @@ export function useComposerCore<TElement = unknown, TContext = unknown>(
     contextHasContent,
     onEscapeWhenEmpty,
     onEscape,
+    uploadFile,
   } = opts;
 
   const [text, setText] = useState<string>(() => draft?.read() ?? initialText ?? '');
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const [images, setImages] = useState<ComposerImage[]>([]);
+  const [files, setFiles] = useState<ComposerFile[]>([]);
   const [elements, setElements] = useState<TElement[]>([]);
   const [context, setContext] = useState<TContext | null>(null);
+
+  // Keep the latest uploader in a ref so addFiles (a stable closure) always
+  // calls the current one without needing it in a dependency array.
+  const uploadFileRef = useRef(uploadFile);
+  uploadFileRef.current = uploadFile;
 
   // ---- Draft binding bridge ----
   // Same logic as CosComposer's prev-binding + pendingSelfWrite pattern:
@@ -234,6 +282,51 @@ export function useComposerCore<TElement = unknown, TContext = unknown>(
     );
   }
 
+  // ---- File management (generic non-image attachments) ----
+  function addFiles(list: FileList | File[]) {
+    const arr = Array.from(list);
+    for (const file of arr) {
+      // Images keep the existing image-attachment behavior (preview thumb).
+      if (file.type.startsWith('image/')) {
+        void addImageBlob(file, file.name || 'pasted-image.png');
+        continue;
+      }
+      const uploader = uploadFileRef.current;
+      if (!uploader) continue; // no place to put it — ignore
+      const id = nextFileId();
+      setFiles((prev) => [...prev, {
+        id,
+        name: file.name || 'file',
+        size: file.size,
+        mimeType: file.type || 'application/octet-stream',
+        status: 'uploading',
+      }]);
+      void uploader(file)
+        .then((res) => {
+          setFiles((prev) => prev.map((f) =>
+            f.id === id ? { ...f, status: 'done', uploadId: res.id, path: res.path, url: res.url } : f,
+          ));
+        })
+        .catch((err) => {
+          setFiles((prev) => prev.map((f) =>
+            f.id === id ? { ...f, status: 'error', error: err?.message || String(err) } : f,
+          ));
+        });
+    }
+  }
+
+  function removeFile(id: string) {
+    setFiles((prev) => prev.filter((f) => f.id !== id));
+  }
+
+  // ---- Drop handler ----
+  function onDrop(ev: DragEvent) {
+    const dropped = ev.dataTransfer?.files;
+    if (!dropped || dropped.length === 0) return;
+    ev.preventDefault();
+    addFiles(dropped);
+  }
+
   // ---- Paste handler ----
   function onPaste(ev: ClipboardEvent) {
     const items = ev.clipboardData?.items;
@@ -254,6 +347,7 @@ export function useComposerCore<TElement = unknown, TContext = unknown>(
   const hasContent =
     !!text.trim() ||
     images.length > 0 ||
+    files.length > 0 ||
     elements.length > 0 ||
     ctxHas(context);
 
@@ -264,6 +358,7 @@ export function useComposerCore<TElement = unknown, TContext = unknown>(
       if (img.kind === 'blob') URL.revokeObjectURL(img.previewUrl);
     }
     setImages([]);
+    setFiles([]);
     setElements([]);
     setContext(null);
     if (draft) draft.clear();
@@ -313,6 +408,9 @@ export function useComposerCore<TElement = unknown, TContext = unknown>(
     addImageBlob,
     removeImage,
     updateImageDataUrl,
+    files,
+    addFiles,
+    removeFile,
     elements,
     setElements,
     context,
@@ -320,6 +418,7 @@ export function useComposerCore<TElement = unknown, TContext = unknown>(
     hasContent,
     clearAll,
     onPaste,
+    onDrop,
     onKeyDown,
     draftRef: prevDraftRef,
   };
