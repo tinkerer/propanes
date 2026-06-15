@@ -79,6 +79,14 @@ const _qdpInit = loadQdpState();
 const quickDispatchAppKey = signal<string | null>(null);
 // But restore the last-used dispatch type so it's pre-selected when opened
 const quickDispatchInitialType = signal<DispatchType | null>(_qdpInit.dispatchType);
+// Screen coords of the [+] button that opened the popup, so the composer
+// appears anchored next to it instead of stranded at screen-center (or at a
+// stale, possibly off-screen, dragged position).
+const quickDispatchAnchor = signal<{ x: number; y: number } | null>(null);
+function anchorFromEvent(e: MouseEvent) {
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  quickDispatchAnchor.value = { x: r.right + 8, y: r.top };
+}
 effect(() => {
   if (quickDispatchAppKey.value != null) {
     saveQdpState(quickDispatchAppKey.value, quickDispatchInitialType.value);
@@ -818,6 +826,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                       onClick={(e) => {
                         e.stopPropagation();
                         const groupAppId = grp.appId || selectedAppId.value || '__unlinked__';
+                        anchorFromEvent(e);
                         quickDispatchInitialType.value = isCos ? 'powwow' : 'wiggum';
                         quickDispatchAppKey.value = quickDispatchAppKey.value === groupAppId ? null : groupAppId;
                       }}
@@ -894,6 +903,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                       class="sidebar-new-terminal-btn"
                       onClick={(e) => {
                         e.stopPropagation();
+                        anchorFromEvent(e);
                         quickDispatchInitialType.value = null;
                         quickDispatchAppKey.value = quickDispatchAppKey.value === appKey ? null : appKey;
                       }}
@@ -904,6 +914,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                     <QuickDispatchPopup
                       appKey={appKey}
                       appName={appName(appKey)}
+                      anchor={quickDispatchAnchor.value}
                       initialDispatchType={quickDispatchInitialType.value || undefined}
                       onClose={() => { quickDispatchAppKey.value = null; quickDispatchInitialType.value = null; }}
                       onSubmitClose={clearQdpState}
@@ -937,6 +948,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                                 class="sidebar-new-terminal-btn"
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  anchorFromEvent(e);
                                   quickDispatchInitialType.value = isCos ? 'powwow' : 'wiggum';
                                   quickDispatchAppKey.value = quickDispatchAppKey.value === appKey ? null : appKey;
                                 }}
@@ -963,6 +975,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                   class="sidebar-new-terminal-btn"
                   onClick={(e) => {
                     e.stopPropagation();
+                    anchorFromEvent(e);
                     quickDispatchInitialType.value = null;
                     quickDispatchAppKey.value = quickDispatchAppKey.value === ungroupedKey ? null : ungroupedKey;
                   }}
@@ -973,6 +986,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                 <QuickDispatchPopup
                   appKey={selectedAppId.value || '__unlinked__'}
                   appName={selectedAppId.value ? (applications.value.find((a: any) => a.id === selectedAppId.value)?.name || selectedAppId.value.slice(-8)) : undefined}
+                  anchor={quickDispatchAnchor.value}
                   initialDispatchType={quickDispatchInitialType.value || undefined}
                   onClose={() => { quickDispatchAppKey.value = null; quickDispatchInitialType.value = null; }}
                   onSubmitClose={clearQdpState}
