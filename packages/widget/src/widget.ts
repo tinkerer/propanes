@@ -85,6 +85,21 @@ function copyTextDeferred(textPromise: Promise<string>): Promise<void> {
 
 const STORAGE_SCREENSHOTS_KEY = 'pw-widget-screenshots';
 const STORAGE_SELECTIONS_KEY = 'pw-widget-selections';
+const STORAGE_FILES_KEY = 'pw-widget-files';
+
+// Generic (non-image) file dragged into the composer. Eagerly uploaded to
+// /api/v1/uploads so a /tmp path is available immediately for "copy path".
+interface WidgetFile {
+  id: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  status: 'uploading' | 'done' | 'error';
+  uploadId?: string;
+  path?: string;
+  url?: string;
+  error?: string;
+}
 
 // Draft text key. Scoped per (appId, sessionId) so the operator never loses an
 // in-progress draft when switching tabs or apps. The legacy unscoped key
@@ -92,6 +107,12 @@ const STORAGE_SELECTIONS_KEY = 'pw-widget-selections';
 const LEGACY_DRAFT_KEY = 'pw-widget-draft';
 function widgetDraftKey(appId: string, sessionId: string): string {
   return `widget:${appId || '__default__'}:${sessionId || '__nosess__'}`;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string
+  ));
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {
@@ -148,6 +169,27 @@ function restoreSelectionsFromStorage(): SelectedElementInfo[] {
   } catch { return []; }
 }
 
+function persistFiles(files: WidgetFile[]) {
+  try {
+    // Only fully-uploaded files have a stable /tmp path worth persisting.
+    const done = files.filter((f) => f.status === 'done' && !!f.path);
+    if (done.length === 0) {
+      localStorage.removeItem(STORAGE_FILES_KEY);
+      return;
+    }
+    localStorage.setItem(STORAGE_FILES_KEY, JSON.stringify(done));
+  } catch {}
+}
+
+function restoreFilesFromStorage(): WidgetFile[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_FILES_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((f) => f && typeof f.path === 'string') : [];
+  } catch { return []; }
+}
+
 function clearWidgetDraftStorage(appId?: string, sessionId?: string) {
   try {
     localStorage.removeItem(LEGACY_DRAFT_KEY);
@@ -156,6 +198,7 @@ function clearWidgetDraftStorage(appId?: string, sessionId?: string) {
     }
     localStorage.removeItem(STORAGE_SCREENSHOTS_KEY);
     localStorage.removeItem(STORAGE_SELECTIONS_KEY);
+    localStorage.removeItem(STORAGE_FILES_KEY);
   } catch {}
 }
 
@@ -166,6 +209,7 @@ export class ProPanesElement {
   private isOpen = false;
   private identity: UserIdentity | null = null;
   private pendingScreenshots: Blob[] = restoreScreenshotsFromStorage();
+  private pendingFiles: WidgetFile[] = restoreFilesFromStorage();
   private eventHandlers: Map<string, Set<EventHandler>> = new Map();
   private sessionBridge: SessionBridge;
   private history: string[] = [];
@@ -1430,6 +1474,7 @@ export class ProPanesElement {
     this.renderScreenshotThumbs();
     this.renderSelectedElementChips();
     this.renderConsoleChip();
+    this.renderFileChips();
 
     this.updateSendButtonTitle(sendBtn);
 
@@ -1485,6 +1530,28 @@ export class ProPanesElement {
           const blob = item.getAsFile();
           if (blob) this.addScreenshot(blob);
         }
+      }
+    });
+
+    // Drag-and-drop: images become screenshots, everything else is uploaded to
+    // /tmp and shown as a file chip with a "copy path" button.
+    panel.addEventListener('dragover', (e: DragEvent) => {
+      if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      panel.classList.add('pw-drag-over');
+    });
+    panel.addEventListener('dragleave', (e: DragEvent) => {
+      if (e.target === panel) panel.classList.remove('pw-drag-over');
+    });
+    panel.addEventListener('drop', (e: DragEvent) => {
+      panel.classList.remove('pw-drag-over');
+      const dropped = e.dataTransfer?.files;
+      if (!dropped || dropped.length === 0) return;
+      e.preventDefault();
+      for (const file of Array.from(dropped)) {
+        if (file.type.startsWith('image/')) this.addScreenshot(file);
+        else void this.addFile(file);
       }
     });
 
@@ -1780,8 +1847,145 @@ export class ProPanesElement {
     container.appendChild(clearBtn);
   }
 
+  // ── Dragged-file attachments ──────────────────────────────────────
+  private async addFile(file: File) {
+    const id = `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const entry: WidgetFile = {
+      id,
+      name: file.name || 'file',
+      size: file.size,
+      mimeType: file.type || 'application/octet-stream',
+      status: 'uploading',
+    };
+    this.pendingFiles.push(entry);
+    this.renderFileChips();
+    this.updateSendButtonTitle();
+    try {
+      const up = await this.uploadFile(file);
+      entry.status = 'done';
+      entry.uploadId = up.id;
+      entry.path = up.path;
+      entry.url = up.url;
+    } catch (err) {
+      entry.status = 'error';
+      entry.error = err instanceof Error ? err.message : 'Upload failed';
+    }
+    persistFiles(this.pendingFiles);
+    this.renderFileChips();
+    this.updateSendButtonTitle();
+  }
+
+  private async uploadFile(file: File): Promise<{ id: string; path: string; url: string }> {
+    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
+    const uploadsUrl = `${endpointUrl.origin}/api/v1/uploads`;
+    const formData = new FormData();
+    formData.append('files', file, file.name);
+    formData.append('meta', JSON.stringify({
+      sessionId: this.getSessionId(),
+      userId: this.identity?.id,
+      sourceUrl: location.href,
+    }));
+    const res = await this.fetchWithContext(uploadsUrl, {
+      method: 'POST',
+      headers: this.apiHeaders(),
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    const up = data?.files?.[0];
+    if (!up) throw new Error('Upload failed');
+    return { id: up.id, path: up.path, url: `${endpointUrl.origin}/api/v1/uploads/${up.id}` };
+  }
+
+  // Transient "Copied!" pill anchored to a button — unlike showFlash() this
+  // does NOT close the panel, so the operator can keep composing.
+  private flashCopyToast(anchor: HTMLElement) {
+    const panel = this.shadow.querySelector('.pw-panel') as HTMLElement | null;
+    if (!panel) return;
+    const toast = document.createElement('div');
+    toast.className = 'pw-copy-toast';
+    toast.textContent = 'Copied!';
+    const a = anchor.getBoundingClientRect();
+    const p = panel.getBoundingClientRect();
+    toast.style.left = `${a.left - p.left + a.width / 2}px`;
+    toast.style.top = `${a.top - p.top - 6}px`;
+    panel.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('pw-copy-toast-visible'));
+    setTimeout(() => {
+      toast.classList.remove('pw-copy-toast-visible');
+      setTimeout(() => toast.remove(), 150);
+    }, 800);
+  }
+
+  private removeFile(id: string) {
+    this.pendingFiles = this.pendingFiles.filter((f) => f.id !== id);
+    persistFiles(this.pendingFiles);
+    this.renderFileChips();
+    this.updateSendButtonTitle();
+  }
+
+  private formatFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  private renderFileChips() {
+    const chips = this.shadow.querySelector('#pw-attach-chips') as HTMLElement | null;
+    if (!chips) return;
+    // Drop any existing file chips; re-render from current state.
+    chips.querySelectorAll('.pw-file-chip').forEach((n) => n.remove());
+
+    for (const f of this.pendingFiles) {
+      const chip = document.createElement('div');
+      chip.className = `pw-attach-chip pw-file-chip${f.status === 'error' ? ' pw-file-error' : ''}${f.status === 'uploading' ? ' pw-file-uploading' : ''}`;
+      chip.title = f.status === 'error' ? (f.error || 'Upload failed') : (f.path || f.name);
+
+      const icon = f.status === 'uploading'
+        ? `<svg class="pw-file-spin" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>`
+        : `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>`;
+      const sizeLabel = f.status === 'error' ? 'failed' : this.formatFileSize(f.size);
+      chip.innerHTML = `${icon}<code class="pw-file-name">${escapeHtml(f.name)}</code><span class="pw-file-size">${sizeLabel}</span>`;
+
+      if (f.status === 'done' && f.path) {
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'pw-file-copy';
+        copyBtn.title = `Copy path: ${f.path}`;
+        copyBtn.setAttribute('aria-label', 'Copy file path');
+        copyBtn.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+        copyBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          void copyText(f.path as string);
+          this.flashCopyToast(copyBtn);
+        });
+        chip.appendChild(copyBtn);
+      }
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'pw-attach-chip-remove';
+      remove.title = 'Remove file';
+      remove.setAttribute('aria-label', 'Remove file');
+      remove.textContent = '×';
+      remove.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.removeFile(f.id);
+      });
+      chip.appendChild(remove);
+      chips.appendChild(chip);
+    }
+
+    const hasAny = chips.children.length > 0;
+    chips.classList.toggle('pw-hidden', !hasAny);
+  }
+
   private clearAll() {
     this.pendingScreenshots = [];
+    this.pendingFiles = [];
     this.selectedElements = [];
     this.voiceResult = null;
     this.consoleCapture = null;
@@ -1795,11 +1999,13 @@ export class ProPanesElement {
     }
     persistScreenshots([]);
     persistSelections([]);
+    persistFiles([]);
     clearWidgetDraftStorage(this.appId, this.getSessionId());
     this.renderScreenshotThumbs();
     this.renderSelectedElementChips();
     this.renderVoiceIndicator();
     this.renderConsoleChip();
+    this.renderFileChips();
     this.exitTimeline();
     this.updateSendButtonTitle();
   }
@@ -3105,7 +3311,7 @@ export class ProPanesElement {
     const errorEl = this.shadow.querySelector('#pw-error') as HTMLElement;
     const rawDescription = input.value.trim();
 
-    if (!rawDescription && this.pendingScreenshots.length === 0 && !this.voiceResult && this.timelineItems.length === 0 && !this.consoleCapture) {
+    if (!rawDescription && this.pendingScreenshots.length === 0 && !this.voiceResult && this.timelineItems.length === 0 && !this.consoleCapture && this.pendingFiles.length === 0) {
       return;
     }
 
@@ -3117,6 +3323,15 @@ export class ProPanesElement {
     if (this.consoleCapture && this.consoleCapture.length > 0) {
       const body = formatWidgetConsoleEntries(this.consoleCapture).slice(-4000);
       const block = `Recent browser console output:\n\`\`\`\n${body}\n\`\`\``;
+      description = description ? `${description}\n\n---\n${block}` : block;
+    }
+
+    // Dragged-file attachments ride along as /tmp paths so an agent on the
+    // server host can read them directly.
+    const doneFiles = this.pendingFiles.filter((f) => f.status === 'done' && f.path);
+    if (doneFiles.length > 0) {
+      const lines = doneFiles.map((f) => `- ${f.path}${f.url ? ` (download: ${f.url})` : ''}`).join('\n');
+      const block = `Attached files (read from these local paths if you are on the server host):\n${lines}`;
       description = description ? `${description}\n\n---\n${block}` : block;
     }
 
@@ -3138,11 +3353,13 @@ export class ProPanesElement {
       try {
         const appendResult = await this.submitAppend(this.appendTargetId, description);
         this.pendingScreenshots = [];
+        this.pendingFiles = [];
         this.selectedElements = [];
         this.consoleCapture = null;
         input.value = '';
         this.flushDraftSave('');
         clearWidgetDraftStorage(this.appId, this.getSessionId());
+        this.renderFileChips();
         this.appendTargetId = null;
         const appendedPaths: string[] = Array.isArray(appendResult?.screenshots)
           ? appendResult.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
@@ -3180,7 +3397,8 @@ export class ProPanesElement {
       this.pendingScreenshots.length > 0 &&
       !this.voiceResult &&
       this.selectedElements.length === 0 &&
-      this.timelineItems.length === 0;
+      this.timelineItems.length === 0 &&
+      this.pendingFiles.length === 0;
 
     try {
       if (isScreenshotOnly) {
@@ -3216,11 +3434,13 @@ export class ProPanesElement {
       this.currentDraft = '';
       this.flushDraftSave('');
       this.pendingScreenshots = [];
+      this.pendingFiles = [];
       this.selectedElements = [];
       this.consoleCapture = null;
       input.value = '';
       clearWidgetDraftStorage(this.appId, this.getSessionId());
       this.renderConsoleChip();
+      this.renderFileChips();
       this.exitTimeline();
 
       this.emit('submit', { type: 'manual', title: '', description, id: result?.id, appId: result?.appId });
