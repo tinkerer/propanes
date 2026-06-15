@@ -135,6 +135,7 @@ export interface ComposerCoreState<TElement, TContext> {
 
   // Files (generic non-image attachments)
   files: ComposerFile[];
+  setFiles: (updater: ComposerFile[] | ((prev: ComposerFile[]) => ComposerFile[])) => void;
   addFiles: (list: FileList | File[]) => void;
   removeFile: (id: string) => void;
 
@@ -409,6 +410,7 @@ export function useComposerCore<TElement = unknown, TContext = unknown>(
     removeImage,
     updateImageDataUrl,
     files,
+    setFiles,
     addFiles,
     removeFile,
     elements,

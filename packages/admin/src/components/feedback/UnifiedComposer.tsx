@@ -4,7 +4,7 @@ import { captureScreenshot, type ScreenshotMethod } from '@propanes/widget/scree
 import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-picker';
 import { VoiceRecorder, type VoiceRecordingResult } from '@propanes/widget/voice-recorder';
 import { snapshotConsole, type ConsoleEntry } from '../../lib/console-buffer.js';
-import { useComposerCore, type ComposerImage, type ComposerFileUploadResult } from '../../lib/use-composer-core.js';
+import { useComposerCore, type ComposerImage, type ComposerFile, type ComposerFileUploadResult } from '../../lib/use-composer-core.js';
 import { api } from '../../lib/api.js';
 import { copyWithTooltip } from '../../lib/clipboard.js';
 
@@ -74,11 +74,19 @@ const LOCAL_DRAFT_PREFIX = 'pw-unified-composer-draft:';
 
 type ComposerDraftAttachments = {
   elements?: SelectedElementInfo[];
+  files?: ComposerFile[];
 };
 
-function serializeDraftAttachments(elements: SelectedElementInfo[]): string | undefined {
-  if (elements.length === 0) return undefined;
-  return JSON.stringify({ elements });
+// Only fully-uploaded files are persistable — they carry a stable /tmp path +
+// id, unlike image blobs (binary, not serialized into the draft).
+function persistableFiles(files: ComposerFile[]): ComposerFile[] {
+  return files.filter((f) => f.status === 'done' && !!f.path);
+}
+
+function serializeDraftAttachments(elements: SelectedElementInfo[], files: ComposerFile[]): string | undefined {
+  const doneFiles = persistableFiles(files);
+  if (elements.length === 0 && doneFiles.length === 0) return undefined;
+  return JSON.stringify({ elements, files: doneFiles });
 }
 
 function parseDraftAttachments(raw: string | null | undefined): ComposerDraftAttachments {
@@ -89,6 +97,9 @@ function parseDraftAttachments(raw: string | null | undefined): ComposerDraftAtt
     return {
       elements: Array.isArray(parsed.elements)
         ? parsed.elements.filter((el: unknown): el is SelectedElementInfo => !!el && typeof el === 'object')
+        : undefined,
+      files: Array.isArray(parsed.files)
+        ? parsed.files.filter((f: any): f is ComposerFile => !!f && typeof f === 'object' && typeof f.path === 'string')
         : undefined,
     };
   } catch {
@@ -289,6 +300,9 @@ export function UnifiedComposer({
       if (attachments.elements?.length && core.elements.length === 0) {
         core.setElements(attachments.elements);
       }
+      if (attachments.files?.length && core.files.length === 0) {
+        core.setFiles(attachments.files);
+      }
       setDraftHydratedKey(draftKey);
     })();
     return () => { cancelled = true; };
@@ -305,7 +319,7 @@ export function UnifiedComposer({
       draftSaveTimerRef.current = null;
       const payload = {
         text: core.text,
-        attachmentsJson: serializeDraftAttachments(core.elements),
+        attachmentsJson: serializeDraftAttachments(core.elements, core.files),
       };
       if (draftStorage === 'local') {
         pushLocalDraft(draftKey, payload);
@@ -319,7 +333,7 @@ export function UnifiedComposer({
         draftSaveTimerRef.current = null;
         const payload = {
           text: core.text,
-          attachmentsJson: serializeDraftAttachments(core.elements),
+          attachmentsJson: serializeDraftAttachments(core.elements, core.files),
         };
         if (draftStorage === 'local') {
           pushLocalDraft(draftKey, payload);
@@ -328,7 +342,7 @@ export function UnifiedComposer({
         }
       }
     };
-  }, [draftKey, draftHydratedKey, draftStorage, core.text, core.elements]);
+  }, [draftKey, draftHydratedKey, draftStorage, core.text, core.elements, core.files]);
 
   // Click-outside to close the expand menu.
   useEffect(() => {

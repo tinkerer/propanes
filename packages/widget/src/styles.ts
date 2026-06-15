@@ -2377,4 +2377,84 @@ export const WIDGET_CSS = `
   margin: 4px 0;
 }
 
+/* ── Dragged-file attachment chips ──────────────────────────────── */
+.pw-file-chip {
+  padding-right: 4px;
+  max-width: 100%;
+}
+.pw-file-chip.pw-file-uploading { opacity: 0.7; }
+.pw-file-chip.pw-file-error {
+  background: rgba(220, 53, 69, 0.12);
+  border-color: #dc3545;
+  color: #fecaca;
+}
+.pw-file-name {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: #bae6fd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 150px;
+}
+.pw-file-size {
+  font-size: 10px;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+.pw-file-copy {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #bae6fd;
+  cursor: pointer;
+}
+.pw-file-copy:hover { background: rgba(29, 155, 240, 0.25); }
+.pw-file-copy svg { width: 11px; height: 11px; }
+.pw-file-spin { animation: pw-file-spin 0.9s linear infinite; }
+@keyframes pw-file-spin { to { transform: rotate(360deg); } }
+
+/* Drag-over highlight on the composer panel */
+.pw-panel.pw-drag-over { outline: 2px dashed #1d9bf0; outline-offset: -4px; }
+.pw-panel.pw-drag-over::after {
+  content: 'Drop files to attach';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(29, 155, 240, 0.12);
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 30;
+}
+
+/* Non-closing "Copied!" pill for the file copy-path button */
+.pw-copy-toast {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.12);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+  z-index: 40;
+}
+.pw-copy-toast.pw-copy-toast-visible { opacity: 1; }
+
 `;
