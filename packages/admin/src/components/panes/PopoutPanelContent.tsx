@@ -3,6 +3,7 @@ import { PopupMenu } from '../pickers/PopupMenu.js';
 import { SessionIdMenu } from '../sessions/SessionIdMenu.js';
 import {
   type PopoutPanelState,
+  allSessions,
   pendingFirstDigit,
   getSessionLabel,
   getTerminalCompanion,
@@ -17,6 +18,7 @@ import {
 } from '../../lib/sessions.js';
 import { type PopoutMode } from '../../lib/settings.js';
 import { cosArtifacts } from '../../lib/cos-artifacts.js';
+import { applications } from '../../lib/state.js';
 
 export function PanelTabBadge({ tabNum }: { tabNum: number }) {
   const pending = pendingFirstDigit.value;
@@ -39,10 +41,22 @@ export function PanelTabBadge({ tabNum }: { tabNum: number }) {
 export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (sid === 'view:page') return 'Page';
   if (sid === 'view:sessions-list') return 'Sessions';
+  if (sid.startsWith('view:sessions-list:machine:')) {
+    const rest = sid.slice('view:sessions-list:machine:'.length);
+    const [machineId, appId] = rest.split(':app:');
+    const machineSession = allSessions.value.find((s: any) => s.machineId === machineId && s.machineName);
+    const app = appId ? applications.value.find((a: any) => a.id === appId) : null;
+    return `${app ? `${app.name} ` : ''}Sessions: ${machineSession?.machineName || machineId.slice(-8)}`;
+  }
   if (sid === 'view:terminals') return 'Terminals';
   if (sid === 'view:files') return 'Files';
   if (sid === 'view:nav') return 'Nav';
   if (sid === 'view:feedback') return 'Tickets';
+  if (sid.startsWith('view:feedback:app:')) {
+    const appId = sid.slice('view:feedback:app:'.length);
+    const app = applications.value.find((a: any) => a.id === appId);
+    return `${app?.name || appId.slice(-8)} Tickets`;
+  }
   if (sid === 'view:sessions-page') return 'Sessions';
   if (sid === 'view:live') return 'Live';
   if (sid === 'view:app-settings') return 'Settings';

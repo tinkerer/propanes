@@ -3,13 +3,16 @@ import { api } from '../lib/api.js';
 import { SetupAssistButton } from '../components/dispatch/SetupAssistButton.js';
 import { trackDeletion } from '../components/ui/DeletedItemsPanel.js';
 import { cachedTargets } from '../components/dispatch/DispatchTargetSelect.js';
-import { spawnTerminal } from '../lib/sessions.js';
+import { openSession, spawnTerminal } from '../lib/sessions.js';
+import { openUrlCompanion } from '../lib/companion-state.js';
+import { openCosInPane } from '../lib/chief-of-staff.js';
+import { addTabToLeaf, findLeafWithTab, focusedLeafId } from '../lib/pane-tree.js';
 import { selectedAppId } from '../lib/state.js';
 import {
   machines, harnessConfigs, applications, launchers,
   loading, error, expandedMachines, loadAll, closeAllForms,
   getAppName, getRepoName, getAppsForMachine, getHarnessUrl,
-  harnessStatusColor, formatBytes, formatUptime, AppLink, SharedRepoBadge,
+  getSessionsForMachine, harnessStatusColor, formatBytes, formatUptime, AppLink, SharedRepoBadge,
 } from '../pages/InfrastructurePage.js';
 import { HarnessSubCard, openAddHarness } from './HarnessSection.js';
 
@@ -270,6 +273,58 @@ function toggleExpanded(machineId: string) {
   expandedMachines.value = next;
 }
 
+function getSessionTitle(s: any): string {
+  if (s.permissionProfile === 'plain') {
+    return s.title || s.paneTitle || s.paneCommand || `Terminal ${s.id.slice(-6)}`;
+  }
+  return s.feedbackTitle || s.title || s.agentName || `Session ${s.id.slice(-6)}`;
+}
+
+function getSessionAppName(appId: string | null | undefined): string {
+  if (!appId) return 'Unlinked';
+  return applications.value.find(a => a.id === appId)?.name || appId.slice(-8);
+}
+
+function openMachineSessionsPane(machineId: string) {
+  const sid = `view:sessions-list:machine:${machineId}`;
+  openViewTab(sid);
+}
+
+function openMachineAppSessionsPane(machineId: string, appId: string) {
+  openViewTab(`view:sessions-list:machine:${machineId}:app:${appId}`);
+}
+
+function openAppTicketsPane(appId: string) {
+  selectedAppId.value = appId;
+  openViewTab(`view:feedback:app:${appId}`);
+}
+
+function openViewTab(sid: string) {
+  const existing = findLeafWithTab(sid);
+  if (existing) {
+    addTabToLeaf(existing.id, sid, true);
+    return;
+  }
+  addTabToLeaf(focusedLeafId.value || 'sidebar-sessions', sid, true);
+}
+
+function buildRemoteCosUrl(adminUrl: string, appId: string): string {
+  const url = new URL(adminUrl, window.location.href);
+  url.searchParams.set('embed', 'cos');
+  url.searchParams.set('appId', appId);
+  url.hash = '';
+  return url.toString();
+}
+
+function openMachineAppCos(m: any, appId: string) {
+  selectedAppId.value = appId;
+  if (m.adminUrl) {
+    openUrlCompanion(buildRemoteCosUrl(m.adminUrl, appId));
+    return;
+  }
+  openCosInPane();
+}
+
 export function MachineForm() {
   return (
     <div class="agent-form" style="margin-bottom:20px">
@@ -323,6 +378,8 @@ export function MachineCard({ m }: { m: any }) {
   const health = machineHealthResults.value[m.id];
   const healthLoading = machineHealthLoading.value[m.id];
   const isHealthExpanded = expandedMachineHealth.value === m.id;
+  const machineSessions = getSessionsForMachine(m.id);
+  const runningCount = machineSessions.filter(s => s.status === 'running').length;
 
   return (
     <div class="agent-card" key={m.id}>
@@ -356,6 +413,7 @@ export function MachineCard({ m }: { m: any }) {
               {healthLoading ? 'Checking...' : 'Health'}
             </button>
             <button class="btn btn-sm" onClick={() => openAddHarness(m.id)}>Add Harness</button>
+            <button class="btn btn-sm" onClick={() => openMachineSessionsPane(m.id)}>Sessions</button>
             <SetupAssistButton entityType="machine" entityId={m.id} entityLabel={m.name} />
             <button class="btn btn-sm" onClick={() => openEditMachine(m)}>Edit</button>
             <button class="btn btn-sm btn-danger" onClick={() => handleMachineDelete(m.id, m.name)}>Delete</button>
@@ -436,17 +494,61 @@ export function MachineCard({ m }: { m: any }) {
             <div style="margin-top:8px;font-size:12px">
               <div style="font-weight:500;color:var(--pw-text);margin-bottom:4px">Apps</div>
               {apps.map(app => (
-                <div key={app.id} style="display:flex;align-items:center;gap:6px;padding:2px 0;flex-wrap:wrap">
-                  <AppLink app={app} />
-                  {app.projectDir && (
-                    <span style="color:var(--pw-text-faint);font-size:11px">{getRepoName(app.projectDir)}</span>
-                  )}
-                  {app.projectDir && <SharedRepoBadge repoKey={app.projectDir} currentInfraId={m.id} />}
+                <div key={app.id} class="infra-machine-app-row">
+                  <div class="infra-machine-app-main">
+                    <AppLink app={app} />
+                    {app.projectDir && (
+                      <span style="color:var(--pw-text-faint);font-size:11px">{getRepoName(app.projectDir)}</span>
+                    )}
+                    {app.projectDir && <SharedRepoBadge repoKey={app.projectDir} currentInfraId={m.id} />}
+                  </div>
+                  <div class="infra-machine-app-actions">
+                    <button class="btn btn-sm" onClick={() => openAppTicketsPane(app.id)}>Tickets</button>
+                    <button class="btn btn-sm" onClick={() => openMachineAppSessionsPane(m.id, app.id)}>Sessions</button>
+                    <button
+                      class="btn btn-sm"
+                      onClick={() => openMachineAppCos(m, app.id)}
+                      title={m.adminUrl ? `Open remote CoS for ${app.name}` : `Open local CoS for ${app.name}`}
+                    >
+                      CoS
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           );
         })()}
+
+        {machineSessions.length > 0 && (
+          <div class="infra-machine-sessions">
+            <div class="infra-machine-subhead">
+              <span>Sessions</span>
+              <button class="btn btn-sm" onClick={() => openMachineSessionsPane(m.id)}>
+                View all ({machineSessions.length}{runningCount > 0 ? `, ${runningCount} running` : ''})
+              </button>
+            </div>
+            <div class="infra-machine-session-list">
+              {machineSessions.slice(0, 6).map((s: any) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  class="infra-machine-session-row"
+                  onClick={() => openSession(s.id)}
+                  title={`${getSessionTitle(s)}\n${s.status} · ${getSessionAppName(s.appId)} · ${s.id}`}
+                >
+                  <span class={`session-status-dot ${s.status}${s.permissionProfile === 'plain' ? ' plain' : ''}`} />
+                  <span class="infra-machine-session-main">
+                    <span class="infra-machine-session-title">{getSessionTitle(s)}</span>
+                    <span class="infra-machine-session-meta">
+                      {getSessionAppName(s.appId)} · {s.permissionProfile === 'plain' ? 'terminal' : 'agent'} · {s.id.slice(-8)}
+                    </span>
+                  </span>
+                  <span class="infra-machine-session-status">{s.status}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {harnessCount > 0 && (
           <div style="margin-top:8px">

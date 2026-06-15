@@ -7,8 +7,9 @@ import { eq, desc } from 'drizzle-orm';
 import { ulid } from 'ulidx';
 import { db, schema } from './db/index.js';
 import type { AgentRuntime, PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
+import { STREAM_PROFILE_PTY_COLS } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
-import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, listPwTmuxSessions } from './tmux-pty.js';
+import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, listPwTmuxSessions, getTmuxPaneCommand, detachTmuxClients } from './tmux-pty.js';
 import { detectClaudeAuthRequired, stripTerminalControl } from './claude-auth-detect.js';
 
 const PORT = parseInt(process.env.SESSION_SERVICE_PORT || '3002', 10);
@@ -208,10 +209,65 @@ const STREAM_PROFILES = new Set<PermissionProfile>([
 // JSON.parse fail downstream (cos-turn-consumer.ts). Use a very wide
 // terminal so individual events stay on one line. Interactive profiles
 // keep a normal width because the user sees the TUI.
-const STREAM_PROFILE_COLS = 32768;
+//
+// IMPORTANT: must equal STREAM_PROFILE_PTY_COLS (10000) from
+// @propanes/shared — tmux hard-caps window width at 10000. Asking the
+// attach client for anything wider (the old 32768) leaves the client
+// permanently larger than the window, and tmux pads the dead zone with
+// `·` fill on every repaint — the source of the dot/line rendering
+// corruption in the admin terminal.
+const STREAM_PROFILE_COLS = STREAM_PROFILE_PTY_COLS;
 const DEFAULT_COLS = 120;
-function ptyColsForProfile(profile: PermissionProfile): number {
-  return STREAM_PROFILES.has(profile) ? STREAM_PROFILE_COLS : DEFAULT_COLS;
+const MAX_INTERACTIVE_COLS = 300;
+const MAX_INTERACTIVE_ROWS = 120;
+function needsWideStreamPty(runtime: AgentRuntime, profile: PermissionProfile): boolean {
+  return runtime === 'claude' && STREAM_PROFILES.has(profile);
+}
+
+function ptyColsForSession(runtime: AgentRuntime, profile: PermissionProfile): number {
+  return needsWideStreamPty(runtime, profile) ? STREAM_PROFILE_COLS : DEFAULT_COLS;
+}
+
+// A live command "wants" the wide stream PTY only if it speaks stream-json
+// (stream profiles or headless `-p` with --output-format stream-json). Anything
+// else is an interactive TUI that must stay at a normal width, or tmux paints
+// full-window-width separator lines that wrap into dozens of rows.
+function commandSpeaksStreamJson(cmd: string): boolean {
+  return /--input-format\s+stream-json|--output-format\s+stream-json|(^|\s)-p(\s|$)/.test(cmd);
+}
+
+// Reconcile a stored permission profile against what the pane is really
+// running. Returns the profile that matches the live command so the PTY width
+// is derived from reality, not a stale DB row. See getTmuxPaneCommand and the
+// project-tmux-stream-pty-width memory note.
+function reconcileProfileWithLiveCommand(
+  sessionId: string,
+  storedProfile: PermissionProfile,
+): PermissionProfile {
+  // Only stream/headless profiles trigger the wide PTY, so only they can drift
+  // into corruption. Interactive profiles are already narrow — nothing to fix.
+  if (!STREAM_PROFILES.has(storedProfile) && storedProfile !== 'headless-yolo') {
+    return storedProfile;
+  }
+  const liveCmd = getTmuxPaneCommand(sessionId);
+  if (!liveCmd || commandSpeaksStreamJson(liveCmd)) return storedProfile;
+
+  // DB says stream/headless but the pane is an interactive TUI — the source of
+  // the 10000-col wrapped-line corruption. Correct to the matching interactive
+  // profile and persist it so future recoveries stay healthy.
+  const corrected: PermissionProfile = liveCmd.includes('--dangerously-skip-permissions')
+    ? 'interactive-yolo'
+    : 'interactive-require';
+  console.warn(`[session-service] Profile drift on ${sessionId}: DB=${storedProfile} but live pane is an interactive TUI; correcting to ${corrected} (was painting wide-window separator lines)`);
+  try {
+    db.update(schema.agentSessions)
+      .set({ permissionProfile: corrected })
+      .where(eq(schema.agentSessions.id, sessionId))
+      .run();
+  } catch (err) {
+    console.error(`[session-service] Failed to persist corrected profile for ${sessionId}:`, err);
+  }
+  return corrected;
 }
 
 function buildAgentCommand(
@@ -421,7 +477,11 @@ function spawnSession(params: {
   appendSystemPrompt?: string;
   suppressAuthCompanion?: boolean;
 }): void {
-  const { sessionId, prompt = '', cwd, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt, suppressAuthCompanion = false } = params;
+  const { sessionId, cwd, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt, suppressAuthCompanion = false } = params;
+  // NFC-normalize: decomposed unicode (NFD accents from macOS clipboards, etc.)
+  // crossing a wrap boundary crashes Claude Code's TUI with "Failed to find
+  // wrapped line in text" (anthropic/claude-code#395, #678, #34380).
+  const prompt = (params.prompt || '').normalize('NFC');
 
   if (activeSessions.has(sessionId)) {
     throw new Error(`Session ${sessionId} is already running`);
@@ -441,7 +501,7 @@ function spawnSession(params: {
 
   let ptyProcess: pty.IPty;
   let tmuxSessionName: string | null = null;
-  const cols = ptyColsForProfile(permissionProfile);
+  const cols = ptyColsForSession(runtime, permissionProfile);
 
   if (isTmuxAvailable()) {
     const result = spawnInTmux({
@@ -530,6 +590,10 @@ function spawnSession(params: {
 // Shared onData handler: output buffering + OSC title-based state detection
 function wireOnData(proc: AgentProcess, ptyProcess: pty.IPty): void {
   ptyProcess.onData((data: string) => {
+    if (isFillOnlyFrame(data)) return;
+    data = stripTerminalFillRuns(data);
+    if (!data) return;
+
     proc.outputBuffer += data;
     proc.totalBytes += Buffer.byteLength(data);
 
@@ -566,6 +630,24 @@ function wireOnData(proc: AgentProcess, ptyProcess: pty.IPty): void {
     maybeOpenClaudeLoginCompanion(proc);
     sendSequenced(proc, { kind: 'output', data });
   });
+}
+
+function isFillOnlyFrame(data: string): boolean {
+  if (data.length < 100) return false;
+  const visible = data
+    .replace(/\x1b\[\??[0-9;]*[a-zA-Z]/g, '')
+    .replace(/\x1b\][^\x07]*\x07/g, '')
+    .replace(/\x1b\([A-Z]/g, '')
+    .replace(/\x1b[>=][0-9;]*[a-zA-Z]/g, '')
+    .replace(/\x1b[\x20-\x2F]*[\x30-\x7E]/g, '')
+    .replace(/[\s\r\n\t]/g, '');
+  if (!visible) return false;
+  const dots = (visible.match(/\u00b7/g) || []).length;
+  return visible.length >= 100 && dots / visible.length > 0.95;
+}
+
+function stripTerminalFillRuns(data: string): string {
+  return data.replace(/\u00b7{20,}/g, '');
 }
 
 function maybeOpenClaudeLoginCompanion(proc: AgentProcess): void {
@@ -715,8 +797,10 @@ function resizeSessionProcess(sessionId: string, cols: number, rows: number): vo
     // would cause tmux to hard-wrap each JSON line at the column boundary,
     // breaking JSON.parse in cos-turn-consumer.ts. Pin cols to the wide
     // value regardless of what the frontend xterm requested.
-    const effectiveCols = STREAM_PROFILES.has(proc.permissionProfile) ? STREAM_PROFILE_COLS : cols;
-    proc.ptyProcess.resize(effectiveCols, rows);
+    const safeRows = Math.max(2, Math.min(Number(rows) || 40, MAX_INTERACTIVE_ROWS));
+    const safeCols = Math.max(20, Math.min(Number(cols) || DEFAULT_COLS, MAX_INTERACTIVE_COLS));
+    const effectiveCols = needsWideStreamPty(proc.runtime, proc.permissionProfile) ? STREAM_PROFILE_COLS : safeCols;
+    proc.ptyProcess.resize(effectiveCols, safeRows);
   }
 }
 
@@ -724,15 +808,37 @@ function writeToSession(sessionId: string, data: string): void {
   const proc = activeSessions.get(sessionId);
   if (proc && proc.status === 'running') {
     proc.ptyProcess.write(data);
-    // Immediately clear waiting/idle on real user input (not xterm.js escape responses)
-    // Bypass debounce — user explicitly typed, so transition is intentional.
-    if (proc.inputState !== 'active' && !data.startsWith('\x1b')) {
-      if (proc.waitingDebounce) { clearTimeout(proc.waitingDebounce); proc.waitingDebounce = null; }
-      proc.inputState = 'active';
-      sendSequenced(proc, { kind: 'input_state', state: 'active' });
-    }
-    if (!data.startsWith('\x1b')) touchActivity(sessionId);
+    markUserInput(sessionId, proc, data);
   }
+}
+
+function sendKeysToSession(sessionId: string, keys: string, enter = true): void {
+  const proc = activeSessions.get(sessionId);
+  if (!proc || proc.status !== 'running') return;
+
+  // See spawnSession: NFD unicode in TUI input triggers the wrapped-line crash.
+  keys = keys.normalize('NFC');
+
+  if (proc.tmuxSessionName && tmuxSessionExists(sessionId) && sendKeysToTmux(sessionId, keys, enter)) {
+    markUserInput(sessionId, proc, keys);
+    return;
+  }
+
+  writeToSession(sessionId, keys);
+  if (enter) {
+    setTimeout(() => writeToSession(sessionId, '\r'), 150);
+  }
+}
+
+function markUserInput(sessionId: string, proc: AgentProcess, data: string): void {
+  // Immediately clear waiting/idle on real user input (not xterm.js escape responses)
+  // Bypass debounce — user explicitly typed, so transition is intentional.
+  if (proc.inputState !== 'active' && !data.startsWith('\x1b')) {
+    if (proc.waitingDebounce) { clearTimeout(proc.waitingDebounce); proc.waitingDebounce = null; }
+    proc.inputState = 'active';
+    sendSequenced(proc, { kind: 'input_state', state: 'active' });
+  }
+  if (!data.startsWith('\x1b')) touchActivity(sessionId);
 }
 
 function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): boolean {
@@ -742,14 +848,29 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
   console.log(`[session-service] Recovering tmux session for ${session.id}`);
 
   try {
-    const recoverProfile = session.permissionProfile as PermissionProfile;
-    const ptyProcess = reattachTmux({ sessionId: session.id, cols: ptyColsForProfile(recoverProfile), rows: 40 });
-    const captured = captureTmuxPane(session.id);
+    const recoverRuntime = session.runtime as AgentRuntime;
+    // Trust the live pane over the DB row: a profile that drifted to a stream
+    // value while running an interactive TUI would otherwise be reattached at
+    // 10000 cols and paint wrapped separator lines. reconcile fixes the row.
+    const recoverProfile = reconcileProfileWithLiveCommand(
+      session.id,
+      session.permissionProfile as PermissionProfile,
+    );
+    const recoverCols = ptyColsForSession(recoverRuntime, recoverProfile);
+    // Drop any zombie clients (e.g. a stale wide attach that survived a crash)
+    // so window-size=latest can't keep the window pinned wider than our new
+    // attach. Reattaching a single correctly-sized client then pulls the
+    // window to the right width on its own (window-size follows the latest
+    // active client) — no explicit resize-window, which would flip the window
+    // to manual sizing and stop it reflowing on browser resize.
+    detachTmuxClients(session.id);
+    const ptyProcess = reattachTmux({ sessionId: session.id, cols: recoverCols, rows: 40 });
+    const captured = stripTerminalFillRuns(captureTmuxPane(session.id));
 
     const proc: AgentProcess = {
       sessionId: session.id,
       runtime: session.runtime as AgentRuntime,
-      permissionProfile: session.permissionProfile as PermissionProfile,
+      permissionProfile: recoverProfile,
       cwd: session.cwd || process.cwd(),
       ptyProcess,
       outputBuffer: captured,
@@ -792,7 +913,7 @@ function attachAdminSocket(sessionId: string, ws: WebSocket): boolean {
   const proc = activeSessions.get(sessionId);
   if (proc) {
     // Send full history + lastInputAckSeq so client can resume its counter
-    ws.send(JSON.stringify({ type: 'history', data: proc.outputBuffer, lastInputAckSeq: proc.lastInputAckSeq, inputState: proc.inputState }));
+    ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(proc.outputBuffer), lastInputAckSeq: proc.lastInputAckSeq, inputState: proc.inputState }));
     proc.adminSockets.add(ws);
     return true;
   }
@@ -816,7 +937,7 @@ function attachAdminSocket(sessionId: string, ws: WebSocket): boolean {
       // DB says running but not in activeSessions — try tmux recovery
       if (tryRecoverSession(session)) {
         const recovered = activeSessions.get(sessionId)!;
-        ws.send(JSON.stringify({ type: 'history', data: recovered.outputBuffer }));
+        ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(recovered.outputBuffer) }));
         recovered.adminSockets.add(ws);
         return true;
       }
@@ -827,12 +948,12 @@ function attachAdminSocket(sessionId: string, ws: WebSocket): boolean {
           sessionId,
           `session-service WebSocket attach could not recover running DB row; left running because tmuxAvailable=${tmuxAvailable} tmuxExists=${tmuxExists}`
         );
-        ws.send(JSON.stringify({ type: 'history', data: session.outputLog || '' }));
+        ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(session.outputLog || '') }));
         return true;
       }
       // Recovery failed and the backing tmux session is definitively gone.
       markSessionStale(sessionId);
-      ws.send(JSON.stringify({ type: 'history', data: session.outputLog || '' }));
+      ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(session.outputLog || '') }));
       ws.send(JSON.stringify({
         type: 'exit',
         exitCode: -1,
@@ -842,7 +963,7 @@ function attachAdminSocket(sessionId: string, ws: WebSocket): boolean {
     }
 
     // Completed/failed/killed — send history + exit
-    ws.send(JSON.stringify({ type: 'history', data: session.outputLog || '' }));
+    ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(session.outputLog || '') }));
     ws.send(JSON.stringify({
       type: 'exit',
       exitCode: session.exitCode,
@@ -1000,6 +1121,13 @@ app.post('/input/:id', async (c) => {
   const id = c.req.param('id');
   const { data } = await c.req.json();
   writeToSession(id, data);
+  return c.json({ ok: true });
+});
+
+app.post('/send-keys/:id', async (c) => {
+  const id = c.req.param('id');
+  const { keys, enter } = await c.req.json();
+  sendKeysToSession(id, String(keys || ''), enter !== false);
   return c.json({ ok: true });
 });
 

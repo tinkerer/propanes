@@ -166,6 +166,63 @@ export function captureTmuxPane(sessionId: string): string {
   }
 }
 
+export function sendKeysToTmux(sessionId: string, keys: string, enter = true): boolean {
+  const name = tmuxName(sessionId);
+  try {
+    if (keys) {
+      execFileSync('tmux', [
+        ...TMUX_SOCKET,
+        'send-keys',
+        '-t', name,
+        '-l',
+        keys,
+      ], { stdio: 'pipe' });
+    }
+    if (enter) {
+      // Codex treats immediate text+Enter as pasted multiline input. Delay
+      // the Enter key so the composer handles it as an explicit submit.
+      setTimeout(() => {
+        try {
+          execFileSync('tmux', [
+            ...TMUX_SOCKET,
+            'send-keys',
+            '-t', name,
+            'Enter',
+          ], { stdio: 'pipe' });
+        } catch {}
+      }, 150);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Return the full command line of the process actually running in the pane.
+// Used to detect "profile drift": a DB row whose stored permission profile no
+// longer matches the live command (e.g. a row marked headless-stream-yolo
+// that's actually running an interactive `claude --resume` TUI). The stored
+// profile drives PTY width, so trusting it blindly hands an interactive TUI a
+// 10000-col window and produces the wrapped-separator-line corruption. Reading
+// the live command lets recovery size the PTY for what's really running.
+export function getTmuxPaneCommand(sessionId: string): string {
+  const name = tmuxName(sessionId);
+  try {
+    const pid = execFileSync('tmux', [
+      ...TMUX_SOCKET, 'list-panes', '-t', name, '-F', '#{pane_pid}',
+    ], { stdio: 'pipe', encoding: 'utf-8' }).trim().split('\n')[0];
+    if (!pid) return '';
+    // The pane's own process (claude/codex is exec'd, so pane_pid IS the agent)
+    // plus any direct children, in case a launcher script wraps the agent.
+    let out = '';
+    try { out += execFileSync('ps', ['-o', 'args=', '-p', pid], { stdio: 'pipe', encoding: 'utf-8' }); } catch {}
+    try { out += '\n' + execFileSync('ps', ['-o', 'args=', '--ppid', pid], { stdio: 'pipe', encoding: 'utf-8' }); } catch {}
+    return out;
+  } catch {
+    return '';
+  }
+}
+
 export function listPwTmuxSessions(): string[] {
   try {
     const output = execFileSync('tmux', [

@@ -872,6 +872,22 @@ export const api = {
     }>('/screenshots', { method: 'POST', body: fd });
   },
 
+  // Upload arbitrary (non-image) files dragged into the composer. Stored in
+  // UPLOAD_DIR and symlinked into /tmp; returns the /tmp path for "copy path".
+  uploadFiles: (
+    files: File[],
+    meta: { sessionId?: string; appId?: string; sourceUrl?: string } = {},
+  ) => {
+    const fd = new FormData();
+    for (const f of files) fd.append('files', f, f.name);
+    fd.append('meta', JSON.stringify(meta));
+    return request<{
+      appId: string | null;
+      createdAt: string;
+      files: { id: string; filename: string; originalName: string; path: string; size: number; mimeType: string }[];
+    }>('/uploads', { method: 'POST', body: fd });
+  },
+
   // Wiggum runs
   getWiggumRuns: () =>
     request<any[]>('/admin/wiggum'),
@@ -1154,6 +1170,19 @@ export const api = {
         createdAt: number;
       }>;
     }>(`/admin/chief-of-staff/threads/by-feedback/${encodeURIComponent(feedbackId)}`),
+
+  getCosThread: (threadId: string) =>
+    request<{
+      id: string;
+      agentId: string;
+      appId: string | null;
+      channelId: string | null;
+      name: string;
+      agentSessionId: string | null;
+      latestAgentSessionId: string | null;
+      createdAt: number;
+      updatedAt: number;
+    }>(`/admin/chief-of-staff/threads/${encodeURIComponent(threadId)}`),
 
   postThreadNote: (threadId: string, text: string) =>
     request<{ id: string; threadId: string; role: 'user'; text: string; createdAt: number }>(

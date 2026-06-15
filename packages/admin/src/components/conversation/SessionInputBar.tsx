@@ -452,7 +452,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
           class="conv-input-bar-send"
           disabled={!text.trim() || submitting || stopping}
           onClick={() => isRunning ? sendTerminalText(text) : submitPrompt(text)}
-          title={isRunning ? 'Send this text to the running session' : 'Resume with this prompt'}
+          title={isRunning ? 'Send this text and press Enter in the running session' : 'Resume with this prompt'}
         >
           {isRunning ? 'Send' : 'Resume'}
         </button>

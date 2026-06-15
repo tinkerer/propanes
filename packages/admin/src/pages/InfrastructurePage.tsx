@@ -2,6 +2,7 @@ import { signal } from '@preact/signals';
 import { useEffect } from 'preact/hooks';
 import { api } from '../lib/api.js';
 import { subscribeAdmin } from '../lib/admin-ws.js';
+import { allSessions, loadAllSessions } from '../lib/sessions.js';
 import { SetupAssistButton } from '../components/dispatch/SetupAssistButton.js';
 import { DeletedItemsPanel } from '../components/ui/DeletedItemsPanel.js';
 import { ensureTargetsLoaded } from '../components/dispatch/DispatchTargetSelect.js';
@@ -112,7 +113,27 @@ export function getAppsForMachine(machineId: string): any[] {
   for (const h of harnessConfigs.value) {
     if (h.machineId === machineId && h.appId) appIds.add(h.appId);
   }
+  for (const s of getSessionsForMachine(machineId)) {
+    if (s.appId) appIds.add(s.appId);
+  }
   return applications.value.filter(a => appIds.has(a.id));
+}
+
+export function getSessionsForMachine(machineId: string): any[] {
+  const machine = machines.value.find(m => m.id === machineId);
+  return allSessions.value
+    .filter((s: any) => s.status !== 'deleted')
+    .filter((s: any) => (
+      s.machineId === machineId
+      || (!!machine?.name && s.machineName === machine.name)
+    ))
+    .sort((a: any, b: any) => {
+      const statusOrder = (s: string) => s === 'running' ? 0 : s === 'pending' ? 1 : s === 'idle' ? 2 : 3;
+      const tier = statusOrder(a.status) - statusOrder(b.status);
+      if (tier !== 0) return tier;
+      return new Date(b.completedAt || b.startedAt || b.createdAt || 0).getTime()
+        - new Date(a.completedAt || a.startedAt || a.createdAt || 0).getTime();
+    });
 }
 
 export function getRepoName(projectDir: string | null | undefined): string {
@@ -185,6 +206,7 @@ export function SharedRepoBadge({ repoKey, currentInfraId }: { repoKey: string; 
 export function InfrastructurePage() {
   useEffect(() => {
     loadAll();
+    loadAllSessions();
     ensureTargetsLoaded();
     return subscribeAdmin('infrastructure', (data: any) => {
       if (data.machines) machines.value = data.machines;

@@ -221,6 +221,16 @@ cosThreadRoutes.get('/chief-of-staff/threads', async (c) => {
   return c.json({ threads: rows });
 });
 
+// Single-thread lookup. The sessions sidebar uses this to resolve a thread's
+// workspace (appId) + channel before jumping the CoS chat to it — the thread
+// may live in a different app than the one currently selected.
+cosThreadRoutes.get('/chief-of-staff/threads/:id', async (c) => {
+  const id = c.req.param('id');
+  const rows = await fetchThreadsWithSessionStatus([eq(schema.cosThreads.id, id)], 1);
+  if (rows.length === 0) return c.json({ error: 'Thread not found' }, 404);
+  return c.json(rows[0]);
+});
+
 // Toggle the per-thread "resolved" / "archived" flags. Used by the rail's
 // inline resolve/archive actions so operators can clear failed/idle threads
 // from triage without deleting them. Both flags can be set independently in
