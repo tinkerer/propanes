@@ -70,7 +70,11 @@ async function getTopicData(topic: string): Promise<unknown> {
 }
 
 function buildInfraData() {
-  const machines = db.select().from(schema.machines).all();
+  const machines = db
+    .select()
+    .from(schema.machines)
+    .all()
+    .map((row) => ({ ...row, tags: row.tags ? JSON.parse(row.tags) : [] }));
   const harnessConfigs = db.select().from(schema.harnessConfigs).all();
   const launchers = listLaunchers().map((l) => ({
     id: l.id,
