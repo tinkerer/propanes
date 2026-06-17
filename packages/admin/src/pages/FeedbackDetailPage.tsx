@@ -10,6 +10,7 @@ import { CropEditor } from '../components/ui/CropEditor.js';
 import { openDispatchDialog, dispatchDialogResult } from '../components/dispatch/DispatchDialog.js';
 import { VoicePlayback } from '../components/voice/VoicePlayback.js';
 import { formatDate } from '../lib/date-utils.js';
+import { hostLabel } from '../lib/url-utils.js';
 import { ElementCard } from '../components/ui/ElementCard.js';
 import { SpecView, SpecToolbar } from '../components/ui/SpecView.js';
 import { fetchParent, fetchChildren, fetchSiblings, fetchComputedStyles } from '../lib/dom-traversal.js';
@@ -473,6 +474,17 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
           )}
           <h2 style={embedded ? undefined : "margin-top:4px"}>
             <code style="font-size:14px;color:var(--pw-text-faint);background:var(--pw-code-block-bg);padding:2px 6px;border-radius:4px;margin-right:8px;cursor:pointer" title={`Click to copy: ${fb.id}`} onClick={(e) => copyWithTooltip(fb.id, e as any)}>{fb.id.slice(-6)}</code>
+            {fb.sourceUrl && hostLabel(fb.sourceUrl) && (
+              <a
+                href={fb.sourceUrl}
+                target="_blank"
+                rel="noopener"
+                style="font-size:12px;font-weight:600;color:var(--pw-text-muted);background:var(--pw-code-block-bg);padding:2px 6px;border-radius:4px;margin-right:8px;text-decoration:none;vertical-align:middle"
+                title={fb.sourceUrl}
+              >
+                {hostLabel(fb.sourceUrl)}
+              </a>
+            )}
             {editingTitle.value ? (
               <input
                 type="text"
