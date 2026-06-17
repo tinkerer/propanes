@@ -9,6 +9,7 @@ import { DeletedItemsPanel, trackDeletion } from '../components/ui/DeletedItemsP
 import { formatDate } from '../lib/date-utils.js';
 import { isMobile } from '../lib/viewport.js';
 import { SpecUpdateComposer } from '../components/feedback/SpecUpdateComposer.js';
+import { hostLabel } from '../lib/url-utils.js';
 
 const TYPES = ['', 'manual', 'ab_test', 'analytics', 'error_report', 'programmatic'];
 const STATUSES = ['', 'new', 'reviewed', 'running', 'completed', 'killed', 'failed', 'resolved', 'archived', 'deleted'];
@@ -756,8 +757,16 @@ export function FeedbackListPage({ appId }: { appId: string }) {
                           }
                         }}
                         style="color:var(--pw-primary-text);text-decoration:none;font-weight:500;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                        title={item.title}
+                        title={item.sourceUrl ? `${item.title}\n${item.sourceUrl}` : item.title}
                       >
+                        {item.sourceUrl && hostLabel(item.sourceUrl) && (
+                          <span
+                            style="display:inline-block;font-size:10px;font-weight:600;color:var(--pw-text-muted);background:var(--pw-code-block-bg);padding:1px 5px;border-radius:3px;margin-right:6px;vertical-align:middle"
+                            title={item.sourceUrl}
+                          >
+                            {hostLabel(item.sourceUrl)}
+                          </span>
+                        )}
                         {item.title}
                       </a>
                       <ThreadPreview item={item} />
