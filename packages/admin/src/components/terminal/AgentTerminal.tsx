@@ -819,13 +819,25 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
   useEffect(() => {
     if (!isActive || !fitRef.current || !termRef.current || !containerRef.current) return;
     const term = termRef.current;
-    // Check if focus is already inside this terminal's panel — only then should
-    // we steal focus.  Without this guard, any signal-driven re-render that
-    // flips isActive (e.g. syncAutoJumpPanel updating panel state) would yank
-    // focus away from whatever the user is interacting with.
+    // Decide whether it's safe to focus this terminal as it becomes active.
+    // We steal focus when either:
+    //   (a) focus is already inside this terminal's panel (the user navigated
+    //       here — e.g. clicked a tab in this panel), or
+    //   (b) nothing meaningful currently holds focus (activeElement is body /
+    //       html / null) — this is the case when a session is opened from the
+    //       sidebar or via auto-jump, where focus is *not* in the panel yet but
+    //       the user also isn't typing anywhere. Without (b) the PTY never
+    //       receives focus on activation and the operator has to switch tabs
+    //       and back before they can type into it.
+    // We must NOT steal focus when the user is actively typing in some *other*
+    // input/terminal (a signal-driven re-render can flip isActive on a pane the
+    // user isn't looking at — e.g. syncAutoJumpPanel updating panel state).
     const container = containerRef.current;
     const panelEl = container.closest('[data-panel-id]') || container.closest('.global-terminal-panel');
     const focusInPanel = panelEl?.contains(document.activeElement) ?? false;
+    const active = document.activeElement;
+    const focusIdle = !active || active === document.body || active === document.documentElement;
+    const shouldFocus = focusInPanel || focusIdle;
     // Wait for the browser to lay out the newly-visible container before fitting.
     // On macOS the kernel skips SIGWINCH when PTY size is unchanged, so we use
     // bounce=true to briefly send rows-1 then correct rows, forcing the PTY to
@@ -844,7 +856,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       }
       safeFitAndResizeRef.current(true);
       term.refresh(0, term.rows - 1);
-      if (focusInPanel) term.focus();
+      if (shouldFocus) term.focus();
     };
     rafId = requestAnimationFrame(attemptFitAndFocus);
     return () => {
