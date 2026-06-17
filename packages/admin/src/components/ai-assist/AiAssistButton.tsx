@@ -71,8 +71,20 @@ function AiAssistPopover({ context, appId, settingPath, onClose, triggerRef }: A
         onClose();
       }
     }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    }
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    // Capture phase so Escape closes the popover before pane-level handlers swallow it.
+    document.addEventListener('keydown', handleKey, true);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKey, true);
+    };
   }, [onClose]);
 
   async function submit() {

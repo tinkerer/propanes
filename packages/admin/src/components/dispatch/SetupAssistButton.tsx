@@ -151,8 +151,20 @@ function SetupAssistPopover({ entityType, entityId, entityLabel, onClose, trigge
         onClose();
       }
     }
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    }
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    // Capture phase so Escape closes the popover before pane-level handlers swallow it.
+    document.addEventListener('keydown', handleKey, true);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKey, true);
+    };
   }, [onClose]);
 
   function submit(requestText?: string) {
@@ -198,7 +210,13 @@ function SetupAssistPopover({ entityType, entityId, entityLabel, onClose, trigge
       <div class="ai-assist-header" onMouseDown={onDragStart}>
         <span style="font-weight:600;font-size:13px">Admin Assist</span>
         <span style="font-size:11px;color:var(--pw-text-muted)">{entityLabel}</span>
-        <button class="ai-assist-close" onClick={onClose}>{'\u2715'}</button>
+        <button
+          class="ai-assist-close"
+          title="Close"
+          aria-label="Close"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onClose(); }}
+        >{'\u2715'}</button>
       </div>
       {presets.length > 0 && (
         <div class="ai-assist-body">
