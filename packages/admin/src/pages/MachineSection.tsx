@@ -470,7 +470,7 @@ export function MachineCard({ m }: { m: any }) {
             </div>
           );
         })()}
-        {m.tags?.length > 0 && (
+        {Array.isArray(m.tags) && m.tags.length > 0 && (
           <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
             {m.tags.map((tag: string) => (
               <span key={tag} style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--pw-primary)20;color:var(--pw-primary)">
