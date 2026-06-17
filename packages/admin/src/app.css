@@ -9085,15 +9085,22 @@ body.pw-isolate {
 
 .ai-assist-close {
   margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
   background: none;
   border: none;
+  border-radius: 4px;
   color: var(--pw-text-muted);
   cursor: pointer;
   font-size: 14px;
-  padding: 0 2px;
+  padding: 0;
   line-height: 1;
 }
-.ai-assist-close:hover { color: var(--pw-text); }
+.ai-assist-close:hover { color: var(--pw-text); background: rgba(255,255,255,0.08); }
 
 .ai-assist-body {
   padding: 10px 12px;
