@@ -25,23 +25,34 @@ export function computeCodexJsonlPath(
   cwd: string | null,
   codexSessionId: string | null,
   startedAt?: string | null,
-  preferLatestByCwd = false,
+  // Retained for call-site compatibility. It used to force "newest rollout in
+  // this cwd" for live sessions (to follow /clear or compaction rotation), but
+  // that cross-contaminated concurrent sessions — see the note below — so it no
+  // longer overrides the per-session resolution.
+  _preferLatestByCwd = false,
 ): string | null {
   const codexRoot = join(homedir(), '.codex', 'sessions');
   if (!existsSync(codexRoot)) return null;
 
-  // Direct lookup by id — rollout files embed the UUID in the filename.
+  // Direct lookup by id — rollout files embed the UUID in the filename. This is
+  // the only exact signal, so always trust it when we have it.
   let direct: string | null = null;
   if (codexSessionId) {
     direct = findRolloutByCodexId(codexRoot, codexSessionId);
-    if (direct && !preferLatestByCwd) return direct;
+    if (direct) return direct;
   }
 
   if (!cwd) return direct;
-  if (preferLatestByCwd) {
-    return findLatestRolloutByCwd(codexRoot, cwd, startedAt) || direct;
-  }
-  return direct || findRolloutByCwd(codexRoot, cwd, startedAt);
+  // Resolve by cwd + time. Several Codex sessions routinely share one cwd (e.g.
+  // multiple PR reviews in the same repo running at once), and we don't always
+  // have a rollout id we can match on. The only signal that distinguishes
+  // concurrent sessions is time: each rollout's session_meta timestamp lands
+  // within a second or two of its own session's start. So pick the rollout
+  // closest to THIS session's startedAt — never the globally-newest one.
+  // Using newest-by-cwd made every running session in a shared cwd resolve to
+  // the most-recently-started session's rollout, so the structured view showed
+  // a different session's transcript next to the correct PTY.
+  return findRolloutByCwd(codexRoot, cwd, startedAt) || direct;
 }
 
 function findRolloutByCodexId(codexRoot: string, sessionId: string): string | null {
@@ -98,13 +109,6 @@ function findRolloutByCwd(codexRoot: string, cwd: string, startedAt?: string | n
   const startTs = startedAt ? Date.parse(startedAt) : Date.now();
   const targetTs = isNaN(startTs) ? Date.now() : startTs;
   candidates.sort((a, b) => Math.abs(a.mtime - targetTs) - Math.abs(b.mtime - targetTs));
-  return candidates[0].path;
-}
-
-function findLatestRolloutByCwd(codexRoot: string, cwd: string, startedAt?: string | null): string | null {
-  const candidates = findRolloutsByCwd(codexRoot, cwd, startedAt);
-  if (candidates.length === 0) return null;
-  candidates.sort((a, b) => b.mtime - a.mtime);
   return candidates[0].path;
 }
 
