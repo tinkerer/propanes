@@ -136,9 +136,23 @@ export function openSession(sessionId: string) {
 
   const existingLeaf = findLeafWithTab(sessionId);
   if (existingLeaf) {
+    const current = activeTabId.value;
     setActiveTab(existingLeaf.id, sessionId);
     setFocusedLeaf(existingLeaf.id);
     showSessionsLeaf();
+    // Re-activating an already-open tab must still move the split's companion
+    // (struct / jsonl) pane to follow the now-active session. This early
+    // return previously skipped syncCompanionsToRightPane, so the PTY would
+    // switch while the right pane stayed pinned to the previously-synced
+    // session — the "structure view of a different session next to the pty"
+    // desync. Mirror the main open path so the left (PTY) and right (struct)
+    // panes never drift apart.
+    if (current !== sessionId) {
+      if (current) previousTabId.value = current;
+      activeTabId.value = sessionId;
+      syncCompanionsToRightPane(sessionId, current);
+      persistTabs();
+    }
     focusSessionTerminal(sessionId);
     return;
   }
