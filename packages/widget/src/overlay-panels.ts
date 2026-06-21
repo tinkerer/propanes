@@ -88,9 +88,16 @@ export class OverlayPanelManager {
     this.shadow = shadow;
     this.appId = appId;
 
-    // Derive admin base URL from widget endpoint
+    // Derive admin base URL from widget endpoint. Strip the `/api/v1/feedback`
+    // suffix rather than taking `.origin`, so any path prefix the widget is
+    // proxied under (e.g. the dashboard's same-origin `/propanes` mount) is
+    // preserved — otherwise overlay panels load the host SPA's `/admin` route
+    // instead of the widget server's.
     const url = new URL(endpoint, window.location.href);
-    this.adminBaseUrl = `${url.origin}/admin/`;
+    url.pathname = url.pathname.replace(/\/api\/v1\/feedback\/?$/, '');
+    url.search = '';
+    url.hash = '';
+    this.adminBaseUrl = `${(url.origin + url.pathname).replace(/\/$/, '')}/admin/`;
 
     this.messageHandler = (e: MessageEvent) => this.handlePostMessage(e);
     window.addEventListener('message', this.messageHandler);
