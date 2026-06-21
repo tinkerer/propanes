@@ -36,8 +36,12 @@ function groupAgentsByRuntime(agents: any[]): Array<[string, any[]]> {
   return Array.from(groups.entries());
 }
 
-// Store dispatch settings per app in localStorage
+// Store dispatch settings per app in localStorage. A `__lastUsed__` bucket
+// mirrors the most recent dispatch type + agent across all apps so the
+// composer stays sticky even on the first open of a never-seen app key (or
+// the global "+"), matching the widget's single global agent memory.
 const SETTINGS_KEY = 'pw-qdp-settings';
+const LAST_USED_KEY = '__lastUsed__';
 
 interface DispatchSettings {
   dispatchType: DispatchType;
@@ -51,7 +55,9 @@ function loadSettings(appKey: string): DispatchSettings | null {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return null;
     const all = JSON.parse(raw);
-    return all[appKey] || null;
+    // Prefer per-app settings (incl. position); otherwise inherit the last
+    // dispatch type + agent used anywhere so the choice feels sticky.
+    return all[appKey] || all[LAST_USED_KEY] || null;
   } catch {
     return null;
   }
@@ -62,6 +68,9 @@ function saveSettings(appKey: string, settings: DispatchSettings) {
     const raw = localStorage.getItem(SETTINGS_KEY);
     const all = raw ? JSON.parse(raw) : {};
     all[appKey] = settings;
+    // Position is per-app/anchor-driven, so the global bucket only carries the
+    // dispatch type + agent selection.
+    all[LAST_USED_KEY] = { dispatchType: settings.dispatchType, agentId: settings.agentId };
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(all));
   } catch { /* ignore */ }
 }
