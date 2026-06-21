@@ -588,14 +588,14 @@ export class ProPanesElement {
     agentSettingsLink.textContent = '\u2699';
     agentSettingsLink.title = 'Agent settings';
     agentSettingsLink.style.cssText = 'font-size:13px;color:#94a3b8;cursor:pointer;text-decoration:none;flex-shrink:0';
-    agentSettingsLink.href = `${new URL(this.config.endpoint, window.location.origin).origin}/admin/#/agents`;
+    agentSettingsLink.href = `${this.apiBase()}/admin/#/agents`;
     agentSettingsLink.target = '_blank';
     agentSettingsLink.addEventListener('click', (e) => e.stopPropagation());
     agentRow.append(agentLabel, agentSel, agentSettingsLink);
     menu.appendChild(agentRow);
 
     // Populate agents from API
-    const agentOrigin = new URL(this.config.endpoint, window.location.origin).origin;
+    const agentOrigin = this.apiBase();
     fetch(`${agentOrigin}/api/v1/admin/agents${this.appId ? `?appId=${this.appId}` : ''}`)
       .then(r => r.json())
       .then((agents: any[]) => {
@@ -635,7 +635,7 @@ export class ProPanesElement {
     menu.appendChild(targetRow);
 
     // Populate targets from API
-    const origin = new URL(this.config.endpoint, window.location.origin).origin;
+    const origin = this.apiBase();
     fetch(`${origin}/api/v1/admin/dispatch-targets`)
       .then(r => r.json())
       .then((data: any) => {
@@ -1303,7 +1303,7 @@ export class ProPanesElement {
       if (sel.value) localStorage.setItem('pw-dispatch-target', sel.value);
       else localStorage.removeItem('pw-dispatch-target');
     });
-    const origin = new URL(this.config.endpoint, window.location.origin).origin;
+    const origin = this.apiBase();
     fetch(`${origin}/api/v1/admin/dispatch-targets`)
       .then(r => r.json())
       .then((data: any) => {
@@ -1876,8 +1876,7 @@ export class ProPanesElement {
   }
 
   private async uploadFile(file: File): Promise<{ id: string; path: string; url: string }> {
-    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
-    const uploadsUrl = `${endpointUrl.origin}/api/v1/uploads`;
+    const uploadsUrl = `${this.apiBase()}/api/v1/uploads`;
     const formData = new FormData();
     formData.append('files', file, file.name);
     formData.append('meta', JSON.stringify({
@@ -1897,7 +1896,7 @@ export class ProPanesElement {
     const data = await res.json();
     const up = data?.files?.[0];
     if (!up) throw new Error('Upload failed');
-    return { id: up.id, path: up.path, url: `${endpointUrl.origin}/api/v1/uploads/${up.id}` };
+    return { id: up.id, path: up.path, url: `${this.apiBase()}/api/v1/uploads/${up.id}` };
   }
 
   // Transient "Copied!" pill anchored to a button — unlike showFlash() this
@@ -2059,8 +2058,7 @@ export class ProPanesElement {
    * Terminal.app bridge).
    */
   private computeMicBridgeUrl(): string {
-    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
-    const originUrl = new URL(endpointUrl.origin);
+    const originUrl = new URL(this.apiBase());
     originUrl.hostname = 'localhost';
     return `${originUrl.origin}/api/v1/local/mic-bridge`;
   }
@@ -2256,9 +2254,7 @@ export class ProPanesElement {
       const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       if (!SR) return;
     }
-
-    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
-    const baseOrigin = endpointUrl.origin;
+    const baseOrigin = this.apiBase();
 
     let sessionId: string | null = null;
     try {
@@ -2430,8 +2426,7 @@ export class ProPanesElement {
     if (trigger) trigger.classList.remove('pw-trigger-listening');
 
     try {
-      const endpointUrl = new URL(this.config.endpoint, window.location.origin);
-      await fetch(`${endpointUrl.origin}/api/v1/voice/sessions/${sessionId}/stop`, {
+      await fetch(`${this.apiBase()}/api/v1/voice/sessions/${sessionId}/stop`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...this.apiHeaders() },
         body: JSON.stringify({ reason }),
@@ -2469,8 +2464,7 @@ export class ProPanesElement {
 
   private async uploadAndAttachBrainstormImage(blob: Blob) {
     try {
-      const endpointUrl = new URL(this.config.endpoint, window.location.origin);
-      const url = `${endpointUrl.origin}/api/v1/screenshots`;
+      const url = `${this.apiBase()}/api/v1/screenshots`;
       const formData = new FormData();
       formData.append('meta', JSON.stringify({
         sessionId: this.getSessionId(),
@@ -2907,8 +2901,7 @@ export class ProPanesElement {
   }
 
   private async dispatchCCTicket(feedbackId: string, runtime: string, mode: string, instructions?: string) {
-    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
-    const base = endpointUrl.origin;
+    const base = this.apiBase();
 
     try {
       await fetch(`${base}/api/v1/voice/dispatch`, {
@@ -2922,8 +2915,7 @@ export class ProPanesElement {
   }
 
   private async dismissCCTicket(feedbackId: string) {
-    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
-    const base = endpointUrl.origin;
+    const base = this.apiBase();
 
     try {
       await fetch(`${base}/api/v1/voice/dismiss`, {
@@ -3444,9 +3436,7 @@ export class ProPanesElement {
       this.exitTimeline();
 
       this.emit('submit', { type: 'manual', title: '', description, id: result?.id, appId: result?.appId });
-
-      const endpointUrl = new URL(this.config.endpoint, window.location.origin);
-      const feedbackUrl = `${endpointUrl.origin}/admin/#/fb/${result.id}`;
+      const feedbackUrl = `${this.apiBase()}/admin/#/fb/${result.id}`;
       const screenshotPaths: string[] = Array.isArray(result?.screenshots)
         ? result.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
         : [];
@@ -3487,8 +3477,7 @@ export class ProPanesElement {
   }
 
   private async submitScreenshotsOnly() {
-    const endpointUrl = new URL(this.config.endpoint, window.location.origin);
-    const screenshotsUrl = `${endpointUrl.origin}/api/v1/screenshots`;
+    const screenshotsUrl = `${this.apiBase()}/api/v1/screenshots`;
     const formData = new FormData();
     formData.append('meta', JSON.stringify({
       sessionId: this.getSessionId(),
@@ -3663,6 +3652,27 @@ export class ProPanesElement {
 
   private apiHeaders(): Record<string, string> {
     return this.config.appKey ? { 'X-API-Key': this.config.appKey } : {};
+  }
+
+  // Server base the widget derives all of its non-feedback API/admin URLs from
+  // (uploads, screenshots, voice, agents, dispatch targets, overlay panels).
+  //
+  // The feedback endpoint points at `.../api/v1/feedback`; strip that suffix to
+  // recover the server mount base. Using `new URL(endpoint).origin` here was a
+  // bug: when the widget is proxied under a PATH prefix (e.g. the dashboard
+  // serves it same-origin at `/propanes/api/v1/feedback` to avoid mixed
+  // content), `.origin` discards the `/propanes` segment, so every derived call
+  // went to `<origin>/api/v1/...` and hit the host SPA instead of the widget
+  // server. Preserving the path makes both mounts work: a same-origin
+  // `/propanes/...` endpoint yields `<origin>/propanes`, and a cross-origin
+  // `http://host:3001/api/v1/feedback` endpoint yields `http://host:3001`.
+  private apiBase(): string {
+    const u = new URL(this.config.endpoint, window.location.origin);
+    u.pathname = u.pathname.replace(/\/api\/v1\/feedback\/?$/, '');
+    u.search = '';
+    u.hash = '';
+    // Trim any trailing slash so callers can append `/api/v1/...` cleanly.
+    return (u.origin + u.pathname).replace(/\/$/, '');
   }
 
   // Wraps fetch so that iOS Safari's opaque "Load failed" TypeError gets
