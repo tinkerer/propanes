@@ -131,6 +131,7 @@ feedbackRoutes.post('/', async (c) => {
     sessionId: input.sessionId || null,
     userId: input.userId || null,
     appId,
+    subApp: input.subApp || null,
     createdAt: now,
     updatedAt: now,
   });
@@ -355,6 +356,7 @@ feedbackRoutes.post('/programmatic', async (c) => {
     sessionId: input.sessionId || null,
     userId: input.userId || null,
     appId: progAppId,
+    subApp: input.subApp || null,
     createdAt: now,
     updatedAt: now,
   });
