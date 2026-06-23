@@ -257,10 +257,21 @@ export function renderPromptTemplate(
 
   const publicBaseUrl = (process.env.PW_PUBLIC_BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
 
+  // Quick Dispatch (and similar free-text paths) auto-derive the title as a
+  // truncated copy of the body — `text.slice(0, 200)` with the full text in
+  // the description. Rendering both `Title: …` and the description then emits
+  // the prompt twice. When the title is just a leading slice of the
+  // description, blank it so we send the feedback once. A genuinely distinct
+  // title (e.g. a widget-authored summary) still renders.
+  const normTitle = (fb.title || '').trim().replace(/\s+/g, ' ');
+  const normDesc = (descriptionWithFallback || '').trim().replace(/\s+/g, ' ');
+  const titleIsDerived =
+    normTitle.length > 0 && normDesc.length > 0 && normDesc.startsWith(normTitle);
+
   const vars: Record<string, string> = {
     'feedback.id': fb.id,
     'feedback.url': `${publicBaseUrl}/api/v1/admin/feedback/${fb.id}`,
-    'feedback.title': inlineMarkers(fb.title || ''),
+    'feedback.title': titleIsDerived ? '' : inlineMarkers(fb.title || ''),
     'feedback.description': inlineMarkers(descriptionWithFallback),
     'feedback.sourceUrl': fb.sourceUrl || '',
     'feedback.tags': fb.tags?.join(', ') || '',
@@ -283,6 +294,9 @@ export function renderPromptTemplate(
     result = result.replaceAll(`{{${key}}}`, value);
   }
 
+  // Drop dangling label lines left behind by a blanked title (default
+  // template renders the literal `Title: {{feedback.title}}`).
+  result = result.replace(/^[ \t]*Title:[ \t]*$/gm, '');
   result = result.replace(/\n{3,}/g, '\n\n');
   return result.trim();
 }
