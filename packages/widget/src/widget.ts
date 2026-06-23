@@ -269,6 +269,7 @@ export class ProPanesElement {
         'environment',
       ],
       appKey: script?.dataset.appKey || undefined,
+      subApp: script?.dataset.subApp || undefined,
       hideTrigger: script?.dataset.hideTrigger === 'true',
     };
 
@@ -3297,6 +3298,7 @@ export class ProPanesElement {
       viewport: `${window.innerWidth}x${window.innerHeight}`,
       sessionId: this.getSessionId(),
       userId: this.identity?.id,
+      subApp: this.config.subApp,
     };
     if (opts.autoDispatch) {
       feedbackPayload.autoDispatch = true;
