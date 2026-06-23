@@ -205,5 +205,9 @@ app.use('/admin/*', serveStatic({ root: '../admin/dist/', rewriteRequestPath: (p
 // SPA fallback for admin routes — any unmatched /admin/<route> gets the SPA shell.
 app.get('/admin/*', serveAdminIndex);
 
+// Default the service root to the admin dashboard. Keep the target slashless so
+// externally shared `/admin` URLs stay canonical behind reverse proxies.
+app.get('/', (c) => c.redirect('/admin'));
+
 // Serve test page and other static files
 app.use('/*', serveStatic({ root: './public/' }));
