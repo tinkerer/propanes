@@ -18,6 +18,11 @@ function goBack() {
   navigate(appId ? `/app/${appId}/sessions` : '/');
 }
 
+function goToFeedback(feedbackId: string) {
+  const appId = selectedAppId.value;
+  navigate(appId ? `/app/${appId}/tickets/${feedbackId}` : `/tickets/${feedbackId}`);
+}
+
 function isCompanionTab(sid: string): boolean {
   return sid.startsWith('view:')
     || sid.startsWith('jsonl:')
@@ -123,6 +128,15 @@ export function StandaloneSessionPage({ sessionId }: { sessionId: string }) {
           </>
         )}
         {isExited && <span style={{ color: 'var(--pw-text-muted)' }}>(exited)</span>}
+        {!companion && sess?.feedbackId && sess?.feedbackTitle && (
+          <button
+            class="session-feedback-link"
+            onClick={(e) => { e.stopPropagation(); goToFeedback(sess.feedbackId); }}
+            title={`Back to ticket: ${sess.feedbackTitle}`}
+          >
+            {sess.feedbackTitle}
+          </button>
+        )}
         <span style="flex:1" />
         {!companion && sess?.jsonlPath && !isMobile.value && (
           <select
