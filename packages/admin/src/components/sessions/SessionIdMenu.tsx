@@ -13,6 +13,8 @@ import {
   popOutTab,
   removeSessionFromPanel,
   resumeSession,
+  killSession,
+  resolveSession,
   openLocalTerminal,
   openUrlCompanion,
   termPickerOpen,
@@ -252,6 +254,28 @@ export function SessionIdMenu({
       }}>
         Distill to Agent...
       </button>
+      {/* Resolve/Kill — the standalone header (mobile + popped-out windows) has
+          no dedicated kill/resolve buttons the way tab/popout pane headers do,
+          so surface them here. */}
+      {context.mode === 'standalone' && sess && (
+        <>
+          <div class="popup-menu-divider" />
+          {sess.feedbackId && (
+            <button class="popup-menu-item id-menu-resolve" onClick={() => { onClose(); resolveSession(sessionId, sess.feedbackId); }}>
+              Resolve
+            </button>
+          )}
+          {isExited ? (
+            <button class="popup-menu-item" onClick={() => { onClose(); resumeSession(sessionId); }}>
+              Resume
+            </button>
+          ) : (
+            <button class="popup-menu-item id-menu-kill" onClick={() => { onClose(); killSession(sessionId); }}>
+              Kill
+            </button>
+          )}
+        </>
+      )}
     </PopupMenu>
   );
 }

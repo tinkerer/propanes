@@ -3408,6 +3408,25 @@ select:focus, textarea:focus {
   color: #fef08a;
 }
 
+/* Resolve/Kill entries inside the session-id dropdown menu */
+.popup-menu-item.id-menu-resolve {
+  color: #facc15;
+}
+
+.popup-menu-item.id-menu-resolve:hover {
+  background: #854d0e;
+  color: #fef08a;
+}
+
+.popup-menu-item.id-menu-kill {
+  color: #f87171;
+}
+
+.popup-menu-item.id-menu-kill:hover {
+  background: #7f1d1d;
+  color: #fecaca;
+}
+
 .terminal-collapse-btn {
   background: none;
   border: 1px solid #334155;
