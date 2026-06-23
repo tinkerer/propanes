@@ -218,6 +218,12 @@ export function runMigrations() {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_cos_threads_feedback ON cos_threads(feedback_id) WHERE feedback_id IS NOT NULL`,
     `ALTER TABLE agent_endpoints ADD COLUMN description TEXT`,
     `ALTER TABLE agent_endpoints ADD COLUMN source_session_ids TEXT`,
+    // Monorepo sub-app support: a JSON registry of named subdirectories on the
+    // application, and the sub-app each feedback item targets. Lets one app
+    // (e.g. "Workbench") route dispatch to platform/dashboard, platform/gateway,
+    // etc. instead of needing a separate app per package.
+    `ALTER TABLE applications ADD COLUMN sub_apps TEXT NOT NULL DEFAULT '[]'`,
+    `ALTER TABLE feedback_items ADD COLUMN sub_app TEXT`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after

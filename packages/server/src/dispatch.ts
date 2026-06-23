@@ -2,7 +2,7 @@ import { ulid } from 'ulidx';
 import { eq, and, sql } from 'drizzle-orm';
 import { homedir } from 'node:os';
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, join } from 'node:path';
 import { execSync } from 'node:child_process';
 import type {
   AgentRuntime,
@@ -65,6 +65,7 @@ Title: {{feedback.title}}
 URL: {{feedback.sourceUrl}}
 
 App: {{app.name}}
+Sub-app: {{feedback.subApp}}
 Project dir: {{app.projectDir}}
 App description: {{app.description}}
 
@@ -72,6 +73,37 @@ App description: {{app.description}}
 {{feedback.networkErrors}}
 {{feedback.data}}
 {{instructions}}`;
+
+interface SubAppEntry { name: string; dir: string; description?: string; subdomain?: string }
+
+function parseSubApps(raw: unknown): SubAppEntry[] {
+  if (Array.isArray(raw)) return raw as SubAppEntry[];
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const v = JSON.parse(raw);
+      return Array.isArray(v) ? v : [];
+    } catch { return []; }
+  }
+  return [];
+}
+
+// Resolve the working directory + label for a feedback item that targets a
+// monorepo sub-app. When the app declares a matching subApps entry, dispatch
+// runs in `<projectDir>/<entry.dir>` so the agent lands directly in the right
+// package; otherwise it falls back to the app's projectDir.
+export function resolveSubApp(
+  app: { projectDir?: string; subApps?: unknown; [key: string]: unknown } | null,
+  subApp?: string | null
+): { projectDir: string; entry: SubAppEntry | null } {
+  const base = app?.projectDir || '';
+  if (!app || !subApp) return { projectDir: base, entry: null };
+  const entry = parseSubApps(app.subApps).find(
+    (s) => s.name.toLowerCase() === String(subApp).toLowerCase()
+  );
+  if (!entry) return { projectDir: base, entry: null };
+  const dir = (entry.dir || '').trim();
+  return { projectDir: dir ? join(base, dir) : base, entry };
+}
 
 const AUTO_CONTINUE_TEXT = 'continue';
 const AUTO_CONTINUE_INITIAL_DELAY_MS = 1200;
@@ -257,12 +289,18 @@ export function renderPromptTemplate(
 
   const publicBaseUrl = (process.env.PW_PUBLIC_BASE_URL || 'http://localhost:3001').replace(/\/$/, '');
 
+  // Resolve the sub-app working dir so {{app.projectDir}} points at the targeted
+  // monorepo package and {{feedback.subApp}} can be surfaced in the prompt.
+  const subApp = (fb as { subApp?: string | null }).subApp || '';
+  const resolvedDir = resolveSubApp(app, subApp).projectDir;
+
   const vars: Record<string, string> = {
     'feedback.id': fb.id,
     'feedback.url': `${publicBaseUrl}/api/v1/admin/feedback/${fb.id}`,
     'feedback.title': inlineMarkers(fb.title || ''),
     'feedback.description': inlineMarkers(descriptionWithFallback),
     'feedback.sourceUrl': fb.sourceUrl || '',
+    'feedback.subApp': subApp,
     'feedback.tags': fb.tags?.join(', ') || '',
     'feedback.consoleLogs': consoleLogs,
     'feedback.networkErrors': networkErrors,
@@ -270,7 +308,7 @@ export function renderPromptTemplate(
     'feedback.screenshot': screenshotText,
     'app.id': String(app?.id || ''),
     'app.name': app?.name || '',
-    'app.projectDir': app?.projectDir || '',
+    'app.projectDir': resolvedDir,
     'app.description': app?.description || '',
     'app.hooks': app?.hooks ? (typeof app.hooks === 'string' ? app.hooks : JSON.stringify(app.hooks)) : '',
     'session.url': liveSession?.url || fb.sourceUrl || '',
@@ -283,6 +321,8 @@ export function renderPromptTemplate(
     result = result.replaceAll(`{{${key}}}`, value);
   }
 
+  // Drop the Sub-app label when this feedback didn't target a monorepo sub-app.
+  result = result.replace(/^[ \t]*Sub-app:[ \t]*$/gm, '');
   result = result.replace(/\n{3,}/g, '\n\n');
   return result.trim();
 }
@@ -391,7 +431,8 @@ export async function dispatchFeedbackToAgent(params: {
       response: result.response.slice(0, 1000),
     };
   } else {
-    const cwd = app?.projectDir || process.cwd();
+    // Land the agent in the targeted monorepo sub-app's directory when set.
+    const cwd = resolveSubApp(app, feedback.subApp).projectDir || process.cwd();
     const isHarness = !!(explicitHarnessConfigId || agent.harnessConfigId);
     const permissionProfile: PermissionProfile = isHarness
       ? 'headless-yolo'
