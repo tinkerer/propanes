@@ -10991,6 +10991,27 @@ body.pw-isolate {
   background: var(--pw-bg-hover, rgba(255, 255, 255, 0.06));
 }
 
+.session-feedback-link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  color: var(--pw-accent, #60a5fa);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 4px;
+  text-align: left;
+}
+.session-feedback-link:hover,
+.session-feedback-link:active {
+  background: var(--pw-bg-hover, rgba(255, 255, 255, 0.06));
+  text-decoration: underline;
+}
+
 .mobile-nav {
   display: none;
   position: fixed;
