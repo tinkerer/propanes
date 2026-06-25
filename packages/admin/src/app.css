@@ -790,6 +790,16 @@ body {
   padding-bottom: 8px;
 }
 
+/* Sessions waiting for input are pinned in their own list above the main
+   scrollable list so they stay visible regardless of how far the rest is
+   scrolled. Capped height with its own scroll for the rare many-waiting case. */
+.sidebar-waiting-list {
+  flex: 0 0 auto;
+  max-height: 40%;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--pw-border);
+}
+
 /* Terminals section in sidebar */
 .sidebar-terminals-resize-handle {
   height: 4px;
