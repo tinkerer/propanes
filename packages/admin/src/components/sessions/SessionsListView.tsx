@@ -550,15 +550,15 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
           </div>
         </div>
       )}
+      {waitingAgents.length > 0 && (
+        <div class="sidebar-sessions-list sidebar-waiting-list">
+          <div class="sidebar-section-label waiting-section-label">
+            Waiting for input ({waitingAgents.length})
+          </div>
+          {waitingAgents.map(renderItem)}
+        </div>
+      )}
       <div class="sidebar-sessions-list" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-        {waitingAgents.length > 0 && (
-          <>
-            <div class="sidebar-section-label waiting-section-label">
-              Waiting for input ({waitingAgents.length})
-            </div>
-            {waitingAgents.map(renderItem)}
-          </>
-        )}
         {(() => {
           // Build parent-child hierarchy from filtered agent sessions
           // Uses both parentSessionId chains AND swarmId/wiggumRunId from server
