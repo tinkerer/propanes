@@ -10,7 +10,7 @@ import type { AgentRuntime, PermissionProfile, SequencedOutput, SessionOutputDat
 import { STREAM_PROFILE_PTY_COLS } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
 import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, listPwTmuxSessions, getTmuxPaneCommand, detachTmuxClients } from './tmux-pty.js';
-import { detectClaudeAuthRequired, stripTerminalControl } from './claude-auth-detect.js';
+import { detectClaudeAuthRequired, detectClaudeTrustPrompt, stripTerminalControl } from './claude-auth-detect.js';
 
 const PORT = parseInt(process.env.SESSION_SERVICE_PORT || '3002', 10);
 
@@ -624,6 +624,14 @@ function wireOnData(proc: AgentProcess, ptyProcess: pty.IPty): void {
           .replace(/\x1b[\x20-\x2F]*[\x30-\x7E]/g, ''); // remaining 2-char ESC sequences
         const newState = classifyFromTitle(proc.lastTitle, visibleTail);
         applyInputState(proc, newState);
+      }
+      // Claude Code's first-run "trust this folder" prompt appears before the
+      // ✳ idle title, so classifyFromTitle can't catch it. Detect it directly
+      // (title-independent) and force 'waiting' so the session surfaces as
+      // needing input. Cleared automatically once the user answers and Claude
+      // resumes emitting spinner titles (→ active).
+      if (proc.runtime === 'claude' && detectClaudeTrustPrompt(proc.outputBuffer)) {
+        applyInputState(proc, 'waiting');
       }
     }
 
