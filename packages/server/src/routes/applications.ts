@@ -23,6 +23,7 @@ function parseAppJson(app: typeof schema.applications.$inferSelect) {
     hooks: JSON.parse(app.hooks),
     controlActions: JSON.parse(app.controlActions || '[]'),
     requestPanel: JSON.parse(app.requestPanel || '{}'),
+    subApps: JSON.parse(app.subApps || '[]'),
   };
 }
 
@@ -308,6 +309,7 @@ applicationRoutes.post('/', async (c) => {
     name: parsed.data.name,
     apiKey,
     projectDir: parsed.data.projectDir,
+    subApps: JSON.stringify(parsed.data.subApps || []),
     serverUrl: parsed.data.serverUrl || null,
     hooks: JSON.stringify(parsed.data.hooks),
     description: parsed.data.description,
@@ -341,6 +343,7 @@ applicationRoutes.patch('/:id', async (c) => {
 
   if (d.name !== undefined) updates.name = d.name;
   if (d.projectDir !== undefined) updates.projectDir = d.projectDir;
+  if (d.subApps !== undefined) updates.subApps = JSON.stringify(d.subApps);
   if ('serverUrl' in d) updates.serverUrl = d.serverUrl || null;
   if (d.hooks !== undefined) updates.hooks = JSON.stringify(d.hooks);
   if (d.description !== undefined) updates.description = d.description;
