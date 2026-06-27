@@ -118,6 +118,14 @@ interface AgentProcess {
   hasStarted: boolean;
   /** Last OSC title seen — used to re-classify when new output arrives without a title change */
   lastTitle: string;
+  /**
+   * True once Claude has emitted a real working title (✳ idle or braille spinner).
+   * The first-run "trust this folder" prompt strictly *precedes* any working title,
+   * so once we've seen one the prompt is behind us and trust-prompt detection must
+   * stop — otherwise later agent output that merely *mentions* the prompt text
+   * (e.g. an agent editing the detector itself) re-triggers a false 'waiting'.
+   */
+  sawWorkingTitle: boolean;
   /** Timer for debouncing transitions away from 'waiting' state */
   waitingDebounce: ReturnType<typeof setTimeout> | null;
   /** Timestamp of last state broadcast (for throttling) */
@@ -541,6 +549,7 @@ function spawnSession(params: {
     inputState: 'active' as InputState,
     hasStarted: false,
     lastTitle: '',
+    sawWorkingTitle: false,
     waitingDebounce: null,
     lastStateBroadcast: 0,
     authCompanionStarted: false,
@@ -610,6 +619,10 @@ function wireOnData(proc: AgentProcess, ptyProcess: pty.IPty): void {
       const title = extractOscTitle(data);
       if (title !== null) {
         proc.lastTitle = title;
+        // A ✳ idle or braille-spinner title means Claude is running its own loop,
+        // which only happens *after* the first-run trust prompt is dismissed.
+        const fc = title.charAt(0);
+        if (fc === '✳' || BRAILLE_SPINNERS.has(fc)) proc.sawWorkingTitle = true;
       }
       // Classify when we have a new title OR when stuck in 'idle' (re-check with
       // updated buffer). This handles the race where the ✳ title arrives in one
@@ -628,9 +641,11 @@ function wireOnData(proc: AgentProcess, ptyProcess: pty.IPty): void {
       // Claude Code's first-run "trust this folder" prompt appears before the
       // ✳ idle title, so classifyFromTitle can't catch it. Detect it directly
       // (title-independent) and force 'waiting' so the session surfaces as
-      // needing input. Cleared automatically once the user answers and Claude
-      // resumes emitting spinner titles (→ active).
-      if (proc.runtime === 'claude' && detectClaudeTrustPrompt(proc.outputBuffer)) {
+      // needing input. Only scan during the startup window — once Claude has
+      // emitted any working title (sawWorkingTitle) the prompt is behind us, so
+      // we stop, otherwise later agent output that merely mentions the prompt
+      // text re-triggers a false 'waiting'. classifyFromTitle then owns state.
+      if (proc.runtime === 'claude' && !proc.sawWorkingTitle && detectClaudeTrustPrompt(proc.outputBuffer)) {
         applyInputState(proc, 'waiting');
       }
     }
@@ -891,6 +906,9 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
       inputState: 'active' as InputState,
       hasStarted: true,
       lastTitle: '',
+      // Recovered sessions are reattaches to an already-running agent — the
+      // first-run trust prompt is long past, so disable trust detection.
+      sawWorkingTitle: true,
       waitingDebounce: null,
       lastStateBroadcast: 0,
       authCompanionStarted: !!session.companionSessionId,
