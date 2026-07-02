@@ -80,6 +80,7 @@ export function StandaloneSessionPage({ sessionId }: { sessionId: string }) {
   const isExited = exitedSessions.value.has(sessionId);
   const mode = getViewMode(sessionId) || viewMode.value;
   const mobile = isMobile.value;
+  const selectableMode = mobile && mode === 'split' ? 'structured' : mode;
   const idMenuAnchorRef = useRef<HTMLSpanElement>(null);
 
   const title = standaloneTitle(sessionId, sess, isExited);
@@ -138,10 +139,10 @@ export function StandaloneSessionPage({ sessionId }: { sessionId: string }) {
           </button>
         )}
         <span style="flex:1" />
-        {!companion && sess?.jsonlPath && !isMobile.value && (
+        {!companion && sess?.jsonlPath && (
           <select
             class="view-mode-select"
-            value={mode}
+            value={selectableMode}
             onChange={(e) => {
               const v = (e.target as HTMLSelectElement).value as ViewMode;
               viewMode.value = v;
@@ -150,7 +151,7 @@ export function StandaloneSessionPage({ sessionId }: { sessionId: string }) {
           >
             <option value="terminal">Term</option>
             <option value="structured">Struct</option>
-            <option value="split">Split</option>
+            {!mobile && <option value="split">Split</option>}
           </select>
         )}
       </div>
