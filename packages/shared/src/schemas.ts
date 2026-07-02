@@ -65,6 +65,11 @@ export const feedbackSubmitSchema = z.object({
   viewport: optionalString,
   sessionId: optionalString,
   userId: optionalString,
+  // Which sub-app of a monorepo this feedback came from (e.g. 'dashboard' for
+  // the dashboard living under workbench/platform/dashboard). Free-form; the
+  // server matches it against the app's subApps registry to resolve a working
+  // directory for dispatch and to label the item.
+  subApp: optionalString,
   tags: optionalStringArray,
   autoDispatch: z.boolean().optional(),
   appId: optionalString,
@@ -182,9 +187,21 @@ export const requestPanelConfigSchema = z.object({
   promptPrefix: z.string().max(5000).optional(),
 });
 
+// One sub-app of a monorepo application: a named subdirectory (relative to the
+// app's projectDir) that feedback can target. Lets a single ProPanes app (e.g.
+// "Workbench") fan dispatch out to the right package — dashboard, frontdoor,
+// gateway, cost-tracking — instead of needing a separate app per package.
+export const subAppSchema = z.object({
+  name: z.string().min(1).max(100),
+  dir: z.string().max(500).default(''),
+  description: z.string().max(500).optional(),
+  subdomain: z.string().max(200).optional(),
+});
+
 export const applicationSchema = z.object({
   name: z.string().min(1).max(100),
   projectDir: z.string().min(1).max(500),
+  subApps: z.array(subAppSchema).max(50).optional(),
   serverUrl: z.string().url().optional(),
   hooks: z.array(z.string().max(100)).max(50).default([]),
   description: z.string().max(5000).default(''),

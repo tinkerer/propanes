@@ -73,6 +73,7 @@ export interface FeedbackItem {
   sessionId: string | null;
   userId: string | null;
   appId: string | null;
+  subApp: string | null;
   tags: string[];
   screenshots: FeedbackScreenshot[];
   audioFiles?: FeedbackAudio[];
@@ -135,11 +136,19 @@ export interface RequestPanelConfig {
   promptPrefix?: string;
 }
 
+export interface SubApp {
+  name: string;
+  dir: string;
+  description?: string;
+  subdomain?: string;
+}
+
 export interface Application {
   id: string;
   name: string;
   apiKey: string;
   projectDir: string;
+  subApps: SubApp[];
   serverUrl: string | null;
   hooks: string[];
   description: string;
@@ -188,6 +197,10 @@ export interface WidgetConfig {
   shortcut: string;
   collectors: Collector[];
   appKey?: string;
+  // Which monorepo sub-app this embed represents (e.g. 'dashboard'). Sent with
+  // every feedback submission so the server can route dispatch to the right
+  // package directory. Set via data-sub-app on the widget script tag.
+  subApp?: string;
   hideTrigger?: boolean;
 }
 
