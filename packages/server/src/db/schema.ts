@@ -5,6 +5,10 @@ export const applications = sqliteTable('applications', {
   name: text('name').notNull(),
   apiKey: text('api_key').notNull().unique(),
   projectDir: text('project_dir').notNull(),
+  // JSON array of { name, dir, description?, subdomain? } describing the
+  // monorepo sub-apps that feedback for this app can target. Empty for
+  // single-package apps.
+  subApps: text('sub_apps').notNull().default('[]'),
   serverUrl: text('server_url'),
   hooks: text('hooks').notNull().default('[]'),
   description: text('description').notNull().default(''),
@@ -34,6 +38,9 @@ export const feedbackItems = sqliteTable('feedback_items', {
   sessionId: text('session_id'),
   userId: text('user_id'),
   appId: text('app_id').references(() => applications.id, { onDelete: 'set null' }),
+  // Sub-app of the monorepo this feedback targets (matched against the app's
+  // subApps registry). Null for single-package apps.
+  subApp: text('sub_app'),
   dispatchedTo: text('dispatched_to'),
   dispatchedAt: text('dispatched_at'),
   dispatchStatus: text('dispatch_status'),

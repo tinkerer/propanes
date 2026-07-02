@@ -2,6 +2,7 @@ import { AgentTerminal } from './AgentTerminal.js';
 import { StructuredView } from './StructuredView.js';
 import { InterruptBar } from './InterruptBar.js';
 import type { InputState } from '../../lib/sessions.js';
+import { allSessions } from '../../lib/sessions.js';
 import { isMobile } from '../../lib/viewport.js';
 import { useCallback, useRef, useState } from 'preact/hooks';
 
@@ -38,8 +39,13 @@ export function SessionViewToggle({ sessionId, isActive, onExit, onInputStateCha
   const [splitRatio, setSplitRatio] = useState(readSplitRatio);
   const [dragging, setDragging] = useState(false);
   const splitDragging = useRef(false);
-  // Mobile: force structured view — xterm + split are not usable on a phone.
-  const effectiveMode: ViewMode = isMobile.value ? 'structured' : mode;
+  const sessionRecord = allSessions.value.find((s: any) => s.id === sessionId);
+  const hasStructuredTranscript = !!sessionRecord?.jsonlPath;
+  // Mobile: prefer structured when a transcript exists, but do not force an
+  // empty JSONL view for live sessions that only have PTY output so far.
+  const effectiveMode: ViewMode = isMobile.value
+    ? (hasStructuredTranscript ? (mode === 'terminal' ? 'terminal' : 'structured') : 'terminal')
+    : mode;
   const showTerminal = effectiveMode === 'terminal' || effectiveMode === 'split';
   const showStructured = effectiveMode === 'structured' || effectiveMode === 'split';
 
