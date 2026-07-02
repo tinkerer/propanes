@@ -13,7 +13,7 @@ function pickYoloAgent(agents: any[], appId: string): any | undefined {
   // back to any *-yolo profile if no interactive-yolo endpoint is configured.
   // Either way the user gets an agent that won't pause for permission prompts.
   const usable = agents.filter((a: any) => a.mode !== 'webhook' || !!a.url);
-  const ordered = [...usable].sort((a, b) => agentSortCmp(a, b, ['codex', 'claude']));
+  const ordered = [...usable].sort(agentSortCmp);
   for (const profile of ['interactive-yolo', 'headless-yolo', 'headless-stream-yolo'] as const) {
     const match = (a: any) => a.permissionProfile === profile;
     const hit = ordered.find(a => match(a) && a.isDefault && a.appId === appId)

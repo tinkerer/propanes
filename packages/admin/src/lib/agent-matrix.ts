@@ -91,17 +91,16 @@ export function formatAgentOption(agent: {
   return `${rt.icon} ${rt.label} — ${pd.icon} ${pd.label}${defaultMarker}`;
 }
 
-// Compare function that orders agents by (runtime preference, profile order)
-// so grouped pickers show Claude first, then Codex, each grouped by the matrix
-// order above. runtimePref lets callers (e.g. YOLO mode) flip the preferred
-// runtime to surface Codex first.
+// Compare function that orders agents by (runtime, profile order) so grouped
+// pickers show Claude first, then Codex, each grouped by the matrix order
+// above.
 export function agentSortCmp(
   a: { runtime?: string | null; permissionProfile?: string | null; name?: string },
   b: { runtime?: string | null; permissionProfile?: string | null; name?: string },
-  runtimePref: Array<'claude' | 'codex'> = ['claude', 'codex'],
 ): number {
+  const RUNTIME_ORDER = ['claude', 'codex'];
   const runtimeIndex = (r: string | null | undefined) => {
-    const idx = runtimePref.indexOf((r || 'claude') as any);
+    const idx = RUNTIME_ORDER.indexOf(r || 'claude');
     return idx === -1 ? 99 : idx;
   };
   const profileIndex = (p: string | null | undefined) => {
