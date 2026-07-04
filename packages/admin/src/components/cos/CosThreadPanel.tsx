@@ -55,6 +55,8 @@ import { CosSavedDraftsList } from './CosSavedDraftsList.js';
  * via `sendChiefOfStaffMessage` with replyToTs set to the thread's anchor
  * timestamp so the reply lands back in this thread's session.
  */
+type ThreadBodyView = 'structured' | 'pty';
+
 export function ThreadPanel({
   agentId,
   showTools,
@@ -131,16 +133,28 @@ export function ThreadPanel({
   const _metaTick = cosThreadMeta.value;
   void _metaTick;
   const threadMeta = threadServerId ? getThreadMeta(threadServerId) : null;
-  // TTY-backed profiles render as live terminals inline. interactive-* are
-  // Claude/Codex TTY sessions; `plain` is a bare shell PTY (e.g. the
+  // TTY-backed profiles have a live terminal available inline. interactive-*
+  // are Claude/Codex TTY sessions; `plain` is a bare shell PTY (e.g. the
   // build-admin / restart-server tmux sessions surfaced as CoS threads).
-  // headless / headless-stream profiles still render as JSONL chat.
+  // headless / headless-stream profiles only have the JSONL chat body.
   const ttyProfile = threadMeta?.sessionPermissionProfile;
   const isInteractiveSession =
     !!sessionId &&
     (ttyProfile === 'interactive-yolo' ||
       ttyProfile === 'interactive-require' ||
       ttyProfile === 'plain');
+
+  // Body view for TTY-backed threads: structured (JSONL chat) by default —
+  // same rendering as headless threads — with a header dropdown to flip to
+  // the raw PTY. `plain` shells have no JSONL transcript, so they default to
+  // the terminal. Override resets when the panel switches to another session.
+  const defaultBodyView: ThreadBodyView = ttyProfile === 'plain' ? 'pty' : 'structured';
+  const [bodyViewOverride, setBodyViewOverride] = useState<ThreadBodyView | null>(null);
+  useEffect(() => {
+    setBodyViewOverride(null);
+  }, [sessionId]);
+  const bodyView: ThreadBodyView = bodyViewOverride ?? defaultBodyView;
+  const showPty = isInteractiveSession && !!sessionId && bodyView === 'pty';
 
   // Lift the JSONL stream up here so we can dedupe optimistic user messages
   // against what's already landed on disk. The body below renders `projected`
@@ -294,6 +308,9 @@ export function ThreadPanel({
     <div class={`cos-thread-panel${compact ? ' cos-thread-panel-compact' : ''}`}>
       <div class="cos-thread-panel-header">
         <span class="cos-thread-panel-title" title={userMsg?.text || ''}>{titlePreview}</span>
+        {isInteractiveSession && (
+          <ThreadBodyViewDropdown view={bodyView} onChange={setBodyViewOverride} />
+        )}
         <ThreadSessionViewButton sessionId={sessionId} />
         <ThreadInteractivePanelButton
           threadServerId={threadServerId}
@@ -307,7 +324,7 @@ export function ThreadPanel({
           aria-label="Close panel"
         >×</button>
       </div>
-      {isInteractiveSession && sessionId ? (
+      {showPty && sessionId ? (
         <div class="cos-thread-panel-terminal">
           <AgentTerminal sessionId={sessionId} isActive={true} />
         </div>
@@ -472,6 +489,89 @@ function ThreadPanelBody({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Header dropdown for TTY-backed threads: switches the panel body between the
+ * structured JSONL chat (default) and the raw PTY terminal. Menu reuses the
+ * .status-dot-menu chrome — hardcoded opaque background per the floating-
+ * overlay rule — and closes on outside click or capture-phase Escape (bubble-
+ * phase keydown gets swallowed by pane handlers).
+ */
+function ThreadBodyViewDropdown({
+  view,
+  onChange,
+}: {
+  view: ThreadBodyView;
+  onChange: (v: ThreadBodyView) => void;
+}) {
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    if (!menuPos) return;
+    const close = () => setMenuPos(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setMenuPos(null);
+      }
+    };
+    document.addEventListener('click', close);
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('click', close);
+      document.removeEventListener('keydown', onKey, true);
+    };
+  }, [menuPos]);
+
+  function pick(v: ThreadBodyView) {
+    onChange(v);
+    setMenuPos(null);
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        ref={btnRef}
+        class="cos-thread-panel-interactive"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (menuPos) {
+            setMenuPos(null);
+            return;
+          }
+          const rect = btnRef.current?.getBoundingClientRect();
+          if (rect) setMenuPos({ x: rect.left, y: rect.bottom + 4 });
+        }}
+        title="Switch between structured transcript and raw terminal"
+        aria-label="Switch thread body view"
+        aria-haspopup="menu"
+        aria-expanded={!!menuPos}
+      >
+        <span>{view === 'pty' ? 'Terminal' : 'Structured'}</span>
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M6 9l6 6 6-6" />
+        </svg>
+      </button>
+      {menuPos && (
+        <div
+          class="status-dot-menu"
+          style={{ left: `${menuPos.x}px`, top: `${menuPos.y}px`, zIndex: 1100 }}
+          onClick={(e) => e.stopPropagation()}
+          role="menu"
+        >
+          <button onClick={() => pick('structured')} role="menuitem">
+            Structured {view === 'structured' && <kbd>✓</kbd>}
+          </button>
+          <button onClick={() => pick('pty')} role="menuitem">
+            Terminal (PTY) {view === 'pty' && <kbd>✓</kbd>}
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
