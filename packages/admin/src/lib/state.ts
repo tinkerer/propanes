@@ -255,6 +255,13 @@ window.addEventListener('hashchange', () => {
   if (viewId) openPageView(viewId);
 });
 
+// Honor deep links on first load even when the persisted pane tree's active
+// tab is a different page view.
+queueMicrotask(() => {
+  const viewId = routeToViewId(currentRoute.value);
+  if (viewId) openPageView(viewId);
+});
+
 window.addEventListener('pw-navigate-view', ((e: CustomEvent) => {
   if (e.detail?.viewId) openPageView(e.detail.viewId);
 }) as EventListener);
