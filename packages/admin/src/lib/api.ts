@@ -317,6 +317,36 @@ export const api = {
       body: JSON.stringify({ actionId }),
     }),
 
+  getFlatter: (appId: string) =>
+    request<{
+      monitors: any[];
+      reports: any[];
+      items: any[];
+      runs: any[];
+    }>(`/admin/flatter/apps/${appId}`),
+
+  createFlatterMonitor: (appId: string, data: Record<string, unknown>) =>
+    request(`/admin/flatter/apps/${appId}/monitors`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  scanFlatterMonitor: (monitorId: string) =>
+    request(`/admin/flatter/monitors/${monitorId}/scan`, {
+      method: 'POST',
+    }),
+
+  updateFlatterItem: (itemId: string, data: Record<string, unknown>) =>
+    request(`/admin/flatter/items/${itemId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  launchFlatterItem: (itemId: string) =>
+    request(`/admin/flatter/items/${itemId}/launch`, {
+      method: 'POST',
+    }),
+
   submitAppRequest: (appId: string, data: { request: string; preferences?: string[] }) =>
     request<{ sessionId: string; feedbackId: string }>(`/admin/applications/${appId}/request`, {
       method: 'POST',

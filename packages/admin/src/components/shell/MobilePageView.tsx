@@ -12,6 +12,7 @@ import { SettingsPage } from '../../pages/SettingsPage.js';
 import { WiggumPage } from '../../pages/WiggumPage.js';
 import { StandaloneSessionPage } from '../../pages/StandaloneSessionPage.js';
 import { SpecWikiPage } from '../../pages/SpecWikiPage.js';
+import { FlatterPage } from '../../pages/FlatterPage.js';
 
 function NoApp() {
   return (
@@ -35,6 +36,7 @@ function renderMobileRoute(route: string) {
     if (rest === 'spec') return <SpecWikiPage appId={appId} />;
     if (rest === 'settings' || rest.startsWith('settings/')) return <AppSettingsPage appId={appId} />;
     if (rest === 'wiggum') return <WiggumPage />;
+    if (rest === 'flatter') return <FlatterPage appId={appId} />;
     return <FeedbackListPage appId={appId} />;
   }
 
