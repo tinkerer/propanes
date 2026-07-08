@@ -55,6 +55,33 @@ Browser (your app)         Server                       Agent runtime
 
 The widget opens a WebSocket to the server. Agents interact with the live page through REST endpoints — the server relays commands over the WebSocket and returns results. Sessions can run locally on the main host or on remote machines via launchers, including inside Docker harnesses.
 
+## Production image
+
+The production Docker image runs the API, terminal session service, in-pod
+launcher daemon, Xvfb/noVNC desktop, and Playwright MCP sidecar process from a
+single pod. The main API and `session-service` run as root because terminal
+sessions use tmux and SQLite state under `/data`; running the session service as
+the non-root agent user causes SQLite `SQLITE_READONLY` failures and breaks
+terminal creation.
+
+Agent processes are isolated separately. `docker-launcher-entrypoint.sh` starts
+`launcher-daemon` as the `propanes` user, UID/GID 10001, with
+`HOME=/data/agent-home`. On startup it copies Claude and Codex auth from the
+read-only `/var/run/propanes-agent-auth` Kubernetes Secret into writable files
+under `/data/agent-home`, then points `/root/.claude`, `/root/.codex`, and
+`/root/.claude.json` at that writable home for CLI compatibility. This keeps
+Claude/Codex credential refreshes writable without running YOLO agent sessions
+as root.
+
+Required runtime inputs for the production pod:
+
+- `/data` persistent volume for `propanes.db`, terminal state, and
+  `/data/agent-home`.
+- `/var/run/propanes-agent-auth` secret mount with Claude/Codex auth material.
+- `LAUNCHER_AUTH_TOKEN`, `VNC_PASSWORD`, `IS_SANDBOX=1`, `DISPLAY=:99`,
+  `AGENT_HOME=/data/agent-home`, and `MAX_SESSIONS`.
+- Port `3001` for the API/admin/widget and port `6080` for noVNC/websockify.
+
 ## Widget
 
 The `<script>` tag mounts a feedback button + session bridge. Configure via data attributes:
