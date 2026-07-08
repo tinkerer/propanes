@@ -142,6 +142,68 @@ export const plans = sqliteTable('plans', {
   updatedAt: text('updated_at').notNull(),
 });
 
+export const flatterMonitors = sqliteTable('flatter_monitors', {
+  id: text('id').primaryKey(),
+  appId: text('app_id').notNull().references(() => applications.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  repoUrl: text('repo_url').notNull(),
+  branch: text('branch').notNull().default('main'),
+  baselineRef: text('baseline_ref'),
+  baselineDate: text('baseline_date'),
+  focusJson: text('focus_json').notNull().default('{}'),
+  lastHeadSha: text('last_head_sha'),
+  lastScannedAt: text('last_scanned_at'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const flatterReports = sqliteTable('flatter_reports', {
+  id: text('id').primaryKey(),
+  appId: text('app_id').notNull().references(() => applications.id, { onDelete: 'cascade' }),
+  monitorId: text('monitor_id').notNull().references(() => flatterMonitors.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  upstreamHeadSha: text('upstream_head_sha'),
+  baselineSummary: text('baseline_summary'),
+  summary: text('summary').notNull().default(''),
+  statsJson: text('stats_json').notNull().default('{}'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const flatterItems = sqliteTable('flatter_items', {
+  id: text('id').primaryKey(),
+  reportId: text('report_id').notNull().references(() => flatterReports.id, { onDelete: 'cascade' }),
+  monitorId: text('monitor_id').notNull().references(() => flatterMonitors.id, { onDelete: 'cascade' }),
+  appId: text('app_id').notNull().references(() => applications.id, { onDelete: 'cascade' }),
+  kind: text('kind').notNull().default('commit'),
+  upstreamRef: text('upstream_ref'),
+  upstreamUrl: text('upstream_url'),
+  title: text('title').notNull(),
+  summary: text('summary').notNull().default(''),
+  category: text('category').notNull().default('nice'),
+  relevance: text('relevance').notNull().default('medium'),
+  risk: text('risk').notNull().default('medium'),
+  status: text('status').notNull().default('proposed'),
+  rationale: text('rationale').notNull().default(''),
+  scopeNotes: text('scope_notes').notNull().default(''),
+  operatorNotes: text('operator_notes').notNull().default(''),
+  payloadJson: text('payload_json').notNull().default('{}'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const flatterRuns = sqliteTable('flatter_runs', {
+  id: text('id').primaryKey(),
+  appId: text('app_id').notNull().references(() => applications.id, { onDelete: 'cascade' }),
+  itemId: text('item_id').notNull().references(() => flatterItems.id, { onDelete: 'cascade' }),
+  label: text('label').notNull(),
+  status: text('status').notNull().default('pending'),
+  columnsJson: text('columns_json').notNull().default('[]'),
+  notes: text('notes').notNull().default(''),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
 export const agentSessions = sqliteTable('agent_sessions', {
   id: text('id').primaryKey(),
   feedbackId: text('feedback_id')

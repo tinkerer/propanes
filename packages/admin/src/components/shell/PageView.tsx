@@ -13,6 +13,7 @@ import { AppSettingsPage } from '../../pages/AppSettingsPage.js';
 import { InfrastructurePage } from '../../pages/InfrastructurePage.js';
 import { UserGuidePage } from '../../pages/UserGuidePage.js';
 import { WiggumPage } from '../../pages/WiggumPage.js';
+import { FlatterPage } from '../../pages/FlatterPage.js';
 
 function parseAppRoute(route: string): { appId: string; sub: string; param?: string } | null {
   const m = route.match(/^\/app\/([^/]+)\/(.+)$/);
@@ -58,6 +59,8 @@ export function PageView() {
       page = <LiveConnectionsPage appId={parsed.appId} />;
     } else if (parsed.sub === 'wiggum') {
       page = <WiggumPage />;
+    } else if (parsed.sub === 'flatter') {
+      page = <FlatterPage appId={parsed.appId} />;
     } else if (parsed.sub === 'settings') {
       page = <AppSettingsPage appId={parsed.appId} />;
     } else {

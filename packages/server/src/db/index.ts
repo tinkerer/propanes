@@ -136,6 +136,81 @@ export function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
   `);
 
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS flatter_monitors (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      repo_url TEXT NOT NULL,
+      branch TEXT NOT NULL DEFAULT 'main',
+      baseline_ref TEXT,
+      baseline_date TEXT,
+      focus_json TEXT NOT NULL DEFAULT '{}',
+      last_head_sha TEXT,
+      last_scanned_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_flatter_monitors_app ON flatter_monitors(app_id, updated_at);
+
+    CREATE TABLE IF NOT EXISTS flatter_reports (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      monitor_id TEXT NOT NULL REFERENCES flatter_monitors(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      upstream_head_sha TEXT,
+      baseline_summary TEXT,
+      summary TEXT NOT NULL DEFAULT '',
+      stats_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_flatter_reports_monitor ON flatter_reports(monitor_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_flatter_reports_app ON flatter_reports(app_id, created_at);
+
+    CREATE TABLE IF NOT EXISTS flatter_items (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL REFERENCES flatter_reports(id) ON DELETE CASCADE,
+      monitor_id TEXT NOT NULL REFERENCES flatter_monitors(id) ON DELETE CASCADE,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL DEFAULT 'commit',
+      upstream_ref TEXT,
+      upstream_url TEXT,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL DEFAULT 'nice',
+      relevance TEXT NOT NULL DEFAULT 'medium',
+      risk TEXT NOT NULL DEFAULT 'medium',
+      status TEXT NOT NULL DEFAULT 'proposed',
+      rationale TEXT NOT NULL DEFAULT '',
+      scope_notes TEXT NOT NULL DEFAULT '',
+      operator_notes TEXT NOT NULL DEFAULT '',
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_flatter_items_report ON flatter_items(report_id, category, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_flatter_items_app ON flatter_items(app_id, status, updated_at);
+
+    CREATE TABLE IF NOT EXISTS flatter_runs (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      item_id TEXT NOT NULL REFERENCES flatter_items(id) ON DELETE CASCADE,
+      label TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      columns_json TEXT NOT NULL DEFAULT '[]',
+      notes TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_flatter_runs_item ON flatter_runs(item_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_flatter_runs_app ON flatter_runs(app_id, updated_at);
+  `);
+
   // Add new columns to existing tables (idempotent via try/catch)
   const alterStatements = [
     `ALTER TABLE feedback_items ADD COLUMN app_id TEXT REFERENCES applications(id) ON DELETE SET NULL`,
