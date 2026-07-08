@@ -32,6 +32,7 @@ import { WiggumPage } from '../../pages/WiggumPage.js';
 import { ChannelPage } from '../../pages/ChannelPage.js';
 import { ApprovalQueuePage } from '../../pages/ApprovalQueuePage.js';
 import { SpecWikiPage } from '../../pages/SpecWikiPage.js';
+import { FlatterPage } from '../../pages/FlatterPage.js';
 import {
   getTerminalCompanion,
   getViewMode,
@@ -72,6 +73,8 @@ export function renderTabContent(
           <LiveConnectionsPage appId={selectedAppId.value} />
         ) : sid === 'view:wiggum' ? (
           <WiggumPage />
+        ) : sid === 'view:flatter' ? (
+          (() => { const aid = selectedAppId.value || applications.value[0]?.id; return aid ? <FlatterPage appId={aid} /> : <div style={{ padding: 16, color: 'var(--pw-text-muted)' }}>No apps configured</div>; })()
         ) : sid === 'view:channel' ? (
           <ChannelPage />
         ) : sid === 'view:approvals' ? (

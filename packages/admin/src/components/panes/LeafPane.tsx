@@ -467,6 +467,12 @@ function getSingletonMeta(sid: string): SingletonMeta {
         plusKind: 'new',
         appPrefix: () => app ? `${app.name} \u2014 ` : '',
       };
+    case 'view:flatter':
+      return {
+        label: 'Flatter',
+        plusKind: 'new',
+        appPrefix: () => app ? `${app.name} \u2014 ` : '',
+      };
     case 'view:app-settings':
       return {
         label: 'Settings',
@@ -512,6 +518,7 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   }
   if (sid === 'view:sessions-page') return 'Sessions';
   if (sid === 'view:live') return 'Live';
+  if (sid === 'view:flatter') return 'Flatter';
   if (sid === 'view:app-settings') return 'Settings';
   if (sid.startsWith('view:files:')) return 'Files';
   if (sid.startsWith('view:git:')) return 'Git Changes';

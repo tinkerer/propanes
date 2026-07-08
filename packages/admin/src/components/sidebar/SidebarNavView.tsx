@@ -291,6 +291,13 @@ export function SidebarNavView() {
                     {'\u{1F9EC}'} FAFO / Wiggum
                   </a>
                   <a
+                    href={`#/app/${app.id}/flatter`}
+                    class={route === `/app/${app.id}/flatter` ? 'active' : ''}
+                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/flatter`); openPageView('view:flatter'); }}
+                  >
+                    {'\u{1F3A8}'} Flatter
+                  </a>
+                  <a
                     href={`#/app/${app.id}/approvals`}
                     class={route === `/app/${app.id}/approvals` ? 'active' : ''}
                     onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/approvals`); openPageView('view:approvals'); }}

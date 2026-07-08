@@ -181,6 +181,7 @@ export function ApplicationsPage() {
             </div>
             <div style="display:flex;gap:8px;flex-shrink:0">
               <button class="btn btn-sm" onClick={() => spawnTerminal(app.id)} title="Open terminal in this app's directory">Terminal</button>
+              <a class="btn btn-sm" href={`#/app/${app.id}/flatter`}>Flatter</a>
               <button class="btn btn-sm" onClick={() => openEdit(app)}>Edit</button>
               <button class="btn btn-sm btn-danger" onClick={() => deleteApp(app.id, app.name)}>Delete</button>
             </div>

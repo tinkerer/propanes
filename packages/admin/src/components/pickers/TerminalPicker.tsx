@@ -307,6 +307,7 @@ export function TerminalPicker({ mode, onClose }: Props) {
     { id: 'view:feedback', label: 'Tickets', icon: '\u{1F4AC}' },
     { id: 'view:sessions-page', label: 'Sessions Page', icon: '\u{1F4CB}' },
     { id: 'view:live', label: 'Live Connections', icon: '\u{1F4E1}' },
+    { id: 'view:flatter', label: 'Flatter', icon: '\u{1F3A8}' },
     { id: 'view:page', label: 'Page (Router)', icon: '\u{1F4C4}' },
     { id: 'view:nav', label: 'Sidebar Nav', icon: '\u{1F4CB}' },
     { id: 'view:sessions-list', label: 'Sessions List', icon: '\u{26A1}' },

@@ -10,6 +10,7 @@ import { cosChannelOrganizeRoutes } from './cos-channel-organize.js';
 import { cosApprovalRoutes } from './cos-approvals.js';
 import { sessionFollowupRoutes } from './session-followups.js';
 import { composerDraftsRoutes } from './composer-drafts.js';
+import { flatterRoutes } from './flatter.js';
 
 export const adminRoutes = new Hono();
 
@@ -24,3 +25,4 @@ adminRoutes.route('/', cosChannelOrganizeRoutes);
 adminRoutes.route('/', cosApprovalRoutes);
 adminRoutes.route('/', sessionFollowupRoutes);
 adminRoutes.route('/', composerDraftsRoutes);
+adminRoutes.route('/', flatterRoutes);

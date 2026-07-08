@@ -227,6 +227,7 @@ function routeToViewId(route: string): string | null {
     feedback: 'view:feedback',
     sessions: 'view:sessions-page',
     live: 'view:live',
+    flatter: 'view:flatter',
     approvals: 'view:approvals',
     settings: 'view:app-settings',
     spec: 'view:spec',
