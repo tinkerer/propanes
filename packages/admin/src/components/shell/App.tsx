@@ -119,6 +119,12 @@ export function App() {
   }
 
   useEffect(() => {
+    // Re-hydrate the logged-in user from the stored token on every mount.
+    // isAuthenticated is seeded synchronously from token presence, but
+    // currentUser was only set during an explicit login — so after a page
+    // reload currentUser stayed null and isAdminUser evaluated false, hiding
+    // the entire admin Settings section (Users/Agents/Usage/Infra/Wiggum).
+    loadCurrentUser().catch(() => {});
     loadApplications();
     initNotifications();
     connectAdminWs();
