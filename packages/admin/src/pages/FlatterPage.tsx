@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { api } from '../lib/api.js';
+import { loadAllSessions } from '../lib/sessions.js';
 
 type FlatterState = {
   monitors: any[];
@@ -160,6 +161,7 @@ export function FlatterPage({ appId }: { appId: string }) {
     setError('');
     try {
       setState(await api.createFlatterPlan(appId) as FlatterState);
+      await loadAllSessions();
     } catch (err: any) {
       setError(err.message || 'Plan creation failed');
     } finally {
@@ -172,6 +174,7 @@ export function FlatterPage({ appId }: { appId: string }) {
     setError('');
     try {
       setState(await api.runFlatterPlan(planId) as FlatterState);
+      await loadAllSessions();
     } catch (err: any) {
       setError(err.message || 'Plan run failed');
     } finally {
@@ -296,8 +299,8 @@ export function FlatterPage({ appId }: { appId: string }) {
               {busyKey === 'create-plan' ? 'Planning…' : 'Create Plan from Accepted'}
             </button>
             {latestPlan && (
-              <button class="btn btn-primary btn-sm" onClick={() => void runPlan(latestPlan.id)} disabled={busyKey === `run-plan:${latestPlan.id}` || latestPlan.status === 'running'}>
-                {busyKey === `run-plan:${latestPlan.id}` ? 'Starting…' : latestPlan.status === 'running' ? 'Running' : 'Run Plan'}
+              <button class="btn btn-primary btn-sm" onClick={() => void runPlan(latestPlan.id)} disabled={busyKey === `run-plan:${latestPlan.id}` || latestPlan.status !== 'ready'}>
+                {busyKey === `run-plan:${latestPlan.id}` ? 'Starting…' : latestPlan.status === 'planning' ? 'Planning…' : latestPlan.status === 'running' ? 'Running' : 'Run Plan'}
               </button>
             )}
           </div>
@@ -321,7 +324,17 @@ export function FlatterPage({ appId }: { appId: string }) {
               </div>
             </div>
             <div style="border:1px solid var(--pw-border);border-radius:10px;padding:12px;background:var(--pw-bg)">
-              <strong style="font-size:13px">Progress</strong>
+              <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+                <strong style="font-size:13px">Progress</strong>
+                {latestPlan.planningSessionId && (
+                  <a href={`#/sessions/${latestPlan.planningSessionId}`} style="font-size:11px">Open planning session</a>
+                )}
+              </div>
+              {latestPlan.planningSessionId && (
+                <div style="font-size:12px;color:var(--pw-text-muted);margin-top:10px">
+                  Planning session: <span style={{ color: statusTone(String(latestPlan.planningSessionStatus || latestPlan.status)) }}>{latestPlan.planningSessionStatus || latestPlan.status}</span>
+                </div>
+              )}
               {(runsByPlan.get(latestPlan.id) || []).length === 0 && (
                 <div style="font-size:12px;color:var(--pw-text-muted);margin-top:10px">Run this plan to launch PR, review, and verification lanes.</div>
               )}

@@ -203,6 +203,8 @@ export function runMigrations() {
       id TEXT PRIMARY KEY,
       app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
       report_id TEXT REFERENCES flatter_reports(id) ON DELETE SET NULL,
+      planning_feedback_id TEXT REFERENCES feedback_items(id) ON DELETE SET NULL,
+      planning_session_id TEXT,
       title TEXT NOT NULL,
       summary TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'ready',
@@ -334,6 +336,8 @@ export function runMigrations() {
     `ALTER TABLE agent_sessions ADD COLUMN isolate_id TEXT`,
     `ALTER TABLE flatter_runs ADD COLUMN plan_id TEXT REFERENCES flatter_plans(id) ON DELETE SET NULL`,
     `CREATE INDEX IF NOT EXISTS idx_flatter_runs_plan ON flatter_runs(plan_id, created_at)`,
+    `ALTER TABLE flatter_plans ADD COLUMN planning_feedback_id TEXT REFERENCES feedback_items(id) ON DELETE SET NULL`,
+    `ALTER TABLE flatter_plans ADD COLUMN planning_session_id TEXT`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after

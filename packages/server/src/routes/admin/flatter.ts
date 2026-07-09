@@ -414,7 +414,24 @@ ${plan.notes || '(none)'}
 ${laneBrief}`;
 }
 
-function createPlanFromAccepted(appId: string) {
+function buildPlanningPrompt(app: typeof schema.applications.$inferSelect, title: string, summary: string, items: FlatterPlanItem[], notes: string) {
+  return `You are the planning lane in a Flatter upstream-sync workflow.
+
+App: ${app.name}
+Repo: ${app.projectDir}
+Plan draft: ${title}
+Summary: ${summary}
+
+Accepted upstream changes:
+${items.map(formatPlanItem).join('\n\n') || '(none)'}
+
+Aggregated operator notes:
+${notes || '(none)'}
+
+Produce an implementation plan for Propanes before any code is changed. Rank the accepted changes by dependency order and risk, call out what should be bundled versus split, identify files likely to change, and list the verification steps required before the operator presses Run Plan. Do not modify files in this planning lane.`;
+}
+
+async function createPlanFromAccepted(appId: string) {
   const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
   if (!app) throw new Error('App not found');
   const itemRows = db.select().from(schema.flatterItems)
@@ -422,24 +439,58 @@ function createPlanFromAccepted(appId: string) {
     .orderBy(desc(schema.flatterItems.updatedAt))
     .all();
   if (itemRows.length === 0) throw new Error('Accept at least one Flatter item before creating a plan');
+  const agents = pickAgents(app.id);
+  const planner = agents.implement || agents.review || agents.verify;
+  if (!planner) throw new Error('Need at least one agent endpoint configured for this app');
 
   const items = itemRows.map(itemJson);
   const reportId = items[0]?.reportId || null;
   const now = new Date().toISOString();
   const planId = ulid();
   const summary = summarizePlan(items);
+  const title = `Flatter plan: ${items.length} accepted ${items.length === 1 ? 'change' : 'changes'}`;
+  const notes = aggregatePlanNotes(items);
   db.insert(schema.flatterPlans).values({
     id: planId,
     appId,
     reportId,
-    title: `Flatter plan: ${items.length} accepted ${items.length === 1 ? 'change' : 'changes'}`,
+    title,
     summary,
-    status: 'ready',
+    status: 'planning',
     itemsJson: JSON.stringify(items),
-    notes: aggregatePlanNotes(items),
+    notes,
     createdAt: now,
     updatedAt: now,
   }).run();
+
+  const prompt = buildPlanningPrompt(app, title, summary, items, notes);
+  const feedbackId = ulid();
+  db.insert(schema.feedbackItems).values({
+    id: feedbackId,
+    type: 'manual',
+    status: 'dispatched',
+    title: `[Flatter/Plan] ${title}`,
+    description: prompt,
+    appId: app.id,
+    dispatchedTo: planner.name,
+    dispatchedAt: now,
+    dispatchStatus: 'running',
+    createdAt: now,
+    updatedAt: now,
+  }).run();
+  const { sessionId } = await dispatchAgentSession({
+    feedbackId,
+    agentEndpointId: planner.id,
+    prompt,
+    cwd: app.projectDir,
+    permissionProfile: (planner.permissionProfile || app.defaultPermissionProfile || 'interactive-require') as any,
+    allowedTools: planner.allowedTools || app.defaultAllowedTools || null,
+  });
+  db.update(schema.flatterPlans).set({
+    planningFeedbackId: feedbackId,
+    planningSessionId: sessionId,
+    updatedAt: now,
+  }).where(eq(schema.flatterPlans.id, planId)).run();
 }
 
 async function launchRunForPlan(planId: string) {
@@ -651,7 +702,10 @@ function hydrateState(appId: string) {
     .all()
     .map(runJson);
 
-  const sessionIds = dedupe(runs.flatMap((run) => run.columns.map((column) => String(column.sessionId || '')).filter(Boolean)));
+  const sessionIds = dedupe([
+    ...runs.flatMap((run) => run.columns.map((column) => String(column.sessionId || '')).filter(Boolean)),
+    ...plans.map((plan) => plan.planningSessionId || '').filter(Boolean),
+  ]);
   const sessionMap = sessionIds.length
     ? new Map(
       db.select().from(schema.agentSessions)
@@ -678,11 +732,26 @@ function hydrateState(appId: string) {
     return { ...run, status, columns };
   });
 
+  const hydratedPlans = plans.map((plan) => {
+    const planningSession = plan.planningSessionId ? sessionMap.get(plan.planningSessionId) : null;
+    const planningSessionStatus = planningSession?.status || null;
+    const status = plan.status === 'running' ? 'running'
+      : planningSessionStatus === 'completed' ? 'ready'
+      : planningSessionStatus === 'failed' || planningSessionStatus === 'killed' ? 'failed'
+      : planningSessionStatus === 'running' || planningSessionStatus === 'pending' ? 'planning'
+      : plan.status;
+    return {
+      ...plan,
+      status,
+      planningSessionStatus,
+    };
+  });
+
   return {
     monitors,
     reports,
     items,
-    plans,
+    plans: hydratedPlans,
     runs: hydratedRuns,
   };
 }
@@ -740,7 +809,7 @@ flatterRoutes.patch('/flatter/items/:itemId', async (c) => {
 flatterRoutes.post('/flatter/apps/:appId/plans', async (c) => {
   const appId = c.req.param('appId');
   try {
-    createPlanFromAccepted(appId);
+    await createPlanFromAccepted(appId);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Plan creation failed';
     return c.json({ error: message }, message.includes('Accept at least one') ? 400 : 500);

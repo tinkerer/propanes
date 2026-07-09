@@ -204,6 +204,8 @@ export const flatterPlans = sqliteTable('flatter_plans', {
   id: text('id').primaryKey(),
   appId: text('app_id').notNull().references(() => applications.id, { onDelete: 'cascade' }),
   reportId: text('report_id').references(() => flatterReports.id, { onDelete: 'set null' }),
+  planningFeedbackId: text('planning_feedback_id').references(() => feedbackItems.id, { onDelete: 'set null' }),
+  planningSessionId: text('planning_session_id'),
   title: text('title').notNull(),
   summary: text('summary').notNull().default(''),
   status: text('status').notNull().default('ready'),
