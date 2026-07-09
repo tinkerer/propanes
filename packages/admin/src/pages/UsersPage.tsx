@@ -17,6 +17,8 @@ export function UsersPage() {
   const [draft, setDraft] = useState({ username: '', password: '', role: 'member', orgId: '', launcherId: '' });
   const [newOrgName, setNewOrgName] = useState('');
   const [resetPasswords, setResetPasswords] = useState<Record<string, string>>({});
+  const [podStatus, setPodStatus] = useState<Record<string, { exists: boolean; replicas: number; readyReplicas: number; available: boolean; message?: string }>>({});
+  const [podBusy, setPodBusy] = useState<Record<string, boolean>>({});
   const [error, setError] = useState('');
 
   async function load() {
@@ -33,6 +35,11 @@ export function UsersPage() {
   useEffect(() => {
     load().catch((err) => setError(err.message || 'Failed to load users'));
   }, []);
+
+  // Fetch each member's pod status once the user list is in.
+  useEffect(() => {
+    users.filter((u) => u.role === 'member').forEach((u) => refreshPodStatus(u.id));
+  }, [users.map((u) => u.id).join(',')]);
 
   async function createUser(e: Event) {
     e.preventDefault();
@@ -90,7 +97,62 @@ export function UsersPage() {
     }
   }
 
+  async function refreshPodStatus(id: string) {
+    try {
+      const s = await api.getUserPodStatus(id);
+      setPodStatus((prev) => ({ ...prev, [id]: s }));
+    } catch {
+      /* non-fatal */
+    }
+  }
+
+  async function provisionPod(id: string) {
+    setError('');
+    setPodBusy((prev) => ({ ...prev, [id]: true }));
+    try {
+      const res = await api.provisionUserPod(id);
+      if (!res.ok) {
+        const failed = (res.resources || []).filter((r: any) => r.action === 'error');
+        setError(`Provision incomplete: ${failed.map((r: any) => `${r.kind} ${r.error}`).join('; ') || 'unknown error'}`);
+      }
+      await load();
+      await refreshPodStatus(id);
+    } catch (err: any) {
+      setError(err.message || 'Failed to provision pod');
+    } finally {
+      setPodBusy((prev) => ({ ...prev, [id]: false }));
+    }
+  }
+
+  async function deprovisionPod(id: string) {
+    if (!confirm('Tear down this user’s launcher pod? Their private credential disk is kept unless you delete it separately.')) return;
+    setError('');
+    setPodBusy((prev) => ({ ...prev, [id]: true }));
+    try {
+      await api.deprovisionUserPod(id);
+      await load();
+      await refreshPodStatus(id);
+    } catch (err: any) {
+      setError(err.message || 'Failed to deprovision pod');
+    } finally {
+      setPodBusy((prev) => ({ ...prev, [id]: false }));
+    }
+  }
+
   const orgName = (id: string | null) => orgs.find((o) => o.id === id)?.name || 'No org';
+
+  function podBadge(id: string) {
+    const s = podStatus[id];
+    if (!s) return null;
+    if (!s.available) return <span style="font-size:11px;color:var(--pw-text-muted)">provisioning n/a</span>;
+    if (!s.exists) return <span style="font-size:11px;color:var(--pw-text-muted)">no pod</span>;
+    const ready = s.readyReplicas > 0;
+    return (
+      <span style={`font-size:11px;color:${ready ? 'var(--pw-ok,#3fb950)' : 'var(--pw-text-muted)'}`}>
+        pod {ready ? 'ready' : 'pending'} ({s.readyReplicas}/{s.replicas})
+      </span>
+    );
+  }
 
   return (
     <div style="max-width:960px">
@@ -157,6 +219,7 @@ export function UsersPage() {
               <div style="flex:1;min-width:180px">
                 <div style="font-size:13px;font-weight:700">{u.username}</div>
                 <div style="font-size:11px;color:var(--pw-text-muted)">{u.id} · {orgName(u.orgId)}</div>
+                {u.role === 'member' && <div style="margin-top:2px">{podBadge(u.id)}</div>}
               </div>
               <select value={u.role} onChange={(e) => patchUser(u.id, { role: (e.currentTarget as HTMLSelectElement).value })}>
                 <option value="member">member</option>
@@ -182,6 +245,11 @@ export function UsersPage() {
                 style="width:130px"
               />
               <button class="btn btn-sm" onClick={() => resetPassword(u.id)}>Reset</button>
+              {u.role === 'member' && (
+                podStatus[u.id]?.exists
+                  ? <button class="btn btn-sm" disabled={podBusy[u.id]} onClick={() => deprovisionPod(u.id)}>{podBusy[u.id] ? '…' : 'Tear down pod'}</button>
+                  : <button class="btn btn-sm" disabled={podBusy[u.id] || podStatus[u.id]?.available === false} onClick={() => provisionPod(u.id)}>{podBusy[u.id] ? '…' : 'Provision pod'}</button>
+              )}
               <button class="btn btn-sm btn-danger" onClick={async () => { await api.deleteUser(u.id); await load(); }}>Delete</button>
             </div>
           ))}
