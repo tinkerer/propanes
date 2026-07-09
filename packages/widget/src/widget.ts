@@ -495,10 +495,24 @@ export class ProPanesElement {
   // Mirrors admin QuickDispatchPopup.pickYoloAgent: prefer interactive-yolo
   // (TTY + skip permissions), fall back to any other *-yolo profile. Within
   // each profile, prefer app-specific default, then global default, then any
-  // app match, then any match.
+  // app match, then any match. Runtime ties prefer Claude before Codex.
   private pickYoloAgent(agents: Array<Record<string, any>>): Record<string, any> | undefined {
     if (!agents?.length) return undefined;
-    const usable = agents.filter((a) => a.mode !== 'webhook' || !!a.url);
+    const profileOrder = ['interactive-require', 'interactive-yolo', 'headless-yolo', 'headless-stream-yolo', 'headless-stream-require'];
+    const runtimeOrder = ['claude', 'codex'];
+    const orderIndex = (values: string[], value: unknown) => {
+      const idx = values.indexOf(typeof value === 'string' && value ? value : values[0]);
+      return idx === -1 ? 99 : idx;
+    };
+    const usable = agents
+      .filter((a) => a.mode !== 'webhook' || !!a.url)
+      .sort((a, b) => {
+        const runtimeCmp = orderIndex(runtimeOrder, a.runtime) - orderIndex(runtimeOrder, b.runtime);
+        if (runtimeCmp !== 0) return runtimeCmp;
+        const profileCmp = orderIndex(profileOrder, a.permissionProfile) - orderIndex(profileOrder, b.permissionProfile);
+        if (profileCmp !== 0) return profileCmp;
+        return String(a.name || '').localeCompare(String(b.name || ''));
+      });
     for (const profile of ['interactive-yolo', 'headless-yolo', 'headless-stream-yolo'] as const) {
       const match = (a: Record<string, any>) => a.permissionProfile === profile;
       const hit =
@@ -666,7 +680,8 @@ export class ProPanesElement {
       e.stopPropagation();
       const selectedMode = modeSel.value;
       if (selectedMode === 'yolo') {
-        const agent = this.pickYoloAgent(this.cachedAgents);
+        const selectedAgent = this.getSelectedDispatchAgent();
+        const agent = selectedAgent || this.pickYoloAgent(this.cachedAgents);
         this.dispatchAgentOverride = agent ? agent.id : null;
         this.pendingPermissionProfile = 'interactive-yolo';
         this.setDispatchMode('once');

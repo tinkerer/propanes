@@ -41,7 +41,7 @@ These components enable dispatching feedback (tickets, screenshots, notes) to ag
 - **Draft persistence**: saves to localStorage per appKey on every keystroke (text, dispatchType, agentId)
 - **Image paste**: Ctrl+V pastes images from clipboard; each image → blob → uploaded after feedback creation
 - Dispatch types: agent, yolo, wiggum, fafo, structured, powwow (6 buttons in footer)
-- Agent select dropdown (disabled if dispatchType=yolo; YOLO auto-picks via pickYoloAgent)
+- Agent select dropdown (YOLO can use Auto via pickYoloAgent or an explicit endpoint override)
 - For app sessions sidebar (+) button; one popup instance per app
 
 ## SetupAssist* — Admin Setup Wizard
@@ -68,7 +68,7 @@ These components enable dispatching feedback (tickets, screenshots, notes) to ag
 All dispatch actions call `api.dispatch({ feedbackId, agentEndpointId, instructions, launcherId?, harnessConfigId? })`:
 
 - **Cook It** (interactive) — requires interactive-require agent; user approves each tool
-- **YOLO** (interactive-yolo) — skips permission prompts; auto-picks via pickYoloAgent
+- **YOLO** (interactive-yolo) — skips permission prompts; Auto picks via pickYoloAgent, explicit agent selection overrides the endpoint
 - **Wiggum** — meta-wiggum template; creates iterative refinement via feedback/screenshot
 - **FAFO** — FAFO_ASSISTANT_TEMPLATE; evolutionary search with multi-path support
 - **Structured** — STRUCTURED_MODE_TEMPLATE; output structured JSON/XML
@@ -77,8 +77,8 @@ All dispatch actions call `api.dispatch({ feedbackId, agentEndpointId, instructi
 
 ## Gotchas
 
-1. **YOLO auto-picks profile** (`QuickDispatchPopup.tsx:262`, DispatchDialog line 136):
-   - YOLO button/mode ignores the manual agent selection and calls `pickYoloAgent(agents, appId)`
+1. **YOLO auto-picks profile** (`QuickDispatchPopup.tsx`, `DispatchDialog.tsx`):
+   - YOLO Auto calls `pickYoloAgent(agents, appId)`; explicit agent selections are honored
    - pickYoloAgent cycles through profiles: interactive-yolo → headless-yolo → headless-stream-yolo
    - Per CLAUDE.md PERMISSION_PROFILES section: yolo profiles skip permission prompts
    - Useful for unattended runs but dangerous if agent is not vetted

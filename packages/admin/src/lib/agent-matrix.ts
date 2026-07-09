@@ -115,3 +115,31 @@ export function agentSortCmp(
   if (pa !== pb) return pa - pb;
   return (a.name || '').localeCompare(b.name || '');
 }
+
+export function isDispatchableAgent(agent: {
+  mode?: string | null;
+  url?: string | null;
+}): boolean {
+  return agent.mode !== 'webhook' || !!agent.url;
+}
+
+export function pickYoloAgent<T extends {
+  appId?: string | null;
+  isDefault?: boolean;
+  mode?: string | null;
+  name?: string;
+  permissionProfile?: string | null;
+  runtime?: string | null;
+  url?: string | null;
+}>(agents: T[], appId?: string | null): T | undefined {
+  const ordered = [...agents].filter(isDispatchableAgent).sort(agentSortCmp);
+  for (const profile of ['interactive-yolo', 'headless-yolo', 'headless-stream-yolo'] as const) {
+    const match = (a: T) => a.permissionProfile === profile;
+    const hit = ordered.find(a => match(a) && a.isDefault && a.appId === appId)
+      || ordered.find(a => match(a) && a.isDefault && !a.appId)
+      || ordered.find(a => match(a) && a.appId === appId)
+      || ordered.find(match);
+    if (hit) return hit;
+  }
+  return undefined;
+}

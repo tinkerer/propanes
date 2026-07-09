@@ -2,28 +2,11 @@ import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import { createPortal } from 'preact/compat';
 import { api } from '../../lib/api.js';
 import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../../lib/agent-constants.js';
-import { formatAgentOption, agentSortCmp } from '../../lib/agent-matrix.js';
+import { formatAgentOption, agentSortCmp, isDispatchableAgent, pickYoloAgent } from '../../lib/agent-matrix.js';
 import { openSession, loadAllSessions, ensureAgentsLoaded } from '../../lib/sessions.js';
 import { UnifiedComposer, type UnifiedComposerData } from '../feedback/UnifiedComposer.js';
 
 export type DispatchType = 'agent' | 'yolo' | 'wiggum' | 'fafo' | 'structured' | 'powwow';
-
-function pickYoloAgent(agents: any[], appId: string): any | undefined {
-  // YOLO button prefers interactive-yolo (TTY + skip permissions), falling
-  // back to any *-yolo profile if no interactive-yolo endpoint is configured.
-  // Either way the user gets an agent that won't pause for permission prompts.
-  const usable = agents.filter((a: any) => a.mode !== 'webhook' || !!a.url);
-  const ordered = [...usable].sort(agentSortCmp);
-  for (const profile of ['interactive-yolo', 'headless-yolo', 'headless-stream-yolo'] as const) {
-    const match = (a: any) => a.permissionProfile === profile;
-    const hit = ordered.find(a => match(a) && a.isDefault && a.appId === appId)
-      || ordered.find(a => match(a) && a.isDefault && !a.appId)
-      || ordered.find(a => match(a) && a.appId === appId)
-      || ordered.find(match);
-    if (hit) return hit;
-  }
-  return undefined;
-}
 
 function groupAgentsByRuntime(agents: any[]): Array<[string, any[]]> {
   const sorted = [...agents].sort(agentSortCmp);
@@ -139,7 +122,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
           : await ensureAgentsLoaded();
         setAgents(list);
         if (!selectedAgentId || !list.some((a: any) => a.id === selectedAgentId)) {
-          const usable = (list as any[]).filter((a: any) => a.mode !== 'webhook' || !!a.url);
+          const usable = (list as any[]).filter(isDispatchableAgent);
           const appDefault = appId ? usable.find((a: any) => a.isDefault && a.appId === appId) : null;
           const globalDefault = usable.find((a: any) => a.isDefault && !a.appId);
           const def = appDefault || globalDefault || usable[0];
@@ -242,14 +225,16 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
         }).catch(() => {});
       }
 
-      // YOLO mode auto-picks a skip-permissions agent, ignoring the manual selection.
-      // Fallbacks skip webhook endpoints with no URL — those can't dispatch.
-      const usable = agents.filter((a: any) => a.mode !== 'webhook' || !!a.url);
+      // YOLO Auto picks a skip-permissions agent; an explicit dropdown choice
+      // uses that endpoint and overrides it to interactive-yolo at dispatch.
+      const usable = agents.filter(isDispatchableAgent);
+      const selectedAgent = usable.find((a: any) => a.id === selectedAgentId);
       const agent = dispatchType === 'yolo'
-        ? (pickYoloAgent(agents, appId) || usable.find((a: any) => a.id === selectedAgentId) || usable[0])
-        : (agents.find((a: any) => a.id === selectedAgentId) || usable[0]);
+        ? (selectedAgent || pickYoloAgent(agents, appId) || usable[0])
+        : (selectedAgent || usable[0]);
       if (!agent) throw new Error('No agent endpoints configured');
-      if (dispatchType === 'yolo' && typeof agent.permissionProfile === 'string' && !agent.permissionProfile.endsWith('-yolo')) {
+      const explicitYoloAgent = dispatchType === 'yolo' && !!selectedAgent;
+      if (dispatchType === 'yolo' && !explicitYoloAgent && typeof agent.permissionProfile === 'string' && !agent.permissionProfile.endsWith('-yolo')) {
         throw new Error('No skip-permissions (*-yolo) agent configured');
       }
 
@@ -285,6 +270,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
         feedbackId: fb.id,
         agentEndpointId: agent.id,
         instructions,
+        permissionProfile: dispatchType === 'yolo' && explicitYoloAgent ? 'interactive-yolo' : undefined,
       });
 
       if (result.sessionId) {
@@ -351,9 +337,9 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
               class="qdp-agent-select"
               value={selectedAgentId}
               onChange={(e) => setSelectedAgentId((e.target as HTMLSelectElement).value)}
-              disabled={dispatchType === 'yolo'}
-              title={dispatchType === 'yolo' ? 'YOLO auto-picks a yolo-profile agent' : 'Pick agent (runtime + permission profile)'}
+              title={dispatchType === 'yolo' ? 'Pick a specific endpoint, or Auto for Claude-first YOLO' : 'Pick agent (runtime + permission profile)'}
             >
+              {dispatchType === 'yolo' && <option value="">Auto</option>}
               {groupAgentsByRuntime(agents).map(([runtime, group]) => (
                 <optgroup key={runtime} label={`${(RUNTIME_INFO[runtime] || RUNTIME_INFO.claude).label}`}>
                   {group.map((a: any) => (
