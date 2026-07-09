@@ -200,10 +200,24 @@ export const flatterItems = sqliteTable('flatter_items', {
   updatedAt: text('updated_at').notNull(),
 });
 
+export const flatterPlans = sqliteTable('flatter_plans', {
+  id: text('id').primaryKey(),
+  appId: text('app_id').notNull().references(() => applications.id, { onDelete: 'cascade' }),
+  reportId: text('report_id').references(() => flatterReports.id, { onDelete: 'set null' }),
+  title: text('title').notNull(),
+  summary: text('summary').notNull().default(''),
+  status: text('status').notNull().default('ready'),
+  itemsJson: text('items_json').notNull().default('[]'),
+  notes: text('notes').notNull().default(''),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
 export const flatterRuns = sqliteTable('flatter_runs', {
   id: text('id').primaryKey(),
   appId: text('app_id').notNull().references(() => applications.id, { onDelete: 'cascade' }),
   itemId: text('item_id').notNull().references(() => flatterItems.id, { onDelete: 'cascade' }),
+  planId: text('plan_id').references(() => flatterPlans.id, { onDelete: 'set null' }),
   label: text('label').notNull(),
   status: text('status').notNull().default('pending'),
   columnsJson: text('columns_json').notNull().default('[]'),

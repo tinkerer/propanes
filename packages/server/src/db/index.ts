@@ -199,10 +199,27 @@ export function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_flatter_items_report ON flatter_items(report_id, category, updated_at);
     CREATE INDEX IF NOT EXISTS idx_flatter_items_app ON flatter_items(app_id, status, updated_at);
 
+    CREATE TABLE IF NOT EXISTS flatter_plans (
+      id TEXT PRIMARY KEY,
+      app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      report_id TEXT REFERENCES flatter_reports(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'ready',
+      items_json TEXT NOT NULL DEFAULT '[]',
+      notes TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_flatter_plans_app ON flatter_plans(app_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_flatter_plans_status ON flatter_plans(app_id, status, updated_at);
+
     CREATE TABLE IF NOT EXISTS flatter_runs (
       id TEXT PRIMARY KEY,
       app_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
       item_id TEXT NOT NULL REFERENCES flatter_items(id) ON DELETE CASCADE,
+      plan_id TEXT REFERENCES flatter_plans(id) ON DELETE SET NULL,
       label TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'pending',
       columns_json TEXT NOT NULL DEFAULT '[]',
@@ -315,6 +332,8 @@ export function runMigrations() {
     `ALTER TABLE agent_endpoints ADD COLUMN isolation TEXT NOT NULL DEFAULT 'shared'`,
     `ALTER TABLE agent_sessions ADD COLUMN isolation TEXT NOT NULL DEFAULT 'shared'`,
     `ALTER TABLE agent_sessions ADD COLUMN isolate_id TEXT`,
+    `ALTER TABLE flatter_runs ADD COLUMN plan_id TEXT REFERENCES flatter_plans(id) ON DELETE SET NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_flatter_runs_plan ON flatter_runs(plan_id, created_at)`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after

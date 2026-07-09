@@ -382,6 +382,7 @@ export const api = {
       monitors: any[];
       reports: any[];
       items: any[];
+      plans: any[];
       runs: any[];
     }>(`/admin/flatter/apps/${appId}`),
 
@@ -400,6 +401,16 @@ export const api = {
     request(`/admin/flatter/items/${itemId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
+    }),
+
+  createFlatterPlan: (appId: string) =>
+    request(`/admin/flatter/apps/${appId}/plans`, {
+      method: 'POST',
+    }),
+
+  runFlatterPlan: (planId: string) =>
+    request(`/admin/flatter/plans/${planId}/run`, {
+      method: 'POST',
     }),
 
   launchFlatterItem: (itemId: string) =>

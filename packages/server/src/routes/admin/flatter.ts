@@ -64,6 +64,15 @@ function itemJson(row: typeof schema.flatterItems.$inferSelect) {
   };
 }
 
+type FlatterPlanItem = ReturnType<typeof itemJson>;
+
+function planJson(row: typeof schema.flatterPlans.$inferSelect) {
+  return {
+    ...row,
+    items: parseJson<FlatterPlanItem[]>(row.itemsJson, []),
+  };
+}
+
 function runJson(row: typeof schema.flatterRuns.$inferSelect) {
   return {
     ...row,
@@ -351,6 +360,182 @@ function pickAgents(appId: string) {
   };
 }
 
+function formatPlanItem(item: FlatterPlanItem, index: number) {
+  return [
+    `${index + 1}. ${item.title}`,
+    `   Commit/ref: ${item.upstreamRef || '(not set)'}`,
+    `   Category: ${item.category}; risk: ${item.risk}; relevance: ${item.relevance}`,
+    `   Rationale: ${item.rationale || '(none)'}`,
+    `   Scope: ${item.scopeNotes || '(none)'}`,
+    `   Operator notes: ${item.operatorNotes || '(none)'}`,
+  ].join('\n');
+}
+
+function summarizePlan(items: FlatterPlanItem[]) {
+  const critical = items.filter((item) => item.category === 'critical').length;
+  const highRisk = items.filter((item) => item.risk === 'high').length;
+  const noted = items.filter((item) => item.operatorNotes.trim().length > 0).length;
+  return [
+    `${items.length} accepted upstream ${items.length === 1 ? 'change' : 'changes'}`,
+    `${critical} critical`,
+    `${highRisk} high-risk`,
+    `${noted} with operator notes`,
+  ].join(' · ');
+}
+
+function aggregatePlanNotes(items: FlatterPlanItem[]) {
+  return items
+    .filter((item) => item.operatorNotes.trim().length > 0)
+    .map((item, index) => `${index + 1}. ${item.title}\n${item.operatorNotes.trim()}`)
+    .join('\n\n');
+}
+
+function buildPlanPrompt(app: typeof schema.applications.$inferSelect, plan: ReturnType<typeof planJson>, lane: 'implement' | 'review' | 'verify') {
+  const items = plan.items.map(formatPlanItem).join('\n\n');
+  const laneBrief = lane === 'implement'
+    ? 'Produce the implementation plan and execute it for Propanes. Stay scoped to the accepted upstream changes, make code changes directly, and run the most relevant local verification.'
+    : lane === 'review'
+      ? 'Review the accepted change set for risks, regressions, missing tests, and sequencing. If implementation is still in progress, review the plan and likely blast radius.'
+      : 'Verify the accepted change set. Focus on build/test execution, screenshots where UI is involved, and precise pass/fail notes for operator judgment.';
+  return `You are the ${lane} lane in a Flatter upstream-sync plan run.
+
+App: ${app.name}
+Repo: ${app.projectDir}
+Plan: ${plan.title}
+Plan status: ${plan.status}
+Plan summary: ${plan.summary}
+
+Accepted upstream changes:
+${items || '(none)'}
+
+Aggregated operator notes:
+${plan.notes || '(none)'}
+
+${laneBrief}`;
+}
+
+function createPlanFromAccepted(appId: string) {
+  const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
+  if (!app) throw new Error('App not found');
+  const itemRows = db.select().from(schema.flatterItems)
+    .where(and(eq(schema.flatterItems.appId, appId), eq(schema.flatterItems.status, 'accepted')))
+    .orderBy(desc(schema.flatterItems.updatedAt))
+    .all();
+  if (itemRows.length === 0) throw new Error('Accept at least one Flatter item before creating a plan');
+
+  const items = itemRows.map(itemJson);
+  const reportId = items[0]?.reportId || null;
+  const now = new Date().toISOString();
+  const planId = ulid();
+  const summary = summarizePlan(items);
+  db.insert(schema.flatterPlans).values({
+    id: planId,
+    appId,
+    reportId,
+    title: `Flatter plan: ${items.length} accepted ${items.length === 1 ? 'change' : 'changes'}`,
+    summary,
+    status: 'ready',
+    itemsJson: JSON.stringify(items),
+    notes: aggregatePlanNotes(items),
+    createdAt: now,
+    updatedAt: now,
+  }).run();
+}
+
+async function launchRunForPlan(planId: string) {
+  const planRow = db.select().from(schema.flatterPlans).where(eq(schema.flatterPlans.id, planId)).get();
+  if (!planRow) throw new Error('Plan not found');
+  const app = db.select().from(schema.applications).where(eq(schema.applications.id, planRow.appId)).get();
+  if (!app) throw new Error('App not found');
+  const plan = planJson(planRow);
+  if (plan.items.length === 0) throw new Error('Plan has no accepted items to run');
+
+  const agents = pickAgents(app.id);
+  if (!agents.implement || !agents.review || !agents.verify) {
+    throw new Error('Need at least one agent endpoint configured for this app');
+  }
+
+  const runId = ulid();
+  const now = new Date().toISOString();
+  const stages = [
+    {
+      key: 'implement',
+      label: 'PR',
+      agent: agents.implement,
+      prompt: buildPlanPrompt(app, plan, 'implement'),
+    },
+    {
+      key: 'review',
+      label: 'Review',
+      agent: agents.review,
+      prompt: buildPlanPrompt(app, plan, 'review'),
+    },
+    {
+      key: 'verify',
+      label: 'Verify',
+      agent: agents.verify,
+      prompt: buildPlanPrompt(app, plan, 'verify'),
+    },
+  ];
+
+  const columns: Array<Record<string, unknown>> = [];
+  for (const stage of stages) {
+    const feedbackId = ulid();
+    db.insert(schema.feedbackItems).values({
+      id: feedbackId,
+      type: 'manual',
+      status: 'dispatched',
+      title: `[Flatter/${stage.label}] ${plan.title}`,
+      description: stage.prompt,
+      appId: app.id,
+      dispatchedTo: stage.agent?.name || null,
+      dispatchedAt: now,
+      dispatchStatus: 'running',
+      createdAt: now,
+      updatedAt: now,
+    }).run();
+    const { sessionId } = await dispatchAgentSession({
+      feedbackId,
+      agentEndpointId: stage.agent!.id,
+      prompt: stage.prompt,
+      cwd: app.projectDir,
+      permissionProfile: (stage.agent!.permissionProfile || app.defaultPermissionProfile || 'interactive-require') as any,
+      allowedTools: stage.agent!.allowedTools || app.defaultAllowedTools || null,
+    });
+    columns.push({
+      key: stage.key,
+      label: stage.label,
+      feedbackId,
+      sessionId,
+      agentEndpointId: stage.agent!.id,
+      agentName: stage.agent!.name,
+    });
+  }
+
+  db.insert(schema.flatterRuns).values({
+    id: runId,
+    appId: app.id,
+    itemId: plan.items[0].id,
+    planId: plan.id,
+    label: plan.title,
+    status: 'running',
+    columnsJson: JSON.stringify(columns),
+    notes: plan.notes,
+    createdAt: now,
+    updatedAt: now,
+  }).run();
+
+  const itemIds = plan.items.map((item) => item.id);
+  db.update(schema.flatterItems).set({
+    status: 'in_progress',
+    updatedAt: now,
+  }).where(inArray(schema.flatterItems.id, itemIds)).run();
+  db.update(schema.flatterPlans).set({
+    status: 'running',
+    updatedAt: now,
+  }).where(eq(schema.flatterPlans.id, plan.id)).run();
+}
+
 async function launchRunForItem(itemId: string) {
   const itemRow = db.select().from(schema.flatterItems).where(eq(schema.flatterItems.id, itemId)).get();
   if (!itemRow) throw new Error('Item not found');
@@ -455,6 +640,11 @@ function hydrateState(appId: string) {
       .all()
       .map(itemJson)
     : [];
+  const plans = db.select().from(schema.flatterPlans)
+    .where(eq(schema.flatterPlans.appId, appId))
+    .orderBy(desc(schema.flatterPlans.createdAt))
+    .all()
+    .map(planJson);
   const runs = db.select().from(schema.flatterRuns)
     .where(eq(schema.flatterRuns.appId, appId))
     .orderBy(desc(schema.flatterRuns.createdAt))
@@ -492,6 +682,7 @@ function hydrateState(appId: string) {
     monitors,
     reports,
     items,
+    plans,
     runs: hydratedRuns,
   };
 }
@@ -544,6 +735,29 @@ flatterRoutes.patch('/flatter/items/:itemId', async (c) => {
     updatedAt: new Date().toISOString(),
   }).where(eq(schema.flatterItems.id, itemId)).run();
   return c.json(hydrateState(item.appId));
+});
+
+flatterRoutes.post('/flatter/apps/:appId/plans', async (c) => {
+  const appId = c.req.param('appId');
+  try {
+    createPlanFromAccepted(appId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Plan creation failed';
+    return c.json({ error: message }, message.includes('Accept at least one') ? 400 : 500);
+  }
+  return c.json(hydrateState(appId));
+});
+
+flatterRoutes.post('/flatter/plans/:planId/run', async (c) => {
+  const planId = c.req.param('planId');
+  const plan = db.select().from(schema.flatterPlans).where(eq(schema.flatterPlans.id, planId)).get();
+  if (!plan) return c.json({ error: 'Plan not found' }, 404);
+  try {
+    await launchRunForPlan(planId);
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Plan run failed' }, 500);
+  }
+  return c.json(hydrateState(plan.appId));
 });
 
 flatterRoutes.post('/flatter/items/:itemId/launch', async (c) => {

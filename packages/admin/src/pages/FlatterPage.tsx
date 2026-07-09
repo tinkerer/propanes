@@ -5,6 +5,7 @@ type FlatterState = {
   monitors: any[];
   reports: any[];
   items: any[];
+  plans: any[];
   runs: any[];
 };
 
@@ -12,6 +13,7 @@ const EMPTY_STATE: FlatterState = {
   monitors: [],
   reports: [],
   items: [],
+  plans: [],
   runs: [],
 };
 
@@ -86,12 +88,16 @@ export function FlatterPage({ appId }: { appId: string }) {
     return map;
   }, [state.items]);
 
-  const runsByItem = useMemo(() => {
+  const acceptedItems = useMemo(() => state.items.filter((item) => item.status === 'accepted'), [state.items]);
+  const latestPlan = state.plans[0] || null;
+
+  const runsByPlan = useMemo(() => {
     const map = new Map<string, any[]>();
     for (const run of state.runs) {
-      const list = map.get(run.itemId) || [];
+      const key = run.planId || run.itemId;
+      const list = map.get(key) || [];
       list.push(run);
-      map.set(run.itemId, list);
+      map.set(key, list);
     }
     return map;
   }, [state.runs]);
@@ -149,13 +155,25 @@ export function FlatterPage({ appId }: { appId: string }) {
     }
   }
 
-  async function launchItem(itemId: string) {
-    setBusyKey(`launch:${itemId}`);
+  async function createPlan() {
+    setBusyKey('create-plan');
     setError('');
     try {
-      setState(await api.launchFlatterItem(itemId) as FlatterState);
+      setState(await api.createFlatterPlan(appId) as FlatterState);
     } catch (err: any) {
-      setError(err.message || 'Launch failed');
+      setError(err.message || 'Plan creation failed');
+    } finally {
+      setBusyKey('');
+    }
+  }
+
+  async function runPlan(planId: string) {
+    setBusyKey(`run-plan:${planId}`);
+    setError('');
+    try {
+      setState(await api.runFlatterPlan(planId) as FlatterState);
+    } catch (err: any) {
+      setError(err.message || 'Plan run failed');
     } finally {
       setBusyKey('');
     }
@@ -262,6 +280,72 @@ export function FlatterPage({ appId }: { appId: string }) {
         </div>
       )}
 
+      <div class="detail-card" style="display:flex;flex-direction:column;gap:14px;flex:0 0 auto;overflow:visible">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+          <div>
+            <div style="font-size:11px;color:var(--pw-text-faint);text-transform:uppercase;letter-spacing:.06em">Plan & Run</div>
+            <div style="font-size:18px;font-weight:700;margin-top:4px">
+              {latestPlan ? latestPlan.title : 'No plan generated yet'}
+            </div>
+            <div style="font-size:13px;color:var(--pw-text-muted);margin-top:6px">
+              {latestPlan ? latestPlan.summary : `${acceptedItems.length} accepted items are ready to aggregate into a plan.`}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+            <button class="btn btn-sm" onClick={() => void createPlan()} disabled={busyKey === 'create-plan' || acceptedItems.length === 0}>
+              {busyKey === 'create-plan' ? 'Planning…' : 'Create Plan from Accepted'}
+            </button>
+            {latestPlan && (
+              <button class="btn btn-primary btn-sm" onClick={() => void runPlan(latestPlan.id)} disabled={busyKey === `run-plan:${latestPlan.id}` || latestPlan.status === 'running'}>
+                {busyKey === `run-plan:${latestPlan.id}` ? 'Starting…' : latestPlan.status === 'running' ? 'Running' : 'Run Plan'}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {latestPlan && (
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
+            <div style="border:1px solid var(--pw-border);border-radius:10px;padding:12px;background:var(--pw-bg-surface)">
+              <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+                <strong style="font-size:13px">Accepted Changes</strong>
+                <span class="sm-tool-badge" style={{ color: statusTone(latestPlan.status), borderColor: statusTone(latestPlan.status) }}>{latestPlan.status}</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;max-height:240px;overflow:auto">
+                {(latestPlan.items || []).map((item: any) => (
+                  <div key={item.id} style="font-size:12px;color:var(--pw-text-muted)">
+                    <span style="color:var(--pw-text-primary);font-weight:700">{item.title}</span>
+                    <span> · risk {item.risk}</span>
+                    {item.operatorNotes ? <div style="margin-top:3px;color:var(--pw-text-faint)">Notes: {item.operatorNotes}</div> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style="border:1px solid var(--pw-border);border-radius:10px;padding:12px;background:var(--pw-bg)">
+              <strong style="font-size:13px">Progress</strong>
+              {(runsByPlan.get(latestPlan.id) || []).length === 0 && (
+                <div style="font-size:12px;color:var(--pw-text-muted);margin-top:10px">Run this plan to launch PR, review, and verification lanes.</div>
+              )}
+              {(runsByPlan.get(latestPlan.id) || []).map((run) => (
+                <div key={run.id} style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px">
+                  {run.columns.map((column: any) => (
+                    <div key={String(column.key)} style="border:1px solid var(--pw-border);border-radius:8px;padding:8px;background:var(--pw-bg-surface)">
+                      <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+                        <strong style="font-size:12px">{column.label}</strong>
+                        <span style={{ fontSize: '11px', color: statusTone(String(column.sessionStatus || 'pending')) }}>{String(column.sessionStatus || 'pending')}</span>
+                      </div>
+                      <div style="font-size:11px;color:var(--pw-text-faint);margin-top:4px">{column.agentName}</div>
+                      {column.sessionId && (
+                        <a href={`#/sessions/${column.sessionId}`} style="font-size:11px;margin-top:6px;display:inline-block">Open session</a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;align-items:start">
         {(['critical', 'nice', 'skip'] as const).map((category) => (
           <div key={category} class="detail-card" style="display:flex;flex-direction:column;gap:12px;min-height:240px">
@@ -270,7 +354,6 @@ export function FlatterPage({ appId }: { appId: string }) {
               <span class="sidebar-count">{itemsByCategory[category]?.length || 0}</span>
             </div>
             {(itemsByCategory[category] || []).map((item) => {
-              const runs = runsByItem.get(item.id) || [];
               return (
                 <div key={item.id} style="border:1px solid var(--pw-border);border-radius:10px;padding:12px;background:var(--pw-bg-surface);display:flex;flex-direction:column;gap:10px">
                   <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
@@ -301,9 +384,6 @@ export function FlatterPage({ appId }: { appId: string }) {
                     {item.status !== 'skipped' && (
                       <button class="btn btn-sm" onClick={() => void saveItem(item, { status: 'skipped', category: 'skip' })} disabled={busyKey === `item:${item.id}`}>Skip</button>
                     )}
-                    <button class="btn btn-sm" onClick={() => void launchItem(item.id)} disabled={busyKey === `launch:${item.id}` || item.status === 'skipped'}>
-                      {busyKey === `launch:${item.id}` ? 'Launching…' : 'Launch Lanes'}
-                    </button>
                   </div>
 
                   <div style="display:flex;flex-direction:column;gap:6px">
@@ -318,26 +398,6 @@ export function FlatterPage({ appId }: { appId: string }) {
                     </div>
                   </div>
 
-                  {runs.length > 0 && (
-                    <div style="display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--pw-border);padding-top:10px">
-                      {runs.map((run) => (
-                        <div key={run.id} style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
-                          {run.columns.map((column: any) => (
-                            <div key={String(column.key)} style="border:1px solid var(--pw-border);border-radius:8px;padding:8px;background:var(--pw-bg)">
-                              <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
-                                <strong style="font-size:12px">{column.label}</strong>
-                                <span style={{ fontSize: '11px', color: statusTone(String(column.sessionStatus || 'pending')) }}>{String(column.sessionStatus || 'pending')}</span>
-                              </div>
-                              <div style="font-size:11px;color:var(--pw-text-faint);margin-top:4px">{column.agentName}</div>
-                              {column.sessionId && (
-                                <a href={`#/sessions/${column.sessionId}`} style="font-size:11px;margin-top:6px;display:inline-block">Open session</a>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               );
             })}
