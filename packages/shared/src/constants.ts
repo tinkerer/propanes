@@ -39,6 +39,13 @@ export const DEFAULT_SHORTCUT = 'ctrl+shift+f';
 export const DISPATCH_MODES = ['webhook', 'headless', 'interactive'] as const;
 export const AGENT_RUNTIMES = ['claude', 'codex'] as const;
 
+// Phase 5 — isolation is a property of the agent type chosen at launch.
+//   'shared'       — the launcher's own agent-home (default, today's behavior).
+//   'per_user_pod' — the owner's long-lived per-user pod.
+//   'per_session'  — a fresh ephemeral isolate per session, torn down at end.
+export const ISOLATION_MODES = ['shared', 'per_user_pod', 'per_session'] as const;
+export type IsolationMode = (typeof ISOLATION_MODES)[number];
+
 // Permission profiles encode two orthogonal axes:
 //   - I/O mode:     interactive (TTY) | headless (one-shot `-p`) | headless-stream (bidirectional JSON)
 //   - Permissions:  yolo (skip) | require (ask)

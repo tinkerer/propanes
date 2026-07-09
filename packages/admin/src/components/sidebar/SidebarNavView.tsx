@@ -63,6 +63,7 @@ async function pollLiveConnections() {
 
 const settingsItems = [
   { path: '/settings/users', label: 'Users', icon: '\u{1F465}', adminOnly: true },
+  { path: '/settings/usage', label: 'Usage', icon: '\u{1F4CA}', adminOnly: true },
   { path: '/settings/agents', label: 'Agents', icon: '\u{1F916}', adminOnly: true },
   { path: '/settings/infrastructure', label: 'Infrastructure', icon: '\u{1F3D7}', adminOnly: true },
   { path: '/settings/wiggum', label: 'Wiggum', icon: '\u{1F575}', adminOnly: true },

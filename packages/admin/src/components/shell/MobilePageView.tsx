@@ -14,6 +14,7 @@ import { StandaloneSessionPage } from '../../pages/StandaloneSessionPage.js';
 import { SpecWikiPage } from '../../pages/SpecWikiPage.js';
 import { FlatterPage } from '../../pages/FlatterPage.js';
 import { UsersPage } from '../../pages/UsersPage.js';
+import { UsagePage } from '../../pages/UsagePage.js';
 
 function NoApp() {
   return (
@@ -52,6 +53,7 @@ function renderMobileRoute(route: string) {
   }
 
   if (route.startsWith('/settings/users')) return <UsersPage />;
+  if (route.startsWith('/settings/usage')) return <UsagePage />;
   if (route.startsWith('/settings/agents')) return <AgentsPage />;
   if (route.startsWith('/settings/infrastructure')) return <InfrastructurePage />;
   if (route.startsWith('/settings/user-guide')) return <UserGuidePage />;

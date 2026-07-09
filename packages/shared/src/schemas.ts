@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FEEDBACK_TYPES, FEEDBACK_STATUSES, DISPATCH_MODES, AGENT_RUNTIMES, PERMISSION_PROFILES } from './constants.js';
+import { FEEDBACK_TYPES, FEEDBACK_STATUSES, DISPATCH_MODES, AGENT_RUNTIMES, PERMISSION_PROFILES, ISOLATION_MODES } from './constants.js';
 
 const nullishToUndefined = (value: unknown) => value == null ? undefined : value;
 const emptyStringToUndefined = (value: unknown) => value === '' ? undefined : nullishToUndefined(value);
@@ -236,6 +236,7 @@ export const agentEndpointSchema = z.object({
   spriteConfigId: z.string().nullable().optional(),
   description: z.string().max(500).optional(),
   sourceSessionIds: z.string().max(5000).optional(),
+  isolation: z.enum(ISOLATION_MODES).default('shared'),
 });
 
 export const dispatchSchema = z.object({

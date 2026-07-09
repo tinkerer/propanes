@@ -128,6 +128,12 @@ export const agentEndpoints = sqliteTable('agent_endpoints', {
   spriteConfigId: text('sprite_config_id'),
   description: text('description'),
   sourceSessionIds: text('source_session_ids'),
+  // Phase 5 — isolation is a property of the agent type chosen at launch.
+  //   'shared'        — today's behavior; the launcher's own agent-home.
+  //   'per_user_pod'  — the owner's long-lived per-user pod (phase 4).
+  //   'per_session'   — a fresh ephemeral isolate created at dispatch and torn
+  //                     down at session end (git-worktree substrate, first cut).
+  isolation: text('isolation').notNull().default('shared'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
@@ -234,10 +240,38 @@ export const agentSessions = sqliteTable('agent_sessions', {
   spriteExecSessionId: text('sprite_exec_session_id'),
   cosThreadId: text('cos_thread_id'),
   title: text('title'),
+  // Phase 5 — the isolation mode this session actually ran in, and the id of
+  // the ephemeral isolate (git-worktree path token) when isolation='per_session'.
+  isolation: text('isolation').notNull().default('shared'),
+  isolateId: text('isolate_id'),
   createdAt: text('created_at').notNull(),
   startedAt: text('started_at'),
   completedAt: text('completed_at'),
   lastActivityAt: text('last_activity_at'),
+});
+
+// Phase 5 — per-session usage meter. One row per dispatched session, tagged
+// with owner/org and the isolate it ran in. Wall time is finalized from the
+// session's terminal state (reconcile-on-read + a periodic sweep); token/cost
+// columns are the substrate for a future Propanes-as-a-service billing ledger
+// and are left null until the runtime exposes per-session accounting.
+export const sessionUsage = sqliteTable('session_usage', {
+  // Keyed by sessionId so begin is idempotent (INSERT OR IGNORE).
+  id: text('id').primaryKey(),
+  sessionId: text('session_id').notNull(),
+  userId: text('user_id'),
+  orgId: text('org_id'),
+  isolation: text('isolation').notNull().default('shared'),
+  isolateClass: text('isolate_class'), // 'shared' | 'per_user_pod' | 'worktree'
+  isolateId: text('isolate_id'),
+  startedAt: text('started_at').notNull(),
+  endedAt: text('ended_at'),
+  wallMs: integer('wall_ms'),
+  tokensIn: integer('tokens_in'),
+  tokensOut: integer('tokens_out'),
+  costEst: real('cost_est'),
+  status: text('status'),
+  createdAt: text('created_at').notNull(),
 });
 
 export const tmuxConfigs = sqliteTable('tmux_configs', {

@@ -161,6 +161,7 @@ agentRoutes.post('/agents', async (c) => {
     autoPlan: parsed.data.autoPlan || false,
     description: parsed.data.description || null,
     sourceSessionIds: parsed.data.sourceSessionIds || null,
+    isolation: parsed.data.isolation || 'shared',
     createdAt: now,
     updatedAt: now,
   });
@@ -211,6 +212,7 @@ agentRoutes.patch('/agents/:id', async (c) => {
     preferredLauncherId: parsed.data.preferredLauncherId ?? existing.preferredLauncherId,
     harnessConfigId: parsed.data.harnessConfigId ?? existing.harnessConfigId,
     spriteConfigId: parsed.data.spriteConfigId ?? existing.spriteConfigId,
+    isolation: parsed.data.isolation || existing.isolation || 'shared',
     updatedAt: now,
   }).where(eq(schema.agentEndpoints.id, id));
 

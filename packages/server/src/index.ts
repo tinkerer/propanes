@@ -1,9 +1,11 @@
 import { serve } from '@hono/node-server';
 import type { Server } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNotNull, inArray } from 'drizzle-orm';
 import { app } from './app.js';
 import { runMigrations, db, schema } from './db/index.js';
+import { reconcileUsage } from './metering.js';
+import { destroyWorktreeIsolate, branchForIsolatePath } from './isolates.js';
 import { registerSession } from './sessions.js';
 import { verifyAdminToken } from './auth.js';
 import {
@@ -124,6 +126,41 @@ setInterval(() => {
     console.error('[session-followups] sweep failed:', err);
   });
 }, 5_000);
+
+// Tear down worktree isolates whose per_session session has reached a terminal
+// status. isolate_id is cleared after a successful sweep so we don't reprocess
+// historical rows every tick.
+function sweepTerminalIsolates(): void {
+  const rows = db
+    .select({ id: schema.agentSessions.id, isolateId: schema.agentSessions.isolateId })
+    .from(schema.agentSessions)
+    .where(
+      and(
+        eq(schema.agentSessions.isolation, 'per_session'),
+        isNotNull(schema.agentSessions.isolateId),
+        inArray(schema.agentSessions.status, ['completed', 'failed', 'killed', 'deleted']),
+      ),
+    )
+    .all();
+  for (const row of rows) {
+    if (!row.isolateId) continue;
+    destroyWorktreeIsolate({ path: row.isolateId, branch: branchForIsolatePath(row.isolateId) });
+    db.update(schema.agentSessions).set({ isolateId: null }).where(eq(schema.agentSessions.id, row.id)).run();
+  }
+}
+
+// Phase 5 — every 60s: finalize the usage meter from terminal session state
+// and tear down worktree isolates whose session has ended. Both are idempotent
+// and cover all session exit paths (local session-service, remote launcher,
+// harness, sprite) without threading teardown through each one.
+setInterval(() => {
+  try {
+    reconcileUsage();
+    sweepTerminalIsolates();
+  } catch (err) {
+    console.error('[phase5] usage/isolate sweep failed:', err);
+  }
+}, 60_000);
 
 // Channel retention: every 5 min, archive threads in channels whose
 // policy.retention.archiveAfterDays cutoff has passed.
