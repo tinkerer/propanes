@@ -14,6 +14,7 @@ import {
   dispatchHarnessSession,
 } from '../../dispatch.js';
 import { getLauncher, sendAndWait } from '../../launcher-registry.js';
+import { getAdminUser } from '../../admin-auth.js';
 
 export const systemRoutes = new Hono();
 
@@ -775,7 +776,10 @@ function buildNewEntityPrompt(
 // Plain terminal session (no agent, no feedback)
 systemRoutes.post('/terminal', async (c) => {
   const body = await c.req.json().catch(() => ({}));
-  const { cwd, appId, launcherId, harnessConfigId, permissionProfile } = body as { cwd?: string; appId?: string; launcherId?: string; harnessConfigId?: string; permissionProfile?: string };
+  const { cwd, appId, harnessConfigId, permissionProfile } = body as { cwd?: string; appId?: string; launcherId?: string; harnessConfigId?: string; permissionProfile?: string };
+  const user = getAdminUser(c);
+  const requestedLauncherId = (body as { launcherId?: string }).launcherId;
+  const launcherId = user.role === 'member' && user.launcherId ? user.launcherId : requestedLauncherId;
   // Harness terminal: exec into the container
   if (harnessConfigId && launcherId) {
     try {
@@ -787,6 +791,8 @@ systemRoutes.post('/terminal', async (c) => {
         composeDir: hc?.composeDir || undefined,
         serviceName: 'pw-server',
         permissionProfile: 'plain',
+        ownerUserId: user.id,
+        orgId: user.orgId,
       });
       return c.json({ sessionId });
     } catch (err) {
@@ -804,7 +810,14 @@ systemRoutes.post('/terminal', async (c) => {
   }
 
   try {
-    const { sessionId } = await dispatchTerminalSession({ cwd: resolvedCwd, appId, launcherId, permissionProfile: (permissionProfile || 'plain') as any });
+    const { sessionId } = await dispatchTerminalSession({
+      cwd: resolvedCwd,
+      appId,
+      launcherId,
+      permissionProfile: (permissionProfile || 'plain') as any,
+      ownerUserId: user.id,
+      orgId: user.orgId,
+    });
     return c.json({ sessionId });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';

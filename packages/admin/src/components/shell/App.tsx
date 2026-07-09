@@ -1,6 +1,6 @@
 import { useEffect } from 'preact/hooks';
 import { ComponentChildren } from 'preact';
-import { isAuthenticated, currentRoute, loadApplications, isEmbedded, isCompanion, isWorkbench, isCosEmbed, clearToken } from '../../lib/state.js';
+import { isAuthenticated, currentRoute, loadApplications, loadCurrentUser, isEmbedded, isCompanion, isWorkbench, isCosEmbed, clearToken } from '../../lib/state.js';
 import { setChiefOfStaffOpen } from '../../lib/chief-of-staff.js';
 import { connectAdminWs } from '../../lib/admin-ws.js';
 import { initNotifications } from '../../lib/notifications.js';
@@ -33,6 +33,7 @@ function tauriStartDrag() {
 function CosEmbedRoot() {
   // Force the Ops chat open and load apps so dispatch / app context resolves.
   useEffect(() => {
+    loadCurrentUser().catch(() => {});
     loadApplications();
     initNotifications();
     connectAdminWs();

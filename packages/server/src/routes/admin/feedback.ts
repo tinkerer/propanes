@@ -7,41 +7,52 @@ import {
   adminFeedbackCreateSchema,
   batchOperationSchema,
 } from '@propanes/shared';
-import { db, schema, sqlite } from '../../db/index.js';
+import { db, schema } from '../../db/index.js';
 import { hydrateFeedback } from '../../dispatch.js';
 import { feedbackEvents } from '../../events.js';
-import { verifyAdminToken } from '../../auth.js';
 import { mintFeedbackThread } from '../../cos-inbox.js';
+import { getAdminUser, memberFeedbackScope, visibleToMember } from '../../admin-auth.js';
 
 export const feedbackRoutes = new Hono();
 
 feedbackRoutes.get('/feedback/tags', async (c) => {
   const appId = c.req.query('appId');
+  const scope = memberFeedbackScope(getAdminUser(c));
 
   let rows: { tag: string; count: number }[];
   if (appId) {
     if (appId === '__unlinked__') {
-      rows = sqlite.prepare(
-        `SELECT ft.tag, COUNT(*) as count FROM feedback_tags ft JOIN feedback_items fi ON ft.feedback_id = fi.id WHERE fi.app_id IS NULL GROUP BY ft.tag ORDER BY count DESC`
-      ).all() as { tag: string; count: number }[];
+      rows = db.select({ tag: schema.feedbackTags.tag, count: sql<number>`count(*)` })
+        .from(schema.feedbackTags)
+        .innerJoin(schema.feedbackItems, eq(schema.feedbackTags.feedbackId, schema.feedbackItems.id))
+        .where(and(sql`${schema.feedbackItems.appId} IS NULL`, scope))
+        .groupBy(schema.feedbackTags.tag)
+        .orderBy(desc(sql`count(*)`))
+        .all() as { tag: string; count: number }[];
     } else {
-      rows = sqlite.prepare(
-        `SELECT ft.tag, COUNT(*) as count FROM feedback_tags ft JOIN feedback_items fi ON ft.feedback_id = fi.id WHERE fi.app_id = ? GROUP BY ft.tag ORDER BY count DESC`
-      ).all(appId) as { tag: string; count: number }[];
+      rows = db.select({ tag: schema.feedbackTags.tag, count: sql<number>`count(*)` })
+        .from(schema.feedbackTags)
+        .innerJoin(schema.feedbackItems, eq(schema.feedbackTags.feedbackId, schema.feedbackItems.id))
+        .where(and(eq(schema.feedbackItems.appId, appId), scope))
+        .groupBy(schema.feedbackTags.tag)
+        .orderBy(desc(sql`count(*)`))
+        .all() as { tag: string; count: number }[];
     }
   } else {
-    rows = sqlite.prepare(
-      `SELECT tag, COUNT(*) as count FROM feedback_tags GROUP BY tag ORDER BY count DESC`
-    ).all() as { tag: string; count: number }[];
+    rows = db.select({ tag: schema.feedbackTags.tag, count: sql<number>`count(*)` })
+      .from(schema.feedbackTags)
+      .innerJoin(schema.feedbackItems, eq(schema.feedbackTags.feedbackId, schema.feedbackItems.id))
+      .where(scope)
+      .groupBy(schema.feedbackTags.tag)
+      .orderBy(desc(sql`count(*)`))
+      .all() as { tag: string; count: number }[];
   }
 
   return c.json(rows);
 });
 
 feedbackRoutes.get('/feedback/events', async (c) => {
-  const token = c.req.header('Authorization')?.replace('Bearer ', '') || c.req.query('token');
-  if (!token || !(await verifyAdminToken(token))) return c.json({ error: 'Unauthorized' }, 401);
-
+  const user = getAdminUser(c);
   return c.body(
     new ReadableStream({
       start(controller) {
@@ -52,8 +63,15 @@ feedbackRoutes.get('/feedback/events', async (c) => {
 
         send('connected', { ts: Date.now() });
 
-        const onNew = (item: { id: string; appId: string | null }) => send('new-feedback', item);
-        const onUpdated = (item: { id: string; appId: string | null }) => send('feedback-updated', item);
+        const canSee = (item: { id: string }) => {
+          const row = db.select({ ownerUserId: schema.feedbackItems.ownerUserId, orgId: schema.feedbackItems.orgId })
+            .from(schema.feedbackItems)
+            .where(eq(schema.feedbackItems.id, item.id))
+            .get();
+          return !!row && visibleToMember(row, user);
+        };
+        const onNew = (item: { id: string; appId: string | null }) => { if (canSee(item)) send('new-feedback', item); };
+        const onUpdated = (item: { id: string; appId: string | null }) => { if (canSee(item)) send('feedback-updated', item); };
         feedbackEvents.on('new', onNew);
         feedbackEvents.on('updated', onUpdated);
 
@@ -88,6 +106,7 @@ feedbackRoutes.post('/feedback', async (c) => {
   const now = new Date().toISOString();
   const id = ulid();
   const input = parsed.data;
+  const user = getAdminUser(c);
 
   await db.insert(schema.feedbackItems).values({
     id,
@@ -96,6 +115,8 @@ feedbackRoutes.post('/feedback', async (c) => {
     title: input.title,
     description: input.description,
     appId: input.appId,
+    ownerUserId: user.id,
+    orgId: user.orgId,
     createdAt: now,
     updatedAt: now,
   });
@@ -171,6 +192,8 @@ feedbackRoutes.get('/feedback', async (c) => {
       conditions.push(eq(schema.feedbackItems.appId, appId));
     }
   }
+  const scope = memberFeedbackScope(getAdminUser(c));
+  if (scope) conditions.push(scope);
 
   let whereClause = conditions.length > 0 ? and(...conditions) : undefined;
 
@@ -364,22 +387,26 @@ feedbackRoutes.get('/feedback/:id', async (c) => {
   if (!item) {
     return c.json({ error: 'Not found' }, 404);
   }
+  if (!visibleToMember(item, getAdminUser(c))) {
+    return c.json({ error: 'Not found' }, 404);
+  }
 
+  const feedbackId = item.id;
   const tags = db
     .select()
     .from(schema.feedbackTags)
-    .where(eq(schema.feedbackTags.feedbackId, id))
+    .where(eq(schema.feedbackTags.feedbackId, feedbackId))
     .all()
     .map((t) => t.tag);
   const screenshots = db
     .select()
     .from(schema.feedbackScreenshots)
-    .where(eq(schema.feedbackScreenshots.feedbackId, id))
+    .where(eq(schema.feedbackScreenshots.feedbackId, feedbackId))
     .all();
   const audioFiles = db
     .select()
     .from(schema.feedbackAudio)
-    .where(eq(schema.feedbackAudio.feedbackId, id))
+    .where(eq(schema.feedbackAudio.feedbackId, feedbackId))
     .all();
 
   return c.json(hydrateFeedback(item, tags, screenshots, audioFiles));
@@ -394,6 +421,7 @@ feedbackRoutes.get('/feedback/:id/voice-trace', async (c) => {
     where: eq(schema.feedbackItems.id, id),
   });
   if (!item) return c.json({ error: 'Not found' }, 404);
+  if (!visibleToMember(item, getAdminUser(c))) return c.json({ error: 'Not found' }, 404);
 
   const data = item.data ? safeParseJson(item.data) : null;
   const voiceSessionId: string | undefined = data?.voiceSessionId;
@@ -449,6 +477,9 @@ feedbackRoutes.get('/feedback/:id/context', async (c) => {
   });
 
   if (!item) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+  if (!visibleToMember(item, getAdminUser(c))) {
     return c.json({ error: 'Not found' }, 404);
   }
 
@@ -535,6 +566,9 @@ feedbackRoutes.patch('/feedback/:id', async (c) => {
   if (!existing) {
     return c.json({ error: 'Not found' }, 404);
   }
+  if (!visibleToMember(existing, getAdminUser(c))) {
+    return c.json({ error: 'Not found' }, 404);
+  }
 
   const now = new Date().toISOString();
   const updates: Record<string, unknown> = { updatedAt: now };
@@ -598,6 +632,9 @@ feedbackRoutes.delete('/feedback/:id', async (c) => {
   if (!existing) {
     return c.json({ error: 'Not found' }, 404);
   }
+  if (!visibleToMember(existing, getAdminUser(c))) {
+    return c.json({ error: 'Not found' }, 404);
+  }
 
   await db.delete(schema.feedbackItems).where(eq(schema.feedbackItems.id, id));
   return c.json({ id, deleted: true });
@@ -613,12 +650,14 @@ feedbackRoutes.post('/feedback/batch', async (c) => {
   const { ids, operation, value } = parsed.data;
   const now = new Date().toISOString();
   let affected = 0;
+  const user = getAdminUser(c);
 
   for (const id of ids) {
     const existing = await db.query.feedbackItems.findFirst({
       where: eq(schema.feedbackItems.id, id),
     });
     if (!existing) continue;
+    if (!visibleToMember(existing, user)) continue;
 
     switch (operation) {
       case 'updateStatus':

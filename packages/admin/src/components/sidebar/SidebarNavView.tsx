@@ -4,7 +4,7 @@ import {
   currentRoute, clearToken, navigate, selectedAppId, applications, unlinkedCount,
   appFeedbackCounts, addAppModalOpen,
   channelsByApp, unsortedCountByApp, channelOrgProposalOpen, loadChannels,
-  pendingApprovalCountByApp, loadApprovals,
+  pendingApprovalCountByApp, loadApprovals, isAdminUser,
   type ChannelKind,
 } from '../../lib/state.js';
 import { api } from '../../lib/api.js';
@@ -62,9 +62,10 @@ async function pollLiveConnections() {
 }
 
 const settingsItems = [
-  { path: '/settings/agents', label: 'Agents', icon: '\u{1F916}' },
-  { path: '/settings/infrastructure', label: 'Infrastructure', icon: '\u{1F3D7}' },
-  { path: '/settings/wiggum', label: 'Wiggum', icon: '\u{1F575}' },
+  { path: '/settings/users', label: 'Users', icon: '\u{1F465}', adminOnly: true },
+  { path: '/settings/agents', label: 'Agents', icon: '\u{1F916}', adminOnly: true },
+  { path: '/settings/infrastructure', label: 'Infrastructure', icon: '\u{1F3D7}', adminOnly: true },
+  { path: '/settings/wiggum', label: 'Wiggum', icon: '\u{1F575}', adminOnly: true },
   { path: '/settings/user-guide', label: 'User Guide', icon: '\u{1F4D6}' },
   { path: '/settings/getting-started', label: 'Getting Started', icon: '\u{1F680}' },
   { path: '/settings/preferences', label: 'Preferences', icon: '\u2699' },
@@ -308,13 +309,15 @@ export function SidebarNavView() {
                     )}
                   </a>
                   <ChannelSubsection appId={app.id} route={route} />
-                  <a
-                    href={`#/app/${app.id}/settings`}
-                    class={route === `/app/${app.id}/settings` ? 'active' : ''}
-                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/settings`); openPageView('view:app-settings'); }}
-                  >
-                    {'\u2699'} Settings
-                  </a>
+                  {isAdminUser.value && (
+                    <a
+                      href={`#/app/${app.id}/settings`}
+                      class={route === `/app/${app.id}/settings` ? 'active' : ''}
+                      onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/settings`); openPageView('view:app-settings'); }}
+                    >
+                      {'\u2699'} Settings
+                    </a>
+                  )}
                 </div>
               )}
             </div>
@@ -365,7 +368,7 @@ export function SidebarNavView() {
         {!collapsed && (
           <div class="sidebar-section-header">Settings</div>
         )}
-        {settingsItems.map((item) => {
+        {settingsItems.filter((item) => !item.adminOnly || isAdminUser.value).map((item) => {
           const key = item.path.replace('/settings/', '');
           return (
             <a

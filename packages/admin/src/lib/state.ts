@@ -30,10 +30,13 @@ if (isolatedComponent.value) {
 }
 
 export const isAuthenticated = signal(!!localStorage.getItem('pw-admin-token'));
+export const currentUser = signal<any | null>(null);
+export const isAdminUser = computed(() => currentUser.value?.role === 'admin');
 // api.ts dispatches `pw-admin-401` on any 401 response. Flip the signal here
 // so the App shell re-renders LoginPage immediately (no manual refresh).
 window.addEventListener('pw-admin-401', () => {
   isAuthenticated.value = false;
+  currentUser.value = null;
   localStorage.removeItem('pw-selected-app-id');
 });
 export const currentRoute = signal(window.location.hash.slice(1) || '/');
@@ -201,14 +204,26 @@ async function loadFeedbackCounts(apps: any[]) {
   }
 }
 
-export function setToken(token: string) {
+export async function loadCurrentUser() {
+  if (!localStorage.getItem('pw-admin-token')) {
+    currentUser.value = null;
+    return null;
+  }
+  const res = await api.me();
+  currentUser.value = res.user;
+  return res.user;
+}
+
+export function setToken(token: string, user?: any) {
   localStorage.setItem('pw-admin-token', token);
+  if (user) currentUser.value = user;
   isAuthenticated.value = true;
 }
 
 export function clearToken() {
   localStorage.removeItem('pw-admin-token');
   localStorage.removeItem('pw-selected-app-id');
+  currentUser.value = null;
   isAuthenticated.value = false;
 }
 
