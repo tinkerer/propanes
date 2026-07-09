@@ -4,7 +4,7 @@ import { api } from '../../lib/api.js';
 import { openSession, loadAllSessions } from '../../lib/sessions.js';
 import { cachedTargets, ensureTargetsLoaded, localTargetLabel, targetKey, parseTargetKey } from './DispatchTargetSelect.js';
 import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../../lib/agent-constants.js';
-import { formatAgentOption, agentSortCmp } from '../../lib/agent-matrix.js';
+import { formatAgentOption, agentSortCmp, isDispatchableAgent, pickYoloAgent } from '../../lib/agent-matrix.js';
 import { openSetupAssistant } from './SetupAssistantDialog.js';
 
 export interface DispatchDialogRequest {
@@ -50,19 +50,13 @@ interface Agent {
   harnessConfigId?: string | null;
 }
 
-// A webhook endpoint with no URL can't be dispatched to — exclude from auto-pick
-// so the picker doesn't silently land on a misconfigured endpoint.
-function isAgentUsable(a: Agent): boolean {
-  return a.mode !== 'webhook' || !!a.url;
-}
-
 function pickAgent(
   agents: Agent[],
   profile: Agent['permissionProfile'],
   appId?: string | null,
   runtimePreference: Array<'claude' | 'codex'> = ['claude', 'codex'],
 ): Agent | undefined {
-  const ordered = [...agents].filter(isAgentUsable).sort((a, b) => {
+  const ordered = [...agents].filter(isDispatchableAgent).sort((a, b) => {
     const ai = runtimePreference.indexOf(a.runtime || 'claude');
     const bi = runtimePreference.indexOf(b.runtime || 'claude');
     return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
@@ -75,14 +69,14 @@ function pickAgent(
 }
 
 function defaultAgent(agents: Agent[], appId?: string | null): Agent | undefined {
-  const usable = agents.filter(isAgentUsable);
+  const usable = agents.filter(isDispatchableAgent);
   return usable.find(a => a.isDefault && a.appId === appId)
     || usable.find(a => a.isDefault && !a.appId)
     || usable[0];
 }
 
 function groupAgentsByRuntime(agents: Agent[]): Array<[string, Agent[]]> {
-  const sorted = [...agents].filter(isAgentUsable).sort(agentSortCmp);
+  const sorted = [...agents].filter(isDispatchableAgent).sort(agentSortCmp);
   const groups = new Map<string, Agent[]>();
   for (const a of sorted) {
     const key = a.runtime || 'claude';
@@ -133,7 +127,7 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
   const sprites = targets.filter(t => t.isSprite);
   const isBatch = req.feedbackIds.length > 1;
   const interactiveAgent = useMemo(() => pickAgent(agents, 'interactive-require', req.appId), [agents, req.appId]);
-  const yoloAgent = useMemo(() => pickAgent(agents, 'interactive-yolo', req.appId, ['codex', 'claude']), [agents, req.appId]);
+  const yoloAgent = useMemo(() => pickYoloAgent(agents, req.appId), [agents, req.appId]);
   const fallbackAgent = useMemo(() => defaultAgent(agents, req.appId), [agents, req.appId]);
   const structuredAgent = useMemo(
     () => pickAgent(agents, 'headless-yolo', req.appId, ['codex', 'claude']) || interactiveAgent || fallbackAgent,
@@ -185,11 +179,13 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
       const override = overrideAgentId ? agents.find(a => a.id === overrideAgentId) : undefined;
       let agent: Agent | undefined;
       let baseInstructions: string | undefined = instructions.trim() || undefined;
+      let permissionProfile: string | undefined;
 
       if (kind === 'interactive') {
         agent = override || interactiveAgent || fallbackAgent;
       } else if (kind === 'yolo') {
         agent = override || yoloAgent || fallbackAgent;
+        if (override) permissionProfile = 'interactive-yolo';
       } else if (kind === 'wiggum') {
         agent = override || fallbackAgent;
         baseInstructions = baseInstructions
@@ -218,6 +214,7 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
           instructions: baseInstructions,
           launcherId,
           harnessConfigId,
+          permissionProfile,
         });
         if (result.sessionId && !firstSessionId) firstSessionId = result.sessionId;
       }
