@@ -673,3 +673,22 @@ export const pendingDispatches = sqliteTable('pending_dispatches', {
   createdAt: text('created_at').notNull(),
   resolvedAt: text('resolved_at'),
 });
+
+export const orgs = sqliteTable('orgs', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  nfsShare: text('nfs_share'),
+  createdAt: text('created_at').notNull(),
+});
+
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  orgId: text('org_id').references(() => orgs.id, { onDelete: 'set null' }),
+  username: text('username').notNull().unique(),
+  passwordHash: text('password_hash').notNull(),
+  role: text('role').notNull().default('member'),
+  status: text('status').notNull().default('active'),
+  launcherId: text('launcher_id'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});

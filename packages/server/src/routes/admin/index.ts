@@ -11,9 +11,11 @@ import { cosApprovalRoutes } from './cos-approvals.js';
 import { sessionFollowupRoutes } from './session-followups.js';
 import { composerDraftsRoutes } from './composer-drafts.js';
 import { flatterRoutes } from './flatter.js';
+import { userRoutes } from './users.js';
 
 export const adminRoutes = new Hono();
 
+adminRoutes.route('/', userRoutes);
 adminRoutes.route('/', feedbackRoutes);
 adminRoutes.route('/', agentRoutes);
 adminRoutes.route('/', systemRoutes);
