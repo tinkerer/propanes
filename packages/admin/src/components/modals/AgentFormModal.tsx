@@ -24,6 +24,7 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
   const [formPermissionProfile, setFormPermissionProfile] = useState<'interactive-require' | 'interactive-yolo' | 'headless-yolo' | 'headless-stream-yolo' | 'headless-stream-require'>(editAgent?.permissionProfile || 'interactive-require');
   const [formAllowedTools, setFormAllowedTools] = useState(editAgent?.allowedTools || '');
   const [formAutoPlan, setFormAutoPlan] = useState(editAgent?.autoPlan || false);
+  const [formIsolation, setFormIsolation] = useState<'shared' | 'per_user_pod' | 'per_session'>(editAgent?.isolation || 'shared');
   const [formError, setFormError] = useState('');
   const [formLoading, setFormLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(
@@ -63,6 +64,7 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
       permissionProfile: formPermissionProfile,
       allowedTools: formAllowedTools || undefined,
       autoPlan: formAutoPlan,
+      isolation: formIsolation,
     };
 
     try {
@@ -241,6 +243,21 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
                 <option value="headless">{formRuntime === 'codex' ? 'Codex' : 'Claude'} (headless)</option>
                 <option value="webhook">Webhook</option>
               </select>
+            </div>
+            <div class="form-group">
+              <label>Isolation</label>
+              <select
+                value={formIsolation}
+                onChange={(e) => setFormIsolation((e.target as HTMLSelectElement).value as any)}
+                style="width:100%"
+              >
+                <option value="shared">Shared (launcher's own home)</option>
+                <option value="per_user_pod">Per-user pod (owner's launcher)</option>
+                <option value="per_session">Per-session isolate (ephemeral worktree)</option>
+              </select>
+              <div style="font-size:11px;color:var(--pw-text-muted);margin-top:4px">
+                Per-session runs each dispatch in a fresh throwaway git worktree, torn down at exit — for untrusted or metered one-shot runs.
+              </div>
             </div>
             {formMode === 'webhook' && (
               <>

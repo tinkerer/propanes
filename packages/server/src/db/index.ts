@@ -311,6 +311,10 @@ export function runMigrations() {
     `ALTER TABLE agent_sessions ADD COLUMN org_id TEXT REFERENCES orgs(id) ON DELETE SET NULL`,
     `CREATE INDEX IF NOT EXISTS idx_agent_sessions_owner ON agent_sessions(owner_user_id, created_at)`,
     `CREATE INDEX IF NOT EXISTS idx_agent_sessions_org ON agent_sessions(org_id, created_at)`,
+    // Phase 5: per-session isolation + metering.
+    `ALTER TABLE agent_endpoints ADD COLUMN isolation TEXT NOT NULL DEFAULT 'shared'`,
+    `ALTER TABLE agent_sessions ADD COLUMN isolation TEXT NOT NULL DEFAULT 'shared'`,
+    `ALTER TABLE agent_sessions ADD COLUMN isolate_id TEXT`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after
@@ -866,6 +870,28 @@ export function runMigrations() {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS session_usage (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      user_id TEXT,
+      org_id TEXT,
+      isolation TEXT NOT NULL DEFAULT 'shared',
+      isolate_class TEXT,
+      isolate_id TEXT,
+      started_at TEXT NOT NULL,
+      ended_at TEXT,
+      wall_ms INTEGER,
+      tokens_in INTEGER,
+      tokens_out INTEGER,
+      cost_est REAL,
+      status TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_session_usage_user ON session_usage(user_id, started_at);
+    CREATE INDEX IF NOT EXISTS idx_session_usage_org ON session_usage(org_id, started_at);
+    CREATE INDEX IF NOT EXISTS idx_session_usage_open ON session_usage(ended_at);
   `);
 
   // Seed default tmux config from tmux-pw.conf if table is empty or default has empty content

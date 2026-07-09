@@ -28,6 +28,8 @@ import { getSession } from './sessions.js';
 import { inputSessionRemote, sendKeysSessionRemote } from './session-service-client.js';
 import { extractArtifactPaths, exportSessionFiles } from './jsonl-utils.js';
 import { launchSpriteSession } from './sprite-sessions.js';
+import { createWorktreeIsolate, type Isolate } from './isolates.js';
+import { beginUsage } from './metering.js';
 
 export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, tags: string[], screenshots: (typeof schema.feedbackScreenshots.$inferSelect)[], audioFiles: (typeof schema.feedbackAudio.$inferSelect)[] = []): FeedbackItem {
   let titleHistory: FeedbackItem['titleHistory'] = [];
@@ -766,6 +768,23 @@ export async function dispatchAgentSession(params: {
 
   const launcher = targetLauncherId ? getLauncher(targetLauncherId) : undefined;
 
+  // Phase 5 — per-session isolation. When the agent type declares
+  // isolation='per_session' and the session runs locally (the worktree
+  // substrate lives on this machine's repo), give it a fresh throwaway
+  // worktree so nothing it writes leaks back into the shared tree. Remote
+  // launchers already run in their own pod, so we leave their cwd untouched
+  // and just record the intent.
+  const isolation = (agent?.isolation as string) || 'shared';
+  let isolate: Isolate | null = null;
+  const runsLocally = !(launcher && launcher.ws.readyState === 1);
+  if (isolation === 'per_session' && runsLocally && params.cwd) {
+    isolate = createWorktreeIsolate(params.cwd, sessionId);
+    if (isolate) {
+      params = { ...params, cwd: isolate.path };
+      console.log(`[dispatch] Session ${sessionId} isolated in worktree ${isolate.path}`);
+    }
+  }
+
   db.insert(schema.agentSessions)
     .values({
       id: sessionId,
@@ -780,9 +799,19 @@ export async function dispatchAgentSession(params: {
       cwd: params.cwd || null,
       ownerUserId: params.ownerUserId ?? null,
       orgId: params.orgId ?? null,
+      isolation,
+      isolateId: isolate?.id ?? null,
       createdAt: now,
     })
     .run();
+
+  beginUsage({
+    sessionId,
+    userId: params.ownerUserId ?? null,
+    orgId: params.orgId ?? null,
+    isolation,
+    isolateId: isolate?.id ?? null,
+  });
 
   // Fire-and-forget: return sessionId immediately so UI can open the tab.
   // The session is already in 'pending' status in the DB.
