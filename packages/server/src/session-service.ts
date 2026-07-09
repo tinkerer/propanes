@@ -112,6 +112,15 @@ interface AgentProcess {
   outputSeq: number;
   lastInputAckSeq: number;
   adminSockets: Set<WebSocket>;
+  /**
+   * Per-connected-client requested PTY size. The tmux/PTY is a single shared
+   * resource but multiple browsers/panes attach to it at different viewport
+   * sizes. We size the PTY to the LARGEST requested dimensions (per-axis max)
+   * so no viewer is ever truncated — mirroring tmux `window-size largest`.
+   * Last-writer-wins (the old behaviour) let a short pane shrink the PTY and
+   * leave taller panes painting blank rows below the content.
+   */
+  clientSizes: Map<WebSocket, { cols: number; rows: number }>;
   status: 'running' | 'completed' | 'failed' | 'killed';
   flushTimer: ReturnType<typeof setInterval>;
   inputState: InputState;
@@ -544,6 +553,7 @@ function spawnSession(params: {
     outputSeq: 0,
     lastInputAckSeq: 0,
     adminSockets: new Set(),
+    clientSizes: new Map(),
     status: 'running',
     flushTimer: setInterval(() => flushOutput(sessionId), FLUSH_INTERVAL),
     inputState: 'active' as InputState,
@@ -813,18 +823,51 @@ function killSessionProcess(sessionId: string): boolean {
   return true;
 }
 
-function resizeSessionProcess(sessionId: string, cols: number, rows: number): void {
+function resizeSessionProcess(sessionId: string, cols: number, rows: number, ws?: WebSocket): void {
   const proc = activeSessions.get(sessionId);
-  if (proc && proc.status === 'running') {
-    // Stream profiles parse stream-json from PTY output. Narrowing the PTY
-    // would cause tmux to hard-wrap each JSON line at the column boundary,
-    // breaking JSON.parse in cos-turn-consumer.ts. Pin cols to the wide
-    // value regardless of what the frontend xterm requested.
-    const safeRows = Math.max(2, Math.min(Number(rows) || 40, MAX_INTERACTIVE_ROWS));
-    const safeCols = Math.max(20, Math.min(Number(cols) || DEFAULT_COLS, MAX_INTERACTIVE_COLS));
-    const effectiveCols = needsWideStreamPty(proc.runtime, proc.permissionProfile) ? STREAM_PROFILE_COLS : safeCols;
-    proc.ptyProcess.resize(effectiveCols, safeRows);
+  if (!proc || proc.status !== 'running') return;
+
+  const safeRows = Math.max(2, Math.min(Number(rows) || 40, MAX_INTERACTIVE_ROWS));
+  const safeCols = Math.max(20, Math.min(Number(cols) || DEFAULT_COLS, MAX_INTERACTIVE_COLS));
+
+  // Record this client's requested size so the shared PTY can be sized to the
+  // largest attached viewer (see clientSizes). A resize with no originating
+  // socket (HTTP /resize, recovery) is applied directly without being recorded.
+  if (ws) proc.clientSizes.set(ws, { cols: safeCols, rows: safeRows });
+
+  applyEffectiveSize(proc, { cols: safeCols, rows: safeRows });
+}
+
+// Resize the shared PTY to the per-axis maximum of every connected client's
+// requested size, so the tallest/widest viewer always gets a fully-painted TUI
+// and no viewer is truncated. `fallback` is used when no client size is on
+// record (e.g. an HTTP resize before any socket registered, or recovery).
+function applyEffectiveSize(
+  proc: AgentProcess,
+  fallback?: { cols: number; rows: number },
+): void {
+  if (proc.status !== 'running') return;
+
+  // Drop sizes for sockets that are no longer attached so a closed pane can't
+  // keep the PTY pinned to its (possibly larger) dimensions forever.
+  for (const sock of proc.clientSizes.keys()) {
+    if (!proc.adminSockets.has(sock)) proc.clientSizes.delete(sock);
   }
+
+  let cols = fallback?.cols ?? 0;
+  let rows = fallback?.rows ?? 0;
+  for (const size of proc.clientSizes.values()) {
+    if (size.cols > cols) cols = size.cols;
+    if (size.rows > rows) rows = size.rows;
+  }
+  if (cols <= 0 || rows <= 0) return;
+
+  // Stream profiles parse stream-json from PTY output. Narrowing the PTY would
+  // cause tmux to hard-wrap each JSON line at the column boundary, breaking
+  // JSON.parse in cos-turn-consumer.ts. Pin cols to the wide value regardless
+  // of what the frontend xterm requested.
+  const effectiveCols = needsWideStreamPty(proc.runtime, proc.permissionProfile) ? STREAM_PROFILE_COLS : cols;
+  proc.ptyProcess.resize(effectiveCols, rows);
 }
 
 function writeToSession(sessionId: string, data: string): void {
@@ -901,6 +944,7 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
       outputSeq: session.lastOutputSeq ?? 0,
       lastInputAckSeq: session.lastInputSeq ?? 0,
       adminSockets: new Set(),
+      clientSizes: new Map(),
       status: 'running',
       flushTimer: setInterval(() => flushOutput(session.id), FLUSH_INTERVAL),
       inputState: 'active' as InputState,
@@ -1016,6 +1060,12 @@ function detachAdminSocket(sessionId: string, ws: WebSocket): void {
   const proc = activeSessions.get(sessionId);
   if (proc) {
     proc.adminSockets.delete(ws);
+    // Drop this viewer's size and shrink the PTY back to the remaining viewers
+    // so a closed large pane doesn't leave the PTY pinned wider/taller than any
+    // pane still showing the session.
+    if (proc.clientSizes.delete(ws) && proc.clientSizes.size > 0) {
+      applyEffectiveSize(proc);
+    }
   }
   const pending = pendingConnections.get(sessionId);
   if (pending) {
@@ -1263,7 +1313,7 @@ wsServer.on('connection', (ws, req) => {
           writeToSession(sessionId, msg.data);
           break;
         case 'resize':
-          resizeSessionProcess(sessionId, msg.cols, msg.rows);
+          resizeSessionProcess(sessionId, msg.cols, msg.rows, ws);
           break;
         case 'kill':
           killSessionProcess(sessionId);
@@ -1280,7 +1330,7 @@ wsServer.on('connection', (ws, req) => {
             if (content.kind === 'input' && content.data) {
               writeToSession(sessionId, content.data);
             } else if (content.kind === 'resize' && content.cols && content.rows) {
-              resizeSessionProcess(sessionId, content.cols, content.rows);
+              resizeSessionProcess(sessionId, content.cols, content.rows, ws);
             } else if (content.kind === 'kill') {
               killSessionProcess(sessionId);
             }
