@@ -413,6 +413,17 @@ export const api = {
       method: 'POST',
     }),
 
+  acceptFlatterPlan: (planId: string) =>
+    request(`/admin/flatter/plans/${planId}/accept`, {
+      method: 'POST',
+    }),
+
+  reopenFlatterPlan: (planId: string, sessionId?: string) =>
+    request(`/admin/flatter/plans/${planId}/reopen`, {
+      method: 'POST',
+      body: JSON.stringify(sessionId ? { sessionId } : {}),
+    }),
+
   launchFlatterItem: (itemId: string) =>
     request(`/admin/flatter/items/${itemId}/launch`, {
       method: 'POST',

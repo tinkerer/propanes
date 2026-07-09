@@ -82,18 +82,14 @@ function runJson(row: typeof schema.flatterRuns.$inferSelect) {
 }
 
 // The planning lane's deliverable is its plan write-up; nothing writes it back
-// to the plan row, so recover it from the session transcript. The session may
-// continue past the planning turn (follow-ups resume the same JSONL), so take
-// the longest assistant message rather than the last — the plan document dwarfs
-// any follow-up reply or status summary.
-function longestAssistantText(filePath: string): string {
+// to the plan row, so recover it from the session transcript.
+function collectAssistantTexts(filePath: string, out: string[]): void {
   let raw: string;
   try {
     raw = readFileSync(filePath, 'utf8');
   } catch {
-    return '';
+    return;
   }
-  let text = '';
   for (const line of raw.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
@@ -116,9 +112,23 @@ function longestAssistantText(filePath: string): string {
           .join('\n');
       }
     }
-    if (candidate.length >= text.length && candidate.length > 0) text = candidate;
+    if (candidate) out.push(candidate);
   }
-  return text;
+}
+
+// The session may continue past the planning turn (adjustment prompts and
+// follow-ups land in the same transcript), so neither "last message" nor
+// "longest message" alone is right: short status summaries would displace the
+// plan, and a revised plan slightly shorter than the original would lose to
+// it. Take the LAST assistant message that is at least half as long as the
+// longest — plan documents dwarf chatter, and revisions supersede originals.
+function pickPlanText(candidates: string[]): string {
+  if (candidates.length === 0) return '';
+  const max = Math.max(...candidates.map((text) => text.length));
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    if (candidates[i].length * 2 >= max) return candidates[i];
+  }
+  return '';
 }
 
 function extractPlanDocument(session: typeof schema.agentSessions.$inferSelect): string {
@@ -139,13 +149,10 @@ function extractPlanDocument(session: typeof schema.agentSessions.$inferSelect):
   }
   if (!mainPath || !existsSync(mainPath)) return '';
   const files = isCodex ? [mainPath] : [mainPath, ...findContinuationJsonls(mainPath)];
-  let text = '';
-  for (const file of files) {
-    const candidate = longestAssistantText(file);
-    if (candidate.length > text.length) text = candidate;
-  }
+  const candidates: string[] = [];
+  for (const file of files) collectAssistantTexts(file, candidates);
   // The <cos-reply> block is the Inbox summary, not part of the plan document.
-  return text.replace(/<cos-reply>[\s\S]*?<\/cos-reply>/g, '').trim();
+  return pickPlanText(candidates).replace(/<cos-reply>[\s\S]*?<\/cos-reply>/g, '').trim();
 }
 
 function execGit(cmd: string, cwd?: string): string {
@@ -803,7 +810,11 @@ function hydrateState(appId: string) {
   const hydratedPlans = plans.map((plan) => {
     const planningSession = plan.planningSessionId ? sessionMap.get(plan.planningSessionId) : null;
     const planningSessionStatus = planningSession?.status || null;
+    // Stored 'running' (run launched) and 'ready' (operator accepted the plan)
+    // are explicit lifecycle states that win over the session-derived status —
+    // an interactive planning session stays alive after the plan is accepted.
     const status = plan.status === 'running' ? 'running'
+      : plan.status === 'ready' ? 'ready'
       : planningSessionStatus === 'completed' ? 'ready'
       : planningSessionStatus === 'failed' || planningSessionStatus === 'killed' ? 'failed'
       : planningSessionStatus === 'running' || planningSessionStatus === 'pending' ? 'planning'
@@ -898,6 +909,47 @@ flatterRoutes.post('/flatter/apps/:appId/plans', async (c) => {
     return c.json({ error: message }, message.includes('Accept at least one') ? 400 : 500);
   }
   return c.json(hydrateState(appId));
+});
+
+// Operator accepts the plan: freeze the current plan document and mark the
+// plan ready to run, even if the (interactive) planning session is still alive.
+flatterRoutes.post('/flatter/plans/:planId/accept', async (c) => {
+  const planId = c.req.param('planId');
+  const plan = db.select().from(schema.flatterPlans).where(eq(schema.flatterPlans.id, planId)).get();
+  if (!plan) return c.json({ error: 'Plan not found' }, 404);
+  let planDocument = plan.planDocument || '';
+  if (plan.planningSessionId) {
+    const session = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, plan.planningSessionId)).get();
+    if (session) {
+      const extracted = extractPlanDocument(session);
+      if (extracted) planDocument = extracted;
+    }
+  }
+  db.update(schema.flatterPlans).set({
+    status: 'ready',
+    planDocument,
+    updatedAt: new Date().toISOString(),
+  }).where(eq(schema.flatterPlans.id, planId)).run();
+  return c.json(hydrateState(plan.appId));
+});
+
+// Re-open planning: back to 'planning' and drop the frozen document so the
+// hydrate path re-reads the (possibly revised) plan from the session
+// transcript. When the adjustment prompt resumed an exited session, the client
+// passes the new session id so status tracking follows the live session.
+flatterRoutes.post('/flatter/plans/:planId/reopen', async (c) => {
+  const planId = c.req.param('planId');
+  const plan = db.select().from(schema.flatterPlans).where(eq(schema.flatterPlans.id, planId)).get();
+  if (!plan) return c.json({ error: 'Plan not found' }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const sessionId = typeof body?.sessionId === 'string' && body.sessionId ? body.sessionId : null;
+  db.update(schema.flatterPlans).set({
+    status: 'planning',
+    planDocument: '',
+    ...(sessionId ? { planningSessionId: sessionId } : {}),
+    updatedAt: new Date().toISOString(),
+  }).where(eq(schema.flatterPlans.id, planId)).run();
+  return c.json(hydrateState(plan.appId));
 });
 
 flatterRoutes.post('/flatter/plans/:planId/run', async (c) => {

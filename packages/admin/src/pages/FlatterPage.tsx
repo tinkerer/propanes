@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { marked } from 'marked';
 import { api } from '../lib/api.js';
-import { loadAllSessions } from '../lib/sessions.js';
+import { loadAllSessions, resumeSession } from '../lib/sessions.js';
 
 type FlatterState = {
   monitors: any[];
@@ -52,6 +52,11 @@ export function FlatterPage({ appId }: { appId: string }) {
   const [excludeKeywords, setExcludeKeywords] = useState('');
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({});
   const [planExpanded, setPlanExpanded] = useState(false);
+  const [askPopup, setAskPopup] = useState<{ x: number; y: number; quote: string } | null>(null);
+  const [askText, setAskText] = useState('');
+  const [adjustText, setAdjustText] = useState('');
+  const planDocRef = useRef<HTMLDivElement>(null);
+  const askInputRef = useRef<HTMLTextAreaElement>(null);
 
   async function load() {
     setLoading(true);
@@ -190,6 +195,119 @@ export function FlatterPage({ appId }: { appId: string }) {
     }
   }
 
+  async function acceptPlan(planId: string) {
+    setBusyKey(`accept-plan:${planId}`);
+    setError('');
+    try {
+      setState(await api.acceptFlatterPlan(planId) as FlatterState);
+    } catch (err: any) {
+      setError(err.message || 'Accept failed');
+    } finally {
+      setBusyKey('');
+    }
+  }
+
+  async function reopenPlan(planId: string) {
+    setBusyKey(`reopen-plan:${planId}`);
+    setError('');
+    try {
+      setState(await api.reopenFlatterPlan(planId) as FlatterState);
+    } catch (err: any) {
+      setError(err.message || 'Re-open failed');
+    } finally {
+      setBusyKey('');
+    }
+  }
+
+  // Deliver an adjustment request to the planning lane: type into the live
+  // session when it's still running, otherwise resume it with the prompt.
+  // Either way the plan drops back to 'planning' so the revised document is
+  // re-read from the session transcript.
+  async function sendToPlanner(message: string): Promise<boolean> {
+    const plan = latestPlan;
+    if (!plan?.planningSessionId) {
+      setError('This plan has no planning session to talk to');
+      return false;
+    }
+    setBusyKey(`ask-plan:${plan.id}`);
+    setError('');
+    try {
+      let newSessionId: string | undefined;
+      if (plan.planningSessionStatus === 'running' || plan.planningSessionStatus === 'pending') {
+        const result = await api.sendKeys(plan.planningSessionId, { keys: message, enter: true });
+        if (!result.ok) throw new Error(result.error || 'send-keys failed');
+      } else {
+        const resumed = await resumeSession(plan.planningSessionId, { additionalPrompt: message });
+        if (!resumed) throw new Error('Failed to resume the planning session');
+        newSessionId = resumed;
+      }
+      setState(await api.reopenFlatterPlan(plan.id, newSessionId) as FlatterState);
+      await loadAllSessions();
+      return true;
+    } catch (err: any) {
+      setError(err.message || 'Failed to send to planner');
+      return false;
+    } finally {
+      setBusyKey('');
+    }
+  }
+
+  async function sendAsk() {
+    if (!askPopup || !askText.trim()) return;
+    const quoted = askPopup.quote.split('\n').map((line) => `> ${line}`).join('\n');
+    const ok = await sendToPlanner(`About this part of the Flatter plan:\n\n${quoted}\n\n${askText.trim()}`);
+    if (ok) {
+      setAskPopup(null);
+      setAskText('');
+    }
+  }
+
+  async function sendAdjust() {
+    if (!adjustText.trim()) return;
+    const ok = await sendToPlanner(adjustText.trim());
+    if (ok) setAdjustText('');
+  }
+
+  function onPlanMouseUp() {
+    // Defer so the selection reflects this mouseup before we read it.
+    setTimeout(() => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+      const quote = sel.toString().trim();
+      if (!quote) return;
+      const container = planDocRef.current;
+      if (!container || !container.contains(sel.anchorNode) || !container.contains(sel.focusNode)) return;
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      const width = 420;
+      const x = Math.min(Math.max(rect.left, 8), window.innerWidth - width - 8);
+      const below = rect.bottom + 8;
+      const y = below + 240 > window.innerHeight ? Math.max(rect.top - 248, 8) : below;
+      setAskPopup({ x, y, quote: quote.slice(0, 1500) });
+      setAskText('');
+    }, 0);
+  }
+
+  useEffect(() => {
+    if (!askPopup) return;
+    setTimeout(() => askInputRef.current?.focus(), 0);
+    // Capture phase: pane-level handlers swallow bubbled keydowns.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setAskPopup(null);
+      }
+    };
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement)?.closest?.('.flatter-ask-popup')) setAskPopup(null);
+    };
+    window.addEventListener('keydown', onKey, true);
+    document.addEventListener('mousedown', onDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKey, true);
+      document.removeEventListener('mousedown', onDown, true);
+    };
+  }, [askPopup]);
+
   return (
     <div style="padding:16px;display:flex;flex-direction:column;gap:16px">
       <div class="page-header" style="margin-bottom:0">
@@ -306,9 +424,38 @@ export function FlatterPage({ appId }: { appId: string }) {
             <button class="btn btn-sm" onClick={() => void createPlan()} disabled={busyKey === 'create-plan' || acceptedItems.length === 0}>
               {busyKey === 'create-plan' ? 'Planning…' : 'Create Plan from Accepted'}
             </button>
-            {latestPlan && (
-              <button class="btn btn-primary btn-sm" onClick={() => void runPlan(latestPlan.id)} disabled={busyKey === `run-plan:${latestPlan.id}` || latestPlan.status !== 'ready'}>
-                {busyKey === `run-plan:${latestPlan.id}` ? 'Starting…' : latestPlan.status === 'planning' ? 'Planning…' : latestPlan.status === 'running' ? 'Running' : 'Run Plan'}
+            {latestPlan && latestPlan.status === 'planning' && (
+              <button
+                class="btn btn-primary btn-sm"
+                onClick={() => void acceptPlan(latestPlan.id)}
+                disabled={busyKey === `accept-plan:${latestPlan.id}` || !planHtml}
+              >
+                {!planHtml ? 'Planning…' : busyKey === `accept-plan:${latestPlan.id}` ? 'Accepting…' : 'Accept Plan'}
+              </button>
+            )}
+            {latestPlan && latestPlan.status === 'ready' && (
+              <>
+                {latestPlan.planningSessionId && (
+                  <button
+                    class="btn btn-sm"
+                    onClick={() => void reopenPlan(latestPlan.id)}
+                    disabled={busyKey === `reopen-plan:${latestPlan.id}`}
+                  >
+                    {busyKey === `reopen-plan:${latestPlan.id}` ? 'Re-opening…' : 'Re-open Planning'}
+                  </button>
+                )}
+                <button
+                  class="btn btn-primary btn-sm"
+                  onClick={() => void runPlan(latestPlan.id)}
+                  disabled={busyKey === `run-plan:${latestPlan.id}`}
+                >
+                  {busyKey === `run-plan:${latestPlan.id}` ? 'Starting…' : 'Run Plan'}
+                </button>
+              </>
+            )}
+            {latestPlan && (latestPlan.status === 'running' || latestPlan.status === 'failed') && (
+              <button class="btn btn-primary btn-sm" disabled>
+                {latestPlan.status === 'running' ? 'Running' : 'Planning Failed'}
               </button>
             )}
           </div>
@@ -370,15 +517,38 @@ export function FlatterPage({ appId }: { appId: string }) {
           <div style="border:1px solid var(--pw-border);border-radius:10px;padding:14px;background:var(--pw-bg)">
             <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
               <strong style="font-size:13px">Implementation Plan</strong>
-              <button class="btn btn-sm" onClick={() => setPlanExpanded((v) => !v)}>
-                {planExpanded ? 'Collapse' : 'Expand'}
-              </button>
+              <div style="display:flex;gap:8px;align-items:center">
+                <span style="font-size:11px;color:var(--pw-text-faint)">Highlight any part of the plan to ask the planner about it</span>
+                <button class="btn btn-sm" onClick={() => setPlanExpanded((v) => !v)}>
+                  {planExpanded ? 'Collapse' : 'Expand'}
+                </button>
+              </div>
             </div>
             <div
+              ref={planDocRef}
               class="sm-md-rendered"
               style={{ marginTop: '10px', fontSize: '13px', overflow: 'auto', maxHeight: planExpanded ? 'none' : '320px' }}
+              onMouseUp={onPlanMouseUp}
               dangerouslySetInnerHTML={{ __html: planHtml }}
             />
+            {latestPlan.planningSessionId && (
+              <div style="display:flex;gap:8px;margin-top:12px">
+                <input
+                  style="flex:1"
+                  placeholder="Request adjustments or ask the planner… (highlight plan text to quote it)"
+                  value={adjustText}
+                  onInput={(e) => setAdjustText((e.currentTarget as HTMLInputElement).value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void sendAdjust(); } }}
+                />
+                <button
+                  class="btn btn-sm"
+                  onClick={() => void sendAdjust()}
+                  disabled={!adjustText.trim() || busyKey === `ask-plan:${latestPlan.id}`}
+                >
+                  {busyKey === `ask-plan:${latestPlan.id}` ? 'Sending…' : 'Send'}
+                </button>
+              </div>
+            )}
           </div>
         ) : latestPlan.status === 'planning' ? (
           <div style="font-size:12px;color:var(--pw-text-muted)">
@@ -448,6 +618,57 @@ export function FlatterPage({ appId }: { appId: string }) {
           </div>
         ))}
       </div>
+
+      {askPopup && (
+        <div
+          class="flatter-ask-popup"
+          // Floating over arbitrary content — hardcoded opaque background, not
+          // var(--pw-bg-surface) (translucent inside dark scopes).
+          style={{
+            position: 'fixed',
+            left: `${askPopup.x}px`,
+            top: `${askPopup.y}px`,
+            width: '420px',
+            zIndex: 1000,
+            background: '#1e293b',
+            border: '1px solid var(--pw-border)',
+            borderRadius: '10px',
+            padding: '12px',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+          }}
+        >
+          <div style="font-size:11px;color:var(--pw-text-faint);text-transform:uppercase;letter-spacing:.06em">Ask the planner about</div>
+          <div style="font-size:12px;color:var(--pw-text-muted);max-height:72px;overflow:auto;border-left:2px solid var(--pw-border);padding-left:8px;white-space:pre-wrap">
+            {askPopup.quote}
+          </div>
+          <textarea
+            ref={askInputRef}
+            value={askText}
+            placeholder="What should change or be clarified? (Enter to send, Shift+Enter for newline)"
+            style="min-height:64px;resize:vertical"
+            onInput={(e) => setAskText((e.currentTarget as HTMLTextAreaElement).value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void sendAsk();
+              }
+            }}
+          />
+          <div style="display:flex;justify-content:flex-end;gap:8px">
+            <button class="btn btn-sm" onClick={() => setAskPopup(null)}>Cancel</button>
+            <button
+              class="btn btn-primary btn-sm"
+              onClick={() => void sendAsk()}
+              disabled={!askText.trim() || (latestPlan && busyKey === `ask-plan:${latestPlan.id}`)}
+            >
+              {latestPlan && busyKey === `ask-plan:${latestPlan.id}` ? 'Sending…' : 'Send to Planner'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
