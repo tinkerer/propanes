@@ -48,6 +48,8 @@ test('deployment wires the launcher identity, private disk, and shared NFS', () 
   assert.equal(env.PROPANES_ROLE, 'launcher');
   assert.equal(env.SERVER_WS_URL, cfg.centralWsUrl);
   assert.equal(env.AGENT_HOME, '/data/agent-home');
+  // Launcher eagerly opens SQLite at import — must sit on a writable disk.
+  assert.equal(env.DB_PATH, '/data/agent-home/launcher.db');
 
   // Launcher token comes from the per-user secret, not inline.
   const tokenEnv = container.env.find((e: any) => e.name === 'LAUNCHER_AUTH_TOKEN');

@@ -202,6 +202,13 @@ export function buildManifests(
                 { name: 'AGENT_USER', value: 'propanes' },
                 { name: 'AGENT_HOME', value: '/data/agent-home' },
                 { name: 'AGENT_AUTH_SEED_DIR', value: '/var/run/propanes-agent-auth' },
+                // The launcher entrypoint eagerly imports db/index.js, which
+                // opens a SQLite handle at module load. Point it at a path on
+                // the agent's own writable disk (the entrypoint creates +
+                // chowns /data/agent-home to the propanes user) — the default
+                // relative path lands in root-owned /app and crashes the
+                // launcher (which runs as propanes) with SQLITE_CANTOPEN.
+                { name: 'DB_PATH', value: '/data/agent-home/launcher.db' },
                 {
                   name: 'VNC_PASSWORD',
                   valueFrom: { secretKeyRef: { name: cfg.vnc.secretName, key: cfg.vnc.passwordKey } },
