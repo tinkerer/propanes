@@ -7,11 +7,12 @@ import { db, schema } from '../db/index.js';
 
 const ADMIN_USER = process.env.ADMIN_USER || 'admin';
 let envAdminPass = process.env.ADMIN_PASS || 'admin';
+const AUTH_TOKEN_TTL_DAYS = Number(process.env.AUTH_TOKEN_TTL_DAYS || 365);
 
 export const authRoutes = new Hono();
 
 async function signToken(payload: JWTPayload) {
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + AUTH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
   const token = await new SignJWT(payload)
     .setProtectedHeader({ alg: 'HS256' })
     .setExpirationTime(expiresAt)
