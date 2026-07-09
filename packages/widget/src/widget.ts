@@ -579,8 +579,11 @@ export class ProPanesElement {
       '<option value="yolo">\u26A1 YOLO</option>',
     ].join('');
     modeSel.value = savedMode;
+    modeSel.addEventListener('pointerdown', (e) => e.stopPropagation());
+    modeSel.addEventListener('click', (e) => e.stopPropagation());
     modeSel.addEventListener('change', () => {
       localStorage.setItem('pw-dispatch-mode', modeSel.value);
+      agentSel.options[0].textContent = modeSel.value === 'yolo' ? 'Auto' : 'Default';
     });
     modeRow.append(modeLabel, modeSel);
     menu.appendChild(modeRow);
@@ -593,8 +596,10 @@ export class ProPanesElement {
     agentLabel.style.cssText = 'font-size:11px;color:#94a3b8;flex-shrink:0';
     const agentSel = document.createElement('select');
     agentSel.className = 'pw-send-menu-target-select';
-    agentSel.innerHTML = '<option value="">Default</option>';
+    agentSel.innerHTML = `<option value="">${savedMode === 'yolo' ? 'Auto' : 'Default'}</option>`;
     agentSel.value = localStorage.getItem('pw-dispatch-agent') || '';
+    agentSel.addEventListener('pointerdown', (e) => e.stopPropagation());
+    agentSel.addEventListener('click', (e) => e.stopPropagation());
     agentSel.addEventListener('change', () => {
       if (agentSel.value) localStorage.setItem('pw-dispatch-agent', agentSel.value);
       else localStorage.removeItem('pw-dispatch-agent');
@@ -642,6 +647,8 @@ export class ProPanesElement {
     localTargetOpt.textContent = 'Local';
     targetSel.appendChild(localTargetOpt);
     targetSel.value = localStorage.getItem('pw-dispatch-target') || '';
+    targetSel.addEventListener('pointerdown', (e) => e.stopPropagation());
+    targetSel.addEventListener('click', (e) => e.stopPropagation());
     targetSel.addEventListener('change', () => {
       if (targetSel.value) localStorage.setItem('pw-dispatch-target', targetSel.value);
       else localStorage.removeItem('pw-dispatch-target');
@@ -679,14 +686,17 @@ export class ProPanesElement {
     sendBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       const selectedMode = modeSel.value;
+      const selectedAgentId = agentSel.value || null;
+      const selectedAgent = selectedAgentId && this.cachedAgents?.length
+        ? this.cachedAgents.find((a) => a.id === selectedAgentId)
+        : undefined;
       if (selectedMode === 'yolo') {
-        const selectedAgent = this.getSelectedDispatchAgent();
         const agent = selectedAgent || this.pickYoloAgent(this.cachedAgents);
         this.dispatchAgentOverride = agent ? agent.id : null;
         this.pendingPermissionProfile = 'interactive-yolo';
         this.setDispatchMode('once');
       } else {
-        this.dispatchAgentOverride = null;
+        this.dispatchAgentOverride = selectedAgentId;
         this.pendingPermissionProfile = null;
         this.setDispatchMode(selectedMode === 'dispatch' ? 'once' : 'off');
       }
