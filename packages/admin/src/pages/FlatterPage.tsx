@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'preact/hooks';
+import { marked } from 'marked';
 import { api } from '../lib/api.js';
 import { loadAllSessions } from '../lib/sessions.js';
 
@@ -50,6 +51,7 @@ export function FlatterPage({ appId }: { appId: string }) {
   const [includeKeywords, setIncludeKeywords] = useState('');
   const [excludeKeywords, setExcludeKeywords] = useState('');
   const [draftNotes, setDraftNotes] = useState<Record<string, string>>({});
+  const [planExpanded, setPlanExpanded] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -91,6 +93,12 @@ export function FlatterPage({ appId }: { appId: string }) {
 
   const acceptedItems = useMemo(() => state.items.filter((item) => item.status === 'accepted'), [state.items]);
   const latestPlan = state.plans[0] || null;
+  const planHtml = useMemo(() => {
+    const doc = latestPlan?.planDocument;
+    if (!doc) return '';
+    const html = marked.parse(doc);
+    return typeof html === 'string' ? html : '';
+  }, [latestPlan?.planDocument]);
 
   const runsByPlan = useMemo(() => {
     const map = new Map<string, any[]>();
@@ -357,6 +365,26 @@ export function FlatterPage({ appId }: { appId: string }) {
             </div>
           </div>
         )}
+
+        {latestPlan && (planHtml ? (
+          <div style="border:1px solid var(--pw-border);border-radius:10px;padding:14px;background:var(--pw-bg)">
+            <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+              <strong style="font-size:13px">Implementation Plan</strong>
+              <button class="btn btn-sm" onClick={() => setPlanExpanded((v) => !v)}>
+                {planExpanded ? 'Collapse' : 'Expand'}
+              </button>
+            </div>
+            <div
+              class="sm-md-rendered"
+              style={{ marginTop: '10px', fontSize: '13px', overflow: 'auto', maxHeight: planExpanded ? 'none' : '320px' }}
+              dangerouslySetInnerHTML={{ __html: planHtml }}
+            />
+          </div>
+        ) : latestPlan.status === 'planning' ? (
+          <div style="font-size:12px;color:var(--pw-text-muted)">
+            The planning session is still running — the implementation plan will appear here when it completes.
+          </div>
+        ) : null)}
       </div>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;align-items:start">

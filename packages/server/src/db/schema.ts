@@ -211,6 +211,7 @@ export const flatterPlans = sqliteTable('flatter_plans', {
   status: text('status').notNull().default('ready'),
   itemsJson: text('items_json').notNull().default('[]'),
   notes: text('notes').notNull().default(''),
+  planDocument: text('plan_document').notNull().default(''),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });

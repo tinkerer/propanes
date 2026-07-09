@@ -338,6 +338,7 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_flatter_runs_plan ON flatter_runs(plan_id, created_at)`,
     `ALTER TABLE flatter_plans ADD COLUMN planning_feedback_id TEXT REFERENCES feedback_items(id) ON DELETE SET NULL`,
     `ALTER TABLE flatter_plans ADD COLUMN planning_session_id TEXT`,
+    `ALTER TABLE flatter_plans ADD COLUMN plan_document TEXT NOT NULL DEFAULT ''`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after

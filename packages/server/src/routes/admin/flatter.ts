@@ -3,11 +3,12 @@ import { z } from 'zod';
 import { ulid } from 'ulidx';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { db, schema } from '../../db/index.js';
 import { dispatchAgentSession } from '../../dispatch.js';
+import { computeJsonlPath, computeCodexJsonlPath, findContinuationJsonls } from '../../jsonl-utils.js';
 
 export const flatterRoutes = new Hono();
 
@@ -78,6 +79,73 @@ function runJson(row: typeof schema.flatterRuns.$inferSelect) {
     ...row,
     columns: parseJson<Array<Record<string, unknown>>>(row.columnsJson, []),
   };
+}
+
+// The planning lane's deliverable is its plan write-up; nothing writes it back
+// to the plan row, so recover it from the session transcript. The session may
+// continue past the planning turn (follow-ups resume the same JSONL), so take
+// the longest assistant message rather than the last — the plan document dwarfs
+// any follow-up reply or status summary.
+function longestAssistantText(filePath: string): string {
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, 'utf8');
+  } catch {
+    return '';
+  }
+  let text = '';
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let obj: any;
+    try { obj = JSON.parse(trimmed); } catch { continue; }
+    let candidate = '';
+    // Claude session JSONL: { type: 'assistant', message: { content: [{ type: 'text', text }] } }
+    if (obj?.type === 'assistant' && Array.isArray(obj.message?.content)) {
+      candidate = obj.message.content
+        .filter((part: any) => part?.type === 'text' && typeof part.text === 'string')
+        .map((part: any) => part.text)
+        .join('\n');
+    } else {
+      // Codex rollout: { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] } }
+      const p = obj?.payload;
+      if (obj?.type === 'response_item' && p?.type === 'message' && p?.role === 'assistant' && Array.isArray(p.content)) {
+        candidate = p.content
+          .filter((part: any) => part?.type === 'output_text' && typeof part.text === 'string')
+          .map((part: any) => part.text)
+          .join('\n');
+      }
+    }
+    if (candidate.length >= text.length && candidate.length > 0) text = candidate;
+  }
+  return text;
+}
+
+function extractPlanDocument(session: typeof schema.agentSessions.$inferSelect): string {
+  // The runtime column reflects the endpoint's configured runtime, which can
+  // disagree with what actually ran (a codex-flavored endpoint dispatching
+  // claude). A claude JSONL lookup is exact (UUID filename), so prefer it
+  // whenever the file exists; only fall back to codex rollout resolution,
+  // whose cwd-matching can grab a concurrent session's transcript.
+  let mainPath: string | null = null;
+  let isCodex = false;
+  if (session.claudeSessionId) {
+    const claudePath = computeJsonlPath(session.cwd || process.cwd(), session.claudeSessionId);
+    if (existsSync(claudePath)) mainPath = claudePath;
+  }
+  if (!mainPath && session.runtime === 'codex') {
+    mainPath = computeCodexJsonlPath(session.cwd, session.claudeSessionId, session.startedAt);
+    isCodex = true;
+  }
+  if (!mainPath || !existsSync(mainPath)) return '';
+  const files = isCodex ? [mainPath] : [mainPath, ...findContinuationJsonls(mainPath)];
+  let text = '';
+  for (const file of files) {
+    const candidate = longestAssistantText(file);
+    if (candidate.length > text.length) text = candidate;
+  }
+  // The <cos-reply> block is the Inbox summary, not part of the plan document.
+  return text.replace(/<cos-reply>[\s\S]*?<\/cos-reply>/g, '').trim();
 }
 
 function execGit(cmd: string, cwd?: string): string {
@@ -740,10 +808,25 @@ function hydrateState(appId: string) {
       : planningSessionStatus === 'failed' || planningSessionStatus === 'killed' ? 'failed'
       : planningSessionStatus === 'running' || planningSessionStatus === 'pending' ? 'planning'
       : plan.status;
+    let planDocument = plan.planDocument || '';
+    if (!planDocument && planningSession) {
+      planDocument = extractPlanDocument(planningSession);
+      // Persist only once the session is terminal — a live session's JSONL is
+      // still growing, and interactive lanes may stay running long after the
+      // planning turn, so running sessions get a transient (re-read) document.
+      const planningDone = planningSessionStatus === 'completed' || planningSessionStatus === 'failed' || planningSessionStatus === 'killed';
+      if (planDocument && planningDone) {
+        db.update(schema.flatterPlans).set({
+          planDocument,
+          updatedAt: new Date().toISOString(),
+        }).where(eq(schema.flatterPlans.id, plan.id)).run();
+      }
+    }
     return {
       ...plan,
       status,
       planningSessionStatus,
+      planDocument,
     };
   });
 
