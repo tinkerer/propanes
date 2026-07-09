@@ -917,6 +917,19 @@ export function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_session_usage_open ON session_usage(ended_at);
   `);
 
+  // The env-credential admin (ADMIN_USER/ADMIN_PASS login) authenticates
+  // without a users row (admin-auth special-cases sub === 'env-admin'), but
+  // tenancy scoping stamps user.id into owner_user_id columns that carry a
+  // FOREIGN KEY to users(id) — without this row every admin-route insert
+  // (create feedback, dispatch, spawn terminal) dies with "FOREIGN KEY
+  // constraint failed". The password_hash is deliberately not a valid scrypt
+  // string so this row can never be logged into; env login stays on the
+  // ADMIN_USER/ADMIN_PASS path in routes/auth.ts.
+  sqlite.prepare(`
+    INSERT OR IGNORE INTO users (id, username, password_hash, role, status, created_at, updated_at)
+    VALUES ('env-admin', 'env-admin', '!env-credential-login-only', 'admin', 'active', ?, ?)
+  `).run(new Date().toISOString(), new Date().toISOString());
+
   // Seed default tmux config from tmux-pw.conf if table is empty or default has empty content
   function readTmuxPwConf(): string {
     // Try multiple relative paths since compiled JS runs from dist/db/
