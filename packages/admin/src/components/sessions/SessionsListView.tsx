@@ -83,9 +83,28 @@ const quickDispatchInitialType = signal<DispatchType | null>(_qdpInit.dispatchTy
 // appears anchored next to it instead of stranded at screen-center (or at a
 // stale, possibly off-screen, dragged position).
 const quickDispatchAnchor = signal<{ x: number; y: number } | null>(null);
+// The sessions list can be mounted in several panes at once (duplicated
+// view:sessions-list leaves). The QDP signals are module-level, so without an
+// owner guard every instance would mount its own popup for the same appKey;
+// each popup's global click-away/focusin listener then sees the *other*
+// popup's DOM as "outside" and immediately closes the shared state — the
+// popup dies within a frame and the [+] appears to do nothing. Track which
+// instance owns the open popup and render it only there.
+let qdpInstanceSeq = 0;
+const quickDispatchOwner = signal<number>(0);
 function anchorFromEvent(e: MouseEvent) {
   const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
   quickDispatchAnchor.value = { x: r.right + 8, y: r.top };
+}
+// Toggle helper for the [+] buttons: close when re-clicked in the same
+// instance, otherwise (re)open owned by the clicking instance.
+function toggleQuickDispatch(appKey: string, instanceId: number) {
+  if (quickDispatchAppKey.value === appKey && quickDispatchOwner.value === instanceId) {
+    quickDispatchAppKey.value = null;
+  } else {
+    quickDispatchOwner.value = instanceId;
+    quickDispatchAppKey.value = appKey;
+  }
 }
 effect(() => {
   if (quickDispatchAppKey.value != null) {
@@ -168,6 +187,9 @@ type SessionsListViewProps = {
 };
 
 export function SessionsListView({ machineId = null, machineName = null, appId = null, appName = null }: SessionsListViewProps = {}) {
+  const qdpInstanceRef = useRef(0);
+  if (!qdpInstanceRef.current) qdpInstanceRef.current = ++qdpInstanceSeq;
+  const qdpInstanceId = qdpInstanceRef.current;
   const sessions = allSessions.value.filter((s: any) => {
     const machineMatches = !machineId && !machineName
       ? true
@@ -828,7 +850,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                         const groupAppId = grp.appId || selectedAppId.value || '__unlinked__';
                         anchorFromEvent(e);
                         quickDispatchInitialType.value = isCos ? 'powwow' : 'wiggum';
-                        quickDispatchAppKey.value = quickDispatchAppKey.value === groupAppId ? null : groupAppId;
+                        toggleQuickDispatch(groupAppId, qdpInstanceId);
                       }}
                       title={isCos ? 'New powwow in this app' : 'New wiggum in this app'}
                     >+</button>
@@ -905,12 +927,12 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                         e.stopPropagation();
                         anchorFromEvent(e);
                         quickDispatchInitialType.value = null;
-                        quickDispatchAppKey.value = quickDispatchAppKey.value === appKey ? null : appKey;
+                        toggleQuickDispatch(appKey, qdpInstanceId);
                       }}
                       title="New session"
                     >+</button>
                   </div>
-                  {quickDispatchAppKey.value === appKey && (
+                  {quickDispatchAppKey.value === appKey && quickDispatchOwner.value === qdpInstanceId && (
                     <QuickDispatchPopup
                       appKey={appKey}
                       appName={appName(appKey)}
@@ -950,7 +972,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                                   e.stopPropagation();
                                   anchorFromEvent(e);
                                   quickDispatchInitialType.value = isCos ? 'powwow' : 'wiggum';
-                                  quickDispatchAppKey.value = quickDispatchAppKey.value === appKey ? null : appKey;
+                                  toggleQuickDispatch(appKey, qdpInstanceId);
                                 }}
                                 title={isCos ? 'New powwow in this app' : 'New wiggum in this app'}
                               >+</button>
@@ -977,12 +999,12 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                     e.stopPropagation();
                     anchorFromEvent(e);
                     quickDispatchInitialType.value = null;
-                    quickDispatchAppKey.value = quickDispatchAppKey.value === ungroupedKey ? null : ungroupedKey;
+                    toggleQuickDispatch(ungroupedKey, qdpInstanceId);
                   }}
                   title="New session"
                 >+</button>
               </div>
-              {quickDispatchAppKey.value === ungroupedKey && (
+              {quickDispatchAppKey.value === ungroupedKey && quickDispatchOwner.value === qdpInstanceId && (
                 <QuickDispatchPopup
                   appKey={selectedAppId.value || '__unlinked__'}
                   appName={selectedAppId.value ? (applications.value.find((a: any) => a.id === selectedAppId.value)?.name || selectedAppId.value.slice(-8)) : undefined}
