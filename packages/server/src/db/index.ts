@@ -835,6 +835,25 @@ export function runMigrations() {
     -- alterStatements pass below, after the ADD COLUMN runs for legacy DBs
     -- that pre-date thread_id (otherwise the index would reference a column
     -- that doesn't exist yet on disk).
+
+    CREATE TABLE IF NOT EXISTS orgs (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      nfs_share TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      org_id TEXT REFERENCES orgs(id) ON DELETE SET NULL,
+      username TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      status TEXT NOT NULL DEFAULT 'active',
+      launcher_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   // Seed default tmux config from tmux-pw.conf if table is empty or default has empty content
