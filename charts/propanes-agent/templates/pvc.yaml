@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agent-home-{{ include "propanes-agent.username" . }}
+  labels:
+    {{- include "propanes-agent.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.agentHome.accessModes | nindent 4 }}
+  storageClassName: {{ .Values.agentHome.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.agentHome.size | quote }}

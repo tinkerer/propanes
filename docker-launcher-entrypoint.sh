@@ -10,6 +10,7 @@ export CODEX_BIN="${CODEX_BIN:-/usr/local/bin/codex}"
 export AGENT_USER="${AGENT_USER:-propanes}"
 export AGENT_HOME="${AGENT_HOME:-/data/agent-home}"
 export AGENT_AUTH_SEED_DIR="${AGENT_AUTH_SEED_DIR:-/var/run/propanes-agent-auth}"
+export PROPANES_ROLE="${PROPANES_ROLE:-all}"
 
 cleanup() {
   jobs -pr | xargs -r kill
@@ -55,6 +56,7 @@ run_as_agent() {
     SERVER_WS_URL="${SERVER_WS_URL:-}" \
     LAUNCHER_ID="${LAUNCHER_ID:-}" \
     LAUNCHER_NAME="${LAUNCHER_NAME:-}" \
+    LAUNCHER_AUTH_TOKEN="${LAUNCHER_AUTH_TOKEN:-}" \
     MAX_SESSIONS="${MAX_SESSIONS:-}" \
     TERM=xterm-256color \
     "$@"
@@ -62,11 +64,13 @@ run_as_agent() {
 
 seed_agent_home
 
-# 1) ProPanes API and live terminal session service.
-node dist/session-service.js >/var/log/propanes-session-service.log 2>&1 &
-node dist/index.js >/var/log/propanes-server.log 2>&1 &
+if [ "$PROPANES_ROLE" != "launcher" ]; then
+  # 1) ProPanes API and live terminal session service.
+  node dist/session-service.js >/var/log/propanes-session-service.log 2>&1 &
+  node dist/index.js >/var/log/propanes-server.log 2>&1 &
+fi
 
-# 2) Headed display + noVNC stack.
+# Headed display + noVNC stack.
 : "${VNC_PASSWORD:?set VNC_PASSWORD from the propanes-secrets secret}"
 mkdir -p /root/.vnc
 x11vnc -storepasswd "$VNC_PASSWORD" /root/.vnc/passwd >/dev/null
@@ -79,7 +83,7 @@ x11vnc -display "$DISPLAY" -rfbauth /root/.vnc/passwd -localhost -forever -share
 sleep 1
 websockify --web=/usr/share/novnc 6080 localhost:5900 >/var/log/novnc.log 2>&1 &
 
-# 3) Playwright MCP, headed on the virtual display.
+# Playwright MCP, headed on the virtual display.
 DISPLAY="$DISPLAY" npx --yes @playwright/mcp@latest \
   --port 8931 \
   --host 127.0.0.1 \
@@ -88,12 +92,16 @@ DISPLAY="$DISPLAY" npx --yes @playwright/mcp@latest \
   --no-sandbox \
   >/var/log/pwmcp.log 2>&1 &
 
-# 4) Wait for the local server, then register the in-pod launcher.
-until curl -sf "http://localhost:${PORT:-3001}/api/v1/health" >/dev/null 2>&1; do
-  sleep 1
-done
+if [ "$PROPANES_ROLE" = "launcher" ]; then
+  : "${SERVER_WS_URL:?set SERVER_WS_URL for launcher-only pods}"
+else
+  # Wait for the local server, then register the in-pod launcher.
+  until curl -sf "http://localhost:${PORT:-3001}/api/v1/health" >/dev/null 2>&1; do
+    sleep 1
+  done
+  export SERVER_WS_URL="${SERVER_WS_URL:-ws://localhost:${PORT:-3001}/ws/launcher}"
+fi
 
-export SERVER_WS_URL="${SERVER_WS_URL:-ws://localhost:${PORT:-3001}/ws/launcher}"
 export LAUNCHER_ID="${LAUNCHER_ID:-$(hostname)}"
 export LAUNCHER_NAME="${LAUNCHER_NAME:-propanes-inpod}"
 export MAX_SESSIONS="${MAX_SESSIONS:-5}"

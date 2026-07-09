@@ -1,0 +1,34 @@
+user:
+  username: maksym
+  org: default
+
+image:
+  repository: wbacr2a63719e.azurecr.io/propanes-server
+  tag: latest
+
+centralServer:
+  wsUrl: ws://propanes.platform.svc:3001/ws/launcher
+
+launcher:
+  maxSessions: 3
+
+launcherAuthSecret:
+  create: true
+  token: replace-with-unique-launcher-token
+
+agentAuthSecret:
+  create: true
+  data:
+    claude-credentials.json: ""
+    claude-config.json: ""
+    codex-auth.json: ""
+    codex-config.toml: ""
+
+nfs:
+  server: mwbctnfs305622.file.core.windows.net
+  path: /mwbctnfs305622/stage-src
+  mountPath: /mnt/stage-nfs-src
+
+agentHome:
+  storageClassName: managed-csi
+  size: 20Gi
