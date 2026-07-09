@@ -187,6 +187,33 @@ export const api = {
       body: JSON.stringify({ newPassword }),
     }),
 
+  // Phase 4 — per-user pod provisioning (Kubernetes).
+  provisionUserPod: (id: string) =>
+    request<{ ok: boolean; launcherId: string; resources: any[] }>(`/admin/users/${id}/provision`, {
+      method: 'POST',
+    }),
+
+  deprovisionUserPod: (id: string, deletePvc = false) =>
+    request<{ ok: boolean; resources: any[] }>(`/admin/users/${id}/deprovision`, {
+      method: 'POST',
+      body: JSON.stringify({ deletePvc }),
+    }),
+
+  getUserPodStatus: (id: string) =>
+    request<{ available: boolean; exists: boolean; replicas: number; readyReplicas: number; launcherId: string; message?: string }>(
+      `/admin/users/${id}/pod-status`,
+    ),
+
+  // Phase 5 — session usage meter.
+  getUsage: (sinceDays = 30) =>
+    request<{
+      totals: { sessions: number; totalWallMs: number; activeSessions: number };
+      byUser: Array<{ key: string; sessions: number; totalWallMs: number; activeSessions: number }>;
+      byOrg: Array<{ key: string; sessions: number; totalWallMs: number; activeSessions: number }>;
+      byIsolation: Array<{ key: string; sessions: number; totalWallMs: number; activeSessions: number }>;
+      recent: Array<{ sessionId: string; userId: string | null; orgId: string | null; isolation: string; isolateClass: string | null; startedAt: string; endedAt: string | null; wallMs: number | null; status: string | null }>;
+    }>(`/admin/usage?sinceDays=${sinceDays}`),
+
   getOrgs: () => request<{ orgs: any[] }>('/admin/orgs'),
 
   createOrg: (data: { name: string; nfsShare?: string }) =>
