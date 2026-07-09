@@ -1,7 +1,7 @@
 import { WebSocket as WsWebSocket } from 'ws';
 import { eq } from 'drizzle-orm';
 import { db, schema } from './db/index.js';
-import type { AgentRuntime, PermissionProfile, InputToSession } from '@propanes/shared';
+import type { AgentRuntime, PermissionProfile, InputToSession, ResizeSessionRequest } from '@propanes/shared';
 import {
   spawnSessionRemote,
   killSessionRemote,
@@ -36,6 +36,61 @@ const adminBridges = new Map<WsWebSocket, Bridge>();
 
 // Track admin sockets per launcher session so we can push output to them
 const launcherSessionAdmins = new Map<string, Set<WsWebSocket>>();
+
+// Per-admin-socket requested PTY size for launcher sessions. A remote PTY is a
+// single shared resource but every browser/pane attaches at its own viewport
+// size, and — unlike local sessions, where session-service sees a distinct
+// upstream socket per browser — the launcher receives all viewers' resizes
+// multiplexed over one WS and can't tell them apart. So we do the "largest
+// attached viewer wins" reconciliation here (the last point where per-browser
+// identity exists) and forward only the max to the launcher, mirroring the
+// local fix in session-service. Without this, a shorter concurrent viewer
+// shrinks the PTY and taller panes paint the TUI in only the top rows.
+const adminSizes = new Map<WsWebSocket, { cols: number; rows: number }>();
+
+const MAX_PTY_COLS = 300;
+const MAX_PTY_ROWS = 120;
+function clampSize(cols: unknown, rows: unknown): { cols: number; rows: number } {
+  return {
+    cols: Math.max(20, Math.min(Number(cols) || 120, MAX_PTY_COLS)),
+    rows: Math.max(2, Math.min(Number(rows) || 40, MAX_PTY_ROWS)),
+  };
+}
+
+// Extract {cols,rows} from either a legacy `{type:'resize'}` message or a
+// sequenced `{type:'sequenced_input', content:{kind:'resize'}}` message.
+function extractResize(parsed: any): { cols: number; rows: number } | null {
+  if (parsed?.type === 'resize' && parsed.cols && parsed.rows) {
+    return { cols: parsed.cols, rows: parsed.rows };
+  }
+  if (parsed?.type === 'sequenced_input' && parsed.content?.kind === 'resize' && parsed.content.cols && parsed.content.rows) {
+    return { cols: parsed.content.cols, rows: parsed.content.rows };
+  }
+  return null;
+}
+
+// Per-axis max of every attached viewer's recorded size for this session.
+function largestSizeForSession(sessionId: string): { cols: number; rows: number } | null {
+  const admins = launcherSessionAdmins.get(sessionId);
+  if (!admins) return null;
+  let cols = 0, rows = 0;
+  for (const a of admins) {
+    const s = adminSizes.get(a);
+    if (!s) continue;
+    if (s.cols > cols) cols = s.cols;
+    if (s.rows > rows) rows = s.rows;
+  }
+  if (cols <= 0 || rows <= 0) return null;
+  return { cols, rows };
+}
+
+function sendResizeToLauncher(launcherId: string, sessionId: string, cols: number, rows: number): void {
+  const launcher = getLauncher(launcherId);
+  if (launcher && launcher.ws.readyState === 1) {
+    const msg: ResizeSessionRequest = { type: 'resize_session', sessionId, cols, rows };
+    try { launcher.ws.send(JSON.stringify(msg)); } catch {}
+  }
+}
 
 function appendSessionAuditMarker(sessionId: string, marker: string): void {
   const session = db
@@ -188,6 +243,12 @@ export function detachAdmin(sessionId: string, ws: WsWebSocket): void {
       admins.delete(ws);
       if (admins.size === 0) launcherSessionAdmins.delete(sessionId);
     }
+    // Drop this viewer's recorded size and shrink the launcher PTY back to the
+    // largest remaining viewer, so a closed large pane can't pin the PTY.
+    if (adminSizes.delete(ws) && bridge.kind === 'launcher') {
+      const max = largestSizeForSession(sessionId);
+      if (max) sendResizeToLauncher(bridge.launcherId, sessionId, max.cols, max.rows);
+    }
   }
   adminBridges.delete(ws);
 }
@@ -218,6 +279,16 @@ export function forwardToService(ws: WsWebSocket, data: string): void {
     if (launcher && launcher.ws.readyState === 1) {
       try {
         const parsed = JSON.parse(data);
+        // Resize is reconciled across all attached viewers: record this
+        // viewer's size and forward the per-axis max, not the raw request, so a
+        // shorter concurrent pane can't shrink the shared PTY (see adminSizes).
+        const resize = extractResize(parsed);
+        if (resize) {
+          adminSizes.set(ws, clampSize(resize.cols, resize.rows));
+          const max = largestSizeForSession(bridge.sessionId);
+          if (max) sendResizeToLauncher(bridge.launcherId, bridge.sessionId, max.cols, max.rows);
+          return;
+        }
         const msg: InputToSession = {
           type: 'input_to_session',
           sessionId: bridge.sessionId,
