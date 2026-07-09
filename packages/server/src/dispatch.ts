@@ -348,6 +348,8 @@ export async function dispatchFeedbackToAgent(params: {
   launcherId?: string;
   harnessConfigId?: string;
   permissionProfile?: PermissionProfile;
+  ownerUserId?: string | null;
+  orgId?: string | null;
 }): Promise<{ dispatched: boolean; sessionId?: string; status: number; response: string; existing?: boolean }> {
   const { feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId: explicitHarnessConfigId, permissionProfile: overrideProfile } = params;
 
@@ -464,6 +466,8 @@ export async function dispatchFeedbackToAgent(params: {
       permissionProfile,
       allowedTools: agent.allowedTools || (app as any)?.defaultAllowedTools || null,
       launcherId: launcherId || undefined,
+      ownerUserId: params.ownerUserId ?? feedback.ownerUserId ?? null,
+      orgId: params.orgId ?? feedback.orgId ?? null,
     });
 
     // Bridge the spawned session into the unified CoS thread/channel model.
@@ -638,6 +642,8 @@ export async function dispatchAgentSession(params: {
   permissionProfile: PermissionProfile;
   allowedTools?: string | null;
   launcherId?: string | null;
+  ownerUserId?: string | null;
+  orgId?: string | null;
 }): Promise<{ sessionId: string }> {
   const sessionId = ulid();
   const now = new Date().toISOString();
@@ -669,6 +675,8 @@ export async function dispatchAgentSession(params: {
         permissionProfile: params.permissionProfile,
         allowedTools: params.allowedTools,
         claudeSessionId,
+        ownerUserId: params.ownerUserId ?? null,
+        orgId: params.orgId ?? null,
       });
     }
   }
@@ -722,6 +730,8 @@ export async function dispatchAgentSession(params: {
           permissionProfile: params.permissionProfile,
           allowedTools: params.allowedTools,
           claudeSessionId,
+          ownerUserId: params.ownerUserId ?? null,
+          orgId: params.orgId ?? null,
         });
       }
     }
@@ -748,6 +758,8 @@ export async function dispatchAgentSession(params: {
         agentEndpointId: params.agentEndpointId,
         claudeSessionId,
         cwd: params.cwd,
+        ownerUserId: params.ownerUserId ?? null,
+        orgId: params.orgId ?? null,
       });
     }
   }
@@ -766,6 +778,8 @@ export async function dispatchAgentSession(params: {
       launcherId: launcher ? launcher.id : null,
       claudeSessionId,
       cwd: params.cwd || null,
+      ownerUserId: params.ownerUserId ?? null,
+      orgId: params.orgId ?? null,
       createdAt: now,
     })
     .run();
@@ -855,6 +869,8 @@ export async function dispatchTerminalSession(params: {
   permissionProfile?: PermissionProfile;
   title?: string | null;
   titlePrefix?: string | null;
+  ownerUserId?: string | null;
+  orgId?: string | null;
 }): Promise<{ sessionId: string }> {
   const sessionId = ulid();
   const now = new Date().toISOString();
@@ -889,6 +905,8 @@ export async function dispatchTerminalSession(params: {
       launcherId: launcher ? launcher.id : null,
       cwd: params.cwd || null,
       title: resolvedTitle,
+      ownerUserId: params.ownerUserId ?? null,
+      orgId: params.orgId ?? null,
       createdAt: now,
     })
     .run();
@@ -932,6 +950,11 @@ export async function dispatchCompanionTerminal(params: {
 }): Promise<{ sessionId: string }> {
   const sessionId = ulid();
   const now = new Date().toISOString();
+  const parent = db
+    .select({ ownerUserId: schema.agentSessions.ownerUserId, orgId: schema.agentSessions.orgId })
+    .from(schema.agentSessions)
+    .where(eq(schema.agentSessions.id, params.parentSessionId))
+    .get();
 
   db.insert(schema.agentSessions)
     .values({
@@ -944,6 +967,8 @@ export async function dispatchCompanionTerminal(params: {
       status: 'pending',
       outputBytes: 0,
       cwd: params.cwd || null,
+      ownerUserId: parent?.ownerUserId ?? null,
+      orgId: parent?.orgId ?? null,
       createdAt: now,
     })
     .run();
@@ -976,7 +1001,11 @@ export async function resumeAgentSession(
 
   // Plain terminal sessions just spawn a new shell
   if (parent.permissionProfile === 'plain') {
-    return dispatchTerminalSession({ cwd: process.cwd() });
+    return dispatchTerminalSession({
+      cwd: process.cwd(),
+      ownerUserId: parent.ownerUserId ?? null,
+      orgId: parent.orgId ?? null,
+    });
   }
 
   // Look up the agent endpoint and original feedback when present. These are
@@ -1086,6 +1115,8 @@ export async function resumeAgentSession(
         claudeSessionId: parent.claudeSessionId,
         launcherId: launcher ? launcher.id : null,
         cwd,
+        ownerUserId: parent.ownerUserId ?? null,
+        orgId: parent.orgId ?? null,
         createdAt: now,
       })
       .run();
@@ -1203,6 +1234,8 @@ IMPORTANT: The previous session may have made partial progress. Check the curren
       claudeSessionId: claudeSessionId || null,
       launcherId: launcher ? launcher.id : null,
       cwd,
+      ownerUserId: parent.ownerUserId ?? null,
+      orgId: parent.orgId ?? null,
       createdAt: now,
     })
     .run();
@@ -1245,6 +1278,8 @@ export async function dispatchHarnessSession(params: {
   agentEndpointId?: string | null;
   claudeSessionId?: string;
   cwd?: string;
+  ownerUserId?: string | null;
+  orgId?: string | null;
 }): Promise<{ sessionId: string }> {
   const sessionId = ulid();
   const now = new Date().toISOString();
@@ -1282,6 +1317,8 @@ export async function dispatchHarnessSession(params: {
       launcherId: params.launcherId,
       claudeSessionId,
       cwd: params.cwd || null,
+      ownerUserId: params.ownerUserId ?? null,
+      orgId: params.orgId ?? null,
       createdAt: now,
     })
     .run();
@@ -1642,6 +1679,8 @@ async function dispatchSpriteSession(params: {
   permissionProfile: PermissionProfile;
   allowedTools?: string | null;
   claudeSessionId: string;
+  ownerUserId?: string | null;
+  orgId?: string | null;
 }): Promise<{ sessionId: string }> {
   const now = new Date().toISOString();
 
@@ -1656,6 +1695,8 @@ async function dispatchSpriteSession(params: {
       outputBytes: 0,
       claudeSessionId: params.claudeSessionId,
       spriteConfigId: params.spriteConfigId,
+      ownerUserId: params.ownerUserId ?? null,
+      orgId: params.orgId ?? null,
       createdAt: now,
     })
     .run();

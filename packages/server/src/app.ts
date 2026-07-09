@@ -25,6 +25,7 @@ import spriteConfigRoutes from './routes/sprites.js';
 import wiggumRoutes from './routes/wiggum.js';
 import localRoutes from './routes/local.js';
 import { gettingStartedMarkdown } from './getting-started.js';
+import { requireAdminAuth } from './admin-auth.js';
 
 export const app = new Hono();
 
@@ -61,6 +62,7 @@ app.get('/api/v1/bookmarklet', (c) => {
 });
 
 app.route('/api/v1/feedback', feedbackRoutes);
+app.use('/api/v1/admin/*', requireAdminAuth);
 app.route('/api/v1/admin', adminRoutes);
 app.route('/api/v1/images', imageRoutes);
 app.route('/api/v1/screenshots', screenshotRoutes);

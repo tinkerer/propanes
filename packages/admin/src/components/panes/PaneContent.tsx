@@ -29,6 +29,7 @@ import { UserGuidePage } from '../../pages/UserGuidePage.js';
 import { GettingStartedPage } from '../../pages/GettingStartedPage.js';
 import { SettingsPage } from '../../pages/SettingsPage.js';
 import { WiggumPage } from '../../pages/WiggumPage.js';
+import { UsersPage } from '../../pages/UsersPage.js';
 import { ChannelPage } from '../../pages/ChannelPage.js';
 import { ApprovalQueuePage } from '../../pages/ApprovalQueuePage.js';
 import { SpecWikiPage } from '../../pages/SpecWikiPage.js';
@@ -139,7 +140,8 @@ export function renderTabContent(
     const key = sid.slice(9);
     return (
       <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0, overflow: 'auto' }}>
-        {key === 'agents' ? <AgentsPage />
+        {key === 'users' ? <UsersPage />
+          : key === 'agents' ? <AgentsPage />
           : key === 'infrastructure' ? <InfrastructurePage />
           : key === 'wiggum' ? <WiggumPage />
           : key === 'user-guide' ? <UserGuidePage />

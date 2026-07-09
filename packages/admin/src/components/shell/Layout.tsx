@@ -561,7 +561,7 @@ export function Layout() {
   }, []);
 
   const appSubTabs = ['feedback', 'sessions', 'live', 'settings'];
-  const settingsTabs = ['/settings/agents', '/settings/infrastructure', '/settings/user-guide', '/settings/getting-started', '/settings/preferences'];
+  const settingsTabs = ['/settings/users', '/settings/agents', '/settings/infrastructure', '/settings/user-guide', '/settings/getting-started', '/settings/preferences'];
 
   function cycleNav(dir: number) {
     const r = currentRoute.value;

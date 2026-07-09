@@ -5,7 +5,8 @@ import * as os from 'node:os';
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { db, schema } from '../db/index.js';
-import { listLaunchers } from '../launcher-registry.js';
+import { getLauncher, listLaunchers } from '../launcher-registry.js';
+import { getAdminUser } from '../admin-auth.js';
 
 const app = new Hono();
 
@@ -51,7 +52,15 @@ function collectNetworkStats() {
 }
 
 app.get('/', (c) => {
-  const rows = db.select().from(schema.machines).all();
+  const user = getAdminUser(c);
+  const allowedMachineId = user.role === 'member' && user.launcherId
+    ? getLauncher(user.launcherId)?.machineId
+    : null;
+  const rows = user.role === 'member'
+    ? allowedMachineId
+      ? db.select().from(schema.machines).where(eq(schema.machines.id, allowedMachineId)).all()
+      : []
+    : db.select().from(schema.machines).all();
 
   // Merge live launcher status
   const launchers = listLaunchers();
@@ -67,6 +76,7 @@ app.get('/', (c) => {
 });
 
 app.post('/', async (c) => {
+  if (getAdminUser(c).role !== 'admin') return c.json({ error: 'Unauthorized' }, 403);
   const body = await c.req.json();
   const now = new Date().toISOString();
   const id = ulid();
@@ -94,6 +104,11 @@ app.post('/', async (c) => {
 });
 
 app.get('/:id', (c) => {
+  const user = getAdminUser(c);
+  const allowedMachineId = user.role === 'member' && user.launcherId ? getLauncher(user.launcherId)?.machineId : null;
+  if (user.role === 'member' && c.req.param('id') !== allowedMachineId) {
+    return c.json({ error: 'Machine not found' }, 404);
+  }
   const row = db.select().from(schema.machines).where(eq(schema.machines.id, c.req.param('id'))).get();
   if (!row) return c.json({ error: 'Machine not found' }, 404);
 
@@ -111,6 +126,7 @@ app.get('/:id', (c) => {
 });
 
 app.patch('/:id', async (c) => {
+  if (getAdminUser(c).role !== 'admin') return c.json({ error: 'Unauthorized' }, 403);
   const id = c.req.param('id');
   const existing = db.select().from(schema.machines).where(eq(schema.machines.id, id)).get();
   if (!existing) return c.json({ error: 'Machine not found' }, 404);
@@ -136,6 +152,7 @@ app.patch('/:id', async (c) => {
 
 // Probe a machine's adminUrl to check if it's alive
 app.get('/:id/admin-health', async (c) => {
+  if (getAdminUser(c).role !== 'admin') return c.json({ error: 'Unauthorized' }, 403);
   const row = db.select().from(schema.machines).where(eq(schema.machines.id, c.req.param('id'))).get();
   if (!row) return c.json({ error: 'Machine not found' }, 404);
   if (!row.adminUrl) return c.json({ alive: false, reason: 'no adminUrl configured' });
@@ -150,6 +167,11 @@ app.get('/:id/admin-health', async (c) => {
 });
 
 app.get('/:id/system-health', (c) => {
+  const user = getAdminUser(c);
+  const allowedMachineId = user.role === 'member' && user.launcherId ? getLauncher(user.launcherId)?.machineId : null;
+  if (user.role === 'member' && c.req.param('id') !== allowedMachineId) {
+    return c.json({ error: 'Machine not found' }, 404);
+  }
   const row = db.select().from(schema.machines).where(eq(schema.machines.id, c.req.param('id'))).get();
   if (!row) return c.json({ error: 'Machine not found' }, 404);
   if (row.type !== 'local') return c.json({ error: 'System health is available through the connected launcher for remote machines' }, 400);
@@ -168,6 +190,7 @@ app.get('/:id/system-health', (c) => {
 
 // Start the pw-server on a remote machine via its launcher
 app.post('/:id/admin-start', async (c) => {
+  if (getAdminUser(c).role !== 'admin') return c.json({ error: 'Unauthorized' }, 403);
   const row = db.select().from(schema.machines).where(eq(schema.machines.id, c.req.param('id'))).get();
   if (!row) return c.json({ error: 'Machine not found' }, 404);
 
@@ -201,6 +224,7 @@ app.post('/:id/admin-start', async (c) => {
 
 // Stop the pw-server on a remote machine via its launcher
 app.post('/:id/admin-stop', async (c) => {
+  if (getAdminUser(c).role !== 'admin') return c.json({ error: 'Unauthorized' }, 403);
   const row = db.select().from(schema.machines).where(eq(schema.machines.id, c.req.param('id'))).get();
   if (!row) return c.json({ error: 'Machine not found' }, 404);
 
@@ -227,6 +251,7 @@ app.post('/:id/admin-stop', async (c) => {
 });
 
 app.delete('/:id', (c) => {
+  if (getAdminUser(c).role !== 'admin') return c.json({ error: 'Unauthorized' }, 403);
   const id = c.req.param('id');
   const existing = db.select().from(schema.machines).where(eq(schema.machines.id, id)).get();
   if (!existing) return c.json({ error: 'Machine not found' }, 404);

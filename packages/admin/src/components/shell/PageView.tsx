@@ -69,6 +69,9 @@ export function PageView() {
   } else if (route === '/settings/agents') {
     openSettingsPanel('agents');
     return null;
+  } else if (route === '/settings/users') {
+    openSettingsPanel('users');
+    return null;
   } else if (route === '/settings/applications') {
     const apps = applications.value;
     if (apps.length > 0) {

@@ -37,6 +37,8 @@ export const feedbackItems = sqliteTable('feedback_items', {
   viewport: text('viewport'),
   sessionId: text('session_id'),
   userId: text('user_id'),
+  ownerUserId: text('owner_user_id').references(() => users.id, { onDelete: 'set null' }),
+  orgId: text('org_id').references(() => orgs.id, { onDelete: 'set null' }),
   appId: text('app_id').references(() => applications.id, { onDelete: 'set null' }),
   // Sub-app of the monorepo this feedback targets (matched against the app's
   // subApps registry). Null for single-package apps.
@@ -223,6 +225,8 @@ export const agentSessions = sqliteTable('agent_sessions', {
   tmuxSessionName: text('tmux_session_name'),
   launcherId: text('launcher_id'),
   machineId: text('machine_id'),
+  ownerUserId: text('owner_user_id').references(() => users.id, { onDelete: 'set null' }),
+  orgId: text('org_id').references(() => orgs.id, { onDelete: 'set null' }),
   claudeSessionId: text('claude_session_id'),
   companionSessionId: text('companion_session_id'),
   cwd: text('cwd'),

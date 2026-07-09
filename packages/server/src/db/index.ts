@@ -31,6 +31,8 @@ export function runMigrations() {
       viewport TEXT,
       session_id TEXT,
       user_id TEXT,
+      owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      org_id TEXT REFERENCES orgs(id) ON DELETE SET NULL,
       dispatched_to TEXT,
       dispatched_at TEXT,
       dispatch_status TEXT,
@@ -109,6 +111,8 @@ export function runMigrations() {
       exit_code INTEGER,
       output_log TEXT,
       output_bytes INTEGER NOT NULL DEFAULT 0,
+      owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      org_id TEXT REFERENCES orgs(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL,
       started_at TEXT,
       completed_at TEXT
@@ -299,6 +303,14 @@ export function runMigrations() {
     // etc. instead of needing a separate app per package.
     `ALTER TABLE applications ADD COLUMN sub_apps TEXT NOT NULL DEFAULT '[]'`,
     `ALTER TABLE feedback_items ADD COLUMN sub_app TEXT`,
+    `ALTER TABLE feedback_items ADD COLUMN owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL`,
+    `ALTER TABLE feedback_items ADD COLUMN org_id TEXT REFERENCES orgs(id) ON DELETE SET NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_feedback_owner ON feedback_items(owner_user_id, created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_feedback_org ON feedback_items(org_id, created_at)`,
+    `ALTER TABLE agent_sessions ADD COLUMN owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL`,
+    `ALTER TABLE agent_sessions ADD COLUMN org_id TEXT REFERENCES orgs(id) ON DELETE SET NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_sessions_owner ON agent_sessions(owner_user_id, created_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_agent_sessions_org ON agent_sessions(org_id, created_at)`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after

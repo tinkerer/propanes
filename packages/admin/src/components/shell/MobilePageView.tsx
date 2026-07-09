@@ -13,6 +13,7 @@ import { WiggumPage } from '../../pages/WiggumPage.js';
 import { StandaloneSessionPage } from '../../pages/StandaloneSessionPage.js';
 import { SpecWikiPage } from '../../pages/SpecWikiPage.js';
 import { FlatterPage } from '../../pages/FlatterPage.js';
+import { UsersPage } from '../../pages/UsersPage.js';
 
 function NoApp() {
   return (
@@ -50,6 +51,7 @@ function renderMobileRoute(route: string) {
     return <StandaloneSessionPage sessionId={sid} />;
   }
 
+  if (route.startsWith('/settings/users')) return <UsersPage />;
   if (route.startsWith('/settings/agents')) return <AgentsPage />;
   if (route.startsWith('/settings/infrastructure')) return <InfrastructurePage />;
   if (route.startsWith('/settings/user-guide')) return <UserGuidePage />;

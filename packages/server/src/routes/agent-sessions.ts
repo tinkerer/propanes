@@ -9,6 +9,7 @@ import { resumeAgentSession, dispatchTerminalSession, transferSession, getTransf
 import { getSessionLiveStates, inputSessionRemote, sendKeysSessionRemote } from '../session-service-client.js';
 import { getLauncher, sendAndWait } from '../launcher-registry.js';
 import { listSessions, sendCommand } from '../sessions.js';
+import { getAdminUser, memberSessionScope, visibleToMember } from '../admin-auth.js';
 import {
   computeJsonlPath as computeJsonlPathFull,
   computeJsonlDir,
@@ -97,7 +98,7 @@ agentSessionRoutes.post('/search-content', async (c) => {
     .leftJoin(schema.feedbackItems, eq(schema.agentSessions.feedbackId, schema.feedbackItems.id))
     .leftJoin(schema.agentEndpoints, eq(schema.agentSessions.agentEndpointId, schema.agentEndpoints.id))
     .leftJoin(schema.applications, eq(schema.feedbackItems.appId, schema.applications.id))
-    .where(ne(schema.agentSessions.status, 'deleted'))
+    .where(and(ne(schema.agentSessions.status, 'deleted'), memberSessionScope(getAdminUser(c))))
     .orderBy(desc(schema.agentSessions.createdAt))
     .limit(100)
     .all();
@@ -209,7 +210,7 @@ agentSessionRoutes.get('/error-summary', async (c) => {
     .leftJoin(schema.feedbackItems, eq(schema.agentSessions.feedbackId, schema.feedbackItems.id))
     .leftJoin(schema.agentEndpoints, eq(schema.agentSessions.agentEndpointId, schema.agentEndpoints.id))
     .leftJoin(schema.applications, eq(schema.feedbackItems.appId, schema.applications.id))
-    .where(ne(schema.agentSessions.status, 'deleted'))
+    .where(and(ne(schema.agentSessions.status, 'deleted'), memberSessionScope(getAdminUser(c))))
     .orderBy(desc(schema.agentSessions.createdAt))
     .limit(50)
     .all();
@@ -319,6 +320,8 @@ const sessionSelectFields = {
   lastInputSeq: schema.agentSessions.lastInputSeq,
   launcherId: schema.agentSessions.launcherId,
   machineId: schema.agentSessions.machineId,
+  ownerUserId: schema.agentSessions.ownerUserId,
+  orgId: schema.agentSessions.orgId,
   claudeSessionId: schema.agentSessions.claudeSessionId,
   companionSessionId: schema.agentSessions.companionSessionId,
   cwd: schema.agentSessions.cwd,
@@ -488,6 +491,7 @@ export async function buildSessionList() {
 }
 
 agentSessionRoutes.get('/', async (c) => {
+  const scope = memberSessionScope(getAdminUser(c));
   const feedbackId = c.req.query('feedbackId');
   const includeDeleted = c.req.query('includeDeleted') === 'true';
   const includeParam = c.req.query('include');
@@ -501,7 +505,7 @@ agentSessionRoutes.get('/', async (c) => {
       ? eq(schema.agentSessions.feedbackId, feedbackId)
       : and(eq(schema.agentSessions.feedbackId, feedbackId), ne(schema.agentSessions.status, 'deleted'));
     rows = sessionBaseQuery()
-      .where(where)
+      .where(and(where, scope))
       .orderBy(desc(schema.agentSessions.createdAt))
       .all();
   } else if (includeIds.length > 0) {
@@ -513,12 +517,12 @@ agentSessionRoutes.get('/', async (c) => {
       ? or(isActive, isIncluded)
       : and(notDeleted, or(isActive, isIncluded));
     rows = sessionBaseQuery()
-      .where(where)
+      .where(and(where, scope))
       .orderBy(desc(schema.agentSessions.createdAt))
       .all();
     const recentLimit = limit || 100;
     const existingIds = new Set(rows.map(r => r.id));
-    const recentWhere = includeDeleted ? undefined : notDeleted;
+    const recentWhere = includeDeleted ? scope : and(notDeleted, scope);
     const recentRows = sessionBaseQuery()
       .where(recentWhere)
       .orderBy(desc(schema.agentSessions.createdAt))
@@ -531,7 +535,7 @@ agentSessionRoutes.get('/', async (c) => {
       }
     }
   } else {
-    const where = includeDeleted ? undefined : ne(schema.agentSessions.status, 'deleted');
+    const where = includeDeleted ? scope : and(ne(schema.agentSessions.status, 'deleted'), scope);
     const q = sessionBaseQuery()
       .where(where)
       .orderBy(desc(schema.agentSessions.createdAt));
@@ -553,12 +557,19 @@ agentSessionRoutes.get('/:id', async (c) => {
   if (!session) {
     return c.json({ error: 'Not found' }, 404);
   }
+  if (!visibleToMember(session, getAdminUser(c))) {
+    return c.json({ error: 'Not found' }, 404);
+  }
 
   return c.json(session);
 });
 
 agentSessionRoutes.post('/:id/kill', async (c) => {
   const id = c.req.param('id');
+  const session = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, id)).get();
+  if (!session || !visibleToMember(session, getAdminUser(c))) {
+    return c.json({ error: 'Session not running or not found' }, 404);
+  }
   const killed = await killSession(id);
 
   if (!killed) {
@@ -571,7 +582,10 @@ agentSessionRoutes.post('/:id/kill', async (c) => {
 agentSessionRoutes.post('/:id/resume', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => ({}));
-  const targetLauncherId = body.launcherId || undefined;
+  const parent = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, id)).get();
+  const user = getAdminUser(c);
+  if (!parent || !visibleToMember(parent, user)) return c.json({ error: 'Session not found' }, 404);
+  const targetLauncherId = user.role === 'member' && user.launcherId ? user.launcherId : body.launcherId || undefined;
   const permissionProfile = body.permissionProfile || undefined;
   const runtime = body.runtime || undefined;
   const additionalPrompt = typeof body.additionalPrompt === 'string' ? body.additionalPrompt : undefined;
@@ -593,6 +607,9 @@ agentSessionRoutes.post('/:id/archive', async (c) => {
     .get();
 
   if (!session) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+  if (!visibleToMember(session, getAdminUser(c))) {
     return c.json({ error: 'Not found' }, 404);
   }
 
@@ -643,7 +660,7 @@ agentSessionRoutes.post('/:id/send-keys', async (c) => {
   if (!keys) return c.json({ error: 'keys is required' }, 400);
 
   const session = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, id)).get();
-  if (!session) return c.json({ error: 'Session not found' }, 404);
+  if (!session || !visibleToMember(session, getAdminUser(c))) return c.json({ error: 'Session not found' }, 404);
 
   if (session.launcherId) {
     const launcher = getLauncher(session.launcherId);
@@ -680,7 +697,7 @@ agentSessionRoutes.post('/:id/capture-pane', async (c) => {
   const { lastN } = body as { lastN?: number };
 
   const session = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, id)).get();
-  if (!session) return c.json({ error: 'Session not found' }, 404);
+  if (!session || !visibleToMember(session, getAdminUser(c))) return c.json({ error: 'Session not found' }, 404);
 
   if (session.launcherId) {
     const launcher = getLauncher(session.launcherId);
@@ -719,6 +736,8 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
       runtime: sql<string>`coalesce(${schema.agentEndpoints.runtime}, ${schema.agentSessions.runtime}, 'claude')`,
       status: schema.agentSessions.status,
       cwd: schema.agentSessions.cwd,
+      ownerUserId: schema.agentSessions.ownerUserId,
+      orgId: schema.agentSessions.orgId,
       startedAt: schema.agentSessions.startedAt,
       appProjectDir: schema.applications.projectDir,
     })
@@ -730,6 +749,9 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
     .get();
 
   if (!row) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+  if (!visibleToMember(row, getAdminUser(c))) {
     return c.json({ error: 'Session not found' }, 404);
   }
 
@@ -875,6 +897,8 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
       claudeSessionId: schema.agentSessions.claudeSessionId,
       cwd: schema.agentSessions.cwd,
       status: schema.agentSessions.status,
+      ownerUserId: schema.agentSessions.ownerUserId,
+      orgId: schema.agentSessions.orgId,
       runtime: sql<string>`coalesce(${schema.agentEndpoints.runtime}, ${schema.agentSessions.runtime}, 'claude')`,
       startedAt: schema.agentSessions.startedAt,
       appProjectDir: schema.applications.projectDir,
@@ -887,6 +911,9 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
     .get();
 
   if (!row) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+  if (!visibleToMember(row, getAdminUser(c))) {
     return c.json({ error: 'Session not found' }, 404);
   }
 
@@ -1033,6 +1060,8 @@ agentSessionRoutes.get('/:id/jsonl-image/:uuid/:imgIndex', async (c) => {
       claudeSessionId: schema.agentSessions.claudeSessionId,
       cwd: schema.agentSessions.cwd,
       status: schema.agentSessions.status,
+      ownerUserId: schema.agentSessions.ownerUserId,
+      orgId: schema.agentSessions.orgId,
       runtime: sql<string>`coalesce(${schema.agentEndpoints.runtime}, ${schema.agentSessions.runtime}, 'claude')`,
       startedAt: schema.agentSessions.startedAt,
       appProjectDir: schema.applications.projectDir,
@@ -1045,6 +1074,9 @@ agentSessionRoutes.get('/:id/jsonl-image/:uuid/:imgIndex', async (c) => {
     .get();
 
   if (!row) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+  if (!visibleToMember(row, getAdminUser(c))) {
     return c.json({ error: 'Session not found' }, 404);
   }
 
@@ -1097,6 +1129,8 @@ agentSessionRoutes.post('/:id/tail-jsonl', async (c) => {
       claudeSessionId: schema.agentSessions.claudeSessionId,
       cwd: schema.agentSessions.cwd,
       status: schema.agentSessions.status,
+      ownerUserId: schema.agentSessions.ownerUserId,
+      orgId: schema.agentSessions.orgId,
       runtime: sql<string>`coalesce(${schema.agentEndpoints.runtime}, ${schema.agentSessions.runtime}, 'claude')`,
       startedAt: schema.agentSessions.startedAt,
       appProjectDir: schema.applications.projectDir,
@@ -1109,6 +1143,9 @@ agentSessionRoutes.post('/:id/tail-jsonl', async (c) => {
     .get();
 
   if (!row) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+  if (!visibleToMember(row, getAdminUser(c))) {
     return c.json({ error: 'Session not found' }, 404);
   }
 
@@ -1145,13 +1182,17 @@ agentSessionRoutes.post('/:id/transfer', async (c) => {
   if (!session) {
     return c.json({ error: 'Session not found' }, 404);
   }
+  if (!visibleToMember(session, getAdminUser(c))) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
 
   if (session.status === 'running' || session.status === 'pending') {
     return c.json({ error: 'Cannot transfer an active session' }, 400);
   }
 
   const body = await c.req.json().catch(() => ({}));
-  const targetLauncherId = body.targetLauncherId || null;
+  const user = getAdminUser(c);
+  const targetLauncherId = user.role === 'member' && user.launcherId ? user.launcherId : body.targetLauncherId || null;
   const targetCwd = body.targetCwd || undefined;
 
   try {
@@ -1179,6 +1220,9 @@ agentSessionRoutes.get('/:id/export-context', async (c) => {
     .get();
 
   if (!row) {
+    return c.json({ error: 'Session not found' }, 404);
+  }
+  if (!visibleToMember(row.session, getAdminUser(c))) {
     return c.json({ error: 'Session not found' }, 404);
   }
 
@@ -1227,6 +1271,9 @@ agentSessionRoutes.delete('/:id', async (c) => {
     .get();
 
   if (!session) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+  if (!visibleToMember(session, getAdminUser(c))) {
     return c.json({ error: 'Not found' }, 404);
   }
 

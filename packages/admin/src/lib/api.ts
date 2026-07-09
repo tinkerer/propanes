@@ -49,10 +49,12 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
 export const api = {
   login: (username: string, password: string) =>
-    request<{ token: string; expiresAt: string }>('/auth/login', {
+    request<{ token: string; expiresAt: string; user: any }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     }),
+
+  me: () => request<{ user: any }>('/auth/me'),
 
   changePassword: (currentPassword: string, newPassword: string) =>
     request<{ ok: boolean }>('/auth/change-password', {
@@ -161,6 +163,37 @@ export const api = {
 
   deleteAgent: (id: string) =>
     request(`/admin/agents/${id}`, { method: 'DELETE' }),
+
+  getUsers: () => request<{ users: any[] }>('/admin/users'),
+
+  createUser: (data: Record<string, unknown>) =>
+    request<{ user: any }>('/admin/users', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateUser: (id: string, data: Record<string, unknown>) =>
+    request<{ user: any }>(`/admin/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  deleteUser: (id: string) =>
+    request<{ ok: boolean }>(`/admin/users/${id}`, { method: 'DELETE' }),
+
+  resetUserPassword: (id: string, newPassword: string) =>
+    request<{ ok: boolean }>(`/admin/users/${id}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ newPassword }),
+    }),
+
+  getOrgs: () => request<{ orgs: any[] }>('/admin/orgs'),
+
+  createOrg: (data: { name: string; nfsShare?: string }) =>
+    request<{ org: any }>('/admin/orgs', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   dispatch: (data: {
     feedbackId: string;

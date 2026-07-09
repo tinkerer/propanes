@@ -14,6 +14,7 @@ import {
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
 import type { LauncherHealthCheckResult } from '@propanes/shared';
+import { getAdminUser } from '../admin-auth.js';
 
 const app = new Hono();
 
@@ -30,22 +31,39 @@ function loadTemplate(): string {
 }
 
 app.get('/', (c) => {
-  const all = listLaunchers().map(serializeLauncher);
+  const user = getAdminUser(c);
+  const launchers = user.role === 'member' && user.launcherId
+    ? listLaunchers().filter((launcher) => launcher.id === user.launcherId)
+    : user.role === 'member'
+      ? []
+      : listLaunchers();
+  const all = launchers.map(serializeLauncher);
   return c.json({ launchers: all });
 });
 
 app.get('/harnesses', (c) => {
-  const harnesses = listHarnesses().map(serializeLauncher);
+  const user = getAdminUser(c);
+  const launchers = user.role === 'member' && user.launcherId
+    ? listHarnesses().filter((launcher) => launcher.id === user.launcherId)
+    : user.role === 'member'
+      ? []
+      : listHarnesses();
+  const harnesses = launchers.map(serializeLauncher);
   return c.json({ harnesses });
 });
 
 app.get('/:id', (c) => {
+  const user = getAdminUser(c);
+  if (user.role === 'member' && c.req.param('id') !== user.launcherId) {
+    return c.json({ error: 'Launcher not found' }, 404);
+  }
   const launcher = getLauncher(c.req.param('id'));
   if (!launcher) return c.json({ error: 'Launcher not found' }, 404);
   return c.json(serializeLauncher(launcher));
 });
 
 app.post('/:id/restart', (c) => {
+  if (getAdminUser(c).role !== 'admin') return c.json({ error: 'Unauthorized' }, 403);
   const launcher = getLauncher(c.req.param('id'));
   if (!launcher) return c.json({ error: 'Launcher not found' }, 404);
   if (launcher.ws?.readyState !== 1) return c.json({ error: 'Launcher not connected' }, 400);
@@ -58,6 +76,10 @@ app.post('/:id/restart', (c) => {
 });
 
 app.get('/:id/health', async (c) => {
+  const user = getAdminUser(c);
+  if (user.role === 'member' && c.req.param('id') !== user.launcherId) {
+    return c.json({ error: 'Launcher not found' }, 404);
+  }
   const launcher = getLauncher(c.req.param('id'));
   if (!launcher) return c.json({ error: 'Launcher not found' }, 404);
   if (launcher.ws?.readyState !== 1) return c.json({ error: 'Launcher not connected' }, 400);
@@ -76,6 +98,7 @@ app.get('/:id/health', async (c) => {
 });
 
 app.get('/:id/systemd-template', (c) => {
+  if (getAdminUser(c).role !== 'admin') return c.json({ error: 'Unauthorized' }, 403);
   const launcher = getLauncher(c.req.param('id'));
   if (!launcher) return c.json({ error: 'Launcher not found' }, 404);
 
@@ -104,6 +127,7 @@ app.get('/:id/systemd-template', (c) => {
 });
 
 app.delete('/:id', (c) => {
+  if (getAdminUser(c).role !== 'admin') return c.json({ error: 'Unauthorized' }, 403);
   const id = c.req.param('id');
   const launcher = getLauncher(id);
   if (!launcher) return c.json({ error: 'Launcher not found' }, 404);

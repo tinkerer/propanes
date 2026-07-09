@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo } from 'preact/hooks';
-import { selectedAppId, applications, navigate, addAppModalOpen, openSpotlight } from '../../lib/state.js';
+import { selectedAppId, applications, navigate, addAppModalOpen, openSpotlight, isAdminUser } from '../../lib/state.js';
 import { api } from '../../lib/api.js';
 import {
   focusOrDockSession,
@@ -153,13 +153,15 @@ export function ControlBar() {
                 <span style="margin-right:6px">{'\u{1F4DF}'}</span>
                 Terminal
               </button>
-              <button
-                class="popup-menu-item"
-                onClick={() => { setMoreDropdown(false); openSetup(); }}
-              >
-                <span style="margin-right:6px">{'⚙'}</span>
-                {actions.length > 0 ? 'Edit Controls' : 'Setup Controls'}
-              </button>
+              {isAdminUser.value && (
+                <button
+                  class="popup-menu-item"
+                  onClick={() => { setMoreDropdown(false); openSetup(); }}
+                >
+                  <span style="margin-right:6px">{'⚙'}</span>
+                  {actions.length > 0 ? 'Edit Controls' : 'Setup Controls'}
+                </button>
+              )}
             </PopupMenu>
           )}
         </>
@@ -181,7 +183,7 @@ export function ControlBar() {
             </button>
           ))}
         </div>
-      ) : app ? (
+      ) : app && isAdminUser.value ? (
         <button
           class="control-bar-btn control-bar-setup-btn"
           onClick={openSetup}

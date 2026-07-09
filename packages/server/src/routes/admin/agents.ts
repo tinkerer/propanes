@@ -17,6 +17,7 @@ import { listLaunchers, getLauncher } from '../../launcher-registry.js';
 import { countActiveSpriteSessions } from '../../sprite-sessions.js';
 import { feedbackEvents } from '../../events.js';
 import { checkDispatchPolicy } from './cos-channels.js';
+import { getAdminUser, visibleToMember } from '../../admin-auth.js';
 
 export const agentRoutes = new Hono();
 
@@ -369,7 +370,17 @@ async function handleDispatch(c: any, payload: unknown) {
     return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
   }
 
-  const { feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId, permissionProfile, channelId } = parsed.data;
+  const { feedbackId, agentEndpointId, instructions, harnessConfigId, permissionProfile, channelId } = parsed.data;
+  const user = getAdminUser(c);
+  const launcherId = user.role === 'member' && user.launcherId ? user.launcherId : parsed.data.launcherId;
+  const feedback = db.select({
+    id: schema.feedbackItems.id,
+    ownerUserId: schema.feedbackItems.ownerUserId,
+    orgId: schema.feedbackItems.orgId,
+  }).from(schema.feedbackItems).where(eq(schema.feedbackItems.id, feedbackId)).get();
+  if (!feedback || !visibleToMember(feedback, user)) {
+    return c.json({ error: 'Feedback not found' }, 404);
+  }
 
   // Channel policy gate: when the caller specifies channelId, the channel's
   // policyJson governs which permission profiles / agents are allowed and
@@ -396,7 +407,7 @@ async function handleDispatch(c: any, payload: unknown) {
           agentEndpointId,
           instructions: instructions || null,
           permissionProfile: effectiveProfile,
-          requestedBy: null,
+          requestedBy: user.id,
           status: 'pending',
           createdAt: Date.now(),
         });
@@ -473,7 +484,16 @@ async function handleDispatch(c: any, payload: unknown) {
       }
     }
 
-    const result = await dispatchFeedbackToAgent({ feedbackId, agentEndpointId, instructions, launcherId, harnessConfigId, permissionProfile });
+    const result = await dispatchFeedbackToAgent({
+      feedbackId,
+      agentEndpointId,
+      instructions,
+      launcherId,
+      harnessConfigId,
+      permissionProfile,
+      ownerUserId: user.id,
+      orgId: user.orgId,
+    });
     return c.json(result);
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
