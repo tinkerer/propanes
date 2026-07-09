@@ -1,0 +1,42 @@
+{{- if .Values.autoprovisionRbac.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.autoprovisionRbac.serviceAccountName }}
+  labels:
+    app.kubernetes.io/name: propanes-autoprovisioner
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: propanes-agent-provisioner
+  labels:
+    app.kubernetes.io/name: propanes-autoprovisioner
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims", "secrets", "services", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: propanes-agent-provisioner
+  labels:
+    app.kubernetes.io/name: propanes-autoprovisioner
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.autoprovisionRbac.serviceAccountName }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: propanes-agent-provisioner
+{{- end }}

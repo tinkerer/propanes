@@ -1,0 +1,84 @@
+user:
+  username: ""
+  org: ""
+
+image:
+  repository: wbacr2a63719e.azurecr.io/propanes-server
+  tag: latest
+  pullPolicy: IfNotPresent
+
+centralServer:
+  wsUrl: ws://propanes.platform.svc:3001/ws/launcher
+
+launcher:
+  id: ""
+  name: ""
+  maxSessions: 3
+
+launcherAuthSecret:
+  create: true
+  name: ""
+  key: token
+  token: ""
+
+agentHome:
+  storageClassName: managed-csi
+  accessModes:
+    - ReadWriteOnce
+  size: 20Gi
+
+agentAuthSecret:
+  create: true
+  name: ""
+  data:
+    claude-credentials.json: ""
+    claude-config.json: ""
+    codex-auth.json: ""
+    codex-config.toml: ""
+
+vnc:
+  secretName: propanes-secrets
+  passwordKey: VNC_PASSWORD
+
+nfs:
+  server: mwbctnfs305622.file.core.windows.net
+  path: /mwbctnfs305622/stage-src
+  mountPath: /mnt/stage-nfs-src
+  readOnly: false
+
+serviceAccount:
+  create: true
+  name: ""
+
+service:
+  enabled: true
+  type: ClusterIP
+  noVncPort: 6080
+  playwrightMcpPort: 8931
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  path: /
+  pathType: Prefix
+  annotations: {}
+  tls: []
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: "2"
+    memory: 4Gi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}
+
+autoprovisionRbac:
+  enabled: false
+  serviceAccountName: propanes-autoprovisioner

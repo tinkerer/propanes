@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "propanes-agent.fullname" . }}
+  labels:
+    {{- include "propanes-agent.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: propanes-agent
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      propanes.io/user: {{ include "propanes-agent.username" . | quote }}
+  template:
+    metadata:
+      labels:
+        {{- include "propanes-agent.labels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "propanes-agent.serviceAccountName" . }}
+      containers:
+        - name: launcher
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: PROPANES_ROLE
+              value: launcher
+            - name: SERVER_WS_URL
+              value: {{ .Values.centralServer.wsUrl | quote }}
+            - name: LAUNCHER_ID
+              value: {{ include "propanes-agent.launcherId" . | quote }}
+            - name: LAUNCHER_NAME
+              value: {{ include "propanes-agent.launcherName" . | quote }}
+            - name: LAUNCHER_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "propanes-agent.launcherAuthSecretName" . }}
+                  key: {{ .Values.launcherAuthSecret.key }}
+            - name: MAX_SESSIONS
+              value: {{ .Values.launcher.maxSessions | quote }}
+            - name: DISPLAY
+              value: ":99"
+            - name: IS_SANDBOX
+              value: "1"
+            - name: AGENT_USER
+              value: propanes
+            - name: AGENT_HOME
+              value: /data/agent-home
+            - name: AGENT_AUTH_SEED_DIR
+              value: /var/run/propanes-agent-auth
+            - name: VNC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.vnc.secretName }}
+                  key: {{ .Values.vnc.passwordKey }}
+          ports:
+            - name: novnc
+              containerPort: 6080
+            - name: playwright-mcp
+              containerPort: 8931
+          volumeMounts:
+            - name: agent-home
+              mountPath: /data
+            - name: agent-auth
+              mountPath: /var/run/propanes-agent-auth
+              readOnly: true
+            - name: stage-nfs-src
+              mountPath: {{ .Values.nfs.mountPath }}
+              readOnly: {{ .Values.nfs.readOnly }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: agent-home
+          persistentVolumeClaim:
+            claimName: agent-home-{{ include "propanes-agent.username" . }}
+        - name: agent-auth
+          secret:
+            secretName: {{ include "propanes-agent.agentAuthSecretName" . }}
+            optional: true
+        - name: stage-nfs-src
+          nfs:
+            server: {{ required "nfs.server is required" .Values.nfs.server | quote }}
+            path: {{ required "nfs.path is required" .Values.nfs.path | quote }}
+            readOnly: {{ .Values.nfs.readOnly }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,21 @@
+{{- if .Values.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "propanes-agent.fullname" . }}
+  labels:
+    {{- include "propanes-agent.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    app.kubernetes.io/name: propanes-agent
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    propanes.io/user: {{ include "propanes-agent.username" . | quote }}
+  ports:
+    - name: novnc
+      port: {{ .Values.service.noVncPort }}
+      targetPort: novnc
+    - name: playwright-mcp
+      port: {{ .Values.service.playwrightMcpPort }}
+      targetPort: playwright-mcp
+{{- end }}
