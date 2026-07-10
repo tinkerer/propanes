@@ -2,9 +2,9 @@
 
 /**
  * Extract a short host label from a URL, e.g.:
- *   https://staging.example.com:3443/admin -> "staging.example.com"
- *   http://localhost:3001/admin                 -> "localhost"
- *   http://20.65.8.179/admin                    -> "20.65.8.179"
+ *   https://example.com:3443/admin -> "example.com"
+ *   http://localhost:5174/admin    -> "localhost"
+ *   http://192.0.2.10/admin        -> "192.0.2.10"
  *
  * The port is dropped for the default cases above but kept when it's the only
  * thing distinguishing two locations on the same host (e.g. localhost:3001 vs

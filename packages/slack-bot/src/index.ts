@@ -4,7 +4,7 @@ const PROPANES_URL = process.env.PROPANES_URL ?? 'http://localhost:3001';
 // Public-facing URL used in Slack messages. Defaults to PROPANES_URL but can
 // be overridden when the server is reached internally but users click links
 // from outside (e.g. PROPANES_URL=http://localhost:3001 but
-// PROPANES_PUBLIC_URL=http://20.65.8.179:3001).
+// PROPANES_PUBLIC_URL=http://192.0.2.10:3001).
 const PROPANES_PUBLIC_URL = process.env.PROPANES_PUBLIC_URL ?? PROPANES_URL;
 const APP_ID = process.env.PROPANES_APP_ID ?? '01KNR6HYSPE08RZJSQJG6WE1PK';
 // Optional override. When unset, the bot auto-picks a yolo/headless-profile

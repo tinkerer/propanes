@@ -54,7 +54,7 @@ function SshSetupForm({ hostname, sessionId }: { hostname: string; sessionId: st
             type="text"
             value={host}
             onInput={(e) => setHost((e.target as HTMLInputElement).value)}
-            placeholder="e.g. 20.65.8.179"
+            placeholder="e.g. 192.0.2.10"
             style="width:100%;padding:6px 10px;font-size:13px"
             onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
           />
