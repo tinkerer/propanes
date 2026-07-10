@@ -988,6 +988,13 @@
   padding: 2px 4px;
 }
 
+/* --- Offline send queue --- */
+.conv-input-bar-queued {
+  font-size: 12px;
+  color: #fbbf24;
+  padding: 2px 4px;
+}
+
 /* --- Mobile overrides --- */
 @media (max-width: 640px) {
   .conv-input-bar { padding: 8px 8px; }

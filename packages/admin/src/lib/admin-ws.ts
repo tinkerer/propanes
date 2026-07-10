@@ -3,6 +3,7 @@
 type Callback = (data: any) => void;
 
 const subscribers = new Map<string, Set<Callback>>();
+const openListeners = new Set<() => void>();
 let ws: WebSocket | null = null;
 let token: string | null = null;
 let reconnectDelay = 1000;
@@ -25,6 +26,9 @@ export function connectAdminWs() {
 
   ws.onopen = () => {
     reconnectDelay = 1000;
+    for (const cb of openListeners) {
+      try { cb(); } catch { /* ignore listener errors */ }
+    }
   };
 
   ws.onmessage = (event) => {
@@ -124,6 +128,15 @@ export function disconnectAdminWs() {
     visibilityHandler = null;
   }
   subscribers.clear();
+}
+
+/**
+ * Register a callback fired every time the admin WebSocket (re)connects.
+ * Used as a "connectivity restored" signal, e.g. to flush the send outbox.
+ */
+export function onAdminWsOpen(cb: () => void): () => void {
+  openListeners.add(cb);
+  return () => { openListeners.delete(cb); };
 }
 
 export function isAdminWsConnected(): boolean {

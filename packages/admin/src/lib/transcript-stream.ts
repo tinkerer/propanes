@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { JsonOutputParser, CodexOutputParser, type ParsedMessage } from './output-parser.js';
+import { JsonOutputParser, type ParsedMessage } from './output-parser.js';
+import { CodexOutputParser } from './codex-output-parser.js';
 import { api } from './api.js';
 import { allSessions, exitedSessions } from './sessions.js';
 import { isMobile } from './viewport.js';

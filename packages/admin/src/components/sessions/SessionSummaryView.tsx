@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { JsonOutputParser, CodexOutputParser, type ParsedMessage } from '../../lib/output-parser.js';
+import { JsonOutputParser, type ParsedMessage } from '../../lib/output-parser.js';
+import { CodexOutputParser } from '../../lib/codex-output-parser.js';
 import { api } from '../../lib/api.js';
 import { allSessions, exitedSessions } from '../../lib/sessions.js';
 import { openFileViewer } from '../../lib/file-viewer.js';

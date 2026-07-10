@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
 import { api } from '../../lib/api.js';
 import { resumeSession, lastResumeError } from '../../lib/sessions.js';
+import { sendKeysReliable, queuedSends } from '../../lib/send-outbox.js';
 import type { ParsedMessage } from '../../lib/output-parser.js';
 
 export interface SessionInputBarProps {
@@ -164,18 +165,48 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
     }
   }, [isWaiting, !!askQuestion]);
 
+  // Free-text sends go through the outbox: input typed while offline is
+  // queued and flushed on reconnect instead of silently erroring. Answer /
+  // quick-action sends stay direct — they respond to a specific prompt on
+  // screen and must not fire late against a different one.
   async function sendTerminalText(value: string) {
     if (!value.trim() || submitting || stopping) return;
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.sendKeys(sessionId, { keys: value, enter: true });
-      if (!result.ok) throw new Error(result.error || 'send-keys failed');
-      setText('');
+      const result = await sendKeysReliable(sessionId, { keys: value, enter: true });
+      if (result.ok || result.queued) {
+        setText('');
+      } else {
+        // Direct-inject only works against a live PTY. If the session exited
+        // between our last poll and this send, relaunch it with the text as
+        // the resume prompt instead of surfacing a dead-session error.
+        const relaunched = await relaunchIfExited(value);
+        if (relaunched) {
+          setText('');
+        } else {
+          throw new Error(result.error || 'send-keys failed');
+        }
+      }
     } catch (err: any) {
       setError(err.message || String(err));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  // Send-keys failed — check whether that's because the session already
+  // reached a terminal status, and if so resume it carrying the operator's
+  // text as the follow-up prompt (same path as the Resume button).
+  async function relaunchIfExited(additionalPrompt: string): Promise<boolean> {
+    try {
+      const session = await api.getAgentSession(sessionId);
+      const status = session?.status;
+      if (!status || status === 'running' || status === 'pending') return false;
+      const newId = await resumeSession(sessionId, { additionalPrompt });
+      return !!newId;
+    } catch {
+      return false;
     }
   }
 
@@ -276,6 +307,12 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
   }
 
   const dimmed = !isRunning || inputState === 'idle';
+  const queuedCount = queuedSends.value.filter((q) => q.sessionId === sessionId).length;
+  const queuedNote = queuedCount > 0 && (
+    <div class="conv-input-bar-queued">
+      {queuedCount === 1 ? '1 message queued' : `${queuedCount} messages queued`} — will send when back online
+    </div>
+  );
 
   // -- State 1: AskUserQuestion with options or text --
   if (isWaiting && askQuestion && answer) {
@@ -417,6 +454,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
             Send
           </button>
         </div>
+        {queuedNote}
         {error && <div class="conv-input-bar-error">{error}</div>}
       </div>
     );
@@ -457,6 +495,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
           {isRunning ? 'Send' : 'Resume'}
         </button>
       </div>
+      {queuedNote}
       {error && <div class="conv-input-bar-error">{error}</div>}
     </div>
   );
