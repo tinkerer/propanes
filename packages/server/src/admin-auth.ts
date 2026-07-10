@@ -1,5 +1,5 @@
 import type { Context, Next } from 'hono';
-import { and, eq, isNull, or, type SQL } from 'drizzle-orm';
+import { eq, or, type SQL } from 'drizzle-orm';
 import { verifyToken } from './auth.js';
 import { db, schema } from './db/index.js';
 
@@ -50,20 +50,31 @@ export function getAdminUser(c: Context): AdminUser {
   return c.get('user') as AdminUser;
 }
 
+// Members see ONLY their own workspace: rows they own or rows in their org.
+// There is deliberately NO "legacy unscoped (owner+org both null) is visible to
+// everyone" clause — that was a shared backdoor that leaked one operator's data
+// to every member. Unowned/legacy rows stay visible to admins (whose scope is
+// undefined = no filter) but never to members.
 export function memberFeedbackScope(user: AdminUser): SQL | undefined {
   if (user.role === 'admin') return undefined;
   const ownerMatches = eq(schema.feedbackItems.ownerUserId, user.id);
   const orgMatches = user.orgId ? eq(schema.feedbackItems.orgId, user.orgId) : undefined;
-  const legacyUnscoped = and(isNull(schema.feedbackItems.ownerUserId), isNull(schema.feedbackItems.orgId));
-  return orgMatches ? or(ownerMatches, orgMatches, legacyUnscoped) : or(ownerMatches, legacyUnscoped);
+  return orgMatches ? or(ownerMatches, orgMatches) : ownerMatches;
 }
 
 export function memberSessionScope(user: AdminUser): SQL | undefined {
   if (user.role === 'admin') return undefined;
   const ownerMatches = eq(schema.agentSessions.ownerUserId, user.id);
   const orgMatches = user.orgId ? eq(schema.agentSessions.orgId, user.orgId) : undefined;
-  const legacyUnscoped = and(isNull(schema.agentSessions.ownerUserId), isNull(schema.agentSessions.orgId));
-  return orgMatches ? or(ownerMatches, orgMatches, legacyUnscoped) : or(ownerMatches, legacyUnscoped);
+  return orgMatches ? or(ownerMatches, orgMatches) : ownerMatches;
+}
+
+// Workspace (application) scope — same rule as feedback/sessions.
+export function memberAppScope(user: AdminUser): SQL | undefined {
+  if (user.role === 'admin') return undefined;
+  const ownerMatches = eq(schema.applications.ownerUserId, user.id);
+  const orgMatches = user.orgId ? eq(schema.applications.orgId, user.orgId) : undefined;
+  return orgMatches ? or(ownerMatches, orgMatches) : ownerMatches;
 }
 
 export function visibleToMember(
@@ -71,6 +82,5 @@ export function visibleToMember(
   user: AdminUser,
 ): boolean {
   if (user.role === 'admin') return true;
-  if (!row.ownerUserId && !row.orgId) return true;
   return row.ownerUserId === user.id || (!!user.orgId && row.orgId === user.orgId);
 }

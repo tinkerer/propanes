@@ -334,6 +334,11 @@ export function runMigrations() {
     `ALTER TABLE agent_endpoints ADD COLUMN isolation TEXT NOT NULL DEFAULT 'shared'`,
     `ALTER TABLE agent_sessions ADD COLUMN isolation TEXT NOT NULL DEFAULT 'shared'`,
     `ALTER TABLE agent_sessions ADD COLUMN isolate_id TEXT`,
+    // Per-user workspace ownership on applications (isolated workspaces).
+    `ALTER TABLE applications ADD COLUMN owner_user_id TEXT REFERENCES users(id) ON DELETE SET NULL`,
+    `ALTER TABLE applications ADD COLUMN org_id TEXT REFERENCES orgs(id) ON DELETE SET NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_applications_owner ON applications(owner_user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_applications_org ON applications(org_id)`,
     `ALTER TABLE flatter_runs ADD COLUMN plan_id TEXT REFERENCES flatter_plans(id) ON DELETE SET NULL`,
     `CREATE INDEX IF NOT EXISTS idx_flatter_runs_plan ON flatter_runs(plan_id, created_at)`,
     `ALTER TABLE flatter_plans ADD COLUMN planning_feedback_id TEXT REFERENCES feedback_items(id) ON DELETE SET NULL`,

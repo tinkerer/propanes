@@ -124,7 +124,18 @@ export function App() {
     // currentUser was only set during an explicit login — so after a page
     // reload currentUser stayed null and isAdminUser evaluated false, hiding
     // the entire admin Settings section (Users/Agents/Usage/Infra/Wiggum).
-    loadCurrentUser().catch(() => {});
+    loadCurrentUser()
+      .then((u) => {
+        // Keep the URL on the operator's own workspace path (/<username>) on
+        // reload/bookmark. Skip when embedded (widget/workbench popout).
+        if (u?.username && !isEmbedded.value) {
+          const seg = window.location.pathname.split('/').filter(Boolean)[0] || '';
+          if (seg !== u.username) {
+            window.history.replaceState(null, '', '/' + encodeURIComponent(u.username) + window.location.hash);
+          }
+        }
+      })
+      .catch(() => {});
     loadApplications();
     initNotifications();
     connectAdminWs();

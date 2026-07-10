@@ -15,7 +15,7 @@ const cfg: ProvisionConfig = {
   storageClassName: 'managed-csi',
   agentHomeSize: '20Gi',
   maxSessions: 3,
-  nfs: { server: 'nfs.example', path: '/share/stage-src', mountPath: '/mnt/stage-nfs-src', readOnly: false },
+  nfs: { server: 'nfs.example', path: '/share/stage-src', mountPath: '/mnt/stage-nfs-src', readOnly: false, perUser: true, localMount: '/mnt/stage-nfs-src' },
   vnc: { secretName: 'propanes-secrets', passwordKey: 'VNC_PASSWORD' },
   launcherToken: 'shared-token',
 };
@@ -61,6 +61,8 @@ test('deployment wires the launcher identity, private disk, and shared NFS', () 
   assert.equal(home.persistentVolumeClaim.claimName, 'agent-home-maksym');
   const nfs = vols.find((v: any) => v.name === 'stage-nfs-src');
   assert.equal(nfs.nfs.server, 'nfs.example');
+  // Per-user isolation: each user mounts their own subdir of the share.
+  assert.equal(nfs.nfs.path, '/share/stage-src/maksym');
 });
 
 test('deployment and pvc carry the user/org labels for selection', () => {

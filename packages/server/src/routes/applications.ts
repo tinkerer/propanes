@@ -10,6 +10,7 @@ import type { ControlAction, RequestPanelConfig } from '@propanes/shared';
 import { db, schema } from '../db/index.js';
 import { dispatchTerminalSession, dispatchAgentSession } from '../dispatch.js';
 import { inputSessionRemote, getSessionStatus } from '../session-service-client.js';
+import { getAdminUser, memberAppScope } from '../admin-auth.js';
 
 export const applicationRoutes = new Hono();
 
@@ -28,7 +29,11 @@ function parseAppJson(app: typeof schema.applications.$inferSelect) {
 }
 
 applicationRoutes.get('/', async (c) => {
-  const apps = db.select().from(schema.applications).all();
+  // Members only see their own workspaces (owned or in their org); admins all.
+  const scope = memberAppScope(getAdminUser(c));
+  const apps = scope
+    ? db.select().from(schema.applications).where(scope).all()
+    : db.select().from(schema.applications).all();
   return c.json(apps.map(parseAppJson));
 });
 
@@ -86,6 +91,7 @@ applicationRoutes.post('/scaffold', async (c) => {
     scripts: { start: 'npx serve .' },
   }, null, 2) + '\n');
 
+  const scaffoldUser = getAdminUser(c);
   await db.insert(schema.applications).values({
     id,
     name,
@@ -93,6 +99,8 @@ applicationRoutes.post('/scaffold', async (c) => {
     projectDir,
     serverUrl,
     hooks: '{}',
+    ownerUserId: scaffoldUser.id,
+    orgId: scaffoldUser.orgId,
     createdAt: now,
     updatedAt: now,
   });
@@ -130,12 +138,15 @@ applicationRoutes.post('/clone', async (c) => {
   const id = ulid();
   const apiKey = generateApiKey();
 
+  const cloneUser = getAdminUser(c);
   await db.insert(schema.applications).values({
     id,
     name,
     apiKey,
     projectDir,
     hooks: '{}',
+    ownerUserId: cloneUser.id,
+    orgId: cloneUser.orgId,
     createdAt: now,
     updatedAt: now,
   });
@@ -303,6 +314,7 @@ applicationRoutes.post('/', async (c) => {
   const now = new Date().toISOString();
   const id = ulid();
   const apiKey = generateApiKey();
+  const user = getAdminUser(c);
 
   await db.insert(schema.applications).values({
     id,
@@ -315,6 +327,8 @@ applicationRoutes.post('/', async (c) => {
     description: parsed.data.description,
     controlActions: JSON.stringify(parsed.data.controlActions || []),
     requestPanel: JSON.stringify(parsed.data.requestPanel || {}),
+    ownerUserId: user.id,
+    orgId: user.orgId,
     createdAt: now,
     updatedAt: now,
   });

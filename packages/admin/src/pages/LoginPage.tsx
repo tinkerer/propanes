@@ -19,6 +19,12 @@ export function LoginPage() {
       if (isEmbedded.value) {
         window.parent.postMessage({ type: 'pw-embed-auth', token: result.token }, '*');
       }
+      // Land each operator on their own workspace path (/<username>) instead
+      // of a shared /admin. Cosmetic vanity path — the SPA hash-routes within.
+      const uname: string | undefined = result.user?.username;
+      if (uname && !isEmbedded.value) {
+        window.history.replaceState(null, '', '/' + encodeURIComponent(uname));
+      }
       navigate('/');
     } catch (err: any) {
       error.value = err.message || 'Login failed';

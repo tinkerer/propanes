@@ -16,7 +16,7 @@
 // The RBAC that lets this pod's ServiceAccount create the above lives in the
 // chart's autoprovision-rbac.yaml (must be applied once, cluster-side).
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdirSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
 
 const SA_DIR = '/var/run/secrets/kubernetes.io/serviceaccount';
@@ -28,7 +28,7 @@ export interface ProvisionConfig {
   storageClassName: string;
   agentHomeSize: string;
   maxSessions: number;
-  nfs: { server: string; path: string; mountPath: string; readOnly: boolean };
+  nfs: { server: string; path: string; mountPath: string; readOnly: boolean; perUser: boolean; localMount: string };
   vnc: { secretName: string; passwordKey: string };
   // Token baked into the per-user launcher secret. Under the current
   // single-token model (index.ts checks the global LAUNCHER_AUTH_TOKEN), the
@@ -51,6 +51,13 @@ export function loadProvisionConfig(): ProvisionConfig {
       path: process.env.PROPANES_NFS_PATH || '/mwbctnfs305622/stage-src',
       mountPath: process.env.PROPANES_NFS_MOUNT || '/mnt/stage-nfs-src',
       readOnly: process.env.PROPANES_NFS_READONLY === '1',
+      // Give each user an isolated subdirectory of the share instead of the
+      // shared root, so no two operators share a working tree. Default on.
+      perUser: process.env.PROPANES_NFS_PER_USER !== '0',
+      // Where the control-plane itself mounts the share, so it can pre-create
+      // the per-user subdir before the launcher pod mounts it (an nfs volume
+      // pointed at a non-existent subpath fails to mount).
+      localMount: process.env.PROPANES_NFS_LOCAL_MOUNT || '/mnt/stage-nfs-src',
     },
     vnc: {
       secretName: process.env.PROPANES_VNC_SECRET || 'propanes-secrets',
@@ -91,6 +98,25 @@ export function fullName(username: string): string {
 
 export function launcherIdFor(username: string): string {
   return `agent-${sanitizeUsername(username)}`;
+}
+
+// Per-user isolated NFS subpath, or the shared root when isolation is off.
+export function nfsPathForUser(username: string, cfg: ProvisionConfig): string {
+  const base = cfg.nfs.path.replace(/\/$/, '');
+  return cfg.nfs.perUser ? `${base}/${sanitizeUsername(username)}` : base;
+}
+
+// Pre-create the per-user subdir on the share via the control-plane's own NFS
+// mount, so the launcher pod's nfs volume (pointed at that subpath) can mount.
+// No-op when isolation is off. Best-effort — logs and continues on failure.
+export function ensureUserNfsDir(username: string, cfg: ProvisionConfig = loadProvisionConfig()): void {
+  if (!cfg.nfs.perUser) return;
+  const dir = `${cfg.nfs.localMount.replace(/\/$/, '')}/${sanitizeUsername(username)}`;
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    console.warn(`[provision] could not pre-create NFS dir ${dir}:`, err instanceof Error ? err.message : err);
+  }
 }
 
 function pvcName(username: string): string {
@@ -234,7 +260,7 @@ export function buildManifests(
             { name: 'agent-auth', secret: { secretName: agentAuthSecretName(username), optional: true } },
             {
               name: 'stage-nfs-src',
-              nfs: { server: cfg.nfs.server, path: cfg.nfs.path, readOnly: cfg.nfs.readOnly },
+              nfs: { server: cfg.nfs.server, path: nfsPathForUser(username, cfg), readOnly: cfg.nfs.readOnly },
             },
           ],
         },
@@ -392,6 +418,8 @@ export async function provisionUserPod(
   opts: { org?: string | null } = {},
   cfg: ProvisionConfig = loadProvisionConfig(),
 ): Promise<ProvisionResult> {
+  // Ensure the per-user NFS subdir exists before the pod tries to mount it.
+  ensureUserNfsDir(username, cfg);
   const manifests = buildManifests(username, cfg, opts);
   const resources: ApplyResult[] = [];
   for (const m of manifests) {

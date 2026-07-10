@@ -207,9 +207,27 @@ app.use('/admin/*', serveStatic({ root: '../admin/dist/', rewriteRequestPath: (p
 // SPA fallback for admin routes — any unmatched /admin/<route> gets the SPA shell.
 app.get('/admin/*', serveAdminIndex);
 
-// Default the service root to the admin dashboard. Keep the target slashless so
-// externally shared `/admin` URLs stay canonical behind reverse proxies.
-app.get('/', (c) => c.redirect('/admin'));
+// Per-user workspace paths: /<username> (e.g. /maksym) serves the same SPA
+// shell. The build's asset base is /admin/, so index.html loads its JS/CSS/
+// manifest from the absolute /admin/ path regardless of which user path the
+// shell was served at; the SPA resolves the operator from its own JWT and
+// routes internally via the URL hash. Reserved top-level segments fall through
+// to their real handlers (static assets / the public catch-all).
+const RESERVED_TOP = new Set([
+  'api', 'admin', 'widget', 'files', 'public', 'sso', '_gw',
+  'favicon.ico', 'GETTING_STARTED.md',
+]);
+const perUserShell = (c: any, next: any) => {
+  const seg = c.req.path.split('/').filter(Boolean)[0] || '';
+  return RESERVED_TOP.has(seg) ? next() : serveAdminIndex(c);
+};
+app.get('/:user', perUserShell);
+app.get('/:user/*', perUserShell);
+
+// The service root serves the SPA shell (which shows login when unauthenticated
+// and, once signed in, sends the operator to their own /<username> workspace).
+// No longer defaults to /admin — each user gets their own path.
+app.get('/', serveAdminIndex);
 
 // Serve test page and other static files
 app.use('/*', serveStatic({ root: './public/' }));

@@ -20,6 +20,10 @@ export const applications = sqliteTable('applications', {
   autoDispatch: integer('auto_dispatch', { mode: 'boolean' }).notNull().default(true),
   controlActions: text('control_actions').notNull().default('[]'),
   requestPanel: text('request_panel').notNull().default('{}'),
+  // Per-user workspace ownership. Members only see apps they own or that
+  // belong to their org (memberAppScope); admins see all.
+  ownerUserId: text('owner_user_id'),
+  orgId: text('org_id'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
