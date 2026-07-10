@@ -45,10 +45,11 @@ COPY packages/server/package.json packages/server/
 # better-sqlite3 + node-pty are native; install build tools just long enough to
 # compile them, keep tmux for the session terminals, and add the launcher/noVNC
 # runtime stack used by the production pod.
+# python3 stays: agent/dev tooling below (and the az CLI installer) needs it.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ \
  && pnpm install --frozen-lockfile --prod \
- && apt-get purge -y python3 make g++ \
+ && apt-get purge -y make g++ \
  && apt-get autoremove -y \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl fluxbox imagemagick novnc psmisc tmux util-linux websockify \
@@ -67,6 +68,24 @@ RUN npm i -g \
  && ln -s "$(npm root -g)" /root/node_modules \
  && mkdir -p /root/.claude /root/.codex \
  && node -e 'const f="/root/.claude.json";const fs=require("fs");let j={};try{j=JSON.parse(fs.readFileSync(f))}catch(e){};j.mcpServers=Object.assign({},j.mcpServers,{playwright:{type:"http",url:"http://localhost:8931/mcp"}});fs.writeFileSync(f,JSON.stringify(j))'
+
+# Dev/agent tooling for in-container terminal sessions: enough to fetch and
+# run installers for the rest (az via aka.ms/InstallAzureCLIDeb, aws via the
+# zip installer). gh comes from GitHub's apt repo. Deliberately NOT baking the
+# heavy CLIs (az alone is >1GB) — install those at runtime where needed; they
+# don't survive a pod restart, but the fetch tools to reinstall them always
+# will.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      curl wget git ca-certificates gnupg jq unzip zip less procps \
+      openssh-client python3-venv python3-pip \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends gh \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/packages/shared/dist  packages/shared/dist
 COPY --from=build /app/packages/widget/dist  packages/widget/dist
