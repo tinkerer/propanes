@@ -9,7 +9,10 @@
   <meta name="apple-mobile-web-app-title" content="ProPanes">
   <link rel="icon" type="image/png" sizes="32x32" href="/admin/favicon.png">
   <link rel="apple-touch-icon" href="/admin/apple-touch-icon.png">
-  <link rel="manifest" href="/manifest.webmanifest">
+  <!-- use-credentials: when propanes is served behind a platform SSO gate,
+       the manifest must send the session cookie or it 302s to the login and
+       fails CORS. Same-origin, so this just attaches credentials. -->
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
   <title>ProPanes Admin</title>
 </head>
 <body>
