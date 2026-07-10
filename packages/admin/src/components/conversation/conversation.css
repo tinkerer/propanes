@@ -995,6 +995,28 @@
   padding: 2px 4px;
 }
 
+/* Lost queued message (evicted or flush failed) — dismissible */
+.conv-input-bar-outbox-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.conv-input-bar-outbox-dismiss {
+  flex: none;
+  background: none;
+  border: none;
+  color: #f87171;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.conv-input-bar-outbox-dismiss:hover {
+  background: rgba(248, 113, 113, 0.15);
+}
+
 /* --- Mobile overrides --- */
 @media (max-width: 640px) {
   .conv-input-bar { padding: 8px 8px; }

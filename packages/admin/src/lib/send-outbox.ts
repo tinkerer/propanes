@@ -42,8 +42,23 @@ let entries: QueuedSend[] = [];
 /** Reactive view of un-transmitted queued sends, for UI badges. */
 export const queuedSends = signal<ReadonlyArray<QueuedSend>>([]);
 
-/** Set when a queued send is evicted or fails terminally during a flush. */
-export const outboxError = signal<string | null>(null);
+/**
+ * Per-session outbox failures (eviction or flush failure). The queued text is
+ * gone at this point, so the message embeds it for manual re-send. Persists
+ * until the operator dismisses it — a later successful send doesn't un-lose
+ * the earlier message.
+ */
+export const outboxErrors = signal<Readonly<Record<string, string>>>({});
+
+function setOutboxError(sessionId: string, message: string) {
+  outboxErrors.value = { ...outboxErrors.value, [sessionId]: message };
+}
+
+export function dismissOutboxError(sessionId: string) {
+  if (!(sessionId in outboxErrors.value)) return;
+  const { [sessionId]: _dismissed, ...rest } = outboxErrors.value;
+  outboxErrors.value = rest;
+}
 
 function publish() {
   queuedSends.value = entries.filter((e) => !e.transmitted);
@@ -55,7 +70,7 @@ function record(sessionId: string, keys: string, enter: boolean): QueuedSend {
   while (entries.length > MAX_OUTBOX_ENTRIES) {
     const dropped = entries.shift()!;
     if (!dropped.transmitted) {
-      outboxError.value = `Dropped queued input (queue full): ${dropped.keys.slice(0, 60)}`;
+      setOutboxError(dropped.sessionId, `Dropped queued input (queue full): "${dropped.keys.slice(0, 60)}"`);
     }
   }
   publish();
@@ -129,9 +144,11 @@ export async function flushOutbox(): Promise<void> {
       publish();
       try {
         const result = await api.sendKeys(entry.sessionId, { keys: entry.keys, enter: entry.enter });
-        if (!result.ok) outboxError.value = result.error || 'Queued input failed to send';
+        if (!result.ok) {
+          setOutboxError(entry.sessionId, `Queued message failed to send — "${entry.keys.slice(0, 80)}" (${result.error || 'send-keys failed'})`);
+        }
       } catch (err: any) {
-        outboxError.value = err?.message || String(err);
+        setOutboxError(entry.sessionId, `Queued message failed to send — "${entry.keys.slice(0, 80)}" (${err?.message || String(err)})`);
       }
       resolve(entry.id);
     }

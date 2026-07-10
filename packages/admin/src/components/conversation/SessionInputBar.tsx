@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
 import { api } from '../../lib/api.js';
 import { resumeSession, lastResumeError } from '../../lib/sessions.js';
-import { sendKeysReliable, queuedSends } from '../../lib/send-outbox.js';
+import { sendKeysReliable, queuedSends, outboxErrors, dismissOutboxError } from '../../lib/send-outbox.js';
 import type { ParsedMessage } from '../../lib/output-parser.js';
 
 export interface SessionInputBarProps {
@@ -313,6 +313,19 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
       {queuedCount === 1 ? '1 message queued' : `${queuedCount} messages queued`} — will send when back online
     </div>
   );
+  // A queued message that could not be delivered (evicted, or its flush
+  // failed) is gone — surface it, with the text, until dismissed.
+  const outboxErr = outboxErrors.value[sessionId];
+  const outboxNote = outboxErr && (
+    <div class="conv-input-bar-error conv-input-bar-outbox-error">
+      <span>{outboxErr}</span>
+      <button
+        class="conv-input-bar-outbox-dismiss"
+        title="Dismiss"
+        onClick={() => dismissOutboxError(sessionId)}
+      >✕</button>
+    </div>
+  );
 
   // -- State 1: AskUserQuestion with options or text --
   if (isWaiting && askQuestion && answer) {
@@ -455,6 +468,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
           </button>
         </div>
         {queuedNote}
+        {outboxNote}
         {error && <div class="conv-input-bar-error">{error}</div>}
       </div>
     );
@@ -496,6 +510,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
         </button>
       </div>
       {queuedNote}
+      {outboxNote}
       {error && <div class="conv-input-bar-error">{error}</div>}
     </div>
   );
