@@ -429,6 +429,12 @@ export const api = {
       method: 'POST',
     }),
 
+  flatterAssist: (appId: string, data: { request: string }) =>
+    request<{ sessionId: string; feedbackId: string }>(`/admin/flatter/apps/${appId}/assist`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   submitAppRequest: (appId: string, data: { request: string; preferences?: string[] }) =>
     request<{ sessionId: string; feedbackId: string }>(`/admin/applications/${appId}/request`, {
       method: 'POST',

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { marked } from 'marked';
 import { api } from '../lib/api.js';
 import { loadAllSessions, resumeSession } from '../lib/sessions.js';
+import { FlatterAssistButton } from '../components/dispatch/FlatterAssistButton.js';
 
 type FlatterState = {
   monitors: any[];
@@ -18,6 +19,20 @@ const EMPTY_STATE: FlatterState = {
   plans: [],
   runs: [],
 };
+
+type SourceType = 'git' | 'webapp' | 'local';
+
+const SOURCE_TYPES: { key: SourceType; label: string; hint: string }[] = [
+  { key: 'git', label: 'Git Repo', hint: 'Scan upstream commits since a baseline' },
+  { key: 'webapp', label: 'Web App', hint: 'Explore a live app with Playwright' },
+  { key: 'local', label: 'Local App', hint: 'Examine a downloaded app via computer-use' },
+];
+
+function sourceTypeLabel(sourceType: string) {
+  if (sourceType === 'webapp') return 'web app';
+  if (sourceType === 'local') return 'local app';
+  return 'git';
+}
 
 function categoryLabel(category: string) {
   if (category === 'critical') return 'Critical';
@@ -44,6 +59,7 @@ export function FlatterPage({ appId }: { appId: string }) {
   const [busyKey, setBusyKey] = useState('');
   const [error, setError] = useState('');
   const [showCreate, setShowCreate] = useState(false);
+  const [sourceType, setSourceType] = useState<SourceType>('git');
   const [name, setName] = useState('');
   const [repoUrl, setRepoUrl] = useState('');
   const [branch, setBranch] = useState('main');
@@ -122,9 +138,10 @@ export function FlatterPage({ appId }: { appId: string }) {
     try {
       const result = await api.createFlatterMonitor(appId, {
         name,
+        sourceType,
         repoUrl,
-        branch,
-        baselineDate: baselineDate || undefined,
+        branch: sourceType === 'git' ? branch : 'main',
+        baselineDate: sourceType === 'git' && baselineDate ? baselineDate : undefined,
         focus: {
           includeKeywords: includeKeywords.split(',').map((part) => part.trim()).filter(Boolean),
           excludeKeywords: excludeKeywords.split(',').map((part) => part.trim()).filter(Boolean),
@@ -132,6 +149,7 @@ export function FlatterPage({ appId }: { appId: string }) {
       }) as FlatterState;
       setState(result);
       setShowCreate(false);
+      setSourceType('git');
       setName('');
       setRepoUrl('');
       setBranch('main');
@@ -309,8 +327,12 @@ export function FlatterPage({ appId }: { appId: string }) {
   }, [askPopup]);
 
   return (
+    // Rendered inside a fixed-height pane body: without min-content flooring,
+    // flex children shrink and .detail-card { overflow: hidden } clips them to
+    // their first row (the "40px form" bug), so every direct child is
+    // flex: 0 0 auto.
     <div style="padding:16px;display:flex;flex-direction:column;gap:16px">
-      <div class="page-header" style="margin-bottom:0">
+      <div class="page-header" style="margin-bottom:0;flex:0 0 auto">
         <div>
           <h2 style="margin-bottom:6px">Flatter</h2>
           <div style="font-size:13px;color:var(--pw-text-muted);max-width:920px">
@@ -318,6 +340,7 @@ export function FlatterPage({ appId }: { appId: string }) {
           </div>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
+          <FlatterAssistButton appId={appId} appLabel="Flatter" />
           <button class="btn btn-sm" onClick={() => setShowCreate((v) => !v)}>
             {showCreate ? 'Close' : '+ Monitor'}
           </button>
@@ -326,77 +349,164 @@ export function FlatterPage({ appId }: { appId: string }) {
       </div>
 
       {error && (
-        <div class="detail-card" style={{ borderColor: 'var(--pw-danger)', color: 'var(--pw-danger)' }}>
+        <div class="detail-card" style={{ borderColor: 'var(--pw-danger)', color: 'var(--pw-danger)', flex: '0 0 auto' }}>
           {error}
         </div>
       )}
 
       {showCreate && (
-        <div class="detail-card" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px">
-          <div class="form-group">
-            <label>Name</label>
-            <input value={name} onInput={(e) => setName((e.currentTarget as HTMLInputElement).value)} placeholder="agent-portal structured view" />
+        <div class="detail-card" style="display:flex;flex-direction:column;gap:16px;max-width:880px;flex:0 0 auto">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+            <div>
+              <div style="font-size:15px;font-weight:700">New Monitor</div>
+              <div style="font-size:12px;color:var(--pw-text-muted);margin-top:2px">
+                Watch another application and surface features worth lifting into this one.
+              </div>
+            </div>
+            <FlatterAssistButton appId={appId} appLabel="New monitor" />
           </div>
-          <div class="form-group">
-            <label>Repo URL</label>
-            <input value={repoUrl} onInput={(e) => setRepoUrl((e.currentTarget as HTMLInputElement).value)} placeholder="https://github.com/org/repo" />
+
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+            {SOURCE_TYPES.map((st) => (
+              <button
+                key={st.key}
+                type="button"
+                onClick={() => setSourceType(st.key)}
+                style={{
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  borderRadius: '10px',
+                  cursor: 'pointer',
+                  border: `1px solid ${sourceType === st.key ? 'var(--pw-primary)' : 'var(--pw-border)'}`,
+                  background: sourceType === st.key ? 'rgba(99,102,241,0.12)' : 'var(--pw-bg-surface)',
+                  color: 'var(--pw-text-primary)',
+                }}
+              >
+                <div style="font-size:13px;font-weight:700">{st.label}</div>
+                <div style="font-size:11px;color:var(--pw-text-muted);margin-top:3px;line-height:1.4">{st.hint}</div>
+              </button>
+            ))}
           </div>
-          <div class="form-group">
-            <label>Branch</label>
-            <input value={branch} onInput={(e) => setBranch((e.currentTarget as HTMLInputElement).value)} />
+
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:12px">
+            <div class="form-group">
+              <label>Name</label>
+              <input value={name} onInput={(e) => setName((e.currentTarget as HTMLInputElement).value)} placeholder={sourceType === 'git' ? 'agent-portal structured view' : sourceType === 'webapp' ? 'linear command palette' : 'obsidian graph view'} />
+            </div>
+            {sourceType === 'git' && (
+              <div class="form-group">
+                <label>Repo URL</label>
+                <input value={repoUrl} onInput={(e) => setRepoUrl((e.currentTarget as HTMLInputElement).value)} placeholder="https://github.com/org/repo" />
+              </div>
+            )}
+            {sourceType === 'webapp' && (
+              <div class="form-group">
+                <label>Target URL</label>
+                <input value={repoUrl} onInput={(e) => setRepoUrl((e.currentTarget as HTMLInputElement).value)} placeholder="https://app.example.com" />
+                <div style="font-size:11px;color:var(--pw-text-faint);margin-top:4px">An exploration agent drives the live app in a Playwright browser.</div>
+              </div>
+            )}
+            {sourceType === 'local' && (
+              <div class="form-group">
+                <label>App Path or Launch Command</label>
+                <input value={repoUrl} onInput={(e) => setRepoUrl((e.currentTarget as HTMLInputElement).value)} placeholder="/home/user/downloads/some-app or `some-app --flag`" />
+                <div style="font-size:11px;color:var(--pw-text-faint);margin-top:4px">An exploration agent launches the app on a visible display (computer-use) to examine it.</div>
+              </div>
+            )}
+            {sourceType === 'git' && (
+              <>
+                <div class="form-group">
+                  <label>Branch</label>
+                  <input value={branch} onInput={(e) => setBranch((e.currentTarget as HTMLInputElement).value)} />
+                </div>
+                <div class="form-group">
+                  <label>Baseline Date <span style="font-weight:400;color:var(--pw-text-faint)">(optional)</span></label>
+                  <input value={baselineDate} onInput={(e) => setBaselineDate((e.currentTarget as HTMLInputElement).value)} placeholder="2026-04-19T20:03:39Z" />
+                  <div style="font-size:11px;color:var(--pw-text-faint);margin-top:4px">Only commits after this date are scanned. Leave blank to scan the latest window.</div>
+                </div>
+              </>
+            )}
           </div>
-          <div class="form-group">
-            <label>Baseline Date</label>
-            <input value={baselineDate} onInput={(e) => setBaselineDate((e.currentTarget as HTMLInputElement).value)} placeholder="2026-04-19T20:03:39Z" />
+
+          <div style="display:flex;flex-direction:column;gap:12px">
+            <div style="font-size:11px;color:var(--pw-text-faint);text-transform:uppercase;letter-spacing:.06em">
+              {sourceType === 'git' ? 'Focus keywords' : 'What to look for'}
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:12px">
+              <div class="form-group">
+                <label>Include</label>
+                <input value={includeKeywords} onInput={(e) => setIncludeKeywords((e.currentTarget as HTMLInputElement).value)} placeholder="structured, session, input, subagent" />
+                <div style="font-size:11px;color:var(--pw-text-faint);margin-top:4px">Comma-separated. {sourceType === 'git' ? 'Commits matching these rank higher.' : 'Steers the exploration agent toward these features.'}</div>
+              </div>
+              <div class="form-group">
+                <label>Exclude</label>
+                <input value={excludeKeywords} onInput={(e) => setExcludeKeywords((e.currentTarget as HTMLInputElement).value)} placeholder="proxy, auth, docs" />
+                <div style="font-size:11px;color:var(--pw-text-faint);margin-top:4px">Comma-separated. Matches are skipped.</div>
+              </div>
+            </div>
           </div>
-          <div class="form-group">
-            <label>Include Keywords</label>
-            <input value={includeKeywords} onInput={(e) => setIncludeKeywords((e.currentTarget as HTMLInputElement).value)} placeholder="structured, session, input, subagent" />
-          </div>
-          <div class="form-group">
-            <label>Exclude Keywords</label>
-            <input value={excludeKeywords} onInput={(e) => setExcludeKeywords((e.currentTarget as HTMLInputElement).value)} placeholder="proxy, auth, docs" />
-          </div>
-          <div style="grid-column:1 / -1;display:flex;justify-content:flex-end">
-            <button class="btn btn-primary" onClick={() => void submitMonitor()} disabled={busyKey === 'create-monitor'}>
-              {busyKey === 'create-monitor' ? 'Creating…' : 'Create Monitor'}
-            </button>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid var(--pw-border);padding-top:12px">
+            <div style="font-size:12px;color:var(--pw-text-muted)">
+              {sourceType === 'git'
+                ? 'Scanning ranks upstream commits into Critical / Nice to Have / Skip for triage.'
+                : 'Exploring dispatches an agent session that examines the target and posts findings for triage.'}
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-sm" onClick={() => setShowCreate(false)}>Cancel</button>
+              <button class="btn btn-primary" onClick={() => void submitMonitor()} disabled={busyKey === 'create-monitor' || !name.trim() || !repoUrl.trim()}>
+                {busyKey === 'create-monitor' ? 'Creating…' : 'Create Monitor'}
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
-        {state.monitors.map((monitor) => (
-          <div key={monitor.id} class="detail-card" style="display:flex;flex-direction:column;gap:10px">
-            <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
-              <div>
-                <div style="font-weight:700">{monitor.name}</div>
-                <div style="font-size:12px;color:var(--pw-text-muted)">{monitor.repoUrl}</div>
-                <div style="font-size:11px;color:var(--pw-text-faint);margin-top:4px">
-                  {monitor.branch} · {monitor.baselineRef ? `since ${monitor.baselineRef}` : monitor.baselineDate ? `since ${monitor.baselineDate.slice(0, 10)}` : 'latest'}
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;flex:0 0 auto">
+        {state.monitors.map((monitor) => {
+          const isGit = (monitor.sourceType || 'git') === 'git';
+          return (
+            <div key={monitor.id} class="detail-card" style="display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+                <div>
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <div style="font-weight:700">{monitor.name}</div>
+                    <span class="sm-tool-badge">{sourceTypeLabel(monitor.sourceType || 'git')}</span>
+                  </div>
+                  <div style="font-size:12px;color:var(--pw-text-muted)">{monitor.repoUrl}</div>
+                  {isGit && (
+                    <div style="font-size:11px;color:var(--pw-text-faint);margin-top:4px">
+                      {monitor.branch} · {monitor.baselineRef ? `since ${monitor.baselineRef}` : monitor.baselineDate ? `since ${monitor.baselineDate.slice(0, 10)}` : 'latest'}
+                    </div>
+                  )}
                 </div>
+                <button class="btn btn-sm" onClick={() => void scanMonitor(monitor.id)} disabled={busyKey === `scan:${monitor.id}`}>
+                  {busyKey === `scan:${monitor.id}` ? (isGit ? 'Scanning…' : 'Dispatching…') : (isGit ? 'Scan' : 'Explore')}
+                </button>
               </div>
-              <button class="btn btn-sm" onClick={() => void scanMonitor(monitor.id)} disabled={busyKey === `scan:${monitor.id}`}>
-                {busyKey === `scan:${monitor.id}` ? 'Scanning…' : 'Scan'}
-              </button>
-            </div>
-            <div style="font-size:12px;color:var(--pw-text-muted)">
-              Focus: {(monitor.focus?.includeKeywords || []).join(', ') || 'none'}
-            </div>
-            {monitor.lastHeadSha && (
-              <div style="font-size:11px;color:var(--pw-text-faint)">
-                Head: <code>{String(monitor.lastHeadSha).slice(0, 12)}</code>
+              <div style="font-size:12px;color:var(--pw-text-muted)">
+                Focus: {(monitor.focus?.includeKeywords || []).join(', ') || 'none'}
               </div>
-            )}
-          </div>
-        ))}
+              {monitor.lastHeadSha && (
+                <div style="font-size:11px;color:var(--pw-text-faint)">
+                  Head: <code>{String(monitor.lastHeadSha).slice(0, 12)}</code>
+                </div>
+              )}
+              {monitor.lastExploreSessionId && (
+                <div style="font-size:11px">
+                  <a href={`#/sessions/${monitor.lastExploreSessionId}`}>Open exploration session</a>
+                </div>
+              )}
+            </div>
+          );
+        })}
         {state.monitors.length === 0 && !loading && (
           <div class="detail-card" style="color:var(--pw-text-muted)">No monitors configured.</div>
         )}
       </div>
 
       {latestReport && (
-        <div class="detail-card" style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start">
+        <div class="detail-card" style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex:0 0 auto">
           <div>
             <div style="font-size:11px;color:var(--pw-text-faint);text-transform:uppercase;letter-spacing:.06em">Latest Report</div>
             <div style="font-size:18px;font-weight:700;margin-top:4px">{latestReport.title}</div>
@@ -557,7 +667,7 @@ export function FlatterPage({ appId }: { appId: string }) {
         ) : null)}
       </div>
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;align-items:start">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;align-items:start;flex:0 0 auto">
         {(['critical', 'nice', 'skip'] as const).map((category) => (
           <div key={category} class="detail-card" style="display:flex;flex-direction:column;gap:12px;min-height:240px">
             <div style="display:flex;justify-content:space-between;align-items:center">

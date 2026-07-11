@@ -344,6 +344,11 @@ export function runMigrations() {
     `ALTER TABLE flatter_plans ADD COLUMN planning_feedback_id TEXT REFERENCES feedback_items(id) ON DELETE SET NULL`,
     `ALTER TABLE flatter_plans ADD COLUMN planning_session_id TEXT`,
     `ALTER TABLE flatter_plans ADD COLUMN plan_document TEXT NOT NULL DEFAULT ''`,
+    // Non-git Flatter sources: webapp/local monitors are examined by a
+    // dispatched exploration agent (Playwright / computer-use) instead of a
+    // commit scan; the session id lets the UI link to the exploration lane.
+    `ALTER TABLE flatter_monitors ADD COLUMN source_type TEXT NOT NULL DEFAULT 'git'`,
+    `ALTER TABLE flatter_monitors ADD COLUMN last_explore_session_id TEXT`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after

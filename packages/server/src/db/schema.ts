@@ -158,6 +158,10 @@ export const flatterMonitors = sqliteTable('flatter_monitors', {
   id: text('id').primaryKey(),
   appId: text('app_id').notNull().references(() => applications.id, { onDelete: 'cascade' }),
   name: text('name').notNull(),
+  // 'git' = upstream repo (commit scan); 'webapp' = live web app examined via
+  // Playwright; 'local' = downloaded/local application examined via
+  // computer-use. For non-git sources repoUrl holds the target URL or path.
+  sourceType: text('source_type').notNull().default('git'),
   repoUrl: text('repo_url').notNull(),
   branch: text('branch').notNull().default('main'),
   baselineRef: text('baseline_ref'),
@@ -165,6 +169,7 @@ export const flatterMonitors = sqliteTable('flatter_monitors', {
   focusJson: text('focus_json').notNull().default('{}'),
   lastHeadSha: text('last_head_sha'),
   lastScannedAt: text('last_scanned_at'),
+  lastExploreSessionId: text('last_explore_session_id'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });

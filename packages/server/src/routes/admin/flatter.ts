@@ -19,11 +19,38 @@ const focusSchema = z.object({
 
 const monitorCreateSchema = z.object({
   name: z.string().min(1).max(200),
-  repoUrl: z.string().url(),
+  sourceType: z.enum(['git', 'webapp', 'local']).default('git'),
+  // For git/webapp this is a URL; for local it's a filesystem path or launch
+  // command, so URL validation is applied per source type below.
+  repoUrl: z.string().min(1).max(500),
   branch: z.string().min(1).max(200).default('main'),
   baselineRef: z.string().max(200).optional(),
   baselineDate: z.string().max(100).optional(),
   focus: focusSchema.optional(),
+}).superRefine((data, ctx) => {
+  if (data.sourceType !== 'local' && !z.string().url().safeParse(data.repoUrl).success) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['repoUrl'],
+      message: data.sourceType === 'git' ? 'Repo URL must be a valid URL' : 'Target URL must be a valid URL',
+    });
+  }
+});
+
+const findingsSchema = z.object({
+  title: z.string().max(300).optional(),
+  summary: z.string().max(4000).optional(),
+  items: z.array(z.object({
+    title: z.string().min(1).max(300),
+    summary: z.string().max(4000).default(''),
+    category: z.enum(['critical', 'nice', 'skip']).default('nice'),
+    relevance: z.enum(['high', 'medium', 'low']).default('medium'),
+    risk: z.enum(['low', 'medium', 'high']).default('medium'),
+    rationale: z.string().max(4000).default(''),
+    scopeNotes: z.string().max(4000).default(''),
+    upstreamUrl: z.string().max(1000).optional(),
+    kind: z.string().max(50).default('feature'),
+  })).min(1).max(50),
 });
 
 const itemUpdateSchema = z.object({
@@ -396,6 +423,168 @@ async function scanMonitor(appId: string, monitorId: string) {
 
   db.update(schema.flatterMonitors).set({
     lastHeadSha: headSha,
+    lastScannedAt: now,
+    updatedAt: now,
+  }).where(eq(schema.flatterMonitors.id, monitor.id)).run();
+}
+
+// --- Exploration & assist lanes ---------------------------------------------
+// Non-git monitors (live web apps, downloaded/local applications) can't be
+// commit-scanned. Scanning one instead dispatches an agent that examines the
+// target — Playwright for web apps, computer-use on the visible VNC display
+// for local apps — and records what it found via the findings endpoint.
+
+function pickAssistAgent(appId: string) {
+  const agents = db.select().from(schema.agentEndpoints).all()
+    .filter((agent) => !agent.appId || agent.appId === appId);
+  return agents.find((agent) => agent.isDefault)
+    || agents.find((agent) => !!agent.appId)
+    || agents[0]
+    || null;
+}
+
+function baseUrlFrom(c: { req: { header: (name: string) => string | undefined } }) {
+  const host = c.req.header('host') || 'localhost:3001';
+  const proto = c.req.header('x-forwarded-proto') || 'http';
+  return `${proto}://${host}`;
+}
+
+function examinationToolingBrief(baseUrl: string): string {
+  return `## Examining a target application
+
+**Live web apps — shared headless Playwright browser** (wrappers in ~/.claude/bin):
+- \`pw goto <url>\` then \`pw screenshot\` — PNG lands at /tmp/pw_screen.png; Read it to see the page.
+- \`pw text\` dumps the page text, \`pw eval <js>\` runs JS in the page, \`pw click <selector>\` clicks.
+- Walk the app systematically: landing page, navigation, each major flow. Screenshot before and after interactions so you can describe features precisely.
+
+**Computer-use — visible browser / GUI apps** (DISPLAY=:1, watchable via NoVNC on :6080):
+- \`pw-vnc-start\` launches a visible Chromium; then \`pw-vnc goto/screenshot/eval/click\` (PNG at /tmp/pw_vnc_screen.png).
+- For a downloaded/local application: unpack or install it under a scratch directory, launch it (GUI apps: \`DISPLAY=:1 <app> &\`), and observe its UI with \`pw-vnc screenshot\` or \`import -window root /tmp/screen.png\`.
+- Prefer exercising the app's real UI over only reading its source — the goal is to understand behavior worth emulating.
+
+If a target page embeds the Propanes widget, the virtual mouse/keyboard agent API (\`${baseUrl}/api/v1/agent/sessions/<sessionId>/mouse|keyboard/...\`) supports coordinate-level clicks, drags, hovers, and typing.`;
+}
+
+function flatterApiBrief(appId: string, baseUrl: string): string {
+  return `## Flatter API
+
+- Get board state: \`GET ${baseUrl}/api/v1/admin/flatter/apps/${appId}\`
+- Create a monitor: \`POST ${baseUrl}/api/v1/admin/flatter/apps/${appId}/monitors\` with JSON \`{ name, sourceType: "git"|"webapp"|"local", repoUrl, branch?, baselineRef?, baselineDate?, focus?: { includeKeywords: [], excludeKeywords: [] } }\`. For \`webapp\` put the target URL in \`repoUrl\`; for \`local\` put the app's path or launch command there.
+- Scan a monitor: \`POST ${baseUrl}/api/v1/admin/flatter/monitors/<monitorId>/scan\` — git monitors get a commit scan; webapp/local monitors dispatch an exploration agent session.
+- Record findings on a monitor: \`POST ${baseUrl}/api/v1/admin/flatter/monitors/<monitorId>/findings\` with JSON \`{ title?, summary?, items: [{ title, summary?, category?: "critical"|"nice"|"skip", relevance?: "high"|"medium"|"low", risk?: "low"|"medium"|"high", rationale?, scopeNotes?, upstreamUrl?, kind? }] }\`. Findings appear on the Flatter board for operator triage.`;
+}
+
+function buildExplorationPrompt(
+  app: typeof schema.applications.$inferSelect,
+  monitor: ReturnType<typeof monitorJson>,
+  baseUrl: string,
+) {
+  const include = (monitor.focus.includeKeywords || []).join(', ');
+  const exclude = (monitor.focus.excludeKeywords || []).join(', ');
+  const sourceLabel = monitor.sourceType === 'webapp' ? 'Live web application' : 'Downloaded / local application';
+  return `You are a Flatter exploration lane. Examine another application and identify features worth emulating in ${app.name}.
+
+App to improve: ${app.name} (${app.projectDir})
+Monitor: ${monitor.name}
+Source type: ${sourceLabel}
+Target: ${monitor.repoUrl}
+Focus on: ${include || '(no include keywords — use judgment)'}
+Ignore: ${exclude || '(none)'}
+
+${examinationToolingBrief(baseUrl)}
+
+## Recording findings
+
+When you have examined the target, record what you found:
+
+\`\`\`
+POST ${baseUrl}/api/v1/admin/flatter/monitors/${monitor.id}/findings
+Content-Type: application/json
+{ "summary": "one-line exploration summary",
+  "items": [{ "title": "feature name", "summary": "what it does and how the target implements the UX",
+              "category": "critical|nice|skip", "relevance": "high|medium|low", "risk": "low|medium|high",
+              "rationale": "why ${app.name} should (or should not) emulate this",
+              "scopeNotes": "where it would land in ${app.name} and what to watch out for" }] }
+\`\`\`
+
+Post one batch when exploration is complete (multiple batches are fine for large apps). Each item becomes a card on the Flatter board where the operator accepts or skips it. Do NOT modify ${app.name}'s code in this lane — exploration and triage only.`;
+}
+
+function buildFlatterAssistPrompt(
+  app: typeof schema.applications.$inferSelect,
+  monitors: Array<ReturnType<typeof monitorJson>>,
+  request: string,
+  baseUrl: string,
+) {
+  const monitorLines = monitors.length
+    ? monitors.map((m) => `- ${m.name} [${m.sourceType}] → ${m.repoUrl} (${summarizeBaseline(m)})`).join('\n')
+    : '- (none configured yet)';
+  return `# Flatter Assist
+
+You help the operator configure Flatter for ${app.name} (${app.projectDir}). Flatter monitors other applications — upstream git repos, live web apps, or downloaded/local applications — ranks what is worth lifting into ${app.name}, and fans accepted work out into implementation lanes.
+
+## Current monitors
+${monitorLines}
+
+${flatterApiBrief(app.id, baseUrl)}
+
+${examinationToolingBrief(baseUrl)}
+
+## Ground rules
+- Set up or adjust monitors to match the operator's request; kick off a scan when it makes sense.
+- If the operator wants features pulled from a web app or a downloaded application, you may explore it directly with the tooling above and post findings yourself instead of waiting for a scan.
+- Do not implement features in this session — get the monitors, focus keywords, and findings in shape so the operator can triage and run a plan.
+
+## Operator request
+${request}`;
+}
+
+async function dispatchFlatterSession(opts: {
+  app: typeof schema.applications.$inferSelect;
+  title: string;
+  prompt: string;
+}) {
+  const agent = pickAssistAgent(opts.app.id);
+  if (!agent) throw new Error('No agent endpoint configured');
+  const now = new Date().toISOString();
+  const feedbackId = ulid();
+  db.insert(schema.feedbackItems).values({
+    id: feedbackId,
+    type: 'manual',
+    status: 'dispatched',
+    title: opts.title,
+    description: opts.prompt,
+    appId: opts.app.id,
+    dispatchedTo: agent.name,
+    dispatchedAt: now,
+    dispatchStatus: 'running',
+    createdAt: now,
+    updatedAt: now,
+  }).run();
+  const { sessionId } = await dispatchAgentSession({
+    feedbackId,
+    agentEndpointId: agent.id,
+    prompt: opts.prompt,
+    cwd: opts.app.projectDir,
+    permissionProfile: (agent.permissionProfile || opts.app.defaultPermissionProfile || 'interactive-require') as any,
+    allowedTools: agent.allowedTools || opts.app.defaultAllowedTools || null,
+  });
+  return { sessionId, feedbackId };
+}
+
+async function exploreMonitor(appId: string, monitorId: string, baseUrl: string) {
+  const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
+  const monitorRow = db.select().from(schema.flatterMonitors).where(eq(schema.flatterMonitors.id, monitorId)).get();
+  if (!app || !monitorRow || monitorRow.appId !== appId) throw new Error('Monitor not found');
+  const monitor = monitorJson(monitorRow);
+  const { sessionId } = await dispatchFlatterSession({
+    app,
+    title: `[Flatter/Explore] ${monitor.name}`,
+    prompt: buildExplorationPrompt(app, monitor, baseUrl),
+  });
+  const now = new Date().toISOString();
+  db.update(schema.flatterMonitors).set({
+    lastExploreSessionId: sessionId,
     lastScannedAt: now,
     updatedAt: now,
   }).where(eq(schema.flatterMonitors.id, monitor.id)).run();
@@ -864,6 +1053,7 @@ flatterRoutes.post('/flatter/apps/:appId/monitors', async (c) => {
     id: ulid(),
     appId,
     name: parsed.data.name,
+    sourceType: parsed.data.sourceType,
     repoUrl: parsed.data.repoUrl,
     branch: parsed.data.branch,
     baselineRef: parsed.data.baselineRef || null,
@@ -880,11 +1070,95 @@ flatterRoutes.post('/flatter/monitors/:monitorId/scan', async (c) => {
   const monitor = db.select().from(schema.flatterMonitors).where(eq(schema.flatterMonitors.id, monitorId)).get();
   if (!monitor) return c.json({ error: 'Monitor not found' }, 404);
   try {
-    await scanMonitor(monitor.appId, monitorId);
+    if (monitor.sourceType !== 'git') {
+      await exploreMonitor(monitor.appId, monitorId, baseUrlFrom(c));
+    } else {
+      await scanMonitor(monitor.appId, monitorId);
+    }
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : 'Scan failed' }, 500);
   }
   return c.json(hydrateState(monitor.appId));
+});
+
+// Exploration lanes (and anything else) record what they found on a monitor.
+// Each item becomes a triageable card on the Flatter board.
+flatterRoutes.post('/flatter/monitors/:monitorId/findings', async (c) => {
+  const monitorId = c.req.param('monitorId');
+  const monitorRow = db.select().from(schema.flatterMonitors).where(eq(schema.flatterMonitors.id, monitorId)).get();
+  if (!monitorRow) return c.json({ error: 'Monitor not found' }, 404);
+  const parsed = findingsSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: parsed.error.flatten() }, 400);
+  const monitor = monitorJson(monitorRow);
+  const now = new Date().toISOString();
+  const reportId = ulid();
+  const counts = { critical: 0, nice: 0, skip: 0 } as Record<string, number>;
+  for (const item of parsed.data.items) counts[item.category] += 1;
+  db.insert(schema.flatterReports).values({
+    id: reportId,
+    appId: monitor.appId,
+    monitorId,
+    title: parsed.data.title || `${monitor.name} exploration`,
+    baselineSummary: monitor.sourceType === 'git' ? summarizeBaseline(monitor) : monitor.repoUrl,
+    summary: parsed.data.summary
+      || [`${counts.critical} critical`, `${counts.nice} nice-to-have`, `${counts.skip} skips`].join(' · '),
+    statsJson: JSON.stringify({ itemCount: parsed.data.items.length, ...counts }),
+    createdAt: now,
+    updatedAt: now,
+  }).run();
+  for (const item of parsed.data.items) {
+    db.insert(schema.flatterItems).values({
+      id: ulid(),
+      reportId,
+      monitorId,
+      appId: monitor.appId,
+      kind: item.kind,
+      upstreamUrl: item.upstreamUrl || null,
+      title: item.title,
+      summary: item.summary,
+      category: item.category,
+      relevance: item.relevance,
+      risk: item.risk,
+      status: item.category === 'skip' ? 'skipped' : 'proposed',
+      rationale: item.rationale,
+      scopeNotes: item.scopeNotes,
+      payloadJson: JSON.stringify({ source: monitor.sourceType, target: monitor.repoUrl }),
+      createdAt: now,
+      updatedAt: now,
+    }).run();
+  }
+  db.update(schema.flatterMonitors).set({
+    lastScannedAt: now,
+    updatedAt: now,
+  }).where(eq(schema.flatterMonitors.id, monitorId)).run();
+  return c.json(hydrateState(monitor.appId));
+});
+
+// Flatter Assist composer: dispatch an agent session that helps the operator
+// set up monitors / focus, or directly examines a target app via Playwright
+// or computer-use and posts findings.
+flatterRoutes.post('/flatter/apps/:appId/assist', async (c) => {
+  const appId = c.req.param('appId');
+  const body = await c.req.json().catch(() => ({}));
+  const request = typeof body?.request === 'string' ? body.request.trim() : '';
+  if (!request) return c.json({ error: 'request text is required' }, 400);
+  const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
+  if (!app) return c.json({ error: 'App not found' }, 404);
+  const monitors = db.select().from(schema.flatterMonitors)
+    .where(eq(schema.flatterMonitors.appId, appId))
+    .orderBy(desc(schema.flatterMonitors.updatedAt))
+    .all()
+    .map(monitorJson);
+  try {
+    const { sessionId, feedbackId } = await dispatchFlatterSession({
+      app,
+      title: `[Flatter/Assist] ${request.slice(0, 60)}`,
+      prompt: buildFlatterAssistPrompt(app, monitors, request, baseUrlFrom(c)),
+    });
+    return c.json({ sessionId, feedbackId });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Assist dispatch failed' }, 500);
+  }
 });
 
 flatterRoutes.patch('/flatter/items/:itemId', async (c) => {
