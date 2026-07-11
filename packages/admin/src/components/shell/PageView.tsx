@@ -66,7 +66,9 @@ export function PageView() {
     } else {
       page = <FeedbackListPage appId={parsed.appId} />;
     }
-  } else if (route === '/settings/agents') {
+  } else if (route === '/settings/agents' || route === '/agents') {
+    // Bare /agents is the legacy pre-settings route; deployed widget builds
+    // still link to it from the send menu's gear icon.
     openSettingsPanel('agents');
     return null;
   } else if (route === '/settings/users') {

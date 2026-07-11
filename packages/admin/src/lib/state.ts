@@ -250,14 +250,35 @@ function routeToViewId(route: string): string | null {
   return map[m[1]] || null;
 }
 
+// Settings pages render as pane tabs (settings:<key>), not through PageView —
+// and PageView is itself a lazy tab that may not be mounted. Route side
+// effects must therefore fire here, or deep links (e.g. the widget's ⚙
+// agent-settings link opening #/settings/agents in a new browser tab) are
+// silently swallowed whenever another pane tab is active.
+const SETTINGS_PANEL_KEYS = new Set([
+  'users', 'usage', 'agents', 'infrastructure', 'wiggum',
+  'user-guide', 'getting-started', 'preferences',
+]);
+
+function openPanelsForRoute(route: string) {
+  const viewId = routeToViewId(route);
+  if (viewId) {
+    openPageView(viewId);
+    return;
+  }
+  // `/agents` is the legacy pre-settings route; deployed widget builds still
+  // link to it.
+  const key = route === '/agents' ? 'agents' : route.match(/^\/settings\/([^/]+)/)?.[1];
+  if (key && SETTINGS_PANEL_KEYS.has(key)) openSettingsPanel(key);
+}
+
 export function navigate(path: string) {
   window.location.hash = path;
   currentRoute.value = path;
   const appId = extractAppIdFromRoute(path);
   if (appId) selectedAppId.value = appId;
   activeChannelSlug.value = extractChannelSlugFromRoute(path);
-  const viewId = routeToViewId(path);
-  if (viewId) openPageView(viewId);
+  openPanelsForRoute(path);
 }
 
 window.addEventListener('hashchange', () => {
@@ -266,15 +287,13 @@ window.addEventListener('hashchange', () => {
   const appId = extractAppIdFromRoute(route);
   if (appId) selectedAppId.value = appId;
   activeChannelSlug.value = extractChannelSlugFromRoute(route);
-  const viewId = routeToViewId(route);
-  if (viewId) openPageView(viewId);
+  openPanelsForRoute(route);
 });
 
 // Honor deep links on first load even when the persisted pane tree's active
 // tab is a different page view.
 queueMicrotask(() => {
-  const viewId = routeToViewId(currentRoute.value);
-  if (viewId) openPageView(viewId);
+  openPanelsForRoute(currentRoute.value);
 });
 
 window.addEventListener('pw-navigate-view', ((e: CustomEvent) => {

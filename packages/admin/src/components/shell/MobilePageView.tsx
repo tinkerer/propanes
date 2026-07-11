@@ -54,7 +54,7 @@ function renderMobileRoute(route: string) {
 
   if (route.startsWith('/settings/users')) return <UsersPage />;
   if (route.startsWith('/settings/usage')) return <UsagePage />;
-  if (route.startsWith('/settings/agents')) return <AgentsPage />;
+  if (route.startsWith('/settings/agents') || route === '/agents') return <AgentsPage />;
   if (route.startsWith('/settings/infrastructure')) return <InfrastructurePage />;
   if (route.startsWith('/settings/user-guide')) return <UserGuidePage />;
   if (route.startsWith('/settings/getting-started')) return <GettingStartedPage />;

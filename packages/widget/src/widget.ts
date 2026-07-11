@@ -608,7 +608,7 @@ export class ProPanesElement {
     agentSettingsLink.textContent = '\u2699';
     agentSettingsLink.title = 'Agent settings';
     agentSettingsLink.style.cssText = 'font-size:13px;color:#94a3b8;cursor:pointer;text-decoration:none;flex-shrink:0';
-    agentSettingsLink.href = `${this.apiBase()}/admin/#/agents`;
+    agentSettingsLink.href = `${this.apiBase()}/admin/#/settings/agents`;
     agentSettingsLink.target = '_blank';
     agentSettingsLink.addEventListener('click', (e) => e.stopPropagation());
     agentRow.append(agentLabel, agentSel, agentSettingsLink);
@@ -616,7 +616,7 @@ export class ProPanesElement {
 
     // Populate agents from API
     const agentOrigin = this.apiBase();
-    fetch(`${agentOrigin}/api/v1/admin/agents${this.appId ? `?appId=${this.appId}` : ''}`)
+    fetch(`${agentOrigin}/api/v1/admin/agents${this.appId ? `?appId=${this.appId}` : ''}`, { headers: this.adminAuthHeaders() })
       .then(r => r.json())
       .then((agents: any[]) => {
         if (!agents?.length) return;
@@ -658,7 +658,7 @@ export class ProPanesElement {
 
     // Populate targets from API
     const origin = this.apiBase();
-    fetch(`${origin}/api/v1/admin/dispatch-targets`)
+    fetch(`${origin}/api/v1/admin/dispatch-targets`, { headers: this.adminAuthHeaders() })
       .then(r => r.json())
       .then((data: any) => {
         const localName = data.localTarget?.name || data.localTarget?.hostname;
@@ -1330,7 +1330,7 @@ export class ProPanesElement {
       else localStorage.removeItem('pw-dispatch-target');
     });
     const origin = this.apiBase();
-    fetch(`${origin}/api/v1/admin/dispatch-targets`)
+    fetch(`${origin}/api/v1/admin/dispatch-targets`, { headers: this.adminAuthHeaders() })
       .then(r => r.json())
       .then((data: any) => {
         const localName = data.localTarget?.name || data.localTarget?.hostname;
@@ -3700,6 +3700,18 @@ export class ProPanesElement {
     u.hash = '';
     // Trim any trailing slash so callers can append `/api/v1/...` cleanly.
     return (u.origin + u.pathname).replace(/\/$/, '');
+  }
+
+  // Admin-scoped endpoints (/api/v1/admin/*) sit behind bearer-token auth.
+  // The token comes from setAdminToken()/pw-embed-auth (any host page), or —
+  // when the widget runs on the admin SPA itself — the SPA's own login token.
+  private adminAuthHeaders(): Record<string, string> {
+    let token: string | null = null;
+    try {
+      token = sessionStorage.getItem('pw-admin-token-overlay')
+        || localStorage.getItem('pw-admin-token');
+    } catch { /* storage blocked (sandboxed iframe etc.) */ }
+    return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
   // Wraps fetch so that iOS Safari's opaque "Load failed" TypeError gets
