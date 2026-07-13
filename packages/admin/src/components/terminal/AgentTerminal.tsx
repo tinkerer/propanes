@@ -5,6 +5,7 @@ import { lastTerminalInput } from '../../lib/sessions.js';
 import { copyText } from '../../lib/clipboard.js';
 import { openUrlCompanion } from '../../lib/companion-state.js';
 import { recordPerfEntry } from '../../lib/perf.js';
+import { useSessionFileDrop, SessionDropOverlay } from './SessionFileDrop.js';
 import type { InputState } from '../../lib/sessions.js';
 
 const MAX_RECONNECT_ATTEMPTS = 10;
@@ -96,6 +97,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
   const safeFitAndResizeRef = useRef<(bounce?: boolean) => void>(() => {});
   const [mountReady, setMountReady] = useState(false);
   const [showScrollDown, setShowScrollDown] = useState(false);
+  const fileDrop = useSessionFileDrop(sessionId);
 
   // Staggered mount: wait for our turn in the queue. The slot is held for
   // MOUNT_STAGGER_MS after we're allowed to mount, then released so the next
@@ -900,8 +902,16 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
   }, [isActive, mountReady]);
 
   return (
-    <div class="agent-terminal-wrap" style={{ width: '100%', height: '100%', position: 'relative' }}>
+    <div
+      class="agent-terminal-wrap"
+      style={{ width: '100%', height: '100%', position: 'relative' }}
+      onDragEnter={fileDrop.onDragEnter}
+      onDragOver={fileDrop.onDragOver}
+      onDragLeave={fileDrop.onDragLeave}
+      onDrop={fileDrop.onDrop}
+    >
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} onClick={() => termRef.current?.focus()} />
+      <SessionDropOverlay drop={fileDrop} />
       {showScrollDown && (
         <button
           type="button"

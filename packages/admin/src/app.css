@@ -15642,6 +15642,114 @@ body.pw-mobile .cos-thread-reply-btn {
   pointer-events: none;
 }
 
+/* ── Session pane file drop (PTY terminal + structured view) ───────── */
+.session-drop-zone {
+  position: absolute;
+  inset: 6px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--pw-accent, #3b82f6);
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--pw-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.session-drop-toast {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  z-index: 31;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #e2e8f0;
+  font-size: 12px;
+  pointer-events: none;
+}
+.session-drop-toast-error {
+  border-color: #7f1d1d;
+  color: #fca5a5;
+}
+/* Floating confirm popup — hardcoded opaque paint per overlay convention */
+.session-drop-confirm {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 32;
+  width: min(360px, calc(100% - 32px));
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  color: #e2e8f0;
+}
+.session-drop-confirm-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.session-drop-confirm-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  max-height: 140px;
+  overflow-y: auto;
+}
+.session-drop-confirm-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.session-drop-confirm-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.session-drop-confirm-size {
+  color: #fbbf24;
+  flex: 0 0 auto;
+}
+.session-drop-confirm-hint {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 10px;
+}
+.session-drop-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.session-drop-confirm-actions button {
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid #334155;
+  background: transparent;
+  color: #cbd5e1;
+}
+.session-drop-confirm-actions button:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+.session-drop-confirm-upload {
+  background: var(--pw-accent, #3b82f6) !important;
+  border-color: var(--pw-accent, #3b82f6) !important;
+  color: #fff !important;
+}
+.session-drop-confirm-upload:hover {
+  filter: brightness(1.1);
+}
+
 /* ── Inline-element-chip composer (experimental) ─────────────────────
    Mirrors `.cos-input` sizing so the contenteditable shell looks the
    same as the textarea it replaces. Chips are rendered as

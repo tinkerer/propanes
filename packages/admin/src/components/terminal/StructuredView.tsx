@@ -6,6 +6,7 @@ import { api } from '../../lib/api.js';
 import { sessionInputStates } from '../../lib/session-state.js';
 import { isMobile, NarrowContext, useContainerNarrow } from '../../lib/viewport.js';
 import { ChoicePrompt, type ChoiceOption } from './InteractivePrompt.js';
+import { useSessionFileDrop, SessionDropOverlay } from './SessionFileDrop.js';
 import {
   groupMessages,
   partitionMergedMessages,
@@ -118,6 +119,7 @@ export function StructuredView({ sessionId, chat }: Props) {
 
   const inputState = sessionInputStates.value.get(sessionId) || 'active';
   const isWaiting = inputState === 'waiting';
+  const fileDrop = useSessionFileDrop(sessionId);
 
   const { messages, loading, error, isSessionDone, isRunning } = useTranscriptStream(sessionId);
 
@@ -276,7 +278,13 @@ export function StructuredView({ sessionId, chat }: Props) {
 
   return (
     <NarrowContext.Provider value={narrow}>
-    <div class="structured-view-wrap">
+    <div
+      class="structured-view-wrap"
+      onDragEnter={fileDrop.onDragEnter}
+      onDragOver={fileDrop.onDragOver}
+      onDragLeave={fileDrop.onDragLeave}
+      onDrop={fileDrop.onDrop}
+    >
     <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} ref={setContainerRef}>
       {messages.length === 0 && (
         <div class="sm-empty">No messages yet</div>
@@ -320,6 +328,7 @@ export function StructuredView({ sessionId, chat }: Props) {
         />
       )}
     </div>
+    <SessionDropOverlay drop={fileDrop} />
     {showScrollDown && (
       <button
         type="button"
