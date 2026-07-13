@@ -166,6 +166,25 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
 
     const fit = new FitAddon();
     term.loadAddon(fit);
+
+    // OSC 52 clipboard writes (write-only). TUIs that enable mouse reporting
+    // (Claude Code) handle text selection themselves and copy via OSC 52;
+    // xterm.js core ignores the sequence, so without this handler "highlight
+    // then copy" silently does nothing. Queries ('?') are deliberately not
+    // answered — no PTY app gets to read the user's clipboard.
+    const osc52Dispose = term.parser.registerOscHandler(52, (data: string) => {
+      const semi = data.indexOf(';');
+      if (semi === -1) return true;
+      const payload = data.slice(semi + 1);
+      if (payload === '?') return true;
+      try {
+        const bytes = Uint8Array.from(atob(payload), (ch) => ch.charCodeAt(0));
+        const text = new TextDecoder().decode(bytes);
+        if (text) navigator.clipboard?.writeText(text).catch(() => {});
+      } catch { /* malformed base64 — ignore */ }
+      return true;
+    });
+
     term.open(containerRef.current);
 
     // Only fit if container is visible (non-zero size); hidden tabs fit on activation
@@ -260,6 +279,16 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
     if (xtermScreen) {
       xtermScreen.addEventListener('contextmenu', onContextMenu);
     }
+
+    // Cmd/Ctrl-C with no xterm selection: the browser's default action copies
+    // the (empty) hidden helper textarea, wiping whatever is on the clipboard.
+    // That clobbers the OSC 52 copy a TUI just made from its own selection —
+    // the "highlight in claude, press Cmd-C, paste is empty" bug. With a real
+    // xterm selection, xterm's own copy handler takes over before default.
+    function onCopyGuard(e: Event) {
+      if (!term.hasSelection()) e.preventDefault();
+    }
+    containerRef.current.addEventListener('copy', onCopyGuard);
 
     // ---- Ctrl+mouse: text selection & context menu ----
     const selOverlay = document.createElement('div');
@@ -793,6 +822,8 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       if (xtermScreen) {
         xtermScreen.removeEventListener('contextmenu', onContextMenu);
       }
+      osc52Dispose.dispose();
+      container.removeEventListener('copy', onCopyGuard);
       container.removeEventListener('mousedown', onCtrlMouseDown, true);
       document.removeEventListener('mousemove', onDragMove);
       document.removeEventListener('mouseup', onDragEnd);
