@@ -136,6 +136,14 @@ export interface SendKeysResult {
   error?: string;
 }
 
+export interface WriteSessionFileResult {
+  type: 'write_file_result';
+  sessionId: string;
+  ok: boolean;
+  path?: string;
+  error?: string;
+}
+
 export interface CapturePaneResult {
   type: 'capture_pane_result';
   sessionId: string;
@@ -168,6 +176,7 @@ export type LauncherToServerMessage =
   | CheckContainerClaudeResult
   | LauncherHealthCheckResult
   | SendKeysResult
+  | WriteSessionFileResult
   | CapturePaneResult
   | ExecInHarnessResult;
 
@@ -322,6 +331,17 @@ export interface SendKeys {
   enter?: boolean;
 }
 
+// Write a file into the launcher host's temp dir so a session running there
+// can read it by path (drag-and-drop uploads for remote sessions). Content is
+// base64 over the launcher WebSocket — fine for the file sizes drops produce;
+// the server caps transfers at WRITE_FILE_MAX_BYTES.
+export interface WriteSessionFile {
+  type: 'write_file';
+  sessionId: string;
+  filename: string;
+  contentBase64: string;
+}
+
 export interface CapturePane {
   type: 'capture_pane';
   sessionId: string;
@@ -357,6 +377,7 @@ export type ServerToLauncherMessage =
   | CheckContainerClaude
   | LauncherHealthCheck
   | SendKeys
+  | WriteSessionFile
   | CapturePane
   | ExecInHarness;
 

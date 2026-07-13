@@ -278,12 +278,17 @@ export function StructuredView({ sessionId, chat }: Props) {
 
   return (
     <NarrowContext.Provider value={narrow}>
+    {/* tabIndex so clicks inside focus the wrap (nearest focusable ancestor)
+        and Cmd/Ctrl-V paste events land within it. */}
     <div
       class="structured-view-wrap"
+      tabIndex={-1}
+      style={{ outline: 'none' }}
       onDragEnter={fileDrop.onDragEnter}
       onDragOver={fileDrop.onDragOver}
       onDragLeave={fileDrop.onDragLeave}
       onDrop={fileDrop.onDrop}
+      onPasteCapture={fileDrop.onPaste}
     >
     <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} ref={setContainerRef}>
       {messages.length === 0 && (

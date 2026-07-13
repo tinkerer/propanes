@@ -22,6 +22,7 @@ export interface SessionFileDrop {
   onDragOver: (e: DragEvent) => void;
   onDragLeave: (e: DragEvent) => void;
   onDrop: (e: DragEvent) => void;
+  onPaste: (e: ClipboardEvent) => void;
   confirmLarge: () => void;
   cancelLarge: () => void;
 }
@@ -58,7 +59,8 @@ export function useSessionFileDrop(sessionId: string): SessionFileDrop {
     if (files.length === 0) return;
     setBusy(true);
     try {
-      const res = await api.uploadFiles(files, { sessionId });
+      const res = await api.sessionDropFiles(sessionId, files);
+      if (res.error) throw new Error(res.error);
       const paths = (res.files || []).map((f) => f.path).filter(Boolean);
       if (paths.length === 0) throw new Error('Upload returned no paths');
       // Trailing space so consecutive drops (or typing after) stay separated.
@@ -70,6 +72,15 @@ export function useSessionFileDrop(sessionId: string): SessionFileDrop {
       setBusy(false);
     }
   }, [sessionId, showError]);
+
+  // Shared intake for dropped or pasted files: small ones upload right away,
+  // oversized ones wait behind the confirmation popup.
+  const intakeFiles = useCallback((all: File[]) => {
+    const small = all.filter((f) => f.size <= LARGE_FILE_BYTES);
+    const large = all.filter((f) => f.size > LARGE_FILE_BYTES);
+    if (small.length > 0) void uploadAndPaste(small);
+    if (large.length > 0) setPendingLarge(large);
+  }, [uploadAndPaste]);
 
   const onDragEnter = useCallback((e: DragEvent) => {
     if (!hasFiles(e)) return;
@@ -97,12 +108,20 @@ export function useSessionFileDrop(sessionId: string): SessionFileDrop {
     if (!dropped || dropped.length === 0) return;
     e.preventDefault();
     e.stopPropagation();
-    const all = Array.from(dropped);
-    const small = all.filter((f) => f.size <= LARGE_FILE_BYTES);
-    const large = all.filter((f) => f.size > LARGE_FILE_BYTES);
-    if (small.length > 0) void uploadAndPaste(small);
-    if (large.length > 0) setPendingLarge(large);
-  }, [uploadAndPaste]);
+    intakeFiles(Array.from(dropped));
+  }, [intakeFiles]);
+
+  // Paste with files on the clipboard (screenshots, copied images/files).
+  // Text-only pastes are left alone — xterm / native handlers take those.
+  // Wire via onPasteCapture on panes containing xterm: its textarea paste
+  // handler stops propagation, so a bubble listener never sees the event.
+  const onPaste = useCallback((e: ClipboardEvent) => {
+    const pasted = e.clipboardData?.files;
+    if (!pasted || pasted.length === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    intakeFiles(Array.from(pasted));
+  }, [intakeFiles]);
 
   const confirmLarge = useCallback(() => {
     setPendingLarge((files) => {
@@ -113,7 +132,7 @@ export function useSessionFileDrop(sessionId: string): SessionFileDrop {
 
   const cancelLarge = useCallback(() => setPendingLarge(null), []);
 
-  return { dragOver, busy, error, pendingLarge, onDragEnter, onDragOver, onDragLeave, onDrop, confirmLarge, cancelLarge };
+  return { dragOver, busy, error, pendingLarge, onDragEnter, onDragOver, onDragLeave, onDrop, onPaste, confirmLarge, cancelLarge };
 }
 
 // Overlay chrome for a drop-enabled pane: drag highlight, busy/error toasts,

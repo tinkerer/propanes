@@ -909,6 +909,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       onDragOver={fileDrop.onDragOver}
       onDragLeave={fileDrop.onDragLeave}
       onDrop={fileDrop.onDrop}
+      onPasteCapture={fileDrop.onPaste}
     >
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} onClick={() => termRef.current?.focus()} />
       <SessionDropOverlay drop={fileDrop} />

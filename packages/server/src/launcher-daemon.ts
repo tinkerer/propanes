@@ -29,6 +29,7 @@ import type {
   CheckContainerClaudeResult,
   LauncherHealthCheckResult,
   SendKeysResult,
+  WriteSessionFileResult,
   CapturePaneResult,
   ExecInHarnessResult,
 } from '@propanes/shared';
@@ -758,6 +759,22 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
         sendToServer(result);
       } else {
         const result: SendKeysResult = { type: 'send_keys_result', sessionId: msg.sessionId, ok: false, error: 'Session not found or not running' };
+        sendToServer(result);
+      }
+      break;
+    }
+
+    case 'write_file': {
+      // Drag-and-drop upload for a session on this launcher: materialize the
+      // file in the host temp dir so the pasted path resolves here.
+      try {
+        const filename = path.basename(msg.filename || 'file');
+        const destPath = path.join(os.tmpdir(), filename);
+        writeFileSync(destPath, Buffer.from(msg.contentBase64, 'base64'));
+        const result: WriteSessionFileResult = { type: 'write_file_result', sessionId: msg.sessionId, ok: true, path: destPath };
+        sendToServer(result);
+      } catch (err: any) {
+        const result: WriteSessionFileResult = { type: 'write_file_result', sessionId: msg.sessionId, ok: false, error: err.message };
         sendToServer(result);
       }
       break;

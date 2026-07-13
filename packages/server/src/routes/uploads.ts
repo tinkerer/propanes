@@ -56,6 +56,52 @@ function resolveAppId(apiKey: string | undefined, sessionId: string | undefined,
 
 export const uploadRoutes = new Hono();
 
+export interface StoredUpload {
+  id: string;
+  filename: string;
+  originalName: string;
+  path: string;
+  size: number;
+  mimeType: string;
+}
+
+// Persist uploaded Files to UPLOAD_DIR + DB and symlink into /tmp. Shared by
+// the generic /uploads route and the per-session drop-files route.
+export async function storeUploads(
+  files: File[],
+  meta: { sessionId?: string; userId?: string; sourceUrl?: string; appId?: string | null },
+): Promise<StoredUpload[]> {
+  await mkdir(UPLOAD_DIR, { recursive: true });
+  const now = new Date().toISOString();
+  const results: StoredUpload[] = [];
+
+  for (const file of files) {
+    const id = ulid();
+    const originalName = sanitizeName(file.name);
+    // Storage filename: <ulid>-<original> so /tmp paths stay readable and unique.
+    const filename = `${id}-${originalName}`;
+    const mimeType = file.type || 'application/octet-stream';
+    const absPath = resolve(UPLOAD_DIR, filename);
+    const buf = Buffer.from(await file.arrayBuffer());
+    await writeFile(absPath, buf);
+    db.insert(schema.uploads).values({
+      id,
+      appId: meta.appId || null,
+      sessionId: meta.sessionId || null,
+      userId: meta.userId || null,
+      sourceUrl: meta.sourceUrl || null,
+      filename,
+      originalName: file.name || originalName,
+      mimeType,
+      size: buf.byteLength,
+      createdAt: now,
+    }).run();
+    const tmpPath = await linkToTmp(absPath, filename);
+    results.push({ id, filename, originalName: file.name || originalName, path: tmpPath, size: buf.byteLength, mimeType });
+  }
+  return results;
+}
+
 // Upload one or more arbitrary files (multipart/form-data, field `files`).
 uploadRoutes.post('/', async (c) => {
   const contentType = c.req.header('content-type') || '';
@@ -70,42 +116,19 @@ uploadRoutes.post('/', async (c) => {
   const apiKey = c.req.header('x-api-key');
   const appId = resolveAppId(apiKey, meta.sessionId as string | undefined, meta.appId as string | undefined);
 
-  const files = formData.getAll('files');
+  const files = formData.getAll('files').filter((f): f is File => f instanceof File);
   if (files.length === 0) {
     return c.json({ error: 'No files provided' }, 400);
   }
 
-  await mkdir(UPLOAD_DIR, { recursive: true });
-  const now = new Date().toISOString();
-  const results: { id: string; filename: string; originalName: string; path: string; size: number; mimeType: string }[] = [];
+  const results = await storeUploads(files, {
+    appId,
+    sessionId: meta.sessionId as string | undefined,
+    userId: meta.userId as string | undefined,
+    sourceUrl: meta.sourceUrl as string | undefined,
+  });
 
-  for (const file of files) {
-    if (!(file instanceof File)) continue;
-    const id = ulid();
-    const originalName = sanitizeName(file.name);
-    // Storage filename: <ulid>-<original> so /tmp paths stay readable and unique.
-    const filename = `${id}-${originalName}`;
-    const mimeType = file.type || 'application/octet-stream';
-    const absPath = resolve(UPLOAD_DIR, filename);
-    const buf = Buffer.from(await file.arrayBuffer());
-    await writeFile(absPath, buf);
-    db.insert(schema.uploads).values({
-      id,
-      appId,
-      sessionId: (meta.sessionId as string) || null,
-      userId: (meta.userId as string) || null,
-      sourceUrl: (meta.sourceUrl as string) || null,
-      filename,
-      originalName: file.name || originalName,
-      mimeType,
-      size: buf.byteLength,
-      createdAt: now,
-    }).run();
-    const tmpPath = await linkToTmp(absPath, filename);
-    results.push({ id, filename, originalName: file.name || originalName, path: tmpPath, size: buf.byteLength, mimeType });
-  }
-
-  return c.json({ appId, createdAt: now, files: results }, 201);
+  return c.json({ appId, createdAt: new Date().toISOString(), files: results }, 201);
 });
 
 // List uploads (admin)

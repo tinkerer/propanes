@@ -625,6 +625,18 @@ export const api = {
       method: 'POST',
     }),
 
+  // Upload files dropped/pasted onto a session pane. The server stores them
+  // and — for sessions on remote launchers — also writes them to the remote
+  // machine's temp dir, returning paths valid where the session runs.
+  sessionDropFiles: (id: string, files: File[]) => {
+    const fd = new FormData();
+    for (const f of files) fd.append('files', f, f.name);
+    return request<{
+      files: { id: string; filename: string; originalName: string; path: string; size: number; mimeType: string }[];
+      error?: string;
+    }>(`/admin/agent-sessions/${id}/drop-files`, { method: 'POST', body: fd });
+  },
+
   sendKeys: (id: string, data: { keys: string; enter?: boolean }) =>
     request<{ ok: boolean; error?: string }>(`/admin/agent-sessions/${id}/send-keys`, {
       method: 'POST',

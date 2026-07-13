@@ -8,6 +8,7 @@ import { killSession } from '../agent-sessions.js';
 import { resumeAgentSession, dispatchTerminalSession, transferSession, getTransfer } from '../dispatch.js';
 import { getSessionLiveStates, inputSessionRemote, sendKeysSessionRemote } from '../session-service-client.js';
 import { getLauncher, sendAndWait } from '../launcher-registry.js';
+import { storeUploads } from './uploads.js';
 import { listSessions, sendCommand } from '../sessions.js';
 import { getAdminUser, memberSessionScope, visibleToMember } from '../admin-auth.js';
 import {
@@ -689,6 +690,58 @@ agentSessionRoutes.post('/:id/send-keys', async (c) => {
   } catch (err: any) {
     return c.json({ ok: false, error: err.message }, 500);
   }
+});
+
+// Drag-and-drop / paste uploads targeted at a session: store on the server,
+// and when the session runs on a remote launcher, also materialize the file
+// in that machine's temp dir so the pasted path resolves where the agent runs.
+const WRITE_FILE_MAX_BYTES = 50 * 1024 * 1024;
+
+agentSessionRoutes.post('/:id/drop-files', async (c) => {
+  const id = c.req.param('id');
+  const contentType = c.req.header('content-type') || '';
+  if (!contentType.includes('multipart/form-data')) {
+    return c.json({ error: 'Expected multipart/form-data' }, 400);
+  }
+
+  const session = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, id)).get();
+  if (!session || !visibleToMember(session, getAdminUser(c))) return c.json({ error: 'Session not found' }, 404);
+
+  const formData = await c.req.formData();
+  const files = formData.getAll('files').filter((f): f is File => f instanceof File);
+  if (files.length === 0) return c.json({ error: 'No files provided' }, 400);
+
+  const stored = await storeUploads(files, { sessionId: id });
+
+  const launcher = session.launcherId ? getLauncher(session.launcherId) : null;
+  if (launcher && !launcher.isLocal) {
+    const { readFile } = await import('node:fs/promises');
+    const { ulid } = await import('ulidx');
+    const remote: typeof stored = [];
+    for (const f of stored) {
+      if (f.size > WRITE_FILE_MAX_BYTES) {
+        return c.json({ error: `${f.originalName} is too large for remote transfer (max ${WRITE_FILE_MAX_BYTES / (1024 * 1024)}MB)` }, 413);
+      }
+      try {
+        const buf = await readFile(f.path);
+        const result = await sendAndWait(session.launcherId!, {
+          type: 'write_file' as const,
+          sessionId: ulid(),
+          filename: f.filename,
+          contentBase64: buf.toString('base64'),
+        }, 'write_file_result', 30_000) as any;
+        if (!result.ok || !result.path) {
+          return c.json({ error: result.error || 'Launcher failed to write file' }, 502);
+        }
+        remote.push({ ...f, path: result.path });
+      } catch (err: any) {
+        return c.json({ error: err.message }, 502);
+      }
+    }
+    return c.json({ files: remote }, 201);
+  }
+
+  return c.json({ files: stored }, 201);
 });
 
 agentSessionRoutes.post('/:id/capture-pane', async (c) => {
