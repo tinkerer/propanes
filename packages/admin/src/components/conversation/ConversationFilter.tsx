@@ -15,13 +15,23 @@ export interface ConversationFilters {
 }
 
 export const DEFAULT_FILTERS: ConversationFilters = {
-  hiddenRoles: new Set(),
+  // Thinking hidden by default — traces are usually absent, so the chip is noise.
+  hiddenRoles: new Set<MessageRole>(['thinking']),
   hiddenTools: new Set(),
   searchQuery: '',
 };
 
+/** True if any hiding is configured (defaults included) — gates the actual filtering. */
+export function filtersHideAnything(f: ConversationFilters): boolean {
+  return f.hiddenRoles.size > 0 || f.hiddenTools.size > 0;
+}
+
+/** True if the user changed anything from the defaults — gates the active dot / clear button. */
 export function filtersActive(f: ConversationFilters): boolean {
-  return f.hiddenRoles.size > 0 || f.hiddenTools.size > 0 || f.searchQuery.length > 0;
+  const defaults = DEFAULT_FILTERS.hiddenRoles;
+  const rolesDiffer =
+    f.hiddenRoles.size !== defaults.size || [...f.hiddenRoles].some(r => !defaults.has(r));
+  return rolesDiffer || f.hiddenTools.size > 0 || f.searchQuery.length > 0;
 }
 
 // ---------------------------------------------------------------------------

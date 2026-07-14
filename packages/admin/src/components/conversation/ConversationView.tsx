@@ -18,7 +18,7 @@ import { SessionInputBar } from './SessionInputBar.js';
 import {
   ConversationFilter,
   DEFAULT_FILTERS,
-  filtersActive as isFiltersActive,
+  filtersHideAnything,
   toolChipId,
   type ConversationFilters,
 } from './ConversationFilter.js';
@@ -332,7 +332,7 @@ function shouldHideMessage(msg: ParsedMessage, filters: ConversationFilters): bo
 
 /** Apply filters to a group's messages, returning only visible ones. */
 function filterGroupMessages(msgs: ParsedMessage[], filters: ConversationFilters): ParsedMessage[] {
-  if (!isFiltersActive(filters)) return msgs;
+  if (!filtersHideAnything(filters)) return msgs;
   // Collect dropped tool_use ids so we can also hide their tool_results
   const droppedToolUseIds = new Set<string>();
   const result: ParsedMessage[] = [];
@@ -393,7 +393,7 @@ export function ConversationView({
   ) : null;
 
   // Compute filtered count for the header
-  const hasActiveFilters = isFiltersActive(filters);
+  const hasActiveFilters = filtersHideAnything(filters);
   const filteredCount = useMemo(() => {
     if (!hasActiveFilters) return 0;
     let count = 0;
