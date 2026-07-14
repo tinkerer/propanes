@@ -6,16 +6,23 @@ import { getActiveRunIds } from './wiggum-controller.js';
 import { buildSessionList } from './routes/agent-sessions.js';
 import { listNotifications } from './notifications.js';
 import { NOTIFICATIONS_TOPIC } from '@propanes/shared';
+import type { AdminUser } from './admin-auth.js';
+import { visibleToMember } from './admin-auth.js';
 
-const adminClients = new Set<WebSocket>();
+const adminClients = new Map<WebSocket, AdminUser>();
+
+// Topics that expose global operator state (all live connections, machines,
+// launchers, wiggum runs, cross-workspace notifications). Members never
+// receive these; their pages degrade to the REST endpoints' scoped answers.
+const ADMIN_ONLY_TOPICS = new Set(['live-connections', 'infrastructure', 'wiggum', NOTIFICATIONS_TOPIC]);
 
 let sessionsTimer: ReturnType<typeof setInterval> | null = null;
 let liveTimer: ReturnType<typeof setInterval> | null = null;
 let infraTimer: ReturnType<typeof setInterval> | null = null;
 let wiggumTimer: ReturnType<typeof setInterval> | null = null;
 
-export function registerAdminClient(ws: WebSocket) {
-  adminClients.add(ws);
+export function registerAdminClient(ws: WebSocket, user: AdminUser) {
+  adminClients.set(ws, user);
   if (adminClients.size === 1) startTimers();
 
   // Send initial snapshots immediately
@@ -31,12 +38,22 @@ export function unregisterAdminClient(ws: WebSocket) {
   if (adminClients.size === 0) stopTimers();
 }
 
+function scopeTopicData(topic: string, data: unknown, user: AdminUser): unknown | undefined {
+  if (user.role === 'admin') return data;
+  if (ADMIN_ONLY_TOPICS.has(topic)) return undefined;
+  if (topic === 'sessions' && Array.isArray(data)) {
+    return data.filter((s) => visibleToMember(s as { ownerUserId?: string | null; orgId?: string | null }, user));
+  }
+  return data;
+}
+
 export function broadcastAdmin(msg: { topic: string; data: unknown }) {
   if (adminClients.size === 0) return;
-  const payload = JSON.stringify(msg);
-  for (const ws of adminClients) {
+  for (const [ws, user] of adminClients) {
+    const scoped = scopeTopicData(msg.topic, msg.data, user);
+    if (scoped === undefined) continue;
     try {
-      ws.send(payload);
+      ws.send(JSON.stringify({ topic: msg.topic, data: scoped }));
     } catch {
       adminClients.delete(ws);
     }
@@ -45,8 +62,12 @@ export function broadcastAdmin(msg: { topic: string; data: unknown }) {
 
 async function sendSnapshot(ws: WebSocket, topic: string) {
   try {
+    const user = adminClients.get(ws);
+    if (!user) return;
     const data = await getTopicData(topic);
-    ws.send(JSON.stringify({ topic, data }));
+    const scoped = scopeTopicData(topic, data, user);
+    if (scoped === undefined) return;
+    ws.send(JSON.stringify({ topic, data: scoped }));
   } catch {
     // ignore
   }

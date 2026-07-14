@@ -1,4 +1,5 @@
 import type { Context, Next } from 'hono';
+import type { JWTPayload } from 'jose';
 import { eq, or, type SQL } from 'drizzle-orm';
 import { verifyToken } from './auth.js';
 import { db, schema } from './db/index.js';
@@ -11,11 +12,14 @@ export type AdminUser = {
   launcherId: string | null;
 };
 
-export async function requireAdminAuth(c: Context, next: Next) {
-  const token = c.req.header('Authorization')?.replace('Bearer ', '') || c.req.query('token');
-  const payload = token ? await verifyToken(token) : null;
+// Resolve a verified JWT payload to an AdminUser, enforcing the same rules as
+// requireAdminAuth (role must be admin|member; DB users must exist and be
+// active). Returns null when the payload doesn't map to a usable account.
+// Shared by the HTTP middleware and the WebSocket handshakes so members are
+// accepted (and scoped) everywhere instead of being bounced with a 401/4003.
+export function resolveAdminUser(payload: JWTPayload | null): AdminUser | null {
   if (!payload || !payload.sub || (payload.role !== 'admin' && payload.role !== 'member')) {
-    return c.json({ error: 'Unauthorized' }, 401);
+    return null;
   }
 
   let launcherId: string | null = null;
@@ -31,18 +35,28 @@ export async function requireAdminAuth(c: Context, next: Next) {
       .where(eq(schema.users.id, String(payload.sub)))
       .get();
     if (!user || user.status !== 'active') {
-      return c.json({ error: 'Unauthorized' }, 401);
+      return null;
     }
     launcherId = user.launcherId ?? null;
   }
 
-  c.set('user', {
+  return {
     id: String(payload.sub),
     username: String(payload.username || ''),
     role: payload.role,
     orgId: (payload as { orgId?: string | null }).orgId ?? null,
     launcherId,
-  } satisfies AdminUser);
+  };
+}
+
+export async function requireAdminAuth(c: Context, next: Next) {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '') || c.req.query('token');
+  const payload = token ? await verifyToken(token) : null;
+  const user = resolveAdminUser(payload);
+  if (!user) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  c.set('user', user satisfies AdminUser);
   await next();
 }
 

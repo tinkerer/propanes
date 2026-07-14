@@ -4,11 +4,34 @@ import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { ulid } from 'ulidx';
 import { db, schema } from '../db/index.js';
-import { verifyAdminToken } from '../auth.js';
+import { verifyToken } from '../auth.js';
+import { resolveAdminUser, visibleToMember, type AdminUser } from '../admin-auth.js';
+import type { Context } from 'hono';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 
 export const imageRoutes = new Hono();
+
+// Members may mutate screenshots only on feedback in their own workspace.
+// 401 is reserved for invalid tokens — the admin SPA logs the user out on any
+// 401, so a valid member token must never receive one.
+async function authUser(c: Context): Promise<AdminUser | null> {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '');
+  return token ? resolveAdminUser(await verifyToken(token)) : null;
+}
+
+function canTouchFeedback(user: AdminUser, feedbackId: string): boolean {
+  if (user.role === 'admin') return true;
+  const fb = db
+    .select({
+      ownerUserId: schema.feedbackItems.ownerUserId,
+      orgId: schema.feedbackItems.orgId,
+    })
+    .from(schema.feedbackItems)
+    .where(eq(schema.feedbackItems.id, feedbackId))
+    .get();
+  return !!fb && visibleToMember(fb, user);
+}
 
 imageRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
@@ -33,14 +56,15 @@ imageRoutes.get('/:id', async (c) => {
 
 // Overwrite existing image with cropped version
 imageRoutes.put('/:id', async (c) => {
-  const token = c.req.header('Authorization')?.replace('Bearer ', '');
-  if (!token || !(await verifyAdminToken(token))) return c.json({ error: 'Unauthorized' }, 401);
+  const user = await authUser(c);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
   const id = c.req.param('id');
   const screenshot = await db.query.feedbackScreenshots.findFirst({
     where: eq(schema.feedbackScreenshots.id, id),
   });
   if (!screenshot) return c.json({ error: 'Image not found' }, 404);
+  if (!canTouchFeedback(user, screenshot.feedbackId)) return c.json({ error: 'Forbidden' }, 403);
 
   const formData = await c.req.formData();
   const file = formData.get('image');
@@ -57,14 +81,15 @@ imageRoutes.put('/:id', async (c) => {
 
 // Save cropped image as new screenshot linked to same feedback
 imageRoutes.post('/', async (c) => {
-  const token = c.req.header('Authorization')?.replace('Bearer ', '');
-  if (!token || !(await verifyAdminToken(token))) return c.json({ error: 'Unauthorized' }, 401);
+  const user = await authUser(c);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
   const formData = await c.req.formData();
   const file = formData.get('image');
   const feedbackId = formData.get('feedbackId');
   if (!(file instanceof File)) return c.json({ error: 'Missing image file' }, 400);
   if (typeof feedbackId !== 'string' || !feedbackId) return c.json({ error: 'Missing feedbackId' }, 400);
+  if (!canTouchFeedback(user, feedbackId)) return c.json({ error: 'Forbidden' }, 403);
 
   const screenshotId = ulid();
   const ext = file.type.split('/')[1] || 'png';
@@ -88,14 +113,15 @@ imageRoutes.post('/', async (c) => {
 });
 
 imageRoutes.delete('/:id', async (c) => {
-  const token = c.req.header('Authorization')?.replace('Bearer ', '');
-  if (!token || !(await verifyAdminToken(token))) return c.json({ error: 'Unauthorized' }, 401);
+  const user = await authUser(c);
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
   const id = c.req.param('id');
   const screenshot = await db.query.feedbackScreenshots.findFirst({
     where: eq(schema.feedbackScreenshots.id, id),
   });
   if (!screenshot) return c.json({ error: 'Image not found' }, 404);
+  if (!canTouchFeedback(user, screenshot.feedbackId)) return c.json({ error: 'Forbidden' }, 403);
 
   try {
     await unlink(join(UPLOAD_DIR, screenshot.filename));

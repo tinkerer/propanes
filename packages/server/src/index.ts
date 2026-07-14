@@ -7,7 +7,8 @@ import { runMigrations, db, schema } from './db/index.js';
 import { reconcileUsage } from './metering.js';
 import { destroyWorktreeIsolate, branchForIsolatePath } from './isolates.js';
 import { registerSession } from './sessions.js';
-import { verifyAdminToken } from './auth.js';
+import { verifyToken } from './auth.js';
+import { resolveAdminUser, visibleToMember } from './admin-auth.js';
 import {
   attachAdmin,
   detachAdmin,
@@ -338,10 +339,28 @@ agentWss.on('connection', async (ws, req) => {
     return;
   }
 
-  const isValid = await verifyAdminToken(token);
-  if (!isValid) {
+  const user = resolveAdminUser(await verifyToken(token));
+  if (!user) {
     ws.close(4003, 'Invalid token');
     return;
+  }
+
+  // Members may only attach to sessions in their own workspace. Close with
+  // 4004 (not 4003 — the admin SPA treats 4003 as a stale token and logs the
+  // user out).
+  if (user.role !== 'admin') {
+    const session = db
+      .select({
+        ownerUserId: schema.agentSessions.ownerUserId,
+        orgId: schema.agentSessions.orgId,
+      })
+      .from(schema.agentSessions)
+      .where(eq(schema.agentSessions.id, sessionId))
+      .get();
+    if (!session || !visibleToMember(session, user)) {
+      ws.close(4004, 'Session not found');
+      return;
+    }
   }
 
   const attached = attachAdmin(sessionId, ws);
@@ -374,14 +393,14 @@ adminWss.on('connection', async (ws, req) => {
     return;
   }
 
-  const isValid = await verifyAdminToken(token);
-  if (!isValid) {
+  const user = resolveAdminUser(await verifyToken(token));
+  if (!user) {
     ws.close(4003, 'Invalid token');
     return;
   }
 
-  registerAdminClient(ws);
-  console.log(`[admin-ws] Client connected`);
+  registerAdminClient(ws, user);
+  console.log(`[admin-ws] Client connected (${user.username || user.id}, ${user.role})`);
 
   ws.on('close', () => {
     unregisterAdminClient(ws);

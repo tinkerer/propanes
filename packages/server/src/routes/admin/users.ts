@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { eq } from 'drizzle-orm';
 import { ulid } from 'ulidx';
-import { hashPassword, verifyAdminToken } from '../../auth.js';
+import { hashPassword, verifyToken } from '../../auth.js';
 import { db, schema } from '../../db/index.js';
 import {
   isProvisioningAvailable,
@@ -14,9 +14,15 @@ import {
 
 export const userRoutes = new Hono();
 
-async function requireAdmin(c: Context): Promise<boolean> {
+// 401 only when the token is missing/invalid — the admin SPA treats any 401
+// as a stale session and force-logs the user out. A valid member token that
+// simply lacks admin rights gets 403 instead.
+async function requireAdmin(c: Context): Promise<Response | null> {
   const token = c.req.header('Authorization')?.replace('Bearer ', '');
-  return !!token && (await verifyAdminToken(token));
+  const payload = token ? await verifyToken(token) : null;
+  if (!payload) return c.json({ error: 'Unauthorized' }, 401);
+  if (payload.role !== 'admin') return c.json({ error: 'Forbidden' }, 403);
+  return null;
 }
 
 function publicUser(u: typeof schema.users.$inferSelect) {
@@ -33,13 +39,15 @@ function publicUser(u: typeof schema.users.$inferSelect) {
 }
 
 userRoutes.get('/users', async (c) => {
-  if (!(await requireAdmin(c))) return c.json({ error: 'Unauthorized' }, 401);
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
   const rows = db.select().from(schema.users).all();
   return c.json({ users: rows.map(publicUser) });
 });
 
 userRoutes.post('/users', async (c) => {
-  if (!(await requireAdmin(c))) return c.json({ error: 'Unauthorized' }, 401);
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
   const body = await c.req.json().catch(() => ({}));
   const username = typeof body.username === 'string' ? body.username.trim() : '';
   const password = typeof body.password === 'string' ? body.password : '';
@@ -72,7 +80,8 @@ userRoutes.post('/users', async (c) => {
 });
 
 userRoutes.post('/users/:id/reset-password', async (c) => {
-  if (!(await requireAdmin(c))) return c.json({ error: 'Unauthorized' }, 401);
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => ({}));
   const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
@@ -89,7 +98,8 @@ userRoutes.post('/users/:id/reset-password', async (c) => {
 });
 
 userRoutes.patch('/users/:id', async (c) => {
-  if (!(await requireAdmin(c))) return c.json({ error: 'Unauthorized' }, 401);
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
   const id = c.req.param('id');
   const body = await c.req.json().catch(() => ({}));
   const user = db.select().from(schema.users).where(eq(schema.users.id, id)).get();
@@ -107,7 +117,8 @@ userRoutes.patch('/users/:id', async (c) => {
 });
 
 userRoutes.delete('/users/:id', async (c) => {
-  if (!(await requireAdmin(c))) return c.json({ error: 'Unauthorized' }, 401);
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
   const id = c.req.param('id');
   db.delete(schema.users).where(eq(schema.users.id, id)).run();
   return c.json({ ok: true });
@@ -122,7 +133,8 @@ function orgLabelFor(orgId: string | null): string | null {
 }
 
 userRoutes.post('/users/:id/provision', async (c) => {
-  if (!(await requireAdmin(c))) return c.json({ error: 'Unauthorized' }, 401);
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
   if (!isProvisioningAvailable()) {
     return c.json(
       { error: 'Kubernetes provisioning unavailable (server is not running in-cluster with a ServiceAccount)' },
@@ -145,7 +157,8 @@ userRoutes.post('/users/:id/provision', async (c) => {
 });
 
 userRoutes.post('/users/:id/deprovision', async (c) => {
-  if (!(await requireAdmin(c))) return c.json({ error: 'Unauthorized' }, 401);
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
   if (!isProvisioningAvailable()) {
     return c.json({ error: 'Kubernetes provisioning unavailable' }, 501);
   }
@@ -165,7 +178,8 @@ userRoutes.post('/users/:id/deprovision', async (c) => {
 });
 
 userRoutes.get('/users/:id/pod-status', async (c) => {
-  if (!(await requireAdmin(c))) return c.json({ error: 'Unauthorized' }, 401);
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
   const id = c.req.param('id');
   const user = db.select().from(schema.users).where(eq(schema.users.id, id)).get();
   if (!user) return c.json({ error: 'User not found' }, 404);
@@ -177,13 +191,15 @@ userRoutes.get('/users/:id/pod-status', async (c) => {
 });
 
 userRoutes.get('/orgs', async (c) => {
-  if (!(await requireAdmin(c))) return c.json({ error: 'Unauthorized' }, 401);
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
   const rows = db.select().from(schema.orgs).all();
   return c.json({ orgs: rows });
 });
 
 userRoutes.post('/orgs', async (c) => {
-  if (!(await requireAdmin(c))) return c.json({ error: 'Unauthorized' }, 401);
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
   const body = await c.req.json().catch(() => ({}));
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!name) return c.json({ error: 'name required' }, 400);

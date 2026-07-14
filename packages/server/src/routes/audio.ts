@@ -3,7 +3,8 @@ import { readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
-import { verifyAdminToken } from '../auth.js';
+import { verifyToken } from '../auth.js';
+import { resolveAdminUser, visibleToMember } from '../admin-auth.js';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 
@@ -31,14 +32,28 @@ audioRoutes.get('/:id', async (c) => {
 });
 
 audioRoutes.delete('/:id', async (c) => {
+  // 401 only for invalid tokens (the admin SPA force-logs-out on 401);
+  // members get 403 unless the audio's feedback is in their workspace.
   const token = c.req.header('Authorization')?.replace('Bearer ', '');
-  if (!token || !(await verifyAdminToken(token))) return c.json({ error: 'Unauthorized' }, 401);
+  const user = token ? resolveAdminUser(await verifyToken(token)) : null;
+  if (!user) return c.json({ error: 'Unauthorized' }, 401);
 
   const id = c.req.param('id');
   const audio = await db.query.feedbackAudio.findFirst({
     where: eq(schema.feedbackAudio.id, id),
   });
   if (!audio) return c.json({ error: 'Audio not found' }, 404);
+  if (user.role !== 'admin') {
+    const fb = db
+      .select({
+        ownerUserId: schema.feedbackItems.ownerUserId,
+        orgId: schema.feedbackItems.orgId,
+      })
+      .from(schema.feedbackItems)
+      .where(eq(schema.feedbackItems.id, audio.feedbackId))
+      .get();
+    if (!fb || !visibleToMember(fb, user)) return c.json({ error: 'Forbidden' }, 403);
+  }
 
   try {
     await unlink(join(UPLOAD_DIR, audio.filename));

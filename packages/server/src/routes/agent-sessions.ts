@@ -428,6 +428,8 @@ async function enrichSessions(rows: SessionRow[]) {
 
     return {
       id: r.id,
+      ownerUserId: r.ownerUserId ?? null,
+      orgId: r.orgId ?? null,
       feedbackId: r.feedbackId,
       agentEndpointId: r.agentEndpointId,
       runtime: r.runtime || 'claude',
