@@ -257,6 +257,14 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
     let inputSeq = 0;
     const pendingInputs = new Map<number, string>();
 
+    // Resize bookkeeping (see safeFitAndResize). serverPtySize comes from the
+    // session-service history message; lastSentSize is per WebSocket connection
+    // because the server tracks viewer sizes per socket.
+    let serverPtySize: { cols: number; rows: number } | null = null;
+    let historyTruncated = false;
+    let lastSentSize: { cols: number; rows: number } | null = null;
+    let sawHistoryData = false;
+
     function sendRawInput(data: string) {
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -541,7 +549,10 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       if (!gotFirstOutput) {
         gotFirstOutput = true;
         if (waitingDots) { clearInterval(waitingDots); waitingDots = null; }
-        // Bounce resize so PTY picks up correct dimensions
+        // First live output with no prior history means the session just
+        // spawned (we may have attached while it was still pending, when
+        // resizes are dropped server-side) — force a size re-send.
+        lastSentSize = null;
         setTimeout(() => safeFitAndResize(true), 80);
       }
       writeTerminal(data);
@@ -549,6 +560,9 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
 
     function connect() {
       if (cleanedUp.current) return;
+
+      // New socket = the server has no size on record for it yet.
+      lastSentSize = null;
 
       const token = localStorage.getItem('pw-admin-token');
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -609,10 +623,24 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
               if (msg.inputState) {
                 onInputStateChange?.(msg.inputState);
               }
+              if (typeof msg.cols === 'number' && typeof msg.rows === 'number' && msg.cols > 0 && msg.rows > 0) {
+                serverPtySize = { cols: msg.cols, rows: msg.rows };
+              }
               if (msg.data) {
                 if (waitingDots) { clearInterval(waitingDots); waitingDots = null; }
+                historyTruncated = msg.data.length > MAX_HISTORY_BYTES;
+                // History is a full snapshot of the PTY. If the terminal
+                // already has content — the main server sends a DB-snapshot
+                // history and the session-service bridge then sends the live
+                // buffer; reconnects re-send it too — the snapshot must
+                // REPLACE the screen, not append after it (appending scrolls
+                // the whole conversation through the pane on every reload).
+                // RIS (\x1bc) goes through the write queue so it stays
+                // ordered relative to any output already queued.
+                const replacing = sawHistoryData || gotFirstOutput;
+                sawHistoryData = true;
                 gotFirstOutput = true;
-                writeTerminal(truncateHistory(msg.data));
+                writeTerminal((replacing ? '\x1bc' : '') + truncateHistory(msg.data));
                 // Popped-out / newly-mounted terminals can open with a 0-size
                 // container (split pane not yet laid out), in which case the
                 // initial fit.fit() in the mount effect was skipped. Once
@@ -741,16 +769,29 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
         if (term.cols > 300 || term.rows > 120) return;
-        // On macOS, TIOCSWINSZ skips SIGWINCH when size is unchanged.
-        // "Bounce" by sending rows-1 first to guarantee the PTY gets a real
-        // SIGWINCH and re-renders when we send the correct size immediately after.
-        if (bounce && term.rows > 1) {
+        const cols = term.cols;
+        const rows = term.rows;
+        const sentMatches = lastSentSize !== null && lastSentSize.cols === cols && lastSentSize.rows === rows;
+        const serverMatches = serverPtySize !== null && serverPtySize.cols === cols && serverPtySize.rows === rows;
+        // A "bounce" (rows-1 then rows) forces a SIGWINCH so the TUI repaints
+        // even when the PTY size is unchanged (the kernel skips the signal for
+        // same-size TIOCSWINSZ). That forced repaint is only needed when the
+        // replayed history snapshot may have rendered unfaithfully (truncated
+        // tail). When the size actually changed, the real resize below causes
+        // the repaint on its own; when it didn't and the snapshot was complete,
+        // bouncing just makes every pane flicker/scroll on reload and refocus.
+        const sizeUnchanged = sentMatches || (lastSentSize === null && serverMatches);
+        const doBounce = bounce && sizeUnchanged && historyTruncated;
+        if (doBounce) historyTruncated = false; // one forced repaint is enough
+        // Size already registered on this socket and no repaint needed — no-op.
+        if (!doBounce && sentMatches) return;
+        if (doBounce && term.rows > 1) {
           inputSeq++;
           const bounceMsg = JSON.stringify({
             type: 'sequenced_input',
             sessionId,
             seq: inputSeq,
-            content: { kind: 'resize', cols: term.cols, rows: term.rows - 1 },
+            content: { kind: 'resize', cols, rows: rows - 1 },
             timestamp: new Date().toISOString(),
           });
           pendingInputs.set(inputSeq, bounceMsg);
@@ -761,11 +802,12 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
           type: 'sequenced_input',
           sessionId,
           seq: inputSeq,
-          content: { kind: 'resize', cols: term.cols, rows: term.rows },
+          content: { kind: 'resize', cols, rows },
           timestamp: new Date().toISOString(),
         });
         pendingInputs.set(inputSeq, msg);
         ws.send(msg);
+        lastSentSize = { cols, rows };
       }
     }
 

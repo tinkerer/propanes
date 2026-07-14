@@ -982,8 +982,10 @@ function markSessionStale(sessionId: string): void {
 function attachAdminSocket(sessionId: string, ws: WebSocket): boolean {
   const proc = activeSessions.get(sessionId);
   if (proc) {
-    // Send full history + lastInputAckSeq so client can resume its counter
-    ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(proc.outputBuffer), lastInputAckSeq: proc.lastInputAckSeq, inputState: proc.inputState }));
+    // Send full history + lastInputAckSeq so client can resume its counter.
+    // cols/rows = current PTY size, so the client can skip redundant resize
+    // bounces when its pane already matches (avoids TUI repaint flicker).
+    ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(proc.outputBuffer), lastInputAckSeq: proc.lastInputAckSeq, inputState: proc.inputState, cols: proc.ptyProcess.cols, rows: proc.ptyProcess.rows }));
     proc.adminSockets.add(ws);
     return true;
   }
@@ -1007,7 +1009,7 @@ function attachAdminSocket(sessionId: string, ws: WebSocket): boolean {
       // DB says running but not in activeSessions — try tmux recovery
       if (tryRecoverSession(session)) {
         const recovered = activeSessions.get(sessionId)!;
-        ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(recovered.outputBuffer) }));
+        ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(recovered.outputBuffer), cols: recovered.ptyProcess.cols, rows: recovered.ptyProcess.rows }));
         recovered.adminSockets.add(ws);
         return true;
       }
