@@ -40,6 +40,7 @@ import { dispatchPendingFollowups } from './routes/admin/session-followups.js';
 import { startRetentionSweeper } from './routes/admin/cos-retention.js';
 import { ensureCosThreadsForOrphanSessions } from './cos-inbox.js';
 import { detectClaudeAuthRequired } from './claude-auth-detect.js';
+import { mergePrUrls } from './pr-detect.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const LAUNCHER_AUTH_TOKEN = process.env.LAUNCHER_AUTH_TOKEN || '';
@@ -473,11 +474,18 @@ launcherWss.on('connection', (ws, req) => {
             if (session) {
               const existing = session.outputLog || '';
               const updated = (existing + output.content.data).slice(-500 * 1024);
+              // Scan a tail window (old tail + new chunk) so a PR URL split
+              // across chunks still matches.
+              const prUrls = mergePrUrls(
+                session.prUrls,
+                existing.slice(-2000) + output.content.data,
+              );
               db.update(schema.agentSessions)
                 .set({
                   outputLog: updated,
                   outputBytes: (session.outputBytes || 0) + Buffer.byteLength(output.content.data),
                   lastOutputSeq: output.seq,
+                  ...(prUrls ? { prUrls } : {}),
                 })
                 .where(eq(schema.agentSessions.id, msg.sessionId))
                 .run();
@@ -488,12 +496,19 @@ launcherWss.on('connection', (ws, req) => {
 
         case 'launcher_session_ended': {
           const completedAt = new Date().toISOString();
+          const endedRow = db
+            .select({ prUrls: schema.agentSessions.prUrls })
+            .from(schema.agentSessions)
+            .where(eq(schema.agentSessions.id, msg.sessionId))
+            .get();
+          const endedPrUrls = mergePrUrls(endedRow?.prUrls, msg.outputLog || '');
           db.update(schema.agentSessions)
             .set({
               status: msg.status,
               exitCode: msg.exitCode,
               outputLog: msg.outputLog.slice(-500 * 1024),
               completedAt,
+              ...(endedPrUrls ? { prUrls: endedPrUrls } : {}),
             })
             .where(eq(schema.agentSessions.id, msg.sessionId))
             .run();

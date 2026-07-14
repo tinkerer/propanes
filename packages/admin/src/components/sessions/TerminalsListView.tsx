@@ -22,6 +22,7 @@ import {
   sessionPassesFilters,
 } from '../../lib/sessions.js';
 import { selectedAppId } from '../../lib/state.js';
+import { PrBadges } from '../PrBadges.js';
 
 export function TerminalsListView() {
   const sessions = allSessions.value;
@@ -101,6 +102,7 @@ export function TerminalsListView() {
                   />
                 </span>
                 <span class="session-label">{label}</span>
+                <PrBadges prUrls={s.prUrls} compact />
                 <button
                   class="sidebar-item-menu-btn"
                   onClick={(e) => {

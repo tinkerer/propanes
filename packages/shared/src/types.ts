@@ -185,6 +185,8 @@ export interface AgentSession {
   exitCode: number | null;
   outputLog: string | null;
   outputBytes: number;
+  /** GitHub PR URLs detected in output — JSON string on the DB row, string[] in list-API responses */
+  prUrls?: string[] | string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;

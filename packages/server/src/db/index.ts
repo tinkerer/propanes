@@ -349,6 +349,8 @@ export function runMigrations() {
     // commit scan; the session id lets the UI link to the exploration lane.
     `ALTER TABLE flatter_monitors ADD COLUMN source_type TEXT NOT NULL DEFAULT 'git'`,
     `ALTER TABLE flatter_monitors ADD COLUMN last_explore_session_id TEXT`,
+    // GitHub PR URLs detected in session output (JSON array) — "PR #123" tag.
+    `ALTER TABLE agent_sessions ADD COLUMN pr_urls TEXT`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after

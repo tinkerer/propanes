@@ -3,6 +3,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import { db, schema } from './db/index.js';
 import { openExecWebSocket } from './sprite-client.js';
 import { broadcastToLauncherSessionAdmins } from './agent-sessions.js';
+import { mergePrUrls } from './pr-detect.js';
 
 interface ActiveSpriteSession {
   sessionId: string;
@@ -67,11 +68,13 @@ export function launchSpriteSession(params: {
     if (row) {
       const existing = row.outputLog || '';
       const updated = (existing + data).slice(-500 * 1024);
+      const prUrls = mergePrUrls(row.prUrls, existing.slice(-2000) + data);
       db.update(schema.agentSessions)
         .set({
           outputLog: updated,
           outputBytes: (row.outputBytes || 0) + Buffer.byteLength(data),
           lastOutputSeq: session.seq,
+          ...(prUrls ? { prUrls } : {}),
         })
         .where(eq(schema.agentSessions.id, sessionId))
         .run();

@@ -266,6 +266,9 @@ export const agentSessions = sqliteTable('agent_sessions', {
   spriteExecSessionId: text('sprite_exec_session_id'),
   cosThreadId: text('cos_thread_id'),
   title: text('title'),
+  // JSON array of GitHub PR URLs detected in this session's output (see
+  // pr-detect.ts). Powers the "PR #123" tag in the admin session lists/header.
+  prUrls: text('pr_urls'),
   // Phase 5 — the isolation mode this session actually ran in, and the id of
   // the ephemeral isolate (git-worktree path token) when isolation='per_session'.
   isolation: text('isolation').notNull().default('shared'),

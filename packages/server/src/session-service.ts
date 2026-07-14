@@ -11,6 +11,7 @@ import { STREAM_PROFILE_PTY_COLS } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
 import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, listPwTmuxSessions, getTmuxPaneCommand, detachTmuxClients } from './tmux-pty.js';
 import { detectClaudeAuthRequired, detectClaudeTrustPrompt, stripTerminalControl } from './claude-auth-detect.js';
+import { mergePrUrls } from './pr-detect.js';
 
 const PORT = parseInt(process.env.SESSION_SERVICE_PORT || '3002', 10);
 
@@ -142,6 +143,8 @@ interface AgentProcess {
   authCompanionStarted: boolean;
   suppressAuthCompanion: boolean;
   tmuxSessionName: string | null;
+  /** JSON array of GitHub PR URLs detected in output (mirrors the pr_urls column) */
+  prUrlsJson: string | null;
 }
 
 const activeSessions = new Map<string, AgentProcess>();
@@ -437,16 +440,26 @@ function appendProcAuditMarker(proc: AgentProcess, marker: string): void {
   proc.totalBytes += Buffer.byteLength(line);
 }
 
+// Scan the accumulated output for GitHub PR URLs (flush-time, not per-chunk —
+// a badge can lag up to one FLUSH_INTERVAL). Once a URL lands in prUrlsJson it
+// sticks even after the buffer truncates past it.
+function scanPrUrls(proc: AgentProcess): void {
+  const updated = mergePrUrls(proc.prUrlsJson, proc.outputBuffer);
+  if (updated) proc.prUrlsJson = updated;
+}
+
 function flushOutput(sessionId: string): void {
   const proc = activeSessions.get(sessionId);
   if (!proc) return;
 
+  scanPrUrls(proc);
   db.update(schema.agentSessions)
     .set({
       outputLog: proc.outputBuffer.slice(-MAX_OUTPUT_LOG),
       outputBytes: proc.totalBytes,
       lastOutputSeq: proc.outputSeq,
       lastActivityAt: new Date().toISOString(),
+      prUrls: proc.prUrlsJson,
     })
     .where(eq(schema.agentSessions.id, sessionId))
     .run();
@@ -542,6 +555,14 @@ function spawnSession(params: {
     });
   }
 
+  // Seed PR detection from the row so a flush never clobbers URLs a previous
+  // run of this session already recorded.
+  const existingRow = db
+    .select({ prUrls: schema.agentSessions.prUrls })
+    .from(schema.agentSessions)
+    .where(eq(schema.agentSessions.id, sessionId))
+    .get();
+
   const proc: AgentProcess = {
     sessionId,
     runtime,
@@ -565,6 +586,7 @@ function spawnSession(params: {
     authCompanionStarted: false,
     suppressAuthCompanion,
     tmuxSessionName,
+    prUrlsJson: existingRow?.prUrls || null,
   };
 
   activeSessions.set(sessionId, proc);
@@ -753,6 +775,7 @@ function wireOnExit(proc: AgentProcess, ptyProcess: pty.IPty): void {
 
     sendSequenced(proc, { kind: 'exit', exitCode, status: proc.status });
 
+    scanPrUrls(proc);
     const completedAt = new Date().toISOString();
     db.update(schema.agentSessions)
       .set({
@@ -762,6 +785,7 @@ function wireOnExit(proc: AgentProcess, ptyProcess: pty.IPty): void {
         outputBytes: proc.totalBytes,
         lastOutputSeq: proc.outputSeq,
         completedAt,
+        prUrls: proc.prUrlsJson,
       })
       .where(eq(schema.agentSessions.id, proc.sessionId))
       .run();
@@ -958,6 +982,7 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
       authCompanionStarted: !!session.companionSessionId,
       suppressAuthCompanion: false,
       tmuxSessionName: session.tmuxSessionName || `pw-${session.id}`,
+      prUrlsJson: session.prUrls || null,
     };
 
     activeSessions.set(session.id, proc);

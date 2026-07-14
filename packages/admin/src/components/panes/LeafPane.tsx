@@ -76,6 +76,7 @@ import { showHotkeyHints, popoutMode, type PopoutMode } from '../../lib/settings
 import { selectedAppId, applications, appFeedbackCounts } from '../../lib/state.js';
 import { copyWithTooltip } from '../../lib/clipboard.js';
 import { cosArtifacts } from '../../lib/cos-artifacts.js';
+import { PrBadges } from '../PrBadges.js';
 
 // --- Shared signals (also used by Layout.tsx for keyboard shortcuts) ---
 export const statusMenuOpen = signal<{ sessionId: string; x: number; y: number } | null>(null);
@@ -338,6 +339,7 @@ function PaneHeader({
               {sess?.feedbackTitle || 'View feedback'}
             </a>
           )}
+          <PrBadges prUrls={sess?.prUrls} />
         </>
       )}
       <span style="flex:1" />

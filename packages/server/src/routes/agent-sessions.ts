@@ -330,6 +330,7 @@ const sessionSelectFields = {
   spriteExecSessionId: schema.agentSessions.spriteExecSessionId,
   cosThreadId: schema.agentSessions.cosThreadId,
   title: schema.agentSessions.title,
+  prUrls: schema.agentSessions.prUrls,
   createdAt: schema.agentSessions.createdAt,
   startedAt: schema.agentSessions.startedAt,
   completedAt: schema.agentSessions.completedAt,
@@ -452,6 +453,13 @@ async function enrichSessions(rows: SessionRow[]) {
       feedbackTitle: r.feedbackTitle || null,
       agentName: r.agentName || null,
       title: r.title || null,
+      prUrls: (() => {
+        if (!r.prUrls) return null;
+        try {
+          const parsed = JSON.parse(r.prUrls);
+          return Array.isArray(parsed) && parsed.length ? parsed : null;
+        } catch { return null; }
+      })(),
       appId: r.feedbackAppId || r.agentAppId || r.cosThreadAppId || null,
       cosThreadId: r.cosThreadId || null,
       cosThreadName: r.cosThreadName || null,
