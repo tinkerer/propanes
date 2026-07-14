@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { signal } from '@preact/signals';
 import { currentRoute, navigate, selectedAppId, applications, addAppModalOpen, spotlightOpen, closeSpotlight, toggleSpotlight } from '../../lib/state.js';
+import { parsePrUrls, prNumberFromUrl } from '../PrBadges.js';
+import { QuickDispatchPopup } from '../dispatch/QuickDispatchPopup.js';
 import { api } from '../../lib/api.js';
 import { idMenuOpen } from '../panes/LeafPane.js';
 import { PopoutPanel, popoutIdMenuOpen, popoutWindowMenuOpen } from '../panes/PopoutPanel.js';
@@ -81,6 +84,17 @@ import {
   openFeedbackItem,
   feedbackTitleCache,
 } from '../../lib/sessions.js';
+
+// "Review PR" composer opened from the sidebar session menu. Holds the PR to
+// review plus the runtime of the session that produced it, so the composer can
+// default to the *opposite* runtime (claude reviews codex work and vice versa).
+const reviewPrPopup = signal<{
+  appKey: string;
+  prNumber: string;
+  prUrl: string;
+  sessionRuntime: string;
+  anchor: { x: number; y: number } | null;
+} | null>(null);
 
 export function Layout() {
   const route = currentRoute.value;
@@ -686,7 +700,9 @@ export function Layout() {
       })()}
       {sidebarItemMenu.value && (() => {
         const menuSid = sidebarItemMenu.value!.sessionId;
-        const menuHeight = 176;
+        const menuSess = allSessions.value.find((s: any) => s.id === menuSid);
+        const menuPrUrls = menuSess ? parsePrUrls(menuSess.prUrls) : [];
+        const menuHeight = 176 + menuPrUrls.length * 26;
         const flipUp = sidebarItemMenu.value!.y + menuHeight > window.innerHeight;
         const menuStyle = flipUp
           ? { left: `${sidebarItemMenu.value!.x}px`, bottom: `${window.innerHeight - sidebarItemMenu.value!.y - 20}px` }
@@ -702,6 +718,22 @@ export function Layout() {
               copyText(`${location.origin}${location.pathname}#/session/${menuSid}`);
               showActionToast('\u{1F517}', 'Link copied', 'var(--pw-accent, var(--pw-primary))');
             }}>Copy link</button>
+            {menuPrUrls.map((url) => (
+              <button
+                key={url}
+                onClick={(e) => {
+                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  sidebarItemMenu.value = null;
+                  reviewPrPopup.value = {
+                    appKey: menuSess?.appId || '__unlinked__',
+                    prNumber: prNumberFromUrl(url),
+                    prUrl: url,
+                    sessionRuntime: menuSess?.runtime || 'claude',
+                    anchor: { x: rect.right + 8, y: rect.top },
+                  };
+                }}
+              >Review PR #{prNumberFromUrl(url)}</button>
+            ))}
             <button onClick={() => { sidebarItemMenu.value = null; popOutTab(menuSid); }}>Open in panel</button>
             <button onClick={() => {
               sidebarItemMenu.value = null;
@@ -741,6 +773,28 @@ export function Layout() {
               )}
             </div>
           </div>
+        );
+      })()}
+      {reviewPrPopup.value && (() => {
+        const rp = reviewPrPopup.value!;
+        const rpAppName = rp.appKey !== '__unlinked__'
+          ? applications.value.find((a: any) => a.id === rp.appKey)?.name
+          : undefined;
+        // Cross-runtime review: a claude session's PR gets reviewed by codex
+        // and vice versa (the dropdown still allows overriding).
+        const reviewerRuntime = rp.sessionRuntime === 'codex' ? 'claude' : 'codex';
+        return (
+          <QuickDispatchPopup
+            appKey={rp.appKey}
+            appName={rpAppName}
+            anchor={rp.anchor}
+            initialDispatchType="yolo"
+            initialText={`review PR ${rp.prNumber} (${rp.prUrl})`}
+            preferRuntime={reviewerRuntime}
+            transient
+            onClose={() => { reviewPrPopup.value = null; }}
+            onSubmitClose={() => { reviewPrPopup.value = null; }}
+          />
         );
       })()}
     </div>

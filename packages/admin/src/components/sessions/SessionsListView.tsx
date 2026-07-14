@@ -390,6 +390,14 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
               {sessionSearchQuery.value ? highlightMatch(raw, sessionSearchQuery.value) : raw}
             </span>
           )}
+          {!isPlain && (
+            <span
+              class={`session-runtime-badge rt-${s.runtime === 'codex' ? 'codex' : 'claude'}`}
+              title={`Runtime: ${s.runtime === 'codex' ? 'Codex' : 'Claude'}`}
+            >
+              {s.runtime === 'codex' ? 'codex' : 'claude'}
+            </span>
+          )}
           <PrBadges prUrls={s.prUrls} compact />
           <button
             class="sidebar-item-menu-btn"

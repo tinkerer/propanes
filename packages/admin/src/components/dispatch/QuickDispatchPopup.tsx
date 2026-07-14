@@ -67,6 +67,15 @@ interface Props {
   initialDispatchType?: DispatchType;
   /** Screen coords of the triggering [+] button, to anchor the popup near it. */
   anchor?: { x: number; y: number } | null;
+  /** Pre-fill the composer text (e.g. "review PR 757"). */
+  initialText?: string;
+  /** Default the agent dropdown to this runtime (yolo profiles first). */
+  preferRuntime?: string;
+  /**
+   * One-off popup (e.g. Review PR): ignore per-app saved settings/drafts and
+   * don't persist this popup's choices back into them.
+   */
+  transient?: boolean;
 }
 
 const PANEL_W = 400;
@@ -90,10 +99,10 @@ function isElementPickerActive(): boolean {
   return document.body.classList.contains('pw-element-picker-active');
 }
 
-export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, initialDispatchType, anchor }: Props) {
-  const settings = loadSettings(appKey);
+export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, initialDispatchType, anchor, initialText, preferRuntime, transient }: Props) {
+  const settings = transient ? null : loadSettings(appKey);
   const [dispatchType, setDispatchType] = useState<DispatchType>(
-    settings?.dispatchType || initialDispatchType || 'agent'
+    (transient && initialDispatchType) || settings?.dispatchType || initialDispatchType || 'agent'
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -123,19 +132,27 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
         setAgents(list);
         if (!selectedAgentId || !list.some((a: any) => a.id === selectedAgentId)) {
           const usable = (list as any[]).filter(isDispatchableAgent);
+          // Runtime preference (e.g. Review PR defaults to the opposite runtime
+          // of the reviewed session): pick a yolo agent of that runtime first.
+          const preferred = preferRuntime
+            ? pickYoloAgent(usable.filter((a: any) => (a.runtime || 'claude') === preferRuntime), appId)
+              || usable.filter((a: any) => (a.runtime || 'claude') === preferRuntime).sort(agentSortCmp)[0]
+            : null;
           const appDefault = appId ? usable.find((a: any) => a.isDefault && a.appId === appId) : null;
           const globalDefault = usable.find((a: any) => a.isDefault && !a.appId);
-          const def = appDefault || globalDefault || usable[0];
+          const def = preferred || appDefault || globalDefault || usable[0];
           if (def) setSelectedAgentId(def.id);
         }
       } catch { /* ignore */ }
     })();
   }, [appId]);
 
-  // Save settings when they change
+  // Save settings when they change (transient popups don't clobber the
+  // user's per-app defaults)
   useEffect(() => {
+    if (transient) return;
     saveSettings(appKey, { dispatchType, agentId: selectedAgentId, posX: pos.x, posY: pos.y });
-  }, [dispatchType, selectedAgentId, appKey, pos.x, pos.y]);
+  }, [dispatchType, selectedAgentId, appKey, pos.x, pos.y, transient]);
 
   // Drag handling
   const onMouseDown = useCallback((e: MouseEvent) => {
@@ -309,7 +326,8 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
           submitTitle={dispatchType === 'yolo' ? 'YOLO Cook' : 'Cook It'}
           submitIcon="send"
           disabled={submitting}
-          draftKey={`qdp-${appKey}`}
+          initialText={initialText}
+          draftKey={transient ? undefined : `qdp-${appKey}`}
           className="qdp-unified-composer"
           error={error || null}
           rows={3}

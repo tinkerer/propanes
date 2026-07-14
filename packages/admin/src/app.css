@@ -4688,6 +4688,32 @@ select:focus, textarea:focus {
   font-size: 8px;
 }
 
+/* Runtime tag (claude / codex) — shown on sidebar session items so operators
+   can tell at a glance which agent is driving the session. Colors mirror
+   RUNTIME_INFO in agent-constants.ts. */
+.session-runtime-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 8px;
+  font-weight: 700;
+  padding: 0 4px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+.session-runtime-badge.rt-claude {
+  background: color-mix(in srgb, #3b82f6 18%, transparent);
+  color: #3b82f6;
+  border: 1px solid color-mix(in srgb, #3b82f6 45%, transparent);
+}
+.session-runtime-badge.rt-codex {
+  background: color-mix(in srgb, #06b6d4 18%, transparent);
+  color: #06b6d4;
+  border: 1px solid color-mix(in srgb, #06b6d4 45%, transparent);
+}
+
 /* Sidebar CoS badge + tree accent mirrors the sessions page treatment. */
 .sidebar-session-tree.sidebar-cos-group .sidebar-session-tree-children {
   border-left-color: var(--pw-primary);

@@ -12,13 +12,17 @@ export function parsePrUrls(prUrls: unknown): string[] {
   return [...new Set(arr.filter((u): u is string => typeof u === 'string' && u.includes('/pull/')))];
 }
 
+export function prNumberFromUrl(url: string): string {
+  return (url.split('/pull/')[1] || '').replace(/[^\d].*$/, '');
+}
+
 export function PrBadges({ prUrls, compact }: { prUrls?: unknown; compact?: boolean }) {
   const urls = parsePrUrls(prUrls);
   if (!urls.length) return null;
   return (
     <span class={`session-pr-badges${compact ? ' compact' : ''}`}>
       {urls.map((url) => {
-        const num = (url.split('/pull/')[1] || '').replace(/[^\d].*$/, '');
+        const num = prNumberFromUrl(url);
         return (
           <a
             key={url}
