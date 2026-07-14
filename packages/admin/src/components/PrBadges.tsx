@@ -16,6 +16,18 @@ export function prNumberFromUrl(url: string): string {
   return (url.split('/pull/')[1] || '').replace(/[^\d].*$/, '');
 }
 
+// Runtime tag (claude / codex) — shown next to the PR badges wherever an agent
+// session is listed. Hidden for plain terminals and unknown sessions.
+export function RuntimeBadge({ runtime, permissionProfile }: { runtime?: string | null; permissionProfile?: string | null }) {
+  if (permissionProfile === 'plain' || (!runtime && !permissionProfile)) return null;
+  const rt = runtime === 'codex' ? 'codex' : 'claude';
+  return (
+    <span class={`session-runtime-badge rt-${rt}`} title={`Runtime: ${rt === 'codex' ? 'Codex' : 'Claude'}`}>
+      {rt}
+    </span>
+  );
+}
+
 export function PrBadges({ prUrls, compact }: { prUrls?: unknown; compact?: boolean }) {
   const urls = parsePrUrls(prUrls);
   if (!urls.length) return null;

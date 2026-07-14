@@ -59,7 +59,7 @@ import { loadCosDispatches, cosGroupForSession } from '../../lib/cos-dispatches.
 import { chiefOfStaffAgents, chiefOfStaffActiveId, ensureChiefOfStaffAgent, loadChiefOfStaffHistory, setChiefOfStaffOpen } from '../../lib/chief-of-staff.js';
 import { cosActiveThread } from '../../lib/cos-popout-tree.js';
 import { getSessionIdForThread } from '../../lib/cos-thread-meta.js';
-import { PrBadges } from '../PrBadges.js';
+import { PrBadges, RuntimeBadge } from '../PrBadges.js';
 
 const autoJumpMenuOpen = signal(false);
 
@@ -390,14 +390,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
               {sessionSearchQuery.value ? highlightMatch(raw, sessionSearchQuery.value) : raw}
             </span>
           )}
-          {!isPlain && (
-            <span
-              class={`session-runtime-badge rt-${s.runtime === 'codex' ? 'codex' : 'claude'}`}
-              title={`Runtime: ${s.runtime === 'codex' ? 'Codex' : 'Claude'}`}
-            >
-              {s.runtime === 'codex' ? 'codex' : 'claude'}
-            </span>
-          )}
+          <RuntimeBadge runtime={s.runtime} permissionProfile={s.permissionProfile} />
           <PrBadges prUrls={s.prUrls} compact />
           <button
             class="sidebar-item-menu-btn"
