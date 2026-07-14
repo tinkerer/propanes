@@ -17,6 +17,11 @@ import { sendInputToSprite, killSpriteSession, isSpriteSession } from './sprite-
 interface LocalBridge {
   kind: 'local';
   serviceWs: WsWebSocket;
+  // Messages received from the browser while serviceWs was still CONNECTING.
+  // Flushed on open — dropping them loses the terminal's initial resize
+  // (sent the moment the browser socket opens, typically before the bridge
+  // has finished connecting), leaving the PTY at a stale size.
+  pendingUntilOpen: string[];
 }
 
 interface LauncherBridge {
@@ -172,12 +177,10 @@ export function attachAdmin(sessionId: string, ws: WsWebSocket): boolean {
     return false;
   }
 
-  // Local session: send DB history immediately (same as launcher path) so the
-  // admin sees content right away instead of waiting for the service WS to connect.
-  if (session.outputLog) {
-    ws.send(JSON.stringify({ type: 'history', data: session.outputLog }));
-  }
   if (session.status !== 'pending' && session.status !== 'running') {
+    if (session.outputLog) {
+      ws.send(JSON.stringify({ type: 'history', data: session.outputLog }));
+    }
     ws.send(JSON.stringify({ type: 'exit', exitCode: session.exitCode, status: session.status }));
     return true;
   }
@@ -187,16 +190,35 @@ export function attachAdmin(sessionId: string, ws: WsWebSocket): boolean {
   const serviceWs = new WsWebSocket(serviceWsUrl);
 
   // Register bridge immediately so forwardToService can find it;
-  // the readyState check in forwardToService handles the not-yet-open case.
-  adminBridges.set(ws, { kind: 'local', serviceWs });
+  // messages arriving before the bridge opens are queued and flushed on open.
+  const bridge: LocalBridge = { kind: 'local', serviceWs, pendingUntilOpen: [] };
+  adminBridges.set(ws, bridge);
 
   let connected = false;
 
+  // The session-service sends the authoritative history (live buffer + PTY
+  // size) as soon as the bridge registers — normally within a few ms on
+  // localhost. Sending the DB snapshot up front too made every attach paint
+  // twice (stale snapshot, then RIS + live buffer), a visible double-flash on
+  // reload. Keep the DB snapshot only as a fallback for a slow/absent service.
+  let serviceDelivered = false;
+  const dbHistoryFallback = setTimeout(() => {
+    if (!serviceDelivered && session.outputLog && ws.readyState === ws.OPEN) {
+      try { ws.send(JSON.stringify({ type: 'history', data: session.outputLog })); } catch {}
+    }
+  }, 500);
+
   serviceWs.on('open', () => {
     connected = true;
+    for (const queued of bridge.pendingUntilOpen) {
+      try { serviceWs.send(queued); } catch { break; }
+    }
+    bridge.pendingUntilOpen.length = 0;
   });
 
   serviceWs.on('message', (raw) => {
+    serviceDelivered = true;
+    clearTimeout(dbHistoryFallback);
     try {
       ws.send(raw.toString());
     } catch {
@@ -205,6 +227,7 @@ export function attachAdmin(sessionId: string, ws: WsWebSocket): boolean {
   });
 
   serviceWs.on('close', (code) => {
+    clearTimeout(dbHistoryFallback);
     adminBridges.delete(ws);
     if (connected) {
       // Forward 4004 from session-service so the client stops reconnecting
@@ -215,13 +238,18 @@ export function attachAdmin(sessionId: string, ws: WsWebSocket): boolean {
   });
 
   serviceWs.on('error', () => {
+    clearTimeout(dbHistoryFallback);
     adminBridges.delete(ws);
     if (!connected) {
       if (session.status !== 'pending' && session.status !== 'running') {
         ws.send(JSON.stringify({ type: 'exit', exitCode: session.exitCode, status: session.status }));
       } else {
-        // Session is still pending/running but we lost the bridge — close the
-        // browser WS so the terminal reconnects and gets a fresh bridge
+        // Session is still pending/running but we lost the bridge — show the
+        // DB snapshot so the pane isn't blank, then close the browser WS so
+        // the terminal reconnects and gets a fresh bridge.
+        if (session.outputLog) {
+          try { ws.send(JSON.stringify({ type: 'history', data: session.outputLog })); } catch {}
+        }
         try { ws.close(4010, 'Session service unavailable, reconnecting'); } catch {}
       }
     }
@@ -272,6 +300,8 @@ export function forwardToService(ws: WsWebSocket, data: string): void {
   if (bridge.kind === 'local') {
     if (bridge.serviceWs.readyState === WsWebSocket.OPEN) {
       bridge.serviceWs.send(data);
+    } else if (bridge.serviceWs.readyState === WsWebSocket.CONNECTING) {
+      bridge.pendingUntilOpen.push(data);
     }
   } else {
     // Forward to launcher, wrapping in InputToSession

@@ -575,7 +575,11 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
         reconnectAttempts = 0;
         sendReplayRequest();
         resendPendingInputs();
-        // Sync terminal size with server on (re)connect — bounce to force SIGWINCH
+        // Sync terminal size with server on (re)connect. Send immediately so a
+        // PTY at a different size starts reflowing before history even paints;
+        // the delayed retry covers containers whose layout hadn't settled yet
+        // (dedupe makes it a no-op when the first send went through).
+        safeFitAndResize();
         setTimeout(() => safeFitAndResize(true), 50);
       };
 
@@ -646,12 +650,23 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
                 // initial fit.fit() in the mount effect was skipped. Once
                 // history arrives the container is almost always sized — fit
                 // + refresh so the buffered content actually paints instead
-                // of sitting invisibly in an unrendered viewport.
+                // of sitting invisibly in an unrendered viewport. Using
+                // safeFitAndResize (not bare fit) also corrects a PTY whose
+                // size differs from this pane RIGHT NOW instead of waiting
+                // for the delayed onopen resize — the shorter that window,
+                // the shorter the mis-wrapped flash when loading a session
+                // that was last viewed at a different size.
                 queueMicrotask(() => {
                   const el = containerRef.current;
                   if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return;
                   try {
-                    fit.fit();
+                    // History arriving proves the full pipeline (browser →
+                    // main server → session-service) is up; a resize sent
+                    // right at onopen may have raced a still-connecting hop
+                    // and been dropped, so re-send unconditionally. A
+                    // same-size resize is a server-side no-op (no SIGWINCH).
+                    lastSentSize = null;
+                    safeFitAndResize();
                     term.refresh(0, term.rows - 1);
                     term.scrollToBottom();
                   } catch { /* xterm may still be initializing */ }
@@ -815,24 +830,37 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
 
     let resizeLastFired = 0;
     let resizeRaf = 0;
+    let resizeTrailing: ReturnType<typeof setTimeout> | null = null;
     let hasPainted = false;
     const RESIZE_THROTTLE_MS = 100;
+    function fireResize() {
+      resizeLastFired = performance.now();
+      safeFitAndResize();
+      // First time the container has real dimensions, force a repaint of
+      // the buffer. fit.fit() alone is a no-op if xterm happened to land
+      // on the same cols/rows, leaving buffered history invisible.
+      const el = containerRef.current;
+      if (!hasPainted && el && el.offsetWidth > 0 && el.offsetHeight > 0) {
+        hasPainted = true;
+        try { term.refresh(0, term.rows - 1); term.scrollToBottom(); } catch { /* initializing */ }
+      }
+    }
     const observer = new ResizeObserver(() => {
       if (resizeRaf) return;
       resizeRaf = requestAnimationFrame(() => {
         resizeRaf = 0;
-        const now = performance.now();
-        if (now - resizeLastFired >= RESIZE_THROTTLE_MS) {
-          resizeLastFired = now;
-          safeFitAndResize();
-          // First time the container has real dimensions, force a repaint of
-          // the buffer. fit.fit() alone is a no-op if xterm happened to land
-          // on the same cols/rows, leaving buffered history invisible.
-          const el = containerRef.current;
-          if (!hasPainted && el && el.offsetWidth > 0 && el.offsetHeight > 0) {
-            hasPainted = true;
-            try { term.refresh(0, term.rows - 1); term.scrollToBottom(); } catch { /* initializing */ }
-          }
+        const elapsed = performance.now() - resizeLastFired;
+        if (elapsed >= RESIZE_THROTTLE_MS) {
+          fireResize();
+        } else if (!resizeTrailing) {
+          // Throttled — schedule a trailing call so the FINAL size of a
+          // continuous drag/window-resize always reaches the PTY. Dropping
+          // it left the terminal stuck at an intermediate size until the
+          // next unrelated fit trigger.
+          resizeTrailing = setTimeout(() => {
+            resizeTrailing = null;
+            fireResize();
+          }, RESIZE_THROTTLE_MS - elapsed);
         }
       });
     });
@@ -881,6 +909,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       flushInputBuffer();
       if (outputFlushRaf) cancelAnimationFrame(outputFlushRaf);
       if (resizeRaf) cancelAnimationFrame(resizeRaf);
+      if (resizeTrailing) clearTimeout(resizeTrailing);
       scrollDispose.dispose();
       observer.disconnect();
       wsRef.current?.close();
