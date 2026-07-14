@@ -841,11 +841,13 @@ function extractImageUrls(content: string): string[] {
 }
 
 function stripLineNumbers(content: string): string {
-  // Read tool output has format "   123→content" — strip the line number prefix
+  // Read tool output prefixes each line with its number: "   123→content"
+  // (older CLI) or cat -n style "     1\tcontent" (current CLI)
+  const numPrefix = /^\s*\d+(?:→|\t)/;
   const lines = content.split('\n');
-  const hasLineNums = lines.length > 1 && lines.slice(0, 5).every(l => !l.trim() || /^\s*\d+→/.test(l));
+  const hasLineNums = lines.length > 1 && lines.slice(0, 5).every(l => !l.trim() || numPrefix.test(l));
   if (!hasLineNums) return content;
-  return lines.map(l => l.replace(/^\s*\d+→/, '')).join('\n');
+  return lines.map(l => l.replace(numPrefix, '')).join('\n');
 }
 
 function ToolResultMessage({ message, prevToolUse }: { message: ParsedMessage; prevToolUse?: ParsedMessage }) {
