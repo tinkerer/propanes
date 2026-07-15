@@ -29,29 +29,45 @@ import { mintFeedbackThread } from '../cos-inbox.js';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 
-function resolveAppId(apiKey: string | undefined, sessionId: string | undefined, appId?: string): string | null {
+type ResolvedApp = { id: string; ownerUserId: string | null; orgId: string | null };
+
+const APP_COLS = {
+  id: schema.applications.id,
+  ownerUserId: schema.applications.ownerUserId,
+  orgId: schema.applications.orgId,
+} as const;
+
+// Resolve the target application AND its workspace ownership. The owner/org are
+// stamped onto the feedback row so member-role operators (who only see rows they
+// own or that belong to their org — see memberFeedbackScope) can actually see
+// widget-submitted feedback. Without this, widget feedback lands unowned and is
+// invisible to everyone except admins, and any session auto-dispatched from it
+// inherits the same null owner (dispatch.ts reads feedback.ownerUserId/orgId).
+function resolveApp(apiKey: string | undefined, sessionId: string | undefined, appId?: string): ResolvedApp | null {
+  const byId = (id: string): ResolvedApp | null =>
+    db.select(APP_COLS).from(schema.applications).where(eq(schema.applications.id, id)).get() ?? null;
+
   if (sessionId) {
     const session = getSession(sessionId);
-    if (session?.appId) return session.appId;
+    if (session?.appId) {
+      const app = byId(session.appId);
+      if (app) return app;
+    }
   }
   // Strip the sentinel used by the admin shell's server-side substitution —
   // if it arrives literally, the admin index.html wasn't served through the
   // rewriting route (e.g. vite dev, stale cached HTML).
   if (apiKey && apiKey !== '__ADMIN_API_KEY__') {
     const app = db
-      .select({ id: schema.applications.id })
+      .select(APP_COLS)
       .from(schema.applications)
       .where(eq(schema.applications.apiKey, apiKey))
       .get();
-    if (app) return app.id;
+    if (app) return app;
   }
   if (appId) {
-    const app = db
-      .select({ id: schema.applications.id })
-      .from(schema.applications)
-      .where(eq(schema.applications.id, appId))
-      .get();
-    if (app) return app.id;
+    const app = byId(appId);
+    if (app) return app;
   }
   return null;
 }
@@ -127,10 +143,11 @@ feedbackRoutes.post('/', async (c) => {
     || (screenshotOnly ? `${imageFiles.length} screenshot${imageFiles.length === 1 ? '' : 's'}` : 'Untitled');
 
   const apiKey = c.req.header('x-api-key');
-  const appId = resolveAppId(apiKey, input.sessionId, input.appId);
-  if (!appId) {
+  const app = resolveApp(apiKey, input.sessionId, input.appId);
+  if (!app) {
     return c.json({ error: 'Could not resolve application. Provide a valid X-API-Key header, sessionId, or appId.' }, 400);
   }
+  const appId = app.id;
 
   await db.insert(schema.feedbackItems).values({
     id,
@@ -145,6 +162,8 @@ feedbackRoutes.post('/', async (c) => {
     viewport: input.viewport || null,
     sessionId: input.sessionId || null,
     userId: input.userId || null,
+    ownerUserId: app.ownerUserId,
+    orgId: app.orgId,
     appId,
     subApp: input.subApp || null,
     ...appOwnership(appId),
@@ -257,8 +276,8 @@ feedbackRoutes.post('/:id/append', async (c) => {
 
   const apiKey = c.req.header('x-api-key');
   const sessionId = appendData.sessionId as string | undefined;
-  const appId = resolveAppId(apiKey, sessionId, appendData.appId as string | undefined);
-  if (!appId || appId !== existing.appId) {
+  const app = resolveApp(apiKey, sessionId, appendData.appId as string | undefined);
+  if (!app || app.id !== existing.appId) {
     return c.json({ error: 'App mismatch or could not resolve application' }, 403);
   }
 
@@ -353,10 +372,11 @@ feedbackRoutes.post('/programmatic', async (c) => {
   const progTitle = input.title || input.description.slice(0, 200) || 'Untitled';
 
   const progApiKey = c.req.header('x-api-key');
-  const progAppId = resolveAppId(progApiKey, input.sessionId, input.appId);
-  if (!progAppId) {
+  const progApp = resolveApp(progApiKey, input.sessionId, input.appId);
+  if (!progApp) {
     return c.json({ error: 'Could not resolve application. Provide a valid X-API-Key header, sessionId, or appId.' }, 400);
   }
+  const progAppId = progApp.id;
 
   await db.insert(schema.feedbackItems).values({
     id,
@@ -371,6 +391,8 @@ feedbackRoutes.post('/programmatic', async (c) => {
     viewport: input.viewport || null,
     sessionId: input.sessionId || null,
     userId: input.userId || null,
+    ownerUserId: progApp.ownerUserId,
+    orgId: progApp.orgId,
     appId: progAppId,
     subApp: input.subApp || null,
     ...appOwnership(progAppId),
