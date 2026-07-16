@@ -131,6 +131,16 @@ function agentAuthSecretName(username: string): string {
   return `propanes-agent-auth-${sanitizeUsername(username)}`;
 }
 
+function sessionTokenSecretName(username: string): string {
+  return `${fullName(username)}-session-api`;
+}
+
+// The HTTP base agents inside the pod use to reach the propanes API — derived
+// from the launcher WS URL (ws://host:port/ws/launcher -> http://host:port).
+export function apiUrlFromWsUrl(wsUrl: string): string {
+  return wsUrl.replace(/^wss:/, 'https:').replace(/^ws:/, 'http:').replace(/\/ws\/launcher\/?$/, '');
+}
+
 function labels(username: string, org?: string | null): Record<string, string> {
   const l: Record<string, string> = {
     'app.kubernetes.io/name': 'propanes-agent',
@@ -147,7 +157,7 @@ function labels(username: string, org?: string | null): Record<string, string> {
 export function buildManifests(
   username: string,
   cfg: ProvisionConfig,
-  opts: { org?: string | null } = {},
+  opts: { org?: string | null; sessionToken?: string | null } = {},
 ): Record<string, unknown>[] {
   const user = sanitizeUsername(username);
   const name = fullName(username);
@@ -180,6 +190,19 @@ export function buildManifests(
     },
   };
 
+  // Bearer token agent sessions use against the propanes API (PROPANES_TOKEN).
+  // Minted for the pod's owner, so the org scoping applies to agents exactly
+  // as it does to the user in the admin UI.
+  const sessionTokenSecret = opts.sessionToken
+    ? {
+        apiVersion: 'v1',
+        kind: 'Secret',
+        metadata: { name: sessionTokenSecretName(username), namespace: cfg.namespace, labels: lbl },
+        type: 'Opaque',
+        stringData: { token: opts.sessionToken },
+      }
+    : null;
+
   const pvc = {
     apiVersion: 'v1',
     kind: 'PersistentVolumeClaim',
@@ -203,6 +226,10 @@ export function buildManifests(
     metadata: { name, namespace: cfg.namespace, labels: lbl },
     spec: {
       replicas: 1,
+      // agent-home is an RWO disk: a RollingUpdate deadlocks on Multi-Attach
+      // (the new pod can't mount while the old one holds the volume). Recreate
+      // trades a few seconds of downtime for rolls that actually complete.
+      strategy: { type: 'Recreate' },
       selector: { matchLabels: selector },
       template: {
         metadata: { labels: lbl },
@@ -238,6 +265,16 @@ export function buildManifests(
                 {
                   name: 'VNC_PASSWORD',
                   valueFrom: { secretKeyRef: { name: cfg.vnc.secretName, key: cfg.vnc.passwordKey } },
+                },
+                // Agent-facing propanes API access: sessions inherit the pod
+                // env, so every agent on this pod can call the feedback/session
+                // API as this pod's owner.
+                { name: 'PROPANES_API_URL', value: apiUrlFromWsUrl(cfg.centralWsUrl) },
+                {
+                  name: 'PROPANES_TOKEN',
+                  valueFrom: {
+                    secretKeyRef: { name: sessionTokenSecretName(username), key: 'token', optional: true },
+                  },
                 },
               ],
               ports: [
@@ -284,7 +321,15 @@ export function buildManifests(
 
   // Order matters for create: secrets + PVC + SA before the Deployment that
   // references them.
-  return [launcherSecret, agentAuthSecret, pvc, serviceAccount, deployment, service];
+  return [
+    launcherSecret,
+    agentAuthSecret,
+    ...(sessionTokenSecret ? [sessionTokenSecret] : []),
+    pvc,
+    serviceAccount,
+    deployment,
+    service,
+  ];
 }
 
 // --- Kubernetes API plumbing ---
@@ -415,7 +460,7 @@ export interface ProvisionResult {
 
 export async function provisionUserPod(
   username: string,
-  opts: { org?: string | null } = {},
+  opts: { org?: string | null; sessionToken?: string | null } = {},
   cfg: ProvisionConfig = loadProvisionConfig(),
 ): Promise<ProvisionResult> {
   // Ensure the per-user NFS subdir exists before the pod tries to mount it.
@@ -442,6 +487,7 @@ export async function deprovisionUserPod(
   resources.push(await deleteResource('ServiceAccount', 'v1', name, ns));
   resources.push(await deleteResource('Secret', 'v1', launcherTokenSecretName(username), ns));
   resources.push(await deleteResource('Secret', 'v1', agentAuthSecretName(username), ns));
+  resources.push(await deleteResource('Secret', 'v1', sessionTokenSecretName(username), ns));
   // The PVC holds the user's private Claude/Codex login — keep it by default
   // so a redeploy doesn't force a re-login. Pass deletePvc to wipe it.
   if (opts.deletePvc) {

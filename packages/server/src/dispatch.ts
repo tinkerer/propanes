@@ -61,6 +61,7 @@ export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, t
 export const COS_REPLY_DISPATCH_HINT = `(Implement directly. When done, wrap a 1–4 sentence summary — changed files/commits, what you verified, follow-ups — in <cos-reply>…</cos-reply> tags; only wrapped text reaches the Inbox thread.)`;
 
 export const DEFAULT_PROMPT_TEMPLATE = `Feedback: {{feedback.url}}
+API access: curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "\${PROPANES_API_URL:-http://localhost:3001}/api/v1/admin/feedback/{{feedback.id}}" (both env vars are preset in this session; all /api/v1/admin/* routes need the bearer token)
 
 Title: {{feedback.title}}
 {{feedback.description}}

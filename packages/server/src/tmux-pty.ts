@@ -89,6 +89,17 @@ export function spawnInTmux(params: {
     tmuxCmd = shellCmd;
   }
 
+  // Env passed to execFileSync only seeds the tmux SERVER when it first
+  // starts; sessions created on an already-running server inherit the
+  // server's stale environment. Pass the agent-facing vars explicitly with
+  // -e (tmux >= 3.2) so every session gets them regardless of server age.
+  const SESSION_ENV_KEYS = ['PROPANES_TOKEN', 'PROPANES_API_URL'];
+  const envFlags: string[] = [];
+  const src = { ...process.env, ...env };
+  for (const k of SESSION_ENV_KEYS) {
+    if (src[k]) envFlags.push('-e', `${k}=${src[k]}`);
+  }
+
   try {
     execFileSync('tmux', [
       ...TMUX_SOCKET,
@@ -98,6 +109,7 @@ export function spawnInTmux(params: {
       '-x', String(cols),
       '-y', String(rows),
       '-c', cwd,
+      ...envFlags,
       tmuxCmd,
     ], {
       stdio: 'pipe',

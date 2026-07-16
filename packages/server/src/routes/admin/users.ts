@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { eq } from 'drizzle-orm';
 import { ulid } from 'ulidx';
-import { hashPassword, verifyToken } from '../../auth.js';
+import { hashPassword, mintUserToken, verifyToken } from '../../auth.js';
 import { db, schema } from '../../db/index.js';
 import {
   isProvisioningAvailable,
@@ -145,7 +145,12 @@ userRoutes.post('/users/:id/provision', async (c) => {
   const user = db.select().from(schema.users).where(eq(schema.users.id, id)).get();
   if (!user) return c.json({ error: 'User not found' }, 404);
 
-  const result = await provisionUserPod(user.username, { org: orgLabelFor(user.orgId) });
+  const result = await provisionUserPod(user.username, {
+    org: orgLabelFor(user.orgId),
+    // Baked into the pod env as PROPANES_TOKEN so agent sessions can call the
+    // feedback/session API as this user (org-scoped like their UI login).
+    sessionToken: await mintUserToken(user),
+  });
   if (result.ok) {
     // Route this user's sessions to their own launcher.
     db.update(schema.users)

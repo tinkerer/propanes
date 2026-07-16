@@ -6,56 +6,70 @@ Full-stack feedback overlay + agent session bridge. Four packages: `widget` (emb
 
 The server exposes a REST API. Use `curl` to query feedback, sessions, applications, and aggregate clusters directly.
 
+### Authentication (required for all /api/v1/admin/* routes)
+
+Dispatched agent sessions have two env vars preset:
+
+- `PROPANES_TOKEN` — bearer token scoped to the session's owner (org-scoped, same visibility as their admin UI login)
+- `PROPANES_API_URL` — API base (`http://localhost:3001` on the main pod / dev VM; the cluster service URL on per-user agent pods)
+
+```bash
+PW="${PROPANES_API_URL:-http://localhost:3001}"
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/feedback?limit=20" | python3 -m json.tool
+```
+
+The examples below assume `PW` and the `Authorization` header as above. If `PROPANES_TOKEN` is unset (plain terminal on the dev VM), mint one: `curl -s -X POST http://localhost:3001/api/v1/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"<ADMIN_PASS from packages/server/.env>"}'` and use the returned `token`.
+
 ### Checking Feedback
 
 ```bash
 # List recent feedback (paginated)
-curl -s 'http://localhost:3001/api/v1/admin/feedback?limit=20' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/feedback?limit=20" | python3 -m json.tool
 
 # Filter by app
-curl -s 'http://localhost:3001/api/v1/admin/feedback?appId=APP_ID&limit=20' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/feedback?appId=APP_ID&limit=20" | python3 -m json.tool
 
 # Filter by status (new, reviewed, dispatched, resolved, archived)
-curl -s 'http://localhost:3001/api/v1/admin/feedback?status=new&limit=20' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/feedback?status=new&limit=20" | python3 -m json.tool
 
 # Get single feedback item
-curl -s 'http://localhost:3001/api/v1/admin/feedback/FEEDBACK_ID' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/feedback/FEEDBACK_ID" | python3 -m json.tool
 ```
 
 ### Checking Agent Sessions
 
 ```bash
 # List all sessions
-curl -s 'http://localhost:3001/api/v1/admin/agent-sessions' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/agent-sessions" | python3 -m json.tool
 
 # Get session by ID (includes output log)
-curl -s 'http://localhost:3001/api/v1/admin/agent-sessions/SESSION_ID' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/agent-sessions/SESSION_ID" | python3 -m json.tool
 
 # Sessions for a specific feedback item
-curl -s 'http://localhost:3001/api/v1/admin/agent-sessions?feedbackId=FEEDBACK_ID' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/agent-sessions?feedbackId=FEEDBACK_ID" | python3 -m json.tool
 ```
 
 ### Aggregate Clusters
 
 ```bash
 # View clustered feedback
-curl -s 'http://localhost:3001/api/v1/admin/aggregate' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/aggregate" | python3 -m json.tool
 
 # Filter clusters by app
-curl -s 'http://localhost:3001/api/v1/admin/aggregate?appId=APP_ID' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/aggregate?appId=APP_ID" | python3 -m json.tool
 
 # Only clusters with 2+ items
-curl -s 'http://localhost:3001/api/v1/admin/aggregate?minCount=2' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/aggregate?minCount=2" | python3 -m json.tool
 
 # List action plans
-curl -s 'http://localhost:3001/api/v1/admin/aggregate/plans' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/aggregate/plans" | python3 -m json.tool
 ```
 
 ### Applications
 
 ```bash
 # List registered apps (shows IDs, names, project dirs)
-curl -s 'http://localhost:3001/api/v1/admin/applications' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/applications" | python3 -m json.tool
 ```
 
 ## Admin UI
@@ -229,7 +243,7 @@ If `SKIP_PROFILES.has(profile)` the runtime passes the skip flag; otherwise it d
 
 ```bash
 # Enqueue (the prompt fires on parent exit — completed, failed, or killed)
-curl -s -X POST http://localhost:3001/api/v1/admin/agent-sessions/SESSION_ID/followup \
+curl -s -X POST -H "Authorization: Bearer $PROPANES_TOKEN" $PW/api/v1/admin/agent-sessions/SESSION_ID/followup \
   -H 'Content-Type: application/json' \
   -d '{"prompt":"now also do X"}'
 
@@ -237,10 +251,10 @@ curl -s -X POST http://localhost:3001/api/v1/admin/agent-sessions/SESSION_ID/fol
 curl -s http://localhost:3001/api/v1/admin/agent-sessions/SESSION_ID/followups
 
 # Cancel a queued followup (before it dispatches)
-curl -s -X DELETE http://localhost:3001/api/v1/admin/agent-sessions/followups/FOLLOWUP_ID
+curl -s -X DELETE -H "Authorization: Bearer $PROPANES_TOKEN" $PW/api/v1/admin/agent-sessions/followups/FOLLOWUP_ID
 
 # Manually trigger the sweep (debugging only; normally runs every 5s)
-curl -s -X POST http://localhost:3001/api/v1/admin/session-followups/sweep
+curl -s -X POST -H "Authorization: Bearer $PROPANES_TOKEN" $PW/api/v1/admin/session-followups/sweep
 ```
 
 Under the hood a 5s timer in the main server (`dispatchPendingFollowups` in `routes/admin/session-followups.ts`) scans for pending followups whose parent has reached a terminal status, then respawns via `resumeAgentSession()` so the new run uses `--resume <claudeSessionId>` and inherits the parent's permission flags. Multiple followups on the same parent chain — each sweep dispatches one, and the next becomes the parent for the subsequent followup.
@@ -305,7 +319,7 @@ Machines are registered compute nodes. Schema: `packages/server/src/db/schema.ts
 
 ```bash
 # CRUD
-curl -s 'http://localhost:3001/api/v1/admin/machines' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/machines" | python3 -m json.tool
 ```
 
 ### Launchers
@@ -330,14 +344,14 @@ Harness configs define Docker Compose stacks for isolated agent testing. Schema:
 
 ```bash
 # List harness configs
-curl -s 'http://localhost:3001/api/v1/admin/harness-configs' | python3 -m json.tool
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/harness-configs" | python3 -m json.tool
 
 # Start/stop harness
-curl -s -X POST 'http://localhost:3001/api/v1/admin/harness-configs/CONFIG_ID/start'
-curl -s -X POST 'http://localhost:3001/api/v1/admin/harness-configs/CONFIG_ID/stop'
+curl -s -X POST -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/harness-configs/CONFIG_ID/start"
+curl -s -X POST -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/harness-configs/CONFIG_ID/stop"
 
 # Launch session inside harness
-curl -s -X POST 'http://localhost:3001/api/v1/admin/harness-configs/CONFIG_ID/session'
+curl -s -X POST -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/harness-configs/CONFIG_ID/session"
 ```
 
 Each config specifies machine, app image, ports, env vars, compose dir. When an agent endpoint has `harnessConfigId`, dispatch routes to that harness's launcher. Start/stop sends `StartHarness`/`StopHarness` to the launcher which runs `docker compose up -d`/`docker compose down`.
