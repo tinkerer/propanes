@@ -64,20 +64,30 @@ export function getAdminUser(c: Context): AdminUser {
   return c.get('user') as AdminUser;
 }
 
-// Members see ONLY their own workspace: rows they own or rows in their org.
+// The unscoped "see everything" view belongs ONLY to org-less admins (the
+// env-admin operator account). An admin who belongs to an org is that org's
+// administrator, not a platform operator: their data plane (apps, feedback,
+// sessions, push topics) is scoped to their org exactly like a member's, so
+// two orgs on one server are completely separate environments. Role still
+// gates the ops surfaces (user management, launchers, machines).
+export function isGlobalAdmin(user: AdminUser): boolean {
+  return user.role === 'admin' && !user.orgId;
+}
+
+// Users see ONLY their own workspace: rows they own or rows in their org.
 // There is deliberately NO "legacy unscoped (owner+org both null) is visible to
 // everyone" clause — that was a shared backdoor that leaked one operator's data
-// to every member. Unowned/legacy rows stay visible to admins (whose scope is
-// undefined = no filter) but never to members.
+// to every member. Unowned/legacy rows stay visible to global admins (whose
+// scope is undefined = no filter) but never to org-scoped users.
 export function memberFeedbackScope(user: AdminUser): SQL | undefined {
-  if (user.role === 'admin') return undefined;
+  if (isGlobalAdmin(user)) return undefined;
   const ownerMatches = eq(schema.feedbackItems.ownerUserId, user.id);
   const orgMatches = user.orgId ? eq(schema.feedbackItems.orgId, user.orgId) : undefined;
   return orgMatches ? or(ownerMatches, orgMatches) : ownerMatches;
 }
 
 export function memberSessionScope(user: AdminUser): SQL | undefined {
-  if (user.role === 'admin') return undefined;
+  if (isGlobalAdmin(user)) return undefined;
   const ownerMatches = eq(schema.agentSessions.ownerUserId, user.id);
   const orgMatches = user.orgId ? eq(schema.agentSessions.orgId, user.orgId) : undefined;
   return orgMatches ? or(ownerMatches, orgMatches) : ownerMatches;
@@ -85,7 +95,7 @@ export function memberSessionScope(user: AdminUser): SQL | undefined {
 
 // Workspace (application) scope — same rule as feedback/sessions.
 export function memberAppScope(user: AdminUser): SQL | undefined {
-  if (user.role === 'admin') return undefined;
+  if (isGlobalAdmin(user)) return undefined;
   const ownerMatches = eq(schema.applications.ownerUserId, user.id);
   const orgMatches = user.orgId ? eq(schema.applications.orgId, user.orgId) : undefined;
   return orgMatches ? or(ownerMatches, orgMatches) : ownerMatches;
@@ -95,6 +105,6 @@ export function visibleToMember(
   row: { ownerUserId?: string | null; orgId?: string | null },
   user: AdminUser,
 ): boolean {
-  if (user.role === 'admin') return true;
+  if (isGlobalAdmin(user)) return true;
   return row.ownerUserId === user.id || (!!user.orgId && row.orgId === user.orgId);
 }

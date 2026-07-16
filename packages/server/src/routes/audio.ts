@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { verifyToken } from '../auth.js';
-import { resolveAdminUser, visibleToMember } from '../admin-auth.js';
+import { isGlobalAdmin, resolveAdminUser, visibleToMember } from '../admin-auth.js';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 
@@ -43,7 +43,7 @@ audioRoutes.delete('/:id', async (c) => {
     where: eq(schema.feedbackAudio.id, id),
   });
   if (!audio) return c.json({ error: 'Audio not found' }, 404);
-  if (user.role !== 'admin') {
+  if (!isGlobalAdmin(user)) {
     const fb = db
       .select({
         ownerUserId: schema.feedbackItems.ownerUserId,

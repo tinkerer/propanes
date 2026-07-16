@@ -5,7 +5,7 @@ import { eq } from 'drizzle-orm';
 import { ulid } from 'ulidx';
 import { db, schema } from '../db/index.js';
 import { verifyToken } from '../auth.js';
-import { resolveAdminUser, visibleToMember, type AdminUser } from '../admin-auth.js';
+import { isGlobalAdmin, resolveAdminUser, visibleToMember, type AdminUser } from '../admin-auth.js';
 import type { Context } from 'hono';
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
@@ -21,7 +21,7 @@ async function authUser(c: Context): Promise<AdminUser | null> {
 }
 
 function canTouchFeedback(user: AdminUser, feedbackId: string): boolean {
-  if (user.role === 'admin') return true;
+  if (isGlobalAdmin(user)) return true;
   const fb = db
     .select({
       ownerUserId: schema.feedbackItems.ownerUserId,

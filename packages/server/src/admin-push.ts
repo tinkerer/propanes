@@ -7,13 +7,14 @@ import { buildSessionList } from './routes/agent-sessions.js';
 import { listNotifications } from './notifications.js';
 import { NOTIFICATIONS_TOPIC } from '@propanes/shared';
 import type { AdminUser } from './admin-auth.js';
-import { visibleToMember } from './admin-auth.js';
+import { isGlobalAdmin, visibleToMember } from './admin-auth.js';
 
 const adminClients = new Map<WebSocket, AdminUser>();
 
 // Topics that expose global operator state (all live connections, machines,
-// launchers, wiggum runs, cross-workspace notifications). Members never
-// receive these; their pages degrade to the REST endpoints' scoped answers.
+// launchers, wiggum runs, cross-workspace notifications). Only org-less global
+// admins receive these; org-scoped users' pages degrade to the REST endpoints'
+// scoped answers.
 const ADMIN_ONLY_TOPICS = new Set(['live-connections', 'infrastructure', 'wiggum', NOTIFICATIONS_TOPIC]);
 
 let sessionsTimer: ReturnType<typeof setInterval> | null = null;
@@ -39,7 +40,7 @@ export function unregisterAdminClient(ws: WebSocket) {
 }
 
 function scopeTopicData(topic: string, data: unknown, user: AdminUser): unknown | undefined {
-  if (user.role === 'admin') return data;
+  if (isGlobalAdmin(user)) return data;
   if (ADMIN_ONLY_TOPICS.has(topic)) return undefined;
   if (topic === 'sessions' && Array.isArray(data)) {
     return data.filter((s) => visibleToMember(s as { ownerUserId?: string | null; orgId?: string | null }, user));

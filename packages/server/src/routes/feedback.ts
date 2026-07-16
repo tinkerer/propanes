@@ -56,6 +56,21 @@ function resolveAppId(apiKey: string | undefined, sessionId: string | undefined,
   return null;
 }
 
+// Widget/programmatic feedback arrives unauthenticated, so workspace ownership
+// comes from the application it lands in — an unowned row is visible only to
+// global admins and would vanish from every org-scoped environment.
+function appOwnership(appId: string): { ownerUserId: string | null; orgId: string | null } {
+  const app = db
+    .select({
+      ownerUserId: schema.applications.ownerUserId,
+      orgId: schema.applications.orgId,
+    })
+    .from(schema.applications)
+    .where(eq(schema.applications.id, appId))
+    .get();
+  return { ownerUserId: app?.ownerUserId ?? null, orgId: app?.orgId ?? null };
+}
+
 export const feedbackRoutes = new Hono();
 
 feedbackRoutes.post('/', async (c) => {
@@ -132,6 +147,7 @@ feedbackRoutes.post('/', async (c) => {
     userId: input.userId || null,
     appId,
     subApp: input.subApp || null,
+    ...appOwnership(appId),
     createdAt: now,
     updatedAt: now,
   });
@@ -357,6 +373,7 @@ feedbackRoutes.post('/programmatic', async (c) => {
     userId: input.userId || null,
     appId: progAppId,
     subApp: input.subApp || null,
+    ...appOwnership(progAppId),
     createdAt: now,
     updatedAt: now,
   });

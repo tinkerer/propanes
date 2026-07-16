@@ -8,7 +8,7 @@ import { reconcileUsage } from './metering.js';
 import { destroyWorktreeIsolate, branchForIsolatePath } from './isolates.js';
 import { registerSession } from './sessions.js';
 import { verifyToken } from './auth.js';
-import { resolveAdminUser, visibleToMember } from './admin-auth.js';
+import { isGlobalAdmin, resolveAdminUser, visibleToMember } from './admin-auth.js';
 import {
   attachAdmin,
   detachAdmin,
@@ -345,10 +345,10 @@ agentWss.on('connection', async (ws, req) => {
     return;
   }
 
-  // Members may only attach to sessions in their own workspace. Close with
-  // 4004 (not 4003 — the admin SPA treats 4003 as a stale token and logs the
-  // user out).
-  if (user.role !== 'admin') {
+  // Org-scoped users may only attach to sessions in their own workspace. Close
+  // with 4004 (not 4003 — the admin SPA treats 4003 as a stale token and logs
+  // the user out).
+  if (!isGlobalAdmin(user)) {
     const session = db
       .select({
         ownerUserId: schema.agentSessions.ownerUserId,
