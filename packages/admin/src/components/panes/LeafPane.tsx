@@ -79,7 +79,10 @@ import { cosArtifacts } from '../../lib/cos-artifacts.js';
 import { PrBadges, RuntimeBadge } from '../PrBadges.js';
 
 // --- Shared signals (also used by Layout.tsx for keyboard shortcuts) ---
-export const statusMenuOpen = signal<{ sessionId: string; x: number; y: number } | null>(null);
+// leafId gates which LeafPane instance renders the menu — module-level signal
+// + multiple panes would otherwise stack one copy per pane at the same spot,
+// and the topmost copy's handlers would act on the wrong leaf.
+export const statusMenuOpen = signal<{ sessionId: string; leafId: string; x: number; y: number } | null>(null);
 export const idMenuOpen = signal<string | null>(null);
 const companionIdMenuOpen = signal<string | null>(null);
 const renamingSessionId = signal<string | null>(null);
@@ -1257,7 +1260,7 @@ export function LeafPane({ leaf }: LeafPaneProps) {
                   onClick={(e) => {
                     e.stopPropagation();
                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                    statusMenuOpen.value = { sessionId: sid, x: rect.left, y: rect.bottom + 4 };
+                    statusMenuOpen.value = { sessionId: sid, leafId: leaf.id, x: rect.left, y: rect.bottom + 4 };
                   }}
                 >
                   {ctrlShiftHeld.value && tabNum !== null && (
@@ -1364,7 +1367,7 @@ export function LeafPane({ leaf }: LeafPaneProps) {
       </div>
 
       {/* Status dot menu */}
-      {statusMenuOpen.value && (() => {
+      {statusMenuOpen.value?.leafId === leaf.id && (() => {
         const menuSid = statusMenuOpen.value!.sessionId;
         const menuSess = sessionMap.get(menuSid);
         const menuExited = exited.has(menuSid);
