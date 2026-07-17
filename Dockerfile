@@ -31,6 +31,10 @@ RUN pnpm run build
 
 # ---- Stage 2: production runtime --------------------------------------------
 FROM node:22-bookworm-slim
+# node:*-slim ships with no locale set (POSIX/C). tmux then renders every
+# non-ASCII glyph in the agent TUIs as "_", so Claude Code's arrows/ellipses
+# show up as "--" in the browser terminal. C.UTF-8 is built into glibc.
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 RUN corepack enable && corepack prepare pnpm@9.14.2 --activate
 RUN groupadd --gid 10001 propanes \
  && useradd --uid 10001 --gid 10001 --home-dir /data/agent-home --shell /bin/bash propanes

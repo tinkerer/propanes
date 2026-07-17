@@ -33,11 +33,24 @@ function tmuxName(sessionId: string): string {
   return `${TMUX_PREFIX}${sessionId}`;
 }
 
-const TMUX_SOCKET = ['-L', 'propanes'];
+// -u forces UTF-8 on every tmux client. Without it tmux sniffs the client
+// locale, and in a POSIX/C environment (node:*-slim images set no LANG at
+// all) it renders every non-ASCII glyph as "_" — Claude Code's ⏵⏵/❯/… turn
+// into "--"/"_" in the browser terminal.
+const TMUX_SOCKET = ['-u', '-L', 'propanes'];
 
 function cleanEnv(extra?: Record<string, string>): Record<string, string> {
   const { CLAUDECODE, ...rest } = process.env as Record<string, string>;
-  return { ...rest, ...extra, TERM: 'xterm-256color' };
+  const env: Record<string, string> = { ...rest, ...extra, TERM: 'xterm-256color' };
+  // Same locale problem on the server side: tmux and the agent TUIs it hosts
+  // fall back to ASCII when no UTF-8 locale is set. Only override when the
+  // inherited environment isn't already UTF-8.
+  const ctype = env.LC_ALL || env.LC_CTYPE || env.LANG || '';
+  if (!/utf-?8/i.test(ctype)) {
+    env.LANG = 'C.UTF-8';
+    env.LC_ALL = 'C.UTF-8';
+  }
+  return env;
 }
 
 export function tmuxSessionExists(sessionId: string): boolean {
@@ -156,7 +169,7 @@ export function reattachTmux(params: {
     name: 'xterm-256color',
     cols,
     rows,
-    env: { ...process.env, TERM: 'xterm-256color' } as Record<string, string>,
+    env: cleanEnv(),
   });
 }
 
