@@ -114,7 +114,19 @@ ${STRUCTURED_MODE_TEMPLATE}`;
 
 // Agent endpoints CRUD
 agentRoutes.get('/agents', async (c) => {
-  const appId = c.req.query('appId');
+  let appId = c.req.query('appId');
+  // Widgets pass their public apiKey (pw_…) as the appId (they never learn the
+  // real application id). Resolve it here, otherwise app-scoped agents get
+  // filtered out and the widget only ever sees global endpoints.
+  if (appId) {
+    const byId = db.select({ id: schema.applications.id }).from(schema.applications)
+      .where(eq(schema.applications.id, appId)).get();
+    if (!byId) {
+      const byKey = db.select({ id: schema.applications.id }).from(schema.applications)
+        .where(eq(schema.applications.apiKey, appId)).get();
+      if (byKey) appId = byKey.id;
+    }
+  }
   let agents;
   if (appId) {
     agents = db.select().from(schema.agentEndpoints)
