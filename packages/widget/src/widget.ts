@@ -515,10 +515,13 @@ export class ProPanesElement {
       });
     for (const profile of ['interactive-yolo', 'headless-yolo', 'headless-stream-yolo'] as const) {
       const match = (a: Record<string, any>) => a.permissionProfile === profile;
+      // this.appId is the public apiKey (pw_…), never the real application id,
+      // so compare scoping by presence: the /agents fetch is already filtered
+      // to (this app ∪ global), so a non-null agent.appId means "ours".
       const hit =
-        usable.find((a) => match(a) && a.isDefault && a.appId === this.appId) ||
+        usable.find((a) => match(a) && a.isDefault && a.appId) ||
         usable.find((a) => match(a) && a.isDefault && !a.appId) ||
-        usable.find((a) => match(a) && a.appId === this.appId) ||
+        usable.find((a) => match(a) && a.appId) ||
         usable.find(match);
       if (hit) return hit;
     }
