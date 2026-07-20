@@ -722,6 +722,26 @@ export class ProPanesElement {
     label.append(cb, span);
     menu.appendChild(label);
 
+    // Open-session checkbox — after dispatch, open the started session on this page
+    const openLabel = document.createElement('label');
+    openLabel.className = 'pw-send-menu-item pw-send-menu-checkbox';
+    openLabel.title = 'Open the dispatched session on this page after sending';
+    const openCb = document.createElement('input');
+    openCb.type = 'checkbox';
+    try {
+      openCb.checked = localStorage.getItem('pw-open-session') === '1';
+    } catch {}
+    openCb.addEventListener('change', () => {
+      try {
+        if (openCb.checked) localStorage.setItem('pw-open-session', '1');
+        else localStorage.removeItem('pw-open-session');
+      } catch {}
+    });
+    const openSpan = document.createElement('span');
+    openSpan.textContent = 'Open session';
+    openLabel.append(openCb, openSpan);
+    menu.appendChild(openLabel);
+
     group.appendChild(menu);
 
     const closeHandler = (e: Event) => {
@@ -3465,6 +3485,13 @@ export class ProPanesElement {
       this.exitTimeline();
 
       this.emit('submit', { type: 'manual', title: '', description, id: result?.id, appId: result?.appId });
+      let openSession = false;
+      try {
+        openSession = localStorage.getItem('pw-open-session') === '1';
+      } catch {}
+      if (openSession && shouldDispatch && result?.id) {
+        this.openDispatchedSession(result.id);
+      }
       const feedbackUrl = `${this.apiBase()}/admin/#/fb/${result.id}`;
       const screenshotPaths: string[] = Array.isArray(result?.screenshots)
         ? result.screenshots.map((s: { path: string }) => s.path).filter(Boolean)
@@ -3486,6 +3513,42 @@ export class ProPanesElement {
       this.dispatchAgentOverride = null;
       this.pendingPermissionProfile = null;
     }
+  }
+
+  // Poll the feedback record until its dispatch produces a session, then open
+  // that session on the current page (hash swap when already on the admin app,
+  // otherwise a same-tab navigation).
+  private openDispatchedSession(feedbackId: string) {
+    const base = this.apiBase();
+    const navigate = (sessionId: string) => {
+      try {
+        const adminOrigin = new URL(base).origin;
+        if (window.location.origin === adminOrigin && /\/admin\b/.test(window.location.pathname)) {
+          window.location.hash = `#/session/${sessionId}`;
+          return;
+        }
+      } catch {}
+      window.location.assign(`${base}/admin/#/session/${sessionId}`);
+    };
+    const started = Date.now();
+    const poll = async () => {
+      try {
+        const res = await fetch(`${base}/api/v1/admin/feedback/${feedbackId}`, {
+          headers: this.adminAuthHeaders(),
+        });
+        if (res.ok) {
+          const item = await res.json();
+          const match = /started:\s*([0-9A-Za-z]{20,})/.exec(item?.dispatchResponse || '');
+          if (match && item?.dispatchStatus === 'running') {
+            navigate(match[1]);
+            return;
+          }
+          if (item?.dispatchStatus === 'error') return;
+        }
+      } catch {}
+      if (Date.now() - started < 20000) setTimeout(poll, 700);
+    };
+    poll();
   }
 
   private showFlash(feedbackUrl?: string, label?: string) {
