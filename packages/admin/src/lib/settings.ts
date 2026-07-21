@@ -50,10 +50,11 @@ export const popoutMode = signal<PopoutMode>(loadSetting('pw-popout-mode', 'pane
 export const localBridgeUrl = signal<string>(loadSetting('pw-local-bridge-url', 'http://localhost:3001'));
 
 export interface SshConfig {
-  // 'ssh' (default, legacy configs have no mode) opens `ssh user@host`;
-  // 'kubectl' opens `kubectl exec` against the pod reported by the server's
-  // /terminal-target endpoint — for K8s deployments with no sshd on the pod.
-  mode?: 'ssh' | 'kubectl';
+  // 'cli' fires a propanes:// deep link handled by the @propanes/cli protocol
+  // handler (no local bridge server needed); 'kubectl' opens `kubectl exec`
+  // against the pod reported by the server's /terminal-target endpoint;
+  // 'ssh' (default, legacy configs have no mode) opens `ssh user@host`.
+  mode?: 'ssh' | 'kubectl' | 'cli';
   sshUser?: string;
   sshHost?: string;
   sshPort?: number;

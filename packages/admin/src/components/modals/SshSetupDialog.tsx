@@ -12,21 +12,23 @@ export function SshSetupDialog() {
 }
 
 function SshSetupForm({ hostname, sessionId, kubernetes }: { hostname: string; sessionId: string; kubernetes: KubeTerminalTarget | null }) {
-  // kubectl exec is the default whenever the server reports a pod target —
-  // it needs no sshd on the pod, only local kubeconfig credentials.
-  const [mode, setMode] = useState<'ssh' | 'kubectl'>(kubernetes ? 'kubectl' : 'ssh');
+  // The CLI deep link is the default: no local bridge server, no cluster or
+  // host credentials — just the @propanes/cli protocol handler.
+  const [mode, setMode] = useState<'ssh' | 'kubectl' | 'cli'>('cli');
   const [user, setUser] = useState('');
   const [host, setHost] = useState(hostname);
   const [port, setPort] = useState('');
   const [kubeContext, setKubeContext] = useState('');
   const [bridgeUrl, setBridgeUrl] = useState(localBridgeUrl.value);
 
-  const canSubmit = mode === 'kubectl' ? !!kubernetes : !!(user.trim() && host.trim());
+  const canSubmit = mode === 'cli' ? true : mode === 'kubectl' ? !!kubernetes : !!(user.trim() && host.trim());
 
   const handleSubmit = () => {
     if (!canSubmit) return;
     localBridgeUrl.value = bridgeUrl;
-    if (mode === 'kubectl') {
+    if (mode === 'cli') {
+      completeSshSetup(hostname, { mode: 'cli' }, sessionId);
+    } else if (mode === 'kubectl') {
       completeSshSetup(hostname, { mode: 'kubectl', ...(kubeContext.trim() ? { kubeContext: kubeContext.trim() } : {}) }, sessionId);
     } else {
       completeSshSetup(
@@ -54,11 +56,28 @@ function SshSetupForm({ hostname, sessionId, kubernetes }: { hostname: string; s
         </p>
 
         <div style="display:flex;gap:8px;margin-bottom:14px">
-          <div style={tabStyle(mode === 'kubectl')} onClick={() => setMode('kubectl')}>
-            kubectl exec{kubernetes ? ' (recommended)' : ''}
+          <div style={tabStyle(mode === 'cli')} onClick={() => setMode('cli')}>
+            propanes CLI (recommended)
           </div>
+          <div style={tabStyle(mode === 'kubectl')} onClick={() => setMode('kubectl')}>kubectl</div>
           <div style={tabStyle(mode === 'ssh')} onClick={() => setMode('ssh')}>SSH</div>
         </div>
+
+        {mode === 'cli' && (
+          <div>
+            <p style="color:var(--pw-text-secondary);margin-bottom:10px;font-size:12.5px">
+              Opens Terminal.app through a <code>propanes://</code> link handled by the
+              Propanes CLI — no local server, no cluster credentials. One-time setup:
+            </p>
+            <pre style="margin:0 0 12px;padding:8px 10px;border:1px solid var(--pw-border);border-radius:6px;background:var(--pw-bg-secondary);font-size:11.5px;overflow-x:auto">{`npm install -g @propanes/cli
+propanes login --server ${location.origin}
+propanes install-protocol`}</pre>
+            <p style="color:var(--pw-text-muted);margin-bottom:12px;font-size:11.5px">
+              Connect saves this choice for {hostname} and fires the link. If nothing
+              opens, finish the setup above and click Open in Terminal.app again.
+            </p>
+          </div>
+        )}
 
         {mode === 'kubectl' && (
           <div>
@@ -135,16 +154,18 @@ function SshSetupForm({ hostname, sessionId, kubernetes }: { hostname: string; s
           </div>
         )}
 
-        <div class="form-group" style="margin-bottom:16px">
-          <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Local Bridge URL</label>
-          <input
-            type="text"
-            value={bridgeUrl}
-            onInput={(e) => setBridgeUrl((e.target as HTMLInputElement).value)}
-            style="width:100%;padding:6px 10px;font-size:13px"
-            onKeyDown={onEnter}
-          />
-        </div>
+        {mode !== 'cli' && (
+          <div class="form-group" style="margin-bottom:16px">
+            <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Local Bridge URL</label>
+            <input
+              type="text"
+              value={bridgeUrl}
+              onInput={(e) => setBridgeUrl((e.target as HTMLInputElement).value)}
+              style="width:100%;padding:6px 10px;font-size:13px"
+              onKeyDown={onEnter}
+            />
+          </div>
+        )}
 
         <div class="modal-actions">
           <button class="btn" onClick={() => { sshSetupDialog.value = null; }}>Cancel</button>
