@@ -50,9 +50,14 @@ export const popoutMode = signal<PopoutMode>(loadSetting('pw-popout-mode', 'pane
 export const localBridgeUrl = signal<string>(loadSetting('pw-local-bridge-url', 'http://localhost:3001'));
 
 export interface SshConfig {
-  sshUser: string;
-  sshHost: string;
+  // 'ssh' (default, legacy configs have no mode) opens `ssh user@host`;
+  // 'kubectl' opens `kubectl exec` against the pod reported by the server's
+  // /terminal-target endpoint — for K8s deployments with no sshd on the pod.
+  mode?: 'ssh' | 'kubectl';
+  sshUser?: string;
+  sshHost?: string;
   sshPort?: number;
+  kubeContext?: string;
 }
 export const sshConfigs = signal<Record<string, SshConfig>>(loadSetting('pw-ssh-configs', {}));
 

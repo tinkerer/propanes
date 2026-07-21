@@ -1,76 +1,139 @@
 import { useState } from 'preact/hooks';
-import { sshSetupDialog, completeSshSetup } from '../../lib/sessions.js';
+import { sshSetupDialog, completeSshSetup, type KubeTerminalTarget } from '../../lib/sessions.js';
 import { localBridgeUrl } from '../../lib/settings.js';
 
 export function SshSetupDialog() {
   const state = sshSetupDialog.value;
   if (!state) return null;
 
-  const { hostname, sessionId } = state;
+  const { hostname, sessionId, kubernetes } = state;
 
-  return <SshSetupForm hostname={hostname} sessionId={sessionId} />;
+  return <SshSetupForm hostname={hostname} sessionId={sessionId} kubernetes={kubernetes} />;
 }
 
-function SshSetupForm({ hostname, sessionId }: { hostname: string; sessionId: string }) {
+function SshSetupForm({ hostname, sessionId, kubernetes }: { hostname: string; sessionId: string; kubernetes: KubeTerminalTarget | null }) {
+  // kubectl exec is the default whenever the server reports a pod target —
+  // it needs no sshd on the pod, only local kubeconfig credentials.
+  const [mode, setMode] = useState<'ssh' | 'kubectl'>(kubernetes ? 'kubectl' : 'ssh');
   const [user, setUser] = useState('');
   const [host, setHost] = useState(hostname);
   const [port, setPort] = useState('');
+  const [kubeContext, setKubeContext] = useState('');
   const [bridgeUrl, setBridgeUrl] = useState(localBridgeUrl.value);
 
+  const canSubmit = mode === 'kubectl' ? !!kubernetes : !!(user.trim() && host.trim());
+
   const handleSubmit = () => {
-    if (!user.trim() || !host.trim()) return;
+    if (!canSubmit) return;
     localBridgeUrl.value = bridgeUrl;
-    completeSshSetup(
-      hostname,
-      { sshUser: user.trim(), sshHost: host.trim(), ...(port.trim() ? { sshPort: parseInt(port.trim(), 10) } : {}) },
-      sessionId,
-    );
+    if (mode === 'kubectl') {
+      completeSshSetup(hostname, { mode: 'kubectl', ...(kubeContext.trim() ? { kubeContext: kubeContext.trim() } : {}) }, sessionId);
+    } else {
+      completeSshSetup(
+        hostname,
+        { mode: 'ssh', sshUser: user.trim(), sshHost: host.trim(), ...(port.trim() ? { sshPort: parseInt(port.trim(), 10) } : {}) },
+        sessionId,
+      );
+    }
   };
+
+  const onEnter = (e: KeyboardEvent) => { if (e.key === 'Enter') handleSubmit(); };
+
+  const tabStyle = (active: boolean) =>
+    `flex:1;padding:6px 10px;font-size:12.5px;font-weight:600;cursor:pointer;border:1px solid var(--pw-border);border-radius:6px;text-align:center;` +
+    (active
+      ? 'background:var(--pw-accent-bg, rgba(250,204,21,0.12));border-color:var(--pw-accent, #facc15);color:var(--pw-text)'
+      : 'background:var(--pw-bg-secondary);color:var(--pw-text-secondary)');
 
   return (
     <div class="modal-overlay" onClick={() => { sshSetupDialog.value = null; }}>
-      <div class="modal" onClick={(e) => e.stopPropagation()} style="max-width:420px">
+      <div class="modal" onClick={(e) => e.stopPropagation()} style="max-width:440px">
         <h3>Set Up Terminal Bridge</h3>
-        <p style="color:var(--pw-text-secondary);margin-bottom:16px;font-size:13px">
-          Configure SSH to reach <strong>{hostname}</strong> from your local machine.
+        <p style="color:var(--pw-text-secondary);margin-bottom:12px;font-size:13px">
+          Configure how Terminal.app on your local machine attaches to sessions on <strong>{hostname}</strong>.
         </p>
 
-        <div class="form-group" style="margin-bottom:12px">
-          <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">SSH User</label>
-          <input
-            type="text"
-            value={user}
-            onInput={(e) => setUser((e.target as HTMLInputElement).value)}
-            placeholder="e.g. azureuser"
-            autoFocus
-            style="width:100%;padding:6px 10px;font-size:13px"
-            onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
-          />
+        <div style="display:flex;gap:8px;margin-bottom:14px">
+          <div style={tabStyle(mode === 'kubectl')} onClick={() => setMode('kubectl')}>
+            kubectl exec{kubernetes ? ' (recommended)' : ''}
+          </div>
+          <div style={tabStyle(mode === 'ssh')} onClick={() => setMode('ssh')}>SSH</div>
         </div>
 
-        <div class="form-group" style="margin-bottom:12px">
-          <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">SSH Host / IP</label>
-          <input
-            type="text"
-            value={host}
-            onInput={(e) => setHost((e.target as HTMLInputElement).value)}
-            placeholder="e.g. 192.0.2.10"
-            style="width:100%;padding:6px 10px;font-size:13px"
-            onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
-          />
-        </div>
+        {mode === 'kubectl' && (
+          <div>
+            {kubernetes ? (
+              <div style="margin-bottom:12px;padding:8px 10px;border:1px solid var(--pw-border);border-radius:6px;background:var(--pw-bg-secondary);font-size:12px">
+                <div style="font-weight:600;margin-bottom:2px">Detected target</div>
+                <div style="font-family:ui-monospace,Menlo,monospace;color:var(--pw-text-secondary)">
+                  -n {kubernetes.namespace}{kubernetes.container ? ` -c ${kubernetes.container}` : ''} {kubernetes.pod}
+                </div>
+              </div>
+            ) : (
+              <div style="margin-bottom:12px;padding:8px 10px;border:1px solid var(--pw-border);border-radius:6px;font-size:12px;color:var(--pw-error)">
+                The server did not report a Kubernetes pod for this session — use SSH mode instead.
+              </div>
+            )}
+            <div class="form-group" style="margin-bottom:12px">
+              <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">
+                kubectl context <span style="color:var(--pw-text-muted);font-weight:400">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={kubeContext}
+                onInput={(e) => setKubeContext((e.target as HTMLInputElement).value)}
+                placeholder="current kubeconfig context"
+                autoFocus
+                style="width:100%;padding:6px 10px;font-size:13px"
+                onKeyDown={onEnter}
+              />
+            </div>
+            <p style="color:var(--pw-text-muted);margin-bottom:12px;font-size:11.5px">
+              Runs <code>kubectl exec</code> from your machine using your kubeconfig credentials
+              (e.g. <code>az aks get-credentials</code>) — no sshd on the pod. The target pod is
+              re-resolved on every open, so restarts are handled automatically.
+            </p>
+          </div>
+        )}
 
-        <div class="form-group" style="margin-bottom:12px">
-          <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">SSH Port <span style="color:var(--pw-text-muted);font-weight:400">(optional)</span></label>
-          <input
-            type="text"
-            value={port}
-            onInput={(e) => setPort((e.target as HTMLInputElement).value)}
-            placeholder="22"
-            style="width:80px;padding:6px 10px;font-size:13px"
-            onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
-          />
-        </div>
+        {mode === 'ssh' && (
+          <div>
+            <div class="form-group" style="margin-bottom:12px">
+              <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">SSH User</label>
+              <input
+                type="text"
+                value={user}
+                onInput={(e) => setUser((e.target as HTMLInputElement).value)}
+                placeholder="e.g. azureuser"
+                autoFocus
+                style="width:100%;padding:6px 10px;font-size:13px"
+                onKeyDown={onEnter}
+              />
+            </div>
+            <div class="form-group" style="margin-bottom:12px">
+              <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">SSH Host / IP</label>
+              <input
+                type="text"
+                value={host}
+                onInput={(e) => setHost((e.target as HTMLInputElement).value)}
+                placeholder="e.g. 192.0.2.10"
+                style="width:100%;padding:6px 10px;font-size:13px"
+                onKeyDown={onEnter}
+              />
+            </div>
+            <div class="form-group" style="margin-bottom:12px">
+              <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">SSH Port <span style="color:var(--pw-text-muted);font-weight:400">(optional)</span></label>
+              <input
+                type="text"
+                value={port}
+                onInput={(e) => setPort((e.target as HTMLInputElement).value)}
+                placeholder="22"
+                style="width:80px;padding:6px 10px;font-size:13px"
+                onKeyDown={onEnter}
+              />
+            </div>
+          </div>
+        )}
 
         <div class="form-group" style="margin-bottom:16px">
           <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Local Bridge URL</label>
@@ -79,13 +142,13 @@ function SshSetupForm({ hostname, sessionId }: { hostname: string; sessionId: st
             value={bridgeUrl}
             onInput={(e) => setBridgeUrl((e.target as HTMLInputElement).value)}
             style="width:100%;padding:6px 10px;font-size:13px"
-            onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
+            onKeyDown={onEnter}
           />
         </div>
 
         <div class="modal-actions">
           <button class="btn" onClick={() => { sshSetupDialog.value = null; }}>Cancel</button>
-          <button class="btn btn-primary" disabled={!user.trim() || !host.trim()} onClick={handleSubmit}>
+          <button class="btn btn-primary" disabled={!canSubmit} onClick={handleSubmit}>
             Connect
           </button>
         </div>

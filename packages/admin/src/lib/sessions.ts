@@ -891,7 +891,9 @@ export function cycleWaitingSession() {
 
 // --- Local Terminal Bridge ---
 
-export const sshSetupDialog = signal<{ hostname: string; sessionId: string } | null>(null);
+export type KubeTerminalTarget = { namespace: string; pod: string; container: string | null; command: string };
+
+export const sshSetupDialog = signal<{ hostname: string; sessionId: string; kubernetes: KubeTerminalTarget | null } | null>(null);
 
 let bridgeWindow: Window | null = null;
 let bridgeReady = false;
@@ -971,17 +973,46 @@ export function openLocalTerminal(sessionId: string) {
   } else {
     const config = sshConfigs.value[location.hostname];
     if (!config) {
-      sshSetupDialog.value = { hostname: location.hostname, sessionId };
+      // Ask the server whether this session lives on a K8s pod so the setup
+      // dialog can offer kubectl exec (no sshd needed) as the default mode.
+      api.getTerminalTarget(sessionId)
+        .then((d) => { sshSetupDialog.value = { hostname: location.hostname, sessionId, kubernetes: d.kubernetes }; })
+        .catch(() => { sshSetupDialog.value = { hostname: location.hostname, sessionId, kubernetes: null }; });
       return;
     }
-    sendBridgeCommand({ ...config, sessionId });
+    sendBridgeCommandForConfig(config, sessionId);
   }
+}
+
+// The kubectl target (pod name) changes across restarts/launchers, so it is
+// fetched fresh per click rather than stored with the config.
+function sendBridgeCommandForConfig(config: import('./settings.js').SshConfig, sessionId: string) {
+  if (config.mode === 'kubectl') {
+    api.getTerminalTarget(sessionId).then((d) => {
+      if (!d.kubernetes) {
+        showActionToast('✕', 'Server did not report a Kubernetes target for this session', 'var(--pw-error)');
+        return;
+      }
+      sendBridgeCommand({
+        ...(config.kubeContext ? { kubeContext: config.kubeContext } : {}),
+        kubeNamespace: d.kubernetes.namespace,
+        kubePod: d.kubernetes.pod,
+        ...(d.kubernetes.container ? { kubeContainer: d.kubernetes.container } : {}),
+        sessionId,
+      });
+    }).catch((err) => {
+      console.error('[local-bridge] terminal-target fetch failed:', err);
+      showActionToast('✕', 'Failed to resolve Kubernetes target', 'var(--pw-error)');
+    });
+    return;
+  }
+  sendBridgeCommand({ sshUser: config.sshUser, sshHost: config.sshHost, ...(config.sshPort ? { sshPort: config.sshPort } : {}), sessionId });
 }
 
 export function completeSshSetup(hostname: string, config: import('./settings.js').SshConfig, sessionId: string) {
   sshConfigs.value = { ...sshConfigs.value, [hostname]: config };
   sshSetupDialog.value = null;
-  sendBridgeCommand({ ...config, sessionId });
+  sendBridgeCommandForConfig(config, sessionId);
 }
 
 // --- Re-exports ---

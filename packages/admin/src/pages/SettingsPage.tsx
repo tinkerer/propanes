@@ -104,7 +104,9 @@ function SshConfigManager() {
           <div style="flex:1;min-width:0">
             <div style="font-size:13px;font-weight:600">{key}</div>
             <div style="font-size:11px;color:var(--pw-text-faint)">
-              {cfg.sshUser}@{cfg.sshHost}{cfg.sshPort ? `:${cfg.sshPort}` : ''}
+              {cfg.mode === 'kubectl'
+                ? `kubectl exec${cfg.kubeContext ? ` --context ${cfg.kubeContext}` : ''} (pod resolved per session)`
+                : `${cfg.sshUser}@${cfg.sshHost}${cfg.sshPort ? `:${cfg.sshPort}` : ''}`}
             </div>
           </div>
           <button class="btn btn-sm btn-danger" onClick={() => removeConfig(key)}>Remove</button>
