@@ -212,7 +212,10 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
     function scheduleOutputFlush(viaRaf = false) {
       if (terminalDisposed || outputFlushScheduled || outputWriteActive) return;
       outputFlushScheduled = true;
-      if (viaRaf) {
+      // rAF is frozen in hidden tabs — scheduling the drain on it while the
+      // tab is hidden stalls the queue, so hours of output pile up and then
+      // replay chunk-by-chunk on return (visible as erratic scroll/flicker).
+      if (viaRaf && !document.hidden) {
         outputFlushRaf = requestAnimationFrame(flushOutputQueue);
       } else {
         queueMicrotask(flushOutputQueue);
@@ -229,7 +232,16 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       outputFlushScheduled = false;
       outputFlushRaf = 0;
       if (terminalDisposed || outputWriteActive || !outputQueue) return;
-      const chunk = outputQueue.slice(0, MAX_TERMINAL_WRITE_BATCH_BYTES);
+      // Batching to 32KB keeps visible writes smooth, but each batch paints
+      // (and auto-scrolls) once — replaying a large backlog that way flickers
+      // for seconds. While hidden nothing paints, and for an oversized backlog
+      // (tab was hidden/throttled) one big write is better: xterm slices
+      // parsing internally and coalesces rendering on rAF, so the terminal
+      // settles in a single jump instead of scrolling erratically.
+      const batchBytes = document.hidden || outputQueue.length > MAX_TERMINAL_WRITE_BATCH_BYTES * 4
+        ? outputQueue.length
+        : MAX_TERMINAL_WRITE_BATCH_BYTES;
+      const chunk = outputQueue.slice(0, batchBytes);
       outputQueue = outputQueue.slice(chunk.length);
       outputWriteActive = true;
       const writeStart = performance.now();
@@ -873,7 +885,19 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
 
     // Bounce resize when browser tab/window regains visibility
     function onVisibilityChange() {
-      if (!document.hidden) setTimeout(() => safeFitAndResize(true), 50);
+      if (document.hidden) {
+        // A flush parked on rAF freezes with the tab — reschedule it as a
+        // microtask so output keeps draining while hidden instead of piling
+        // up and replaying (with flicker) when the user comes back.
+        if (outputFlushRaf) {
+          cancelAnimationFrame(outputFlushRaf);
+          outputFlushRaf = 0;
+          outputFlushScheduled = false;
+          scheduleOutputFlush(false);
+        }
+        return;
+      }
+      setTimeout(() => safeFitAndResize(true), 50);
     }
     document.addEventListener('visibilitychange', onVisibilityChange);
 
