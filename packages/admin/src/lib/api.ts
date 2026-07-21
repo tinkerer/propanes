@@ -524,6 +524,13 @@ export const api = {
   getAgentSession: (id: string) =>
     request<any>(`/admin/agent-sessions/${id}`),
 
+  // Where the session's tmux lives when the server runs on Kubernetes; null
+  // kubernetes means "not a pod — use SSH". Feeds the Terminal.app bridge.
+  getTerminalTarget: (id: string) =>
+    request<{ kubernetes: { namespace: string; pod: string; container: string | null; command: string } | null }>(
+      `/admin/agent-sessions/${id}/terminal-target`,
+    ),
+
   killAgentSession: (id: string) =>
     request<{ id: string; killed: boolean }>(`/admin/agent-sessions/${id}/kill`, {
       method: 'POST',

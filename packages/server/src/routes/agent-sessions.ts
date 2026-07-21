@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { eq, desc, ne, and, inArray, or, sql } from 'drizzle-orm';
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { hostname as osHostname } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { db, schema } from '../db/index.js';
@@ -634,6 +635,57 @@ agentSessionRoutes.post('/:id/archive', async (c) => {
     .run();
 
   return c.json({ id, archived: true });
+});
+
+// Where does this session's tmux actually live? On Kubernetes deployments the
+// answer is a pod, not an SSH host — the admin UI calls this to build a
+// `kubectl exec` attach command instead of requiring sshd on the pod. Returns
+// { kubernetes: null } when the server isn't in a cluster or the session runs
+// on an SSH-reachable machine launcher (the SSH flow stays correct there).
+agentSessionRoutes.get('/:id/terminal-target', async (c) => {
+  const id = c.req.param('id');
+  const session = db
+    .select()
+    .from(schema.agentSessions)
+    .where(eq(schema.agentSessions.id, id))
+    .get();
+  if (!session || !visibleToMember(session, getAdminUser(c))) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+
+  // The pod hostname IS the pod name, both for this control-plane pod and for
+  // per-user launcher pods (which report os.hostname() on registration).
+  let pod = osHostname();
+  let container: string | null = process.env.PROPANES_K8S_CONTAINER || null;
+  if (session.launcherId) {
+    const launcher = getLauncher(session.launcherId);
+    if (launcher && !launcher.isLocal) {
+      if (launcher.machineId) return c.json({ kubernetes: null }); // SSH machine, not a pod
+      if (launcher.hostname) {
+        pod = launcher.hostname;
+        container = 'launcher'; // charts/propanes-agent container name
+      }
+    }
+  }
+
+  let namespace: string | null = process.env.PROPANES_K8S_NAMESPACE || null;
+  if (!namespace && process.env.KUBERNETES_SERVICE_HOST) {
+    try {
+      namespace = readFileSync('/var/run/secrets/kubernetes.io/serviceaccount/namespace', 'utf8').trim() || null;
+    } catch {
+      namespace = null;
+    }
+  }
+  if (!namespace) return c.json({ kubernetes: null });
+
+  return c.json({
+    kubernetes: {
+      namespace,
+      pod,
+      container,
+      command: `kubectl exec -it -n ${namespace}${container ? ` -c ${container}` : ''} ${pod} -- tmux -L propanes attach-session -t pw-${id}`,
+    },
+  });
 });
 
 agentSessionRoutes.post('/:id/open-terminal', async (c) => {

@@ -82,26 +82,42 @@ localRoutes.post('/open-terminal', async (c) => {
   }
 
   const body = await c.req.json().catch(() => ({}));
-  const { command, sshUser, sshHost, sshPort, sessionId } = body as {
+  const { command, sshUser, sshHost, sshPort, sessionId, kubeNamespace, kubePod, kubeContainer, kubeContext } = body as {
     command?: string;
     sshUser?: string;
     sshHost?: string;
     sshPort?: number;
     sessionId?: string;
+    kubeNamespace?: string;
+    kubePod?: string;
+    kubeContainer?: string;
+    kubeContext?: string;
   };
 
   let finalCommand: string;
 
-  if (sshUser && sshHost && sessionId) {
+  if (kubeNamespace && kubePod && sessionId) {
+    // kubectl exec path — for sessions on Kubernetes pods (e.g. AKS) that
+    // don't run sshd. Auth rides on the local kubeconfig (az aks get-credentials).
+    const k8sName = /^[a-zA-Z0-9._-]+$/;
+    if (!k8sName.test(kubeNamespace)) return c.json({ error: 'Invalid kubeNamespace' }, 400);
+    if (!k8sName.test(kubePod)) return c.json({ error: 'Invalid kubePod' }, 400);
+    if (kubeContainer && !k8sName.test(kubeContainer)) return c.json({ error: 'Invalid kubeContainer' }, 400);
+    if (kubeContext && !/^[a-zA-Z0-9._@:/-]+$/.test(kubeContext)) return c.json({ error: 'Invalid kubeContext' }, 400);
+    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) return c.json({ error: 'Invalid sessionId' }, 400);
+    const ctxFlag = kubeContext ? ` --context ${kubeContext}` : '';
+    const containerFlag = kubeContainer ? ` -c ${kubeContainer}` : '';
+    finalCommand = `kubectl exec -it${ctxFlag} -n ${kubeNamespace}${containerFlag} ${kubePod} -- tmux -L propanes attach-session -t pw-${sessionId}`;
+  } else if (sshUser && sshHost && sessionId) {
     if (!/^[a-zA-Z0-9._-]+$/.test(sshUser)) return c.json({ error: 'Invalid sshUser' }, 400);
     if (!/^[a-zA-Z0-9._-]+$/.test(sshHost)) return c.json({ error: 'Invalid sshHost' }, 400);
     if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) return c.json({ error: 'Invalid sessionId' }, 400);
     const portFlag = sshPort ? ` -p ${Number(sshPort)}` : '';
     finalCommand = `ssh ${sshUser}@${sshHost}${portFlag} -t "tmux -L propanes attach-session -t pw-${sessionId}"`;
   } else if (command) {
-    // Validate it looks like an SSH+tmux command (not arbitrary shell)
-    if (!/^ssh\s/.test(command) && !/^tmux\s/.test(command)) {
-      return c.json({ error: 'Only ssh and tmux commands are allowed' }, 400);
+    // Validate it looks like an SSH/kubectl/tmux command (not arbitrary shell)
+    if (!/^ssh\s/.test(command) && !/^tmux\s/.test(command) && !/^kubectl\s/.test(command)) {
+      return c.json({ error: 'Only ssh, kubectl, and tmux commands are allowed' }, 400);
     }
     finalCommand = command;
   } else if (sessionId) {
