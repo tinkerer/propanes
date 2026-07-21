@@ -59,7 +59,7 @@ import { loadCosDispatches, cosGroupForSession } from '../../lib/cos-dispatches.
 import { chiefOfStaffAgents, chiefOfStaffActiveId, ensureChiefOfStaffAgent, loadChiefOfStaffHistory, setChiefOfStaffOpen } from '../../lib/chief-of-staff.js';
 import { cosActiveThread } from '../../lib/cos-popout-tree.js';
 import { getSessionIdForThread } from '../../lib/cos-thread-meta.js';
-import { PrBadges, RuntimeBadge } from '../PrBadges.js';
+import { PrBadges, RuntimeBadge, parsePrUrls } from '../PrBadges.js';
 
 const autoJumpMenuOpen = signal(false);
 
@@ -278,7 +278,10 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
 
   const autoJumpBtnRef = useRef<HTMLSpanElement>(null);
 
-  const renderItem = (s: any) => {
+  // opts.hideBadges: CoS-thread children show their runtime/PR badges on the
+  // thread divider instead, so the row's badges don't shift when the hover
+  // menu/delete buttons appear.
+  const renderItem = (s: any, opts?: { hideBadges?: boolean }) => {
     const isTabbed = tabSet.has(s.id);
     const isInPanel = !!findPanelForSession(s.id);
     const isVisible = visibleSet.has(s.id);
@@ -390,8 +393,8 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
               {sessionSearchQuery.value ? highlightMatch(raw, sessionSearchQuery.value) : raw}
             </span>
           )}
-          <RuntimeBadge runtime={s.runtime} permissionProfile={s.permissionProfile} />
-          <PrBadges prUrls={s.prUrls} compact />
+          {!opts?.hideBadges && <RuntimeBadge runtime={s.runtime} permissionProfile={s.permissionProfile} />}
+          {!opts?.hideBadges && <PrBadges prUrls={s.prUrls} compact />}
           <button
             class="sidebar-item-menu-btn"
             onClick={(e) => {
@@ -580,7 +583,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
           <div class="sidebar-section-label waiting-section-label">
             Waiting for input ({waitingAgents.length})
           </div>
-          {waitingAgents.map(renderItem)}
+          {waitingAgents.map((it: any) => renderItem(it))}
         </div>
       )}
       <div class="sidebar-sessions-list" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
@@ -667,6 +670,14 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
               const tid = link?.threadId || '';
               if (tid && tid !== lastThreadId) {
                 const agentId = link?.agentId || 'default';
+                // Badges live on the divider (right side), not the session
+                // rows below it — the row's hover-revealed menu/delete buttons
+                // would otherwise push the badges around on every hover.
+                const threadChildren = children.filter((c) => (cosGroupForSession(c)?.threadId || '') === tid);
+                const threadRuntimes = [...new Set(threadChildren
+                  .filter((c) => c.permissionProfile !== 'plain' && (c.runtime || c.permissionProfile))
+                  .map((c) => (c.runtime === 'codex' ? 'codex' : 'claude')))];
+                const threadPrUrls = threadChildren.flatMap((c) => parsePrUrls(c.prUrls));
                 out.push(
                   <div
                     key={`cos-thread-${tid}`}
@@ -747,12 +758,16 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                       }
                     }}
                   >
-                    {link?.name || 'Thread'}
+                    <span class="sidebar-cos-thread-divider-label">{link?.name || 'Thread'}</span>
+                    <span class="sidebar-cos-thread-divider-badges">
+                      {threadRuntimes.map((rt) => <RuntimeBadge key={rt} runtime={rt} />)}
+                      <PrBadges prUrls={threadPrUrls} compact />
+                    </span>
                   </div>,
                 );
                 lastThreadId = tid;
               }
-              out.push(renderItem(child));
+              out.push(renderItem(child, { hideBadges: !!tid }));
             }
             return out;
           };
@@ -793,7 +808,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                   </div>
                   {expanded && (
                     <div class="sidebar-session-tree-children">
-                      {children.map(renderItem)}
+                      {children.map((it: any) => renderItem(it))}
                     </div>
                   )}
                 </div>
@@ -860,7 +875,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                   </div>
                   {expanded && (
                     <div class="sidebar-session-tree-children">
-                      {isCos ? renderCosChildren(grp.children) : grp.children.map(renderItem)}
+                      {isCos ? renderCosChildren(grp.children) : grp.children.map((it: any) => renderItem(it))}
                     </div>
                   )}
                 </div>
@@ -980,7 +995,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                                 title={isCos ? 'New powwow in this app' : 'New wiggum in this app'}
                               >+</button>
                             </div>
-                            {exp && <div class="sidebar-session-tree-children">{isCos ? renderCosChildren(grp.children) : grp.children.map(renderItem)}</div>}
+                            {exp && <div class="sidebar-session-tree-children">{isCos ? renderCosChildren(grp.children) : grp.children.map((it: any) => renderItem(it))}</div>}
                           </div>
                         );
                       })}
