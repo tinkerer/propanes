@@ -1,0 +1,26 @@
+# Exposes the Propanes SSH gateway (ssh-gateway.ts, enabled via
+# SSH_GATEWAY_PORT on the control-plane deployment) outside the cluster.
+#
+# Apply cluster-side after setting SSH_GATEWAY_PORT=2222 on the propanes
+# deployment. Adjust the selector to match your control-plane pod labels
+# (check with: kubectl -n platform get pods --show-labels).
+#
+# Note this creates a public TCP endpoint. The gateway authenticates against
+# propanes user accounts and scopes sessions per workspace, but consider a
+# loadBalancerSourceRanges allowlist for pilots.
+apiVersion: v1
+kind: Service
+metadata:
+  name: propanes-ssh
+  namespace: platform
+spec:
+  type: LoadBalancer
+  selector:
+    app: propanes   # <-- match your control-plane deployment's pod labels
+  ports:
+    - name: ssh
+      port: 22
+      targetPort: 2222
+      protocol: TCP
+  # loadBalancerSourceRanges:
+  #   - 203.0.113.0/24

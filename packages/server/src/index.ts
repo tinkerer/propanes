@@ -42,6 +42,7 @@ import { startRetentionSweeper } from './routes/admin/cos-retention.js';
 import { ensureCosThreadsForOrphanSessions } from './cos-inbox.js';
 import { detectClaudeAuthRequired } from './claude-auth-detect.js';
 import { mergePrUrls } from './pr-detect.js';
+import { startSshGateway } from './ssh-gateway.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 const LAUNCHER_AUTH_TOKEN = process.env.LAUNCHER_AUTH_TOKEN || '';
@@ -245,6 +246,9 @@ startFAFOPoller(15_000);
 if (process.env.ADMIN_WATCH === '1') {
   startAdminWatcher();
 }
+
+// Native-terminal SSH access to agent sessions; no-op unless SSH_GATEWAY_PORT is set.
+startSshGateway();
 
 const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
   const url = `http://localhost:${info.port}`;

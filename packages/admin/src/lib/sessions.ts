@@ -987,6 +987,14 @@ export function openLocalTerminal(sessionId: string) {
 // The kubectl target (pod name) changes across restarts/launchers, so it is
 // fetched fresh per click rather than stored with the config.
 function sendBridgeCommandForConfig(config: import('./settings.js').SshConfig, sessionId: string) {
+  if (config.mode === 'cli') {
+    // Deep link into the @propanes/cli protocol handler — Terminal.app opens
+    // running `propanes attach`, no local bridge server involved. If the
+    // handler isn't installed the browser shows its "no app" dialog.
+    window.location.href = `propanes://attach?session=${encodeURIComponent(sessionId)}&server=${encodeURIComponent(window.location.origin)}`;
+    showActionToast('→', 'Launching Terminal.app via propanes://', 'var(--pw-accent, #facc15)');
+    return;
+  }
   if (config.mode === 'kubectl') {
     api.getTerminalTarget(sessionId).then((d) => {
       if (!d.kubernetes) {
