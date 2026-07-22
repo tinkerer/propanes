@@ -148,7 +148,8 @@ That usually means the host is behind a browser SSO proxy (edge auth) that
 blocks non-browser clients before they reach Propanes. Options:
   - ask your platform operator to exempt /api/v1/* and /ws/* on this host
     from edge SSO (Propanes enforces its own auth on those routes), or
-  - use the SSH gateway instead:  ssh -t <user>@<gateway> attach <sessionId>`);
+  - configure the SSH gateway so this CLI tunnels through it automatically:
+      propanes login --web --server <host> --gateway <gateway-host>`);
   }
   const ct = res.headers.get('content-type') || '';
   if (res.ok && !ct.includes('application/json')) {
@@ -167,6 +168,65 @@ function decodeJwt(token) {
   } catch {
     return {};
   }
+}
+
+// SSH gateway address for a server, as "host" or "host:port". Lets the CLI
+// reach sessions on hosts whose HTTP/WS API is behind a browser-SSO edge:
+// the gateway is propanes-native auth on a raw TCP LoadBalancer that the edge
+// never sees. Resolution order: --gateway flag, env, stored config.
+function normalizeGateway(input) {
+  if (!input || input === true) return null;
+  const s = String(input).replace(/^ssh:\/\//, '');
+  const m = s.match(/^([^:]+)(?::(\d+))?$/);
+  if (!m) return null;
+  return { host: m[1], port: m[2] ? Number(m[2]) : 22 };
+}
+
+function gatewayFor(flags, cfg, server) {
+  const raw = flags.gateway || process.env.PROPANES_GATEWAY || cfg.servers?.[server]?.gateway;
+  return normalizeGateway(raw);
+}
+
+// Canonical "host:port" string to persist in config, preserving an existing
+// value when --gateway isn't passed this run.
+function normGw(flags, cfg, server) {
+  const raw = (flags.gateway && flags.gateway !== true ? flags.gateway : null)
+    || cfg.servers?.[server]?.gateway;
+  const g = normalizeGateway(raw);
+  return g ? `${g.host}:${g.port}` : undefined;
+}
+
+function knownHostsPath() {
+  return join(CONFIG_DIR, 'known_hosts');
+}
+
+// Run a command on the SSH gateway, feeding the stored JWT as the SSH password
+// non-interactively via SSH_ASKPASS (OpenSSH >= 8.4). tty:true allocates a PTY
+// and inherits stdio (used for `attach`); otherwise stdout is captured.
+function sshGateway(server, gw, token, username, remoteArgs, { tty = false } = {}) {
+  mkdirSync(CONFIG_DIR, { recursive: true });
+  const askpass = join(CONFIG_DIR, `askpass-${process.pid}.sh`);
+  writeFileSync(askpass, '#!/bin/sh\nprintf %s "$PROPANES_ASKPASS_TOKEN"\n', { mode: 0o700 });
+  const args = [
+    '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', `UserKnownHostsFile=${knownHostsPath()}`,
+    '-o', 'NumberOfPasswordPrompts=1',
+    '-p', String(gw.port),
+  ];
+  if (tty) args.push('-t');
+  args.push(`${username}@${gw.host}`, ...remoteArgs);
+  const env = {
+    ...process.env,
+    SSH_ASKPASS: askpass,
+    SSH_ASKPASS_REQUIRE: 'force',
+    DISPLAY: process.env.DISPLAY || ':0',
+    PROPANES_ASKPASS_TOKEN: token,
+  };
+  const child = spawn('ssh', args, { env, stdio: tty ? 'inherit' : ['ignore', 'pipe', 'inherit'] });
+  const cleanup = () => { try { rmSync(askpass, { force: true }); } catch {} };
+  child.on('exit', cleanup);
+  child.on('error', cleanup);
+  return child;
 }
 
 function openBrowser(url) {
@@ -213,6 +273,7 @@ function cmdLoginWeb(flags) {
       token,
       username: claims.username || null,
       expiresAt: claims.exp ? new Date(claims.exp * 1000).toISOString() : null,
+      gateway: normGw(flags, cfg, server),
     };
     cfg.defaultServer = server;
     saveConfig(cfg);
@@ -247,7 +308,7 @@ async function cmdLogin(flags) {
     if (!me.ok) die(`Token rejected by ${server} (HTTP ${me.status})`);
     const body = await me.json();
     cfg.servers = cfg.servers || {};
-    cfg.servers[server] = { token: flags.token, username: body.user?.username || null, expiresAt: null };
+    cfg.servers[server] = { token: flags.token, username: body.user?.username || null, expiresAt: null, gateway: normGw(flags, cfg, server) };
     cfg.defaultServer = server;
     saveConfig(cfg);
     console.log(`Logged in to ${server} as ${body.user?.username || '(token)'}`);
@@ -268,7 +329,7 @@ async function cmdLogin(flags) {
   }
   const body = await res.json();
   cfg.servers = cfg.servers || {};
-  cfg.servers[server] = { token: body.token, expiresAt: body.expiresAt, username };
+  cfg.servers[server] = { token: body.token, expiresAt: body.expiresAt, username, gateway: normGw(flags, cfg, server) };
   cfg.defaultServer = server;
   saveConfig(cfg);
   console.log(`Logged in to ${server} as ${username}`);
@@ -279,6 +340,20 @@ async function cmdSessions(flags) {
   const server = resolveServer(flags, cfg);
   const token = tokenFor(cfg, server);
   if (!token) die(`Not logged in to ${server}. Run: propanes login --server ${server}`);
+
+  // When a gateway is configured, list over it — the HTTP API may be behind an
+  // SSO edge that blocks us. The gateway's own `list` is workspace-scoped too.
+  const gw = gatewayFor(flags, cfg, server);
+  if (gw) {
+    const username = cfg.servers[server]?.username || decodeJwt(token).username;
+    if (!username) die('No username on file for the gateway; re-run propanes login.');
+    const child = sshGateway(server, gw, token, username, ['list']);
+    let out = '';
+    child.stdout.on('data', (d) => { out += d.toString(); });
+    child.on('exit', (code) => { process.stdout.write(out); process.exit(code || 0); });
+    return;
+  }
+
   const res = await apiFetch(`${server}/api/v1/admin/agent-sessions`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -302,6 +377,18 @@ function cmdAttach(flags, sessionId) {
   const server = resolveServer(flags, cfg);
   const token = tokenFor(cfg, server);
   if (!token) die(`Not logged in to ${server}. Run: propanes login --server ${server}`);
+
+  // Gateway path: attach natively over SSH (bypasses any SSO edge on the HTTP
+  // ingress). ssh inherits the terminal; detach with the ssh escape `~.`.
+  const gw = gatewayFor(flags, cfg, server);
+  if (gw) {
+    const username = cfg.servers[server]?.username || decodeJwt(token).username;
+    if (!username) die('No username on file for the gateway; re-run propanes login.');
+    if (process.stdin.isTTY) process.stderr.write(`Attaching to ${sessionId} via gateway ${gw.host} (detach: press Enter then ~.)\n`);
+    const child = sshGateway(server, gw, token, username, ['attach', sessionId], { tty: true });
+    child.on('exit', (code) => process.exit(code || 0));
+    return;
+  }
 
   const wsBase = server.replace(/^http/, 'ws');
   const isTty = process.stdin.isTTY && process.stdout.isTTY;
@@ -530,8 +617,11 @@ function usage() {
 
 Usage:
   propanes login [--server URL] [--username U] [--password P | --token JWT]
-  propanes login --web [--server URL]      Log in via the browser (works when
-                                           the API is behind a browser-SSO proxy)
+  propanes login --web [--server URL] [--gateway HOST[:PORT]]
+                                           Log in via the browser (works when
+                                           the API is behind a browser-SSO proxy);
+                                           --gateway routes sessions/attach over
+                                           the SSH gateway automatically
   propanes attach <sessionId> [--server URL]
   propanes sessions [--server URL]
   propanes open-url <propanes://attach?session=..&server=..>
