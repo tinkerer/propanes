@@ -90,7 +90,8 @@ export function App() {
   const route = currentRoute.value;
 
   useEffect(() => {
-    document.title = 'ProPanes Admin';
+    // Host-first so environment (azstaging vs localhost vs prod) survives tab truncation.
+    document.title = `${window.location.host} — ProPanes Admin`;
   }, []);
 
   if (route === '/logout') {
