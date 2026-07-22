@@ -375,28 +375,30 @@ async function pollWorkbenchToken(edge, deviceCode, intervalSec) {
   let interval = Math.max(2, intervalSec || 5);
   while (Date.now() < deadline) {
     await sleep(interval * 1000);
-    const r = await fetch(`${edge}/auth/cli/token`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ device_code: deviceCode }),
-    });
-    const j = await r.json().catch(() => ({}));
-    if (r.ok && j.access_token) return j.access_token;
-    switch (j.error) {
-      case "authorization_pending":
-        break;
-      case "slow_down":
-        interval += 5;
-        break;
-      case "access_denied":
-        die("Authorization was denied in the browser.");
-        break;
-      case "expired_token":
-        die("The request expired before approval. Run login --workbench again.");
-        break;
-      default:
-        die(`Workbench authorization failed: ${j.error || `HTTP ${r.status}`}`);
+    let r, j;
+    try {
+      r = await fetch(`${edge}/auth/cli/token`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ device_code: deviceCode }),
+      });
+      j = await r.json().catch(() => ({}));
+    } catch {
+      continue; // network blip — keep polling until the deadline
     }
+    if (r.ok && j.access_token) return j.access_token;
+    if (j.error === "authorization_pending") continue;
+    if (j.error === "slow_down") {
+      interval += 5;
+      continue;
+    }
+    if (j.error === "access_denied") die("Authorization was denied in the browser.");
+    if (j.error === "expired_token")
+      die("The request expired before approval. Run login --workbench again.");
+    // Transient (5xx / server_error / anything unexpected): a single blip —
+    // e.g. a control-plane replica cycling — must not abort the whole login.
+    if (r.status >= 500 || j.error === "server_error") continue;
+    die(`Workbench authorization failed: ${j.error || `HTTP ${r.status}`}`);
   }
   die("Timed out waiting for browser approval (15 min).");
 }
@@ -478,6 +480,7 @@ function cmdLoginWeb(flags) {
     const claims = decodeJwt(token);
     cfg.servers = cfg.servers || {};
     cfg.servers[server] = {
+      ...cfg.servers[server], // preserve workbench / wbSession
       token,
       username: claims.username || null,
       expiresAt: claims.exp ? new Date(claims.exp * 1000).toISOString() : null,
@@ -517,7 +520,7 @@ async function cmdLogin(flags) {
     if (!me.ok) die(`Token rejected by ${server} (HTTP ${me.status})`);
     const body = await me.json();
     cfg.servers = cfg.servers || {};
-    cfg.servers[server] = { token: flags.token, username: body.user?.username || null, expiresAt: null, gateway: normGw(flags, cfg, server) };
+    cfg.servers[server] = { ...cfg.servers[server], token: flags.token, username: body.user?.username || null, expiresAt: null, gateway: normGw(flags, cfg, server) };
     cfg.defaultServer = server;
     saveConfig(cfg);
     console.log(`Logged in to ${server} as ${body.user?.username || '(token)'}`);
@@ -538,7 +541,7 @@ async function cmdLogin(flags) {
   }
   const body = await res.json();
   cfg.servers = cfg.servers || {};
-  cfg.servers[server] = { token: body.token, expiresAt: body.expiresAt, username, gateway: normGw(flags, cfg, server) };
+  cfg.servers[server] = { ...cfg.servers[server], token: body.token, expiresAt: body.expiresAt, username, gateway: normGw(flags, cfg, server) };
   cfg.defaultServer = server;
   saveConfig(cfg);
   console.log(`Logged in to ${server} as ${username}`);
