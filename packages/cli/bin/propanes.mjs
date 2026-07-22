@@ -501,7 +501,12 @@ end open location
     execFileSync('osacompile', ['-o', appPath, scriptPath]);
     const plist = join(appPath, 'Contents', 'Info.plist');
     const pb = (args) => execFileSync('/usr/libexec/PlistBuddy', ['-c', args, plist]);
-    pb('Set :CFBundleIdentifier ai.propanes.launcher');
+    // osacompile omits CFBundleIdentifier on newer macOS — Set fails on a missing key.
+    try {
+      pb('Set :CFBundleIdentifier ai.propanes.launcher');
+    } catch {
+      pb('Add :CFBundleIdentifier string ai.propanes.launcher');
+    }
     pb('Add :CFBundleURLTypes array');
     pb('Add :CFBundleURLTypes:0 dict');
     pb('Add :CFBundleURLTypes:0:CFBundleURLName string Propanes');
