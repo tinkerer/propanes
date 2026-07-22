@@ -92,26 +92,66 @@ function parseArgs(argv) {
 // ---------- prompts ----------
 
 function prompt(question, { hidden = false } = {}) {
+  if (!hidden) {
+    return new Promise((resolve) => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      rl.question(question, (answer) => {
+        rl.close();
+        resolve(answer);
+      });
+    });
+  }
+  // Hidden input via raw mode — readline's line-redraw would echo typed
+  // characters (muting only the initial prompt write is not enough).
   return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    if (hidden) {
-      // Mute echo while the password is typed.
-      const origWrite = rl._writeToOutput.bind(rl);
-      rl._writeToOutput = (str) => {
-        if (str.includes(question)) origWrite(str);
-      };
-      rl.question(question, (answer) => {
-        process.stdout.write('\n');
-        rl.close();
-        resolve(answer);
-      });
-    } else {
-      rl.question(question, (answer) => {
-        rl.close();
-        resolve(answer);
-      });
-    }
+    process.stdout.write(question);
+    const stdin = process.stdin;
+    const raw = stdin.isTTY;
+    if (raw) stdin.setRawMode(true);
+    stdin.resume();
+    let buf = '';
+    const onData = (chunk) => {
+      for (const c of chunk.toString('utf8')) {
+        if (c === '\r' || c === '\n') {
+          stdin.off('data', onData);
+          if (raw) stdin.setRawMode(false);
+          stdin.pause();
+          process.stdout.write('\n');
+          resolve(buf);
+          return;
+        }
+        if (c === '\x03') { // ctrl-c
+          process.stdout.write('\n');
+          process.exit(130);
+        }
+        if (c === '\x7f' || c === '\b') buf = buf.slice(0, -1);
+        else buf += c;
+      }
+    };
+    stdin.on('data', onData);
   });
+}
+
+// fetch that refuses to silently follow an edge-SSO redirect into an HTML
+// login page (e.g. a Cloudflare/workbench proxy in front of the server) —
+// those produce confusing JSON parse errors otherwise.
+async function apiFetch(url, opts = {}) {
+  const res = await fetch(url, { ...opts, redirect: 'manual' });
+  if (res.status >= 300 && res.status < 400) {
+    const loc = res.headers.get('location') || '(unknown)';
+    die(`The server redirected this request to: ${loc}
+
+That usually means the host is behind a browser SSO proxy (edge auth) that
+blocks non-browser clients before they reach Propanes. Options:
+  - ask your platform operator to exempt /api/v1/* and /ws/* on this host
+    from edge SSO (Propanes enforces its own auth on those routes), or
+  - use the SSH gateway instead:  ssh -t <user>@<gateway> attach <sessionId>`);
+  }
+  const ct = res.headers.get('content-type') || '';
+  if (res.ok && !ct.includes('application/json')) {
+    die(`Expected JSON from ${url} but got ${ct || 'unknown content'} — is this really a Propanes server URL?`);
+  }
+  return res;
 }
 
 // ---------- commands ----------
@@ -123,7 +163,7 @@ async function cmdLogin(flags) {
   const server = normalizeServer(rawServer);
 
   if (flags.token) {
-    const me = await fetch(`${server}/api/v1/auth/me`, {
+    const me = await apiFetch(`${server}/api/v1/auth/me`, {
       headers: { Authorization: `Bearer ${flags.token}` },
     });
     if (!me.ok) die(`Token rejected by ${server} (HTTP ${me.status})`);
@@ -139,7 +179,7 @@ async function cmdLogin(flags) {
   const username = flags.username || process.env.PROPANES_USERNAME || (await prompt('Username: '));
   const password = flags.password || process.env.PROPANES_PASSWORD || (await prompt('Password: ', { hidden: true }));
 
-  const res = await fetch(`${server}/api/v1/auth/login`, {
+  const res = await apiFetch(`${server}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ username, password }),
@@ -161,7 +201,7 @@ async function cmdSessions(flags) {
   const server = resolveServer(flags, cfg);
   const token = tokenFor(cfg, server);
   if (!token) die(`Not logged in to ${server}. Run: propanes login --server ${server}`);
-  const res = await fetch(`${server}/api/v1/admin/agent-sessions`, {
+  const res = await apiFetch(`${server}/api/v1/admin/agent-sessions`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (res.status === 401) die(`Token expired. Run: propanes login --server ${server}`);
@@ -301,6 +341,19 @@ function cmdAttach(flags, sessionId) {
 
     ws.on('error', () => {
       // close handler drives the retry
+    });
+
+    // An edge-SSO proxy answers the WS upgrade with a 3xx redirect — surface
+    // that clearly instead of reconnect-looping forever.
+    ws.on('unexpected-response', (_req, res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400) {
+        cleanupAndExit(1, `WebSocket upgrade was redirected (HTTP ${res.statusCode} → ${res.headers.location || '?'}).
+The host appears to be behind a browser SSO proxy. Ask your platform operator
+to exempt /api/v1/* and /ws/* on this host from edge SSO, or use the SSH
+gateway: ssh -t <user>@<gateway> attach <sessionId>`);
+      } else {
+        cleanupAndExit(1, `WebSocket upgrade failed: HTTP ${res.statusCode}`);
+      }
     });
   }
 
