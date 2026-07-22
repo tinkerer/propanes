@@ -23,6 +23,28 @@ via `propanes://` deep links:
 propanes install-protocol
 ```
 
+### Hosts behind a browser-SSO edge (e.g. workbench / Cloudflare Access)
+
+Some deployments front the HTTP/WS ingress with an SSO proxy that redirects
+every non-browser request to a login page — so direct `propanes login` and the
+attach WebSocket can't get through. Two CLI-side answers, no edge change:
+
+```bash
+# Log in through the browser (which carries the SSO cookie) AND point the CLI
+# at the SSH gateway so sessions/attach tunnel around the edge:
+propanes login --web --server https://propanes.example.com --gateway <gateway-host>
+```
+
+With a gateway configured, `propanes sessions` and `propanes attach <id>` run
+over SSH to the gateway (propanes-native auth on a raw TCP LoadBalancer the
+edge never sees) instead of the SSO-gated HTTP/WS API. The stored JWT is used
+as the SSH password automatically (via `SSH_ASKPASS`), so there's no second
+prompt. Detach from an attached session with the SSH escape: Enter, then `~.`.
+
+The cleaner long-term fix is to exempt `/api/v1/*` and `/ws/*` from the edge
+SSO (Propanes enforces its own auth there); then no gateway is needed and the
+plain WebSocket path works. See mode 2 below for enabling the gateway.
+
 Then pick **propanes CLI** in the Terminal Bridge dialog. Security notes: the
 token is stored per server origin in `~/.config/propanes/config.json` (0600);
 `propanes://` links only ever use tokens for servers you have explicitly
