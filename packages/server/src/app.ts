@@ -51,6 +51,62 @@ app.get('/api/v1/health', (c) =>
   c.json({ status: 'ok', timestamp: new Date().toISOString() })
 );
 
+// Browser-assisted CLI login. The @propanes/cli `login --web` flow opens this
+// page in the user's browser; because the browser already carries whatever
+// edge/SSO cookie the host requires (and the propanes JWT the admin SPA stored
+// in localStorage), this page can hand that JWT back to the CLI's loopback
+// listener on 127.0.0.1 — letting the CLI authenticate on hosts whose API is
+// behind a browser-SSO proxy that blocks non-browser clients directly.
+//
+// Security: the only value reflected into the redirect target is the numeric
+// loopback port; the host is hard-pinned to 127.0.0.1, so this can't be turned
+// into an open redirect. The token never leaves the user's machine (propanes
+// origin → localhost).
+app.get('/cli-auth', (c) => {
+  const port = c.req.query('port') || '';
+  const state = c.req.query('state') || '';
+  if (!/^\d{1,5}$/.test(port) || !/^[a-zA-Z0-9_-]{8,64}$/.test(state)) {
+    return c.html('<h3>Invalid CLI auth request</h3><p>Missing or malformed port/state. Re-run <code>propanes login --web</code>.</p>', 400);
+  }
+  const portJson = JSON.stringify(port);
+  const stateJson = JSON.stringify(state);
+  return c.html(`<!doctype html><html><head><meta charset="utf-8"><title>Propanes CLI login</title>
+<style>body{font-family:system-ui,sans-serif;background:#0f1420;color:#e6e9ef;display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center}
+.card{background:#161c2b;border:1px solid #26304a;border-radius:12px;padding:28px 32px;max-width:440px;text-align:center;box-shadow:0 8px 40px rgba(0,0,0,.4)}
+h2{margin:0 0 10px;font-size:18px}p{color:#9aa4bd;font-size:14px;line-height:1.5;margin:8px 0}
+a.btn,button.btn{display:inline-block;margin-top:14px;padding:9px 18px;border-radius:8px;border:none;background:#f5c542;color:#1a1a1a;font-weight:600;font-size:14px;cursor:pointer;text-decoration:none}
+code{background:#0c111b;padding:2px 6px;border-radius:4px;font-size:12.5px}</style></head>
+<body><div class="card" id="card">
+<h2>Connecting the Propanes CLI…</h2>
+<p id="status">Checking your browser session…</p>
+<div id="actions"></div>
+</div>
+<script>
+(function(){
+  var PORT=${portJson}, STATE=${stateJson};
+  var statusEl=document.getElementById('status'), actionsEl=document.getElementById('actions');
+  function handoff(token){
+    statusEl.textContent='Login found — returning to your terminal…';
+    // Top-level navigation to the loopback (not fetch — avoids mixed-content
+    // blocking of an http subresource from this https page).
+    window.location.href='http://127.0.0.1:'+PORT+'/callback?state='+encodeURIComponent(STATE)+'&token='+encodeURIComponent(token);
+  }
+  function noToken(){
+    statusEl.innerHTML='You are not logged in to Propanes in this browser yet.';
+    actionsEl.innerHTML='<a class="btn" href="/admin" target="_blank" rel="noopener">Open Propanes admin to log in</a>'+
+      '<p style="margin-top:14px">Then come back here and click Retry.</p>'+
+      '<button class="btn" id="retry">Retry</button>';
+    document.getElementById('retry').onclick=check;
+  }
+  function check(){
+    var t=null; try{t=localStorage.getItem('pw-admin-token');}catch(e){}
+    if(t) handoff(t); else noToken();
+  }
+  check();
+})();
+</script></body></html>`);
+});
+
 app.get('/api/v1/bookmarklet', (c) => {
   const proto = c.req.header('x-forwarded-proto') || 'http';
   const host = c.req.header('host') || 'localhost:3001';
