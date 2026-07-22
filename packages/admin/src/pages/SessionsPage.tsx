@@ -1,8 +1,8 @@
 import { useSignal } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import { api } from '../lib/api.js';
-import { isEmbedded, applications } from '../lib/state.js';
-import { allSessions, openSession, deleteSession, permanentlyDeleteSession, spawnTerminal, sessionInputStates, includeDeletedInPolling, termPickerOpen, openFeedbackItem } from '../lib/sessions.js';
+import { isEmbedded, isWorkbench, applications } from '../lib/state.js';
+import { allSessions, openSession, deleteSession, permanentlyDeleteSession, spawnTerminal, sessionInputStates, includeDeletedInPolling, termPickerOpen, openFeedbackItem, startSessionPolling } from '../lib/sessions.js';
 import { DeletedItemsPanel, trackDeletion } from '../components/ui/DeletedItemsPanel.js';
 import { cachedTargets, ensureTargetsLoaded } from '../components/dispatch/DispatchTargetSelect.js';
 import { isMobile } from '../lib/viewport.js';
@@ -109,7 +109,12 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
     loadSetFromStorage(STATUS_FILTER_STORAGE_KEY, DEFAULT_STATUSES, new Set(ALL_STATUSES)),
   );
   const filterTargets = useSignal<Set<string>>(loadSetFromStorage(TARGET_FILTER_STORAGE_KEY));
-  const filterApps = useSignal<Set<string>>(loadSetFromStorage(APP_FILTER_STORAGE_KEY));
+  // Widget overlay panels (embed=true, not the full workbench) must stay scoped
+  // to the widget's app: don't seed the persisted app-filter override there —
+  // it leaks the main admin's saved selection via shared localStorage and would
+  // show other apps' sessions. The in-panel chips still work for widening.
+  const scopedToRouteApp = isEmbedded.value && !isWorkbench.value && !!appId;
+  const filterApps = useSignal<Set<string>>(scopedToRouteApp ? new Set() : loadSetFromStorage(APP_FILTER_STORAGE_KEY));
   const searchQuery = useSignal('');
   const feedbackMap = useSignal<Record<string, string>>({});
   const agentMap = useSignal<Record<string, string>>({});
@@ -213,9 +218,14 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
     // Poll CoS dispatches periodically so sessions launched while this page is
     // open get nested under their thread without a full reload.
     const cosTimer = window.setInterval(() => { loadCosDispatches(); }, 30_000);
+    // Plain embeds (widget ⚡ Sessions panel) render without Layout, which is
+    // what normally starts session polling — without this the panel's list
+    // stays permanently empty.
+    const stopPolling = isEmbedded.value && !isWorkbench.value ? startSessionPolling() : null;
     return () => {
       includeDeletedInPolling.value = false;
       window.clearInterval(cosTimer);
+      stopPolling?.();
     };
   }, []);
 

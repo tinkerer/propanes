@@ -264,6 +264,15 @@ function openPanelsForRoute(route: string) {
   const viewId = routeToViewId(route);
   if (viewId) {
     openPageView(viewId);
+    // `/app/:appId/sessions/:sessionId` deep-links a specific session: open the
+    // sessions view scoped to the app AND dock that session. Used by the
+    // widget's "Open session" post-dispatch flow. Dynamic import because
+    // sessions.ts imports state.ts.
+    const sessionMatch = route.match(/^\/app\/[^/]+\/sessions\/([^/?#]+)/);
+    if (sessionMatch) {
+      const sessionId = decodeURIComponent(sessionMatch[1]);
+      import('./sessions.js').then((m) => m.openSession(sessionId)).catch(() => {});
+    }
     return;
   }
   // `/agents` is the legacy pre-settings route; deployed widget builds still
