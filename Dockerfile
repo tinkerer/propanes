@@ -66,6 +66,7 @@ RUN apt-get update \
 RUN npm i -g \
       @anthropic-ai/claude-code@2.1.202 \
       @openai/codex@0.142.5 \
+      @schpet/linear-cli@2.2.0 \
       @playwright/mcp@latest \
       playwright@latest \
  && npx --yes playwright install --with-deps chromium \
