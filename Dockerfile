@@ -56,7 +56,7 @@ RUN apt-get update \
  && apt-get purge -y make g++ \
  && apt-get autoremove -y \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl fluxbox imagemagick novnc psmisc tmux util-linux websockify \
+      ca-certificates curl feh fluxbox imagemagick novnc psmisc tmux util-linux websockify \
       x11-utils x11-xserver-utils x11vnc xauth xvfb \
  && rm -rf /var/lib/apt/lists/*
 
