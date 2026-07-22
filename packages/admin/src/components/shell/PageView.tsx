@@ -18,7 +18,15 @@ import { FlatterPage } from '../../pages/FlatterPage.js';
 function parseAppRoute(route: string): { appId: string; sub: string; param?: string } | null {
   const m = route.match(/^\/app\/([^/]+)\/(.+)$/);
   if (!m) return null;
-  const [, appId, rest] = m;
+  const [, rawAppId, rest] = m;
+  // The widget builds overlay routes with its public apiKey (pw_…) as the
+  // appId segment. Pages filter by the real app id, so translate once the
+  // applications list is loaded (falls back to the raw value before that).
+  let appId = rawAppId;
+  if (rawAppId.startsWith('pw_')) {
+    const match = applications.value.find((a: any) => a.apiKey === rawAppId);
+    if (match) appId = match.id;
+  }
   const slashIdx = rest.indexOf('/');
   if (slashIdx === -1) return { appId, sub: rest };
   return { appId, sub: rest.slice(0, slashIdx), param: rest.slice(slashIdx + 1) };

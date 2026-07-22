@@ -3516,19 +3516,23 @@ export class ProPanesElement {
   }
 
   // Poll the feedback record until its dispatch produces a session, then open
-  // that session on the current page (hash swap when already on the admin app,
-  // otherwise a same-tab navigation).
+  // that session on the current page. On the admin app itself we hash-swap to
+  // the /app/:appId/sessions/:sessionId deep link, which opens the sessions
+  // view scoped to this app and docks the session in the pane tree (instead of
+  // blowing away the layout with the standalone /session page). On any other
+  // host page we open the widget's Sessions overlay panel with the same route,
+  // so the list is filtered to this app and the dispatched session loads.
   private openDispatchedSession(feedbackId: string) {
     const base = this.apiBase();
     const navigate = (sessionId: string) => {
       try {
         const adminOrigin = new URL(base).origin;
         if (window.location.origin === adminOrigin && /\/admin\b/.test(window.location.pathname)) {
-          window.location.hash = `#/session/${sessionId}`;
+          window.location.hash = `#/app/${this.appId}/sessions/${sessionId}`;
           return;
         }
       } catch {}
-      window.location.assign(`${base}/admin/#/session/${sessionId}`);
+      this.overlayManager.openPanel('sessions', { param: sessionId });
     };
     const started = Date.now();
     const poll = async () => {
