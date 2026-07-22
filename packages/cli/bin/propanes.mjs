@@ -7,6 +7,7 @@
 //
 //   propanes login [--server URL] [--username U] [--password P | --token JWT]
 //   propanes login --web [--server URL]     (browser login; works behind SSO)
+//   propanes login --workbench [--server URL] (Workbench SSO device flow)
 //   propanes attach <sessionId> [--server URL]
 //   propanes sessions [--server URL]
 //   propanes open-url <propanes://attach?session=..&server=..>
@@ -135,25 +136,66 @@ function prompt(question, { hidden = false } = {}) {
   });
 }
 
-// fetch that refuses to silently follow an edge-SSO redirect into an HTML
-// login page (e.g. a Cloudflare/workbench proxy in front of the server) —
-// those produce confusing JSON parse errors otherwise.
+function isEdgeRedirect(res) {
+  return res.status >= 300 && res.status < 400;
+}
+
+// fetch that (a) attaches a stored Workbench edge session cookie so requests
+// pass the SSO proxy, (b) transparently refreshes that cookie via the stored
+// Workbench CLI token when it has expired, and (c) fails loudly (rather than
+// parsing an HTML login page as JSON) when the host is still edge-gated.
 async function apiFetch(url, opts = {}) {
-  const res = await fetch(url, { ...opts, redirect: 'manual' });
-  if (res.status >= 300 && res.status < 400) {
-    const loc = res.headers.get('location') || '(unknown)';
+  let origin;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    origin = null;
+  }
+  const withCookie = (extra) => {
+    const headers = { ...(opts.headers || {}) };
+    const cookie = edgeCookieHeader(loadConfig(), origin);
+    const merged = [opts.headers?.Cookie, cookie, extra]
+      .filter(Boolean)
+      .join("; ");
+    if (merged) headers.Cookie = merged;
+    return headers;
+  };
+
+  let res = await fetch(url, {
+    ...opts,
+    headers: withCookie(),
+    redirect: "manual",
+  });
+
+  // Edge session missing/expired — if we hold a Workbench CLI token, mint a
+  // fresh wb_session and retry once before giving up.
+  if (isEdgeRedirect(res) && origin && hasWorkbench(loadConfig(), origin)) {
+    const fresh = await refreshWbSession(origin).catch(() => null);
+    if (fresh) {
+      res = await fetch(url, {
+        ...opts,
+        headers: withCookie(fresh),
+        redirect: "manual",
+      });
+    }
+  }
+
+  if (isEdgeRedirect(res)) {
+    const loc = res.headers.get("location") || "(unknown)";
     die(`The server redirected this request to: ${loc}
 
 That usually means the host is behind a browser SSO proxy (edge auth) that
 blocks non-browser clients before they reach Propanes. Options:
-  - ask your platform operator to exempt /api/v1/* and /ws/* on this host
-    from edge SSO (Propanes enforces its own auth on those routes), or
-  - configure the SSH gateway so this CLI tunnels through it automatically:
+  - connect through Workbench SSO (recommended for *.myworkbench.ai):
+      propanes login --workbench --server ${origin || "<host>"}
+  - or tunnel through the SSH gateway:
       propanes login --web --server <host> --gateway <gateway-host>`);
   }
-  const ct = res.headers.get('content-type') || '';
-  if (res.ok && !ct.includes('application/json')) {
-    die(`Expected JSON from ${url} but got ${ct || 'unknown content'} — is this really a Propanes server URL?`);
+  const ct = res.headers.get("content-type") || "";
+  if (res.ok && !ct.includes("application/json")) {
+    die(
+      `Expected JSON from ${url} but got ${ct || "unknown content"} — is this really a Propanes server URL?`,
+    );
   }
   return res;
 }
@@ -244,6 +286,172 @@ function openBrowser(url) {
   }
 }
 
+// ---------- Workbench SSO (edge) ---------------------------------------------
+// Hosts under *.myworkbench.ai are fronted by the Workbench SSO edge, which
+// 302s any non-browser request. These helpers drive the Workbench CLI
+// device-authorization flow (workbenchai/workbench#811): a browser-approved
+// login yields a long-lived `wbcli_` token, which we exchange per host for the
+// short-lived `wb_session` cookie the edge accepts — the same cookie a signed-in
+// browser carries. Stored per propanes server under `.workbench` / `.wbSession`.
+
+const DEFAULT_WB_EDGE = "https://app.myworkbench.ai";
+
+function workbenchFor(cfg, server) {
+  return cfg.servers?.[server]?.workbench || null;
+}
+
+function hasWorkbench(cfg, server) {
+  return !!workbenchFor(cfg, server)?.token;
+}
+
+// Returns "wb_session=…" if a fresh cached edge session exists, else null.
+function edgeCookieHeader(cfg, server) {
+  const s = cfg.servers?.[server]?.wbSession;
+  if (!s?.cookie) return null;
+  if (s.expiresAt && new Date(s.expiresAt).getTime() < Date.now()) return null;
+  return s.cookie;
+}
+
+// Exchange the stored wbcli_ token for a fresh wb_session cookie for `server`'s
+// host and cache it. Returns the cookie string or null.
+async function refreshWbSession(server) {
+  const cfg = loadConfig();
+  const wb = workbenchFor(cfg, server);
+  if (!wb?.token) return null;
+  const host = wb.host || new URL(server).host;
+  const res = await fetch(`${wb.edge}/auth/cli/session`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${wb.token}`,
+    },
+    body: JSON.stringify({ host }),
+  });
+  if (res.status === 401)
+    die(
+      `Workbench session rejected — re-run: propanes login --workbench --server ${server}`,
+    );
+  if (!res.ok) return null;
+  const { sso_url } = await res.json().catch(() => ({}));
+  if (!sso_url) return null;
+  // GET the /sso/callback URL; the edge gateway answers with Set-Cookie
+  // wb_session and a redirect — we want only the cookie, so don't follow it.
+  const cb = await fetch(sso_url, { redirect: "manual" });
+  const cookies =
+    typeof cb.headers.getSetCookie === "function"
+      ? cb.headers.getSetCookie()
+      : [cb.headers.get("set-cookie") || ""];
+  let cookie = null;
+  let maxAge = null;
+  for (const raw of cookies) {
+    const m = raw && raw.match(/wb_session=([^;]+)/);
+    if (m) {
+      cookie = `wb_session=${m[1]}`;
+      const ma = raw.match(/max-age=(\d+)/i);
+      if (ma) maxAge = Number(ma[1]);
+      break;
+    }
+  }
+  if (!cookie) return null;
+  // Default to 6 days if the cookie didn't advertise its own lifetime (the
+  // edge issues 7-day sessions); we refresh proactively before it lapses.
+  const ttlMs = (maxAge || 6 * 24 * 3600) * 1000;
+  const next = loadConfig();
+  next.servers[server] = next.servers[server] || {};
+  next.servers[server].wbSession = {
+    cookie,
+    expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+  };
+  saveConfig(next);
+  return cookie;
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function pollWorkbenchToken(edge, deviceCode, intervalSec) {
+  const deadline = Date.now() + 15 * 60 * 1000;
+  let interval = Math.max(2, intervalSec || 5);
+  while (Date.now() < deadline) {
+    await sleep(interval * 1000);
+    const r = await fetch(`${edge}/auth/cli/token`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ device_code: deviceCode }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.access_token) return j.access_token;
+    switch (j.error) {
+      case "authorization_pending":
+        break;
+      case "slow_down":
+        interval += 5;
+        break;
+      case "access_denied":
+        die("Authorization was denied in the browser.");
+        break;
+      case "expired_token":
+        die("The request expired before approval. Run login --workbench again.");
+        break;
+      default:
+        die(`Workbench authorization failed: ${j.error || `HTTP ${r.status}`}`);
+    }
+  }
+  die("Timed out waiting for browser approval (15 min).");
+}
+
+// propanes login --workbench [--server URL] [--edge https://app.myworkbench.ai]
+async function cmdLoginWorkbench(flags) {
+  const cfg = loadConfig();
+  const server = resolveServer(flags, cfg);
+  const edge = normalizeServer(
+    flags.edge || process.env.PROPANES_WORKBENCH_EDGE || DEFAULT_WB_EDGE,
+  );
+  const host = new URL(server).host;
+
+  const start = await fetch(`${edge}/auth/cli/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "propanes-cli" }),
+  });
+  if (!start.ok)
+    die(
+      `Couldn't start Workbench sign-in (HTTP ${start.status}). Is ${edge} the Workbench login host?`,
+    );
+  const grant = await start.json();
+  console.log(`\nTo authorize this CLI, open:\n  ${grant.verification_uri}`);
+  console.log(`and enter the code:  ${grant.user_code}\n`);
+  openBrowser(grant.verification_uri_complete || grant.verification_uri);
+  console.log("Waiting for you to approve in the browser…");
+
+  const token = await pollWorkbenchToken(
+    edge,
+    grant.device_code,
+    grant.interval,
+  );
+  const next = loadConfig();
+  next.servers[server] = next.servers[server] || {};
+  next.servers[server].workbench = { edge, token, host };
+  next.defaultServer = next.defaultServer || server;
+  saveConfig(next);
+
+  const cookie = await refreshWbSession(server);
+  if (!cookie)
+    die(
+      `Signed in to Workbench, but couldn't obtain an edge session for ${host}. ` +
+        `Your account may not have access to that workspace.`,
+    );
+  console.log(
+    `\nWorkbench SSO connected for ${host}. Propanes commands now pass the edge automatically.`,
+  );
+  const tok = tokenFor(next, server);
+  if (!tok)
+    console.log(
+      `Next, sign in to Propanes itself:  propanes login --server ${server}`,
+    );
+}
+
 // ---------- commands ----------
 
 // Browser-assisted login: open /cli-auth in the user's browser (which carries
@@ -294,6 +502,7 @@ function cmdLoginWeb(flags) {
 }
 
 async function cmdLogin(flags) {
+  if (flags.workbench) return cmdLoginWorkbench(flags);
   if (flags.web) return cmdLoginWeb(flags);
 
   const cfg = loadConfig();
@@ -399,6 +608,7 @@ function cmdAttach(flags, sessionId) {
   let sawHistory = false;
   let exiting = false;
   let reconnectDelay = 300;
+  let edgeRetried = false;
   const pendingInputs = new Map();
 
   function cleanupAndExit(code, msg) {
@@ -445,7 +655,11 @@ function cmdAttach(flags, sessionId) {
   }
 
   function connect() {
-    ws = new WebSocket(`${wsBase}/ws/agent-session?sessionId=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(token)}`);
+    // Attach the Workbench edge session cookie (if any) so the WS upgrade
+    // passes the SSO proxy; the app-level auth is still the ?token= query.
+    const cookie = edgeCookieHeader(loadConfig(), server);
+    const wsOpts = cookie ? { headers: { Cookie: cookie } } : undefined;
+    ws = new WebSocket(`${wsBase}/ws/agent-session?sessionId=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(token)}`, wsOpts);
 
     ws.on('open', () => {
       reconnectDelay = 300;
@@ -508,18 +722,33 @@ function cmdAttach(flags, sessionId) {
       // close handler drives the retry
     });
 
-    // An edge-SSO proxy answers the WS upgrade with a 3xx redirect — surface
-    // that clearly instead of reconnect-looping forever.
+    // An edge-SSO proxy answers the WS upgrade with a 3xx redirect. If we hold
+    // a Workbench token, refresh the edge session and reconnect once; otherwise
+    // surface it clearly instead of reconnect-looping forever.
     ws.on('unexpected-response', (_req, res) => {
       if (res.statusCode >= 300 && res.statusCode < 400) {
-        cleanupAndExit(1, `WebSocket upgrade was redirected (HTTP ${res.statusCode} → ${res.headers.location || '?'}).
-The host appears to be behind a browser SSO proxy. Ask your platform operator
-to exempt /api/v1/* and /ws/* on this host from edge SSO, or use the SSH
-gateway: ssh -t <user>@<gateway> attach <sessionId>`);
+        if (hasWorkbench(loadConfig(), server) && !edgeRetried) {
+          edgeRetried = true;
+          refreshWbSession(server)
+            .then((fresh) => {
+              if (fresh) { try { ws.terminate(); } catch {} connect(); }
+              else edgeBlockedExit(res);
+            })
+            .catch(() => edgeBlockedExit(res));
+          return;
+        }
+        edgeBlockedExit(res);
       } else {
         cleanupAndExit(1, `WebSocket upgrade failed: HTTP ${res.statusCode}`);
       }
     });
+  }
+
+  function edgeBlockedExit(res) {
+    cleanupAndExit(1, `WebSocket upgrade was redirected (HTTP ${res.statusCode} → ${res.headers.location || '?'}).
+The host is behind a browser SSO proxy. Connect through Workbench SSO:
+  propanes login --workbench --server ${server}
+or tunnel through the SSH gateway (propanes login --web --gateway <host>).`);
   }
 
   if (isTty) {
@@ -617,6 +846,9 @@ function usage() {
 
 Usage:
   propanes login [--server URL] [--username U] [--password P | --token JWT]
+  propanes login --workbench [--server URL] [--edge URL]
+                                           Sign in through Workbench SSO so
+                                           requests pass the *.myworkbench.ai edge
   propanes login --web [--server URL] [--gateway HOST[:PORT]]
                                            Log in via the browser (works when
                                            the API is behind a browser-SSO proxy);
