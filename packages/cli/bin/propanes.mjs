@@ -6,6 +6,7 @@
 // local server. Commands:
 //
 //   propanes login [--server URL] [--username U] [--password P | --token JWT]
+//   propanes login --web [--server URL]     (browser login; works behind SSO)
 //   propanes attach <sessionId> [--server URL]
 //   propanes sessions [--server URL]
 //   propanes open-url <propanes://attach?session=..&server=..>
@@ -18,8 +19,10 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { createServer } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import WebSocket from 'ws';
 
 const CONFIG_DIR = join(homedir(), '.config', 'propanes');
@@ -154,9 +157,84 @@ blocks non-browser clients before they reach Propanes. Options:
   return res;
 }
 
+// Decode a JWT payload without verifying (we trust it — it came from our own
+// browser handoff or the server's login response). Used only to show the
+// username and pick up expiry for local staleness checks.
+function decodeJwt(token) {
+  try {
+    const payload = token.split('.')[1];
+    return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function openBrowser(url) {
+  const cmd = process.platform === 'darwin' ? 'open'
+    : process.platform === 'win32' ? 'cmd'
+    : 'xdg-open';
+  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+  try {
+    const child = spawn(cmd, args, { stdio: 'ignore', detached: true });
+    child.on('error', () => {});
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------- commands ----------
 
+// Browser-assisted login: open /cli-auth in the user's browser (which carries
+// any edge-SSO cookie the host requires) and receive the propanes JWT back on
+// a loopback listener. Works on hosts whose API is behind a browser-SSO proxy
+// that blocks direct CLI password login.
+function cmdLoginWeb(flags) {
+  const cfg = loadConfig();
+  const rawServer = flags.server || process.env.PROPANES_SERVER || cfg.defaultServer;
+  if (!rawServer) die('Specify the server: propanes login --web --server https://your-propanes-host');
+  const server = normalizeServer(rawServer);
+  const state = randomBytes(16).toString('hex');
+
+  const srv = createServer((req, res) => {
+    const u = new URL(req.url, 'http://127.0.0.1');
+    if (u.pathname !== '/callback') { res.writeHead(404); res.end(); return; }
+    const token = u.searchParams.get('token');
+    const gotState = u.searchParams.get('state');
+    const ok = token && gotState === state;
+    res.writeHead(ok ? 200 : 400, { 'Content-Type': 'text/html' });
+    res.end(`<!doctype html><meta charset="utf-8"><style>body{font-family:system-ui;background:#0f1420;color:#e6e9ef;display:flex;height:100vh;margin:0;align-items:center;justify-content:center;text-align:center}</style><div><h2>${ok ? '✓ Propanes CLI connected' : '✗ Login failed'}</h2><p>${ok ? 'You can close this tab and return to your terminal.' : 'State mismatch — re-run propanes login --web.'}</p></div>`);
+    srv.close();
+    if (!ok) die('Login failed: state mismatch (possible CSRF) — please retry.');
+    const claims = decodeJwt(token);
+    cfg.servers = cfg.servers || {};
+    cfg.servers[server] = {
+      token,
+      username: claims.username || null,
+      expiresAt: claims.exp ? new Date(claims.exp * 1000).toISOString() : null,
+    };
+    cfg.defaultServer = server;
+    saveConfig(cfg);
+    console.log(`\nLogged in to ${server} as ${claims.username || '(token)'}`);
+    process.exit(0);
+  });
+
+  srv.listen(0, '127.0.0.1', () => {
+    const port = srv.address().port;
+    const authUrl = `${server}/cli-auth?port=${port}&state=${state}`;
+    console.log('Opening your browser to complete login…');
+    console.log(`If it doesn't open, visit:\n  ${authUrl}\n`);
+    openBrowser(authUrl);
+    console.log('Waiting for the browser to hand back your session (ctrl-c to cancel)…');
+  });
+
+  setTimeout(() => die('Timed out waiting for browser login (3 min).'), 180_000).unref();
+}
+
 async function cmdLogin(flags) {
+  if (flags.web) return cmdLoginWeb(flags);
+
   const cfg = loadConfig();
   const rawServer = flags.server || process.env.PROPANES_SERVER || cfg.defaultServer
     || (await prompt('Server URL: '));
@@ -447,6 +525,8 @@ function usage() {
 
 Usage:
   propanes login [--server URL] [--username U] [--password P | --token JWT]
+  propanes login --web [--server URL]      Log in via the browser (works when
+                                           the API is behind a browser-SSO proxy)
   propanes attach <sessionId> [--server URL]
   propanes sessions [--server URL]
   propanes open-url <propanes://attach?session=..&server=..>
