@@ -1,6 +1,6 @@
 import { useEffect } from 'preact/hooks';
 import { ComponentChildren } from 'preact';
-import { isAuthenticated, currentRoute, loadApplications, loadCurrentUser, isEmbedded, isCompanion, isWorkbench, isCosEmbed, clearToken } from '../../lib/state.js';
+import { isAuthenticated, currentRoute, currentUser, loadApplications, loadCurrentUser, isEmbedded, isCompanion, isWorkbench, isCosEmbed, clearToken } from '../../lib/state.js';
 import { setChiefOfStaffOpen } from '../../lib/chief-of-staff.js';
 import { connectAdminWs } from '../../lib/admin-ws.js';
 import { initNotifications } from '../../lib/notifications.js';
@@ -89,10 +89,11 @@ export function App() {
   const embedded = isEmbedded.value;
   const route = currentRoute.value;
 
+  const titleUsername = currentUser.value?.username;
   useEffect(() => {
-    // Host-first so environment (azstaging vs localhost vs prod) survives tab truncation.
-    document.title = `${window.location.host} — ProPanes Admin`;
-  }, []);
+    // "ProPanes <user> <host>" — host disambiguates azstaging vs localhost vs prod tabs.
+    document.title = `ProPanes ${titleUsername ? `${titleUsername} ` : ''}${window.location.host}`;
+  }, [titleUsername]);
 
   if (route === '/logout') {
     clearToken();
