@@ -87,19 +87,33 @@ function listSessionLines(user: AdminUser): string[] {
       orgId: schema.agentSessions.orgId,
       createdAt: schema.agentSessions.createdAt,
       title: schema.agentSessions.title,
+      feedbackId: schema.agentSessions.feedbackId,
+      feedbackTitle: schema.feedbackItems.title,
     })
     .from(schema.agentSessions)
+    .leftJoin(schema.feedbackItems, eq(schema.agentSessions.feedbackId, schema.feedbackItems.id))
     .where(and(inArray(schema.agentSessions.status, ['pending', 'running'])))
     .orderBy(desc(schema.agentSessions.createdAt))
     .limit(50)
     .all()
     .filter((s) => visibleToMember(s, user));
   if (rows.length === 0) return ['No running sessions.'];
+  const truncate = (t: string, n: number) => {
+    const flat = t.replace(/\s+/g, ' ').trim();
+    return flat.length > n ? `${flat.slice(0, n - 1)}…` : flat;
+  };
   const lines = ['Running sessions:', ''];
   for (const s of rows) {
-    lines.push(`  ${s.id}  ${(s.status || '').padEnd(8)} ${s.title || ''}`);
+    const title = s.feedbackTitle || s.title || '';
+    lines.push(
+      `  ${s.id}  ${(s.status || '').padEnd(8)}  ${(s.feedbackId || '-').padEnd(26)}  ${truncate(title, 60)}`,
+    );
   }
-  lines.push('', 'Attach with:  ssh -t <user>@<gateway> attach <sessionId>');
+  lines.push(
+    '',
+    'Attach with:      ssh -t <user>@<gateway> attach <sessionId>',
+    'Full feedback:    propanes feedback <feedback-id>',
+  );
   return lines;
 }
 

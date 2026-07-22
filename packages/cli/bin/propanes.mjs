@@ -10,6 +10,7 @@
 //   propanes login --workbench [--server URL] (Workbench SSO device flow)
 //   propanes attach <sessionId> [--server URL]
 //   propanes sessions [--server URL]
+//   propanes feedback <feedbackId> | -l | --session <sessionId>
 //   propanes open-url <propanes://attach?session=..&server=..>
 //   propanes install-protocol        (macOS: register the propanes:// handler)
 //
@@ -52,7 +53,9 @@ function normalizeServer(input) {
 }
 
 function resolveServer(flags, cfg, { required = true } = {}) {
-  const raw = flags.server || process.env.PROPANES_SERVER || cfg.defaultServer;
+  // PROPANES_API_URL is preset in dispatched agent sessions — lets the CLI
+  // work there without a login step (paired with the PROPANES_TOKEN fallback).
+  const raw = flags.server || process.env.PROPANES_SERVER || process.env.PROPANES_API_URL || cfg.defaultServer;
   if (!raw) {
     if (required) die('No server configured. Run: propanes login --server https://your-propanes-host');
     return null;
@@ -62,9 +65,10 @@ function resolveServer(flags, cfg, { required = true } = {}) {
 
 function tokenFor(cfg, server) {
   const entry = cfg.servers?.[server];
-  if (!entry?.token) return null;
-  if (entry.expiresAt && new Date(entry.expiresAt).getTime() < Date.now()) return null;
-  return entry.token;
+  if (entry?.token && !(entry.expiresAt && new Date(entry.expiresAt).getTime() < Date.now())) {
+    return entry.token;
+  }
+  return process.env.PROPANES_TOKEN || null;
 }
 
 function die(msg, code = 1) {
@@ -566,10 +570,7 @@ async function cmdSessions(flags) {
     return;
   }
 
-  const res = await apiFetch(`${server}/api/v1/admin/agent-sessions`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (res.status === 401) die(`Token expired. Run: propanes login --server ${server}`);
+  const res = await adminGet(server, token, '/api/v1/admin/agent-sessions');
   if (!res.ok) die(`Failed to list sessions (HTTP ${res.status})`);
   const sessions = await res.json();
   const live = sessions.filter((s) => s.status === 'running' || s.status === 'pending');
@@ -577,8 +578,111 @@ async function cmdSessions(flags) {
     console.log('No running sessions.');
     return;
   }
+  // <sessionId>  <status>  <feedbackId|->  <truncated feedback title>
+  const cols = process.stdout.columns || 120;
+  const headWidth = 26 + 2 + 8 + 2 + 26 + 2; // ULID + status + feedback ULID + gaps
   for (const s of live) {
-    console.log(`${s.id}  ${String(s.status).padEnd(8)}  ${s.title || s.agentName || ''}`);
+    const title = s.feedbackTitle || s.title || s.agentName || '';
+    console.log(
+      `${s.id}  ${String(s.status).padEnd(8)}  ${(s.feedbackId || '-').padEnd(26)}  ${truncate(title, Math.max(24, cols - headWidth))}`,
+    );
+  }
+  if (process.stdout.isTTY) {
+    console.log('\nFull feedback: propanes feedback <feedback-id>   (or: propanes feedback --session <session-id>, propanes feedback -l)');
+  }
+}
+
+function truncate(s, n) {
+  if (!s) return '';
+  const flat = String(s).replace(/\s+/g, ' ').trim();
+  return flat.length > n ? `${flat.slice(0, Math.max(1, n - 1))}…` : flat;
+}
+
+// Authenticated admin GET with the shared 401 → "re-login" mapping.
+async function adminGet(server, token, path) {
+  const res = await apiFetch(`${server}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 401) die(`Token expired. Run: propanes login --server ${server}`);
+  return res;
+}
+
+// propanes feedback <feedbackId>            full item + all sessions for it
+// propanes feedback -l [--limit N]          list items with latest session status
+// propanes feedback --session <sessionId>   the feedback item behind a session
+async function cmdFeedback(flags, positional) {
+  const cfg = loadConfig();
+  const server = resolveServer(flags, cfg);
+  const token = tokenFor(cfg, server);
+  if (!token) die(`Not logged in to ${server}. Run: propanes login --server ${server}`);
+
+  const listMode = !!flags.list || positional.includes('-l');
+  let feedbackId = positional.find((p, i) => i > 0 && !p.startsWith('-')) || null;
+
+  if (!listMode && flags.session) {
+    if (flags.session === true) die('Usage: propanes feedback --session <session-id>');
+    const res = await adminGet(server, token, `/api/v1/admin/agent-sessions/${encodeURIComponent(flags.session)}`);
+    if (res.status === 404) die(`Session not found: ${flags.session}`);
+    if (!res.ok) die(`Failed to load session (HTTP ${res.status})`);
+    const session = await res.json();
+    if (!session.feedbackId) die(`Session ${flags.session} has no linked feedback item.`);
+    feedbackId = session.feedbackId;
+  }
+
+  if (listMode) {
+    const limit = Number(flags.limit) > 0 ? Number(flags.limit) : 20;
+    const res = await adminGet(server, token, `/api/v1/admin/feedback?limit=${limit}`);
+    if (!res.ok) die(`Failed to list feedback (HTTP ${res.status})`);
+    const { items = [], total = 0 } = await res.json();
+    if (items.length === 0) {
+      console.log('No feedback items.');
+      return;
+    }
+    // <feedbackId>  <latest session status>  <truncated title>
+    const cols = process.stdout.columns || 120;
+    for (const f of items) {
+      const sess = f.latestSessionStatus || 'not dispatched';
+      const extra = f.sessionCount > 1 ? ` (${f.sessionCount} sessions)` : '';
+      console.log(`${f.id}  ${sess.padEnd(14)}  ${truncate(f.title, Math.max(24, cols - 26 - 14 - 6 - extra.length))}${extra}`);
+    }
+    if (total > items.length && process.stdout.isTTY) {
+      console.log(`\nShowing ${items.length} of ${total} — use --limit N for more.`);
+    }
+    return;
+  }
+
+  if (!feedbackId) die('Usage: propanes feedback <feedback-id> | -l | --session <session-id>');
+
+  const res = await adminGet(server, token, `/api/v1/admin/feedback/${encodeURIComponent(feedbackId)}`);
+  if (res.status === 404) die(`Feedback not found: ${feedbackId}`);
+  if (!res.ok) die(`Failed to load feedback (HTTP ${res.status})`);
+  const fb = await res.json();
+
+  const sessRes = await adminGet(server, token, `/api/v1/admin/agent-sessions?feedbackId=${encodeURIComponent(fb.id)}`);
+  const sessions = sessRes.ok ? await sessRes.json() : [];
+
+  console.log(`${fb.id}  [${fb.status}]`);
+  console.log(`Title:       ${fb.title || '(untitled)'}`);
+  console.log(`Type:        ${fb.type}`);
+  if (fb.appId) console.log(`App:         ${fb.appId}`);
+  console.log(`Created:     ${fb.createdAt}`);
+  if (fb.dispatchedTo) {
+    console.log(`Dispatched:  ${fb.dispatchedTo} at ${fb.dispatchedAt}${fb.dispatchStatus ? ` — ${fb.dispatchStatus}` : ''}`);
+  }
+  if (fb.tags?.length) console.log(`Tags:        ${fb.tags.join(', ')}`);
+  if (fb.sourceUrl) console.log(`URL:         ${fb.sourceUrl}`);
+  if (fb.description && fb.description !== fb.title) {
+    console.log(`\nDescription:\n${fb.description}`);
+  }
+  console.log(`\nSessions (${sessions.length}):`);
+  if (sessions.length === 0) {
+    console.log('  (none — not dispatched yet)');
+  } else {
+    for (const s of sessions) {
+      const when = s.startedAt || s.createdAt || '';
+      console.log(`  ${s.id}  ${String(s.status).padEnd(9)}  ${s.agentName || s.runtime || ''}  ${when}`);
+    }
+    if (process.stdout.isTTY) console.log('\nAttach: propanes attach <session-id>');
   }
 }
 
@@ -859,6 +963,9 @@ Usage:
                                            the SSH gateway automatically
   propanes attach <sessionId> [--server URL]
   propanes sessions [--server URL]
+  propanes feedback <feedbackId>           Show a feedback item + its sessions
+  propanes feedback -l [--limit N]         List feedback with latest session status
+  propanes feedback --session <sessionId>  Show the feedback behind a session
   propanes open-url <propanes://attach?session=..&server=..>
   propanes install-protocol      Register the propanes:// handler (macOS)
 
@@ -880,6 +987,10 @@ switch (command) {
   case 'sessions':
   case 'ls':
     await cmdSessions(flags);
+    break;
+  case 'feedback':
+  case 'fb':
+    await cmdFeedback(flags, positional);
     break;
   case 'open-url':
     await cmdOpenUrl(flags, positional[1]);
