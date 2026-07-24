@@ -50,6 +50,7 @@ COPY packages/server/package.json packages/server/
 # compile them, keep tmux for the session terminals, and add the launcher/noVNC
 # runtime stack used by the production pod.
 # python3 stays: agent/dev tooling below (and the az CLI installer) needs it.
+# xz-utils: linear-cli's npm install script untars a .tar.xz release (slim has no xz).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ \
  && pnpm install --frozen-lockfile --prod \
@@ -57,7 +58,7 @@ RUN apt-get update \
  && apt-get autoremove -y \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl feh fluxbox imagemagick novnc psmisc tmux util-linux websockify \
-      x11-utils x11-xserver-utils x11vnc xauth xvfb \
+      x11-utils x11-xserver-utils x11vnc xauth xvfb xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # Playwright MCP + headed Chromium. The MCP/browser process runs as root so the
