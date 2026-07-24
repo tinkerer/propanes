@@ -38,8 +38,8 @@ import {
   autoJumpPaused,
   sidebarStatusMenu,
   sidebarItemMenu,
-  sessionAppFilters,
-  toggleAppFilter,
+  sessionAppExcludes,
+  toggleAppExclude,
   sessionGroupByApp,
   toggleGroupByApp,
   sessionExpandedParents,
@@ -541,8 +541,8 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                     <label key={app.id} class="sidebar-filter-checkbox">
                       <input
                         type="checkbox"
-                        checked={sessionAppFilters.value.has(app.id)}
-                        onChange={() => toggleAppFilter(app.id)}
+                        checked={!sessionAppExcludes.value.has(app.id)}
+                        onChange={() => toggleAppExclude(app.id)}
                       />
                       <span>{app.name}</span>
                       {count > 0 && <span class="sidebar-filter-count">{count}</span>}
@@ -555,8 +555,8 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                     <label class="sidebar-filter-checkbox">
                       <input
                         type="checkbox"
-                        checked={sessionAppFilters.value.has('__unlinked__')}
-                        onChange={() => toggleAppFilter('__unlinked__')}
+                        checked={!sessionAppExcludes.value.has('__unlinked__')}
+                        onChange={() => toggleAppExclude('__unlinked__')}
                       />
                       <span style={{ fontStyle: 'italic' }}>Unlinked</span>
                       <span class="sidebar-filter-count">{unlinkedCount}</span>
@@ -906,9 +906,9 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
             // Keep registered apps in the list even with zero sessions so users can
             // launch a new one via the + button. Respect active app filters.
             {
-              const appFilter = sessionAppFilters.value;
+              const appExcludes = sessionAppExcludes.value;
               for (const app of applications.value) {
-                if (appFilter.size > 0 && !appFilter.has(app.id)) continue;
+                if (appExcludes.has(app.id)) continue;
                 if (!appMap.has(app.id)) appMap.set(app.id, []);
               }
             }

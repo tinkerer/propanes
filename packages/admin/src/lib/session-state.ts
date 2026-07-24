@@ -297,20 +297,20 @@ export function sessionPassesFilters(s: any, _tabSet: Set<string>): boolean {
   const statusFilters = sessionStatusFilters.value;
   if (!statusFilters.has(s.status)) return false;
   // App filter
-  const appFilter = sessionAppFilters.value;
-  if (appFilter.size > 0) {
-    const sAppId = s.appId || '__unlinked__';
-    if (!appFilter.has(sAppId)) return false;
-  }
+  const appExcludes = sessionAppExcludes.value;
+  if (appExcludes.has(s.appId || '__unlinked__')) return false;
   return true;
 }
 
 // --- App Filters ---
+// Exclusion set: an app id (or '__unlinked__') in the set means its checkbox is
+// unchecked and its sessions are hidden. Empty set = everything visible, so all
+// checkboxes default to checked on fresh deployments and for newly registered apps.
 
-export const sessionAppFilters = signal<Set<string>>(
-  new Set(loadJson<string[]>('pw-session-app-filters', []))
+export const sessionAppExcludes = signal<Set<string>>(
+  new Set(loadJson<string[]>('pw-session-app-excludes', []))
 );
-export const sessionGroupByApp = signal<boolean>(loadJson('pw-session-group-by-app', false));
+export const sessionGroupByApp = signal<boolean>(loadJson('pw-session-group-by-app', true));
 export const sessionExpandedParents = signal<Set<string>>(
   new Set(loadJson<string[]>('pw-session-expanded-parents', []))
 );
@@ -318,12 +318,12 @@ export const sessionCollapsedAppGroups = signal<Set<string>>(
   new Set(loadJson<string[]>('pw-session-collapsed-app-groups', []))
 );
 
-export function toggleAppFilter(appIdVal: string) {
-  const next = new Set(sessionAppFilters.value);
+export function toggleAppExclude(appIdVal: string) {
+  const next = new Set(sessionAppExcludes.value);
   if (next.has(appIdVal)) next.delete(appIdVal);
   else next.add(appIdVal);
-  sessionAppFilters.value = next;
-  localStorage.setItem('pw-session-app-filters', JSON.stringify([...next]));
+  sessionAppExcludes.value = next;
+  localStorage.setItem('pw-session-app-excludes', JSON.stringify([...next]));
 }
 
 export function toggleGroupByApp() {
