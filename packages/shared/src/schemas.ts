@@ -12,7 +12,9 @@ const optionalStringArray = z.preprocess(nullishToUndefined, z.array(z.string().
 export const feedbackSubmitSchema = z.object({
   type: z.preprocess(nullishToUndefined, z.enum(FEEDBACK_TYPES).default('manual')),
   title: z.preprocess(nullishToUndefined, z.string().max(500).default('')),
-  description: z.preprocess(nullishToUndefined, z.string().max(10000).default('')),
+  // Generous cap: prompts routinely include pasted console dumps / stack
+  // traces. Bounded only to keep abuse out, not to constrain real reports.
+  description: z.preprocess(nullishToUndefined, z.string().max(100000).default('')),
   data: optionalRecord,
   context: z.preprocess(
     nullishToUndefined,
@@ -83,7 +85,7 @@ export type FeedbackSubmitInput = z.infer<typeof feedbackSubmitSchema>;
 export const feedbackUpdateSchema = z.object({
   status: z.enum(FEEDBACK_STATUSES).optional(),
   title: z.string().min(1).max(500).optional(),
-  description: z.string().max(10000).optional(),
+  description: z.string().max(100000).optional(),
   tags: z.array(z.string().max(50)).max(20).optional(),
   data: z.record(z.unknown()).optional(),
   context: z
@@ -134,7 +136,7 @@ export const feedbackUpdateSchema = z.object({
 
 export const adminFeedbackCreateSchema = z.object({
   title: z.string().min(1).max(500),
-  description: z.string().max(10000).default(''),
+  description: z.string().max(100000).default(''),
   type: z.enum(FEEDBACK_TYPES).default('manual'),
   appId: z.string(),
   tags: z.array(z.string().max(50)).max(20).optional(),
@@ -242,7 +244,7 @@ export const agentEndpointSchema = z.object({
 export const dispatchSchema = z.object({
   feedbackId: z.string(),
   agentEndpointId: z.string(),
-  instructions: z.string().max(5000).optional(),
+  instructions: z.string().max(100000).optional(),
   launcherId: z.string().optional(),
   harnessConfigId: z.string().optional(),
   permissionProfile: z.enum(PERMISSION_PROFILES).optional(),
@@ -255,7 +257,7 @@ export const powwowSchema = z.object({
   feedbackId: z.string(),
   moderatorAgentId: z.string(),
   participantAgentIds: z.array(z.string()).min(1).max(8),
-  instructions: z.string().max(10000).optional(),
+  instructions: z.string().max(100000).optional(),
   launcherId: z.string().optional(),
   harnessConfigId: z.string().optional(),
   rounds: z.coerce.number().int().min(1).max(5).default(2),
