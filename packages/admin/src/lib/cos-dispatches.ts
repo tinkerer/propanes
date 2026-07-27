@@ -16,6 +16,9 @@ export const sessionToCos = signal<Map<string, CosLink>>(new Map());
 export const feedbackToCos = signal<Map<string, CosLink>>(new Map());
 
 export async function loadCosDispatches(): Promise<void> {
+  // Skip while offline (laptop asleep / switching networks) — the fetch can't
+  // succeed and every attempt spams the console with net::ERR_* lines.
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
   try {
     const { dispatches } = await api.getCosDispatches();
     // Endpoint orders dispatches newest-first, so the *last* write to each
