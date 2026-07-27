@@ -1007,6 +1007,16 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
   // previous response. Switches the response to JSON with only the bytes
   // appended since the cursor, instead of the entire merged transcript.
   const cursorParam = c.req.query('cursor');
+  const isDifferential = cursorParam !== undefined && cursorParam !== '';
+  // Expected-missing transcript: the agent is still spinning up, the session
+  // has no resolvable JSONL path (plain terminal), or a filtered file vanished.
+  // Differential pollers hit this every few seconds and Chrome logs every
+  // non-2xx request to the console, so answer with an empty 200 delta flagged
+  // `pending` instead of a 404/400. The cursor is echoed back untouched so the
+  // client keeps its offsets if the file reappears. Legacy full-text consumers
+  // keep the original error contract.
+  const pendingDelta = () =>
+    c.json({ cursor: cursorParam || 'init', reset: false, order: [], files: [], pending: true });
   const row = db
     .select({
       claudeSessionId: schema.agentSessions.claudeSessionId,
@@ -1034,9 +1044,11 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
 
   const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt, row.status);
   if (!jsonlPath) {
+    if (isDifferential) return pendingDelta();
     return c.json({ error: 'No JSONL path available' }, 400);
   }
   if (!existsSync(jsonlPath)) {
+    if (isDifferential) return pendingDelta();
     return c.json({ error: `JSONL file not found: ${jsonlPath}` }, 404);
   }
 
@@ -1053,9 +1065,11 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
     const allFiles = listJsonlFiles(jsonlPath);
     const target = allFiles.find(f => f.id === fileFilter);
     if (!target) {
+      if (isDifferential) return pendingDelta();
       return c.json({ error: `File not found: ${fileFilter}` }, 404);
     }
     if (!existsSync(target.filePath)) {
+      if (isDifferential) return pendingDelta();
       return c.json({ error: `File missing on disk: ${target.filePath}` }, 404);
     }
     // Single file, no _subagentId injection — matches the legacy ?file= behavior.
