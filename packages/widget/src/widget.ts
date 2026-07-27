@@ -32,6 +32,31 @@ type EventHandler = (data: unknown) => void;
 const HISTORY_KEY = 'pw-history';
 const MAX_HISTORY = 50;
 
+// Build an Error from a failed API response, surfacing zod field errors from
+// the server's `details` payload ("Validation failed" alone is unactionable —
+// e.g. an over-long description should say which field and why).
+async function apiResponseError(res: Response): Promise<Error> {
+  const err = await res.json().catch(() => ({ error: 'Unknown error' })) as {
+    error?: string;
+    details?: { fieldErrors?: Record<string, string[]>; formErrors?: string[] };
+  };
+  const base = err.error || `HTTP ${res.status}`;
+  const fieldErrors = err.details?.fieldErrors;
+  const parts: string[] = [];
+  if (fieldErrors && typeof fieldErrors === 'object') {
+    for (const [field, messages] of Object.entries(fieldErrors)) {
+      const msg = Array.isArray(messages) ? messages[0] : messages;
+      if (msg) parts.push(`${field}: ${msg}`);
+      if (parts.length >= 3) break;
+    }
+  }
+  for (const msg of err.details?.formErrors || []) {
+    if (parts.length >= 3) break;
+    parts.push(msg);
+  }
+  return new Error(parts.length > 0 ? `${base} — ${parts.join('; ')}` : base);
+}
+
 function micErrorMessage(err: unknown): string {
   const code = (err as any)?.code;
   const name = (err as any)?.name;
@@ -1939,8 +1964,7 @@ export class ProPanesElement {
       body: formData,
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(err.error || `HTTP ${res.status}`);
+      throw await apiResponseError(res);
     }
     const data = await res.json();
     const up = data?.files?.[0];
@@ -3591,8 +3615,7 @@ export class ProPanesElement {
       body: formData,
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(err.error || `HTTP ${res.status}`);
+      throw await apiResponseError(res);
     }
     return res.json();
   }
@@ -3681,8 +3704,7 @@ export class ProPanesElement {
       });
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(err.error || `HTTP ${res.status}`);
+        throw await apiResponseError(res);
       }
       return res.json();
     } else {
@@ -3693,8 +3715,7 @@ export class ProPanesElement {
       });
 
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(err.error || `HTTP ${res.status}`);
+        throw await apiResponseError(res);
       }
       return res.json();
     }
@@ -3729,8 +3750,7 @@ export class ProPanesElement {
         body: formData,
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(err.error || `HTTP ${res.status}`);
+        throw await apiResponseError(res);
       }
       return res.json();
     } else {
@@ -3740,8 +3760,7 @@ export class ProPanesElement {
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(err.error || `HTTP ${res.status}`);
+        throw await apiResponseError(res);
       }
       return res.json();
     }
