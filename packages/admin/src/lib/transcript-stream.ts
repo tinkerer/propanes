@@ -144,7 +144,9 @@ export function useTranscriptStream(
     if (isSessionDone || pollMs <= 0) {
       return () => { cancelled = true; };
     }
-    const interval = setInterval(() => { if (!document.hidden) fetchJsonl(); }, pollMs);
+    const interval = setInterval(() => {
+      if (!document.hidden && navigator.onLine !== false) fetchJsonl();
+    }, pollMs);
     return () => { cancelled = true; clearInterval(interval); };
   }, [sessionId, fileFilter, tailLines, pollMs, isSessionDone, runtime]);
 
