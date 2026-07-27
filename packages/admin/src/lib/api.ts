@@ -569,7 +569,7 @@ export const api = {
   getJsonlDelta: async (
     id: string,
     opts: { fileFilter?: string; tail?: number; cursor?: string | null } = {},
-  ): Promise<{ cursor: string; reset: boolean; order: string[]; files: Array<{ key: string; lines: string }> }> => {
+  ): Promise<{ cursor: string; reset: boolean; order: string[]; files: Array<{ key: string; lines: string }>; pending?: boolean }> => {
     const params: string[] = [`cursor=${encodeURIComponent(opts.cursor || 'init')}`];
     if (opts.fileFilter) params.push(`file=${encodeURIComponent(opts.fileFilter)}`);
     if (opts.tail && opts.tail > 0) params.push(`tail=${opts.tail}`);

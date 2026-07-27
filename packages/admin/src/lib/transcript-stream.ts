@@ -95,6 +95,16 @@ export function useTranscriptStream(
           cursor: cursor.current,
         });
         if (cancelled) return;
+        if (delta.pending) {
+          // Transcript not on disk (yet) — the server answers 200 + pending
+          // instead of a 404 so routine polls don't spam the console. Same
+          // semantics as the 404 path below: loading state while the session
+          // runs, empty view once it's done. Buffers/cursor stay untouched in
+          // case the file reappears.
+          setError(null);
+          setLoading(!isSessionDone && buffers.current.size === 0);
+          return;
+        }
         cursor.current = delta.cursor;
         order.current = delta.order;
         if (delta.reset) buffers.current = new Map();
