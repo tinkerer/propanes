@@ -11,6 +11,7 @@ import { autoNavigateToFeedback, autoJumpWaiting, autoJumpInterrupt, autoJumpDel
 import { navigate, selectedAppId, isEmbedded } from './state.js';
 import { isMobile } from './viewport.js';
 import { timed } from './perf.js';
+import { PROFILE_MATRIX } from './agent-matrix.js';
 import {
   findLeafWithTab,
   addTabToLeaf,
@@ -395,6 +396,19 @@ export async function resumeSession(sessionId: string, opts?: { permissionProfil
     lastResumeError.value = null;
     // Kill running session first before resuming with new profile
     const sess = allSessions.value.find((s) => s.id === sessionId);
+    // Headless sessions are one-shot: a plain Resume would just spin up another
+    // background run that exits after a single turn. Every resumeSession caller
+    // without an explicit profile is a user-facing Resume action (button, menu,
+    // follow-up input), where the user expects the conversation back as a live
+    // interactive TTY — so promote headless profiles to their interactive
+    // counterpart, preserving the yolo/require axis. Explicit choices
+    // ("Resume as...") pass a profile and are honored as-is.
+    if (!opts?.permissionProfile && sess?.permissionProfile) {
+      const pd = PROFILE_MATRIX[sess.permissionProfile];
+      if (pd && (pd.mode === 'headless' || pd.mode === 'headless-stream')) {
+        opts = { ...opts, permissionProfile: pd.yolo ? 'interactive-yolo' : 'interactive-require' };
+      }
+    }
     if (sess && (sess.status === 'running' || sess.status === 'pending')) {
       await api.killAgentSession(sessionId);
       allSessions.value = allSessions.value.map((s) =>

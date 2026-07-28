@@ -1127,7 +1127,12 @@ export async function resumeAgentSession(
     console.log(`[dispatch] Resume of ${parentSessionId} (parent profile=${parent.permissionProfile}): preserving --dangerously-skip-permissions by promoting interactive-require → interactive-yolo`);
     permissionProfile = 'interactive-yolo';
   }
-  const shouldAutoContinue = runtime === 'claude' && parent.runtime === 'claude' && !!parent.claudeSessionId && permissionProfile === 'interactive-yolo';
+  // Auto-"continue" is a kick for prompt-less yolo resumes (Resume button /
+  // "Resume as..." menu). When the caller supplies an additionalPrompt (e.g.
+  // the mobile "Resume with a follow-up" input) that prompt is already passed
+  // to `claude --resume` — sending "continue" on top would burn an extra turn.
+  const shouldAutoContinue = runtime === 'claude' && parent.runtime === 'claude' && !!parent.claudeSessionId
+    && permissionProfile === 'interactive-yolo' && !(additionalPrompt && additionalPrompt.trim());
 
   // If parent has a Claude session ID, use --resume for full context restoration
   if (runtime === 'claude' && parent.runtime === 'claude' && parent.claudeSessionId) {
