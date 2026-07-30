@@ -333,17 +333,28 @@ export function goToPreviousTab() {
 
 export async function resolveSession(sessionId: string, feedbackId?: string) {
   const alreadyExited = exitedSessions.value.has(sessionId);
+  // Optimistic UI: reflect the resolve immediately. The kill round-trip can
+  // take seconds when the session-service is busy, and serializing
+  // kill → feedback-update → closeTab made the button look dead.
   if (!alreadyExited) {
-    await killSession(sessionId);
-  }
-  if (feedbackId) {
-    try {
-      await api.updateFeedback(feedbackId, { status: 'resolved' });
-    } catch (err: any) {
-      console.error('Resolve feedback failed:', err.message);
-    }
+    allSessions.value = allSessions.value.map((s) =>
+      s.id === sessionId ? { ...s, status: 'killed' } : s
+    );
+    markSessionExited(sessionId);
   }
   closeTab(sessionId);
+  await Promise.all([
+    alreadyExited
+      ? Promise.resolve()
+      : api.killAgentSession(sessionId).catch((err: any) => {
+          console.error('Kill failed:', err.message);
+        }),
+    feedbackId
+      ? api.updateFeedback(feedbackId, { status: 'resolved' }).catch((err: any) => {
+          console.error('Resolve feedback failed:', err.message);
+        })
+      : Promise.resolve(),
+  ]);
 }
 
 export async function deleteSession(sessionId: string) {
