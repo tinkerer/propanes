@@ -15,11 +15,12 @@ export interface SpawnParams {
   appendSystemPrompt?: string;
 }
 
-async function post(path: string, body?: unknown): Promise<Response> {
+async function post(path: string, body?: unknown, timeoutMs?: number): Promise<Response> {
   return fetch(`${SESSION_SERVICE_URL}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   });
 }
 
@@ -45,7 +46,9 @@ export class SessionServiceError extends Error {
 }
 
 export async function killSessionRemote(sessionId: string): Promise<boolean> {
-  const res = await post(`/kill/${sessionId}`);
+  // Bounded: a busy/hung session-service must not stall the /kill route —
+  // the caller's DB safety net marks the session killed regardless.
+  const res = await post(`/kill/${sessionId}`, undefined, 5000);
   return res.ok;
 }
 
