@@ -52,8 +52,6 @@ import {
 import {
   getTerminalCompanion,
   setTerminalCompanion,
-  getCompanions,
-  toggleCompanion,
   syncCompanionsToRightPane,
   terminalCompanionMap,
   transferSessionCompanions,
@@ -180,13 +178,10 @@ export function openSession(sessionId: string) {
     setTerminalCompanion(sessionId, sess.companionSessionId);
   }
 
-  // Auto-open JSONL companion for headless sessions (raw JSON terminal is not useful)
-  if (sess && sess.permissionProfile !== 'plain') {
-    const companions = getCompanions(sessionId);
-    if (!companions.includes('jsonl')) {
-      toggleCompanion(sessionId, 'jsonl');
-    }
-  }
+  // No auto-open of a JSONL companion here: the session tab itself defaults to
+  // the in-tab split view (PTY + structured conversation) whenever a transcript
+  // exists — see getViewMode(). Splitting the pane leaf for a companion on top
+  // of that duplicated the conversation view on every session-list selection.
 
   syncCompanionsToRightPane(sessionId, current);
 
