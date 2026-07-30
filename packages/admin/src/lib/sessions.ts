@@ -326,15 +326,42 @@ export function goToPreviousTab() {
 
 // --- Session CRUD ---
 
+// Optimistic status overrides. Incoming session lists (REST poll + WS push)
+// replace allSessions wholesale, so a locally-killed session would flip back
+// to 'running' until the backend kill lands. Overrides are applied to every
+// incoming list until the server itself reports a terminal status (or the
+// override expires — safety valve in case the kill silently failed).
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'killed', 'deleted']);
+const OVERRIDE_TTL_MS = 60_000;
+const localStatusOverrides = new Map<string, { status: string; at: number }>();
+
+function setLocalStatus(sessionId: string, status: string) {
+  localStatusOverrides.set(sessionId, { status, at: Date.now() });
+  allSessions.value = allSessions.value.map((s) =>
+    s.id === sessionId ? { ...s, status } : s
+  );
+}
+
+export function applyLocalStatusOverrides(sessions: any[]): any[] {
+  if (localStatusOverrides.size === 0) return sessions;
+  return sessions.map((s) => {
+    const ov = localStatusOverrides.get(s.id);
+    if (!ov) return s;
+    if (TERMINAL_STATUSES.has(s.status) || Date.now() - ov.at > OVERRIDE_TTL_MS) {
+      localStatusOverrides.delete(s.id);
+      return s;
+    }
+    return { ...s, status: ov.status };
+  });
+}
+
 export async function resolveSession(sessionId: string, feedbackId?: string) {
   const alreadyExited = exitedSessions.value.has(sessionId);
   // Optimistic UI: reflect the resolve immediately. The kill round-trip can
   // take seconds when the session-service is busy, and serializing
   // kill → feedback-update → closeTab made the button look dead.
   if (!alreadyExited) {
-    allSessions.value = allSessions.value.map((s) =>
-      s.id === sessionId ? { ...s, status: 'killed' } : s
-    );
+    setLocalStatus(sessionId, 'killed');
     markSessionExited(sessionId);
   }
   closeTab(sessionId);
@@ -353,12 +380,10 @@ export async function resolveSession(sessionId: string, feedbackId?: string) {
 }
 
 export async function deleteSession(sessionId: string) {
+  setLocalStatus(sessionId, 'deleted');
+  closeTab(sessionId);
   try {
     await api.archiveAgentSession(sessionId);
-    allSessions.value = allSessions.value.map((s) =>
-      s.id === sessionId ? { ...s, status: 'deleted' } : s
-    );
-    closeTab(sessionId);
   } catch (err: any) {
     console.error('Archive session failed:', err.message);
   }
@@ -375,13 +400,11 @@ export async function permanentlyDeleteSession(sessionId: string) {
 }
 
 export async function killSession(sessionId: string) {
+  setLocalStatus(sessionId, 'killed');
+  markSessionExited(sessionId);
+  closeTab(sessionId);
   try {
     await api.killAgentSession(sessionId);
-    allSessions.value = allSessions.value.map((s) =>
-      s.id === sessionId ? { ...s, status: 'killed' } : s
-    );
-    markSessionExited(sessionId);
-    closeTab(sessionId);
   } catch (err: any) {
     console.error('Kill failed:', err.message);
   }
@@ -646,7 +669,8 @@ export async function loadAllSessions(includeDeleted = false, isAutoPoll = false
         if (!tabs.includes(sid)) tabs.push(sid);
       }
     }
-    const sessions = await timed('sessions:list', () => api.getAgentSessions(undefined, tabs.length > 0 ? tabs : undefined, includeDeleted));
+    const fetched = await timed('sessions:list', () => api.getAgentSessions(undefined, tabs.length > 0 ? tabs : undefined, includeDeleted));
+    const sessions = applyLocalStatusOverrides(fetched);
 
     autoOpenChildSessions(sessions);
 
@@ -686,9 +710,10 @@ export function startSessionPolling(): () => void {
   // Initial load via REST, then subscribe to WS push updates
   loadAllSessions(includeDeletedInPolling.value);
 
-  const unsub = subscribeAdmin('sessions', (sessions: any[]) => {
+  const unsub = subscribeAdmin('sessions', (pushed: any[]) => {
     if (lastTerminalInput.value > 0 && Date.now() - lastTerminalInput.value < 5000) return;
 
+    const sessions = applyLocalStatusOverrides(pushed);
     autoOpenChildSessions(sessions);
 
     const prevSessions = allSessions.value;
