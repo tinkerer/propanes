@@ -223,6 +223,9 @@ function FloatingCompanionSplit({
   // We rAF-poll because the popout moves/resizes via signal updates that
   // don't traverse this component.
   const [popoutRect, setPopoutRect] = useState<DOMRect | null>(null);
+  // Height of the popout's thin toolbar (X / hamburger row). Internal overlay
+  // drawers must start below it so the toolbar stays clickable.
+  const [toolbarInset, setToolbarInset] = useState(0);
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -231,6 +234,9 @@ function FloatingCompanionSplit({
     let raf: number | null = null;
     const tick = () => {
       const r = popoutEl.getBoundingClientRect();
+      const toolbar = popoutEl.querySelector(':scope > .cos-thin-toolbar');
+      const inset = toolbar ? Math.max(0, toolbar.getBoundingClientRect().bottom - r.top) : 0;
+      setToolbarInset(inset);
       setPopoutRect((prev) => {
         if (prev && prev.top === r.top && prev.left === r.left && prev.width === r.width && prev.height === r.height) return prev;
         return r;
@@ -286,7 +292,7 @@ function FloatingCompanionSplit({
   const drawerRectViewport = popoutRect
     ? collapsed
       ? collapsedHandleRect(popoutRect, isHorizontal, isFirst)
-      : drawerRectFor(popoutRect, node.ratio, isHorizontal, isFirst, isExternal)
+      : drawerRectFor(popoutRect, node.ratio, isHorizontal, isFirst, isExternal, toolbarInset)
     : null;
 
   // Resize: tab drag changes the split ratio.
@@ -329,7 +335,7 @@ function FloatingCompanionSplit({
         const wasExternal = isExternalRef.current;
         cosSetLeafExternal(drawerLeaf.id, !wasExternal);
         // Reposition handle at cursor's parallel coordinate on the new edge.
-        const newRect = drawerRectFor(popoutRect!, node.ratio, isHorizontal, isFirst, !wasExternal);
+        const newRect = drawerRectFor(popoutRect!, node.ratio, isHorizontal, isFirst, !wasExternal, toolbarInset);
         const parallelSize = isHorizontal ? newRect.height : newRect.width;
         const parallelStart = isHorizontal ? newRect.top : newRect.left;
         const cursorParallel = isHorizontal ? ev.clientY : ev.clientX;
@@ -352,7 +358,7 @@ function FloatingCompanionSplit({
           onFlip: (ev) => {
             const wasExternal = isExternalRef.current;
             cosSetLeafExternal(drawerLeaf.id, !wasExternal);
-            const newRect = drawerRectFor(popoutRect!, node.ratio, isHorizontal, isFirst, !wasExternal);
+            const newRect = drawerRectFor(popoutRect!, node.ratio, isHorizontal, isFirst, !wasExternal, toolbarInset);
             const parallelSize = isHorizontal ? newRect.height : newRect.width;
             const parallelStart = isHorizontal ? newRect.top : newRect.left;
             const cursorParallel = isHorizontal ? ev.clientY : ev.clientX;
@@ -440,7 +446,7 @@ function FloatingCompanionSplit({
   // does NOT destroy/recreate the DOM — the same portal node survives the
   // flip, which preserves scroll position and avoids a flash.
   const overlayRect = popoutRect && !collapsed
-    ? drawerRectFor(popoutRect, node.ratio, isHorizontal, isFirst, isExternal)
+    ? drawerRectFor(popoutRect, node.ratio, isHorizontal, isFirst, isExternal, toolbarInset)
     : null;
 
   return (
@@ -490,8 +496,14 @@ function drawerRectFor(
   isHorizontal: boolean,
   isFirst: boolean,
   isExternal: boolean,
+  toolbarInset = 0,
 ): { top: number; left: number; width: number; height: number } {
   const drawerShare = isFirst ? ratio : 1 - ratio;
+  // Internal overlays anchor to the popout's *content* area (below the thin
+  // toolbar) so the toolbar's X / hamburger stay visible. External drawers
+  // sit outside the popout and keep the full-height anchor.
+  const contentTop = popoutRect.top + toolbarInset;
+  const contentHeight = Math.max(0, popoutRect.height - toolbarInset);
   if (isHorizontal) {
     const width = isExternal
       ? Math.max(120, popoutRect.width * drawerShare)
@@ -503,16 +515,16 @@ function drawerRectFor(
     }
     // Overlay: inside popout on the matching side.
     const left = isFirst ? popoutRect.left : popoutRect.left + popoutRect.width - width;
-    return { top: popoutRect.top, left, width, height: popoutRect.height };
+    return { top: contentTop, left, width, height: contentHeight };
   }
   const height = isExternal
     ? Math.max(120, popoutRect.height * drawerShare)
-    : popoutRect.height * drawerShare;
+    : contentHeight * drawerShare;
   if (isExternal) {
     const top = isFirst ? Math.max(0, popoutRect.top - height) : popoutRect.top + popoutRect.height;
     return { top, left: popoutRect.left, width: popoutRect.width, height };
   }
-  const top = isFirst ? popoutRect.top : popoutRect.top + popoutRect.height - height;
+  const top = isFirst ? contentTop : popoutRect.top + popoutRect.height - height;
   return { top, left: popoutRect.left, width: popoutRect.width, height };
 }
 
