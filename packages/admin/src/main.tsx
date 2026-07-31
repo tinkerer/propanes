@@ -3,6 +3,9 @@ import { App } from './components/shell/App.js';
 import './lib/settings.js';
 import { installConsoleBuffer, installNetworkCollector } from './lib/console-buffer.js';
 import { installBrowserFreezeInstrumentation } from './lib/perf.js';
+import { initUpdateCheck } from './lib/update-check.js';
+import { UpdateBanner } from './components/ui/UpdateBanner.js';
+import { isEmbedded, isCompanion } from './lib/state.js';
 import '@xterm/xterm/css/xterm.css';
 import './app.css';
 
@@ -16,7 +19,18 @@ installConsoleBuffer();
 installNetworkCollector();
 installBrowserFreezeInstrumentation();
 
-render(<App />, document.getElementById('app')!);
+// Stale-bundle detection: only in top-level tabs — embedded/companion iframes
+// reload with their host, and a banner inside them is just noise.
+const isTopLevelTab = !isEmbedded.value && !isCompanion.value;
+if (isTopLevelTab) initUpdateCheck();
+
+render(
+  <>
+    <App />
+    {isTopLevelTab && <UpdateBanner />}
+  </>,
+  document.getElementById('app')!,
+);
 
 const ADMIN_KEY_SENTINEL = '__ADMIN_API_KEY__';
 
