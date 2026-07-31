@@ -238,10 +238,14 @@ function FileRow({ entry }: { entry: FileEntry }) {
 // --- Main component ---
 
 export function FilesCompanion({ sessionId }: FilesCompanionProps) {
-  const { messages, loading, isRunning, isSessionDone } = useTranscriptStream(sessionId);
+  const { messages, loading, isRunning, isSessionDone, noTranscript } = useTranscriptStream(sessionId);
 
   const summary = useMemo(() => extractFiles(messages), [messages]);
   const fileList = useMemo(() => buildFileList(summary), [summary]);
+
+  if (noTranscript) {
+    return <div class="conv-files-list"><div class="conv-files-empty">Plain terminal session — no agent transcript.</div></div>;
+  }
 
   if (loading) {
     const msg = isSessionDone

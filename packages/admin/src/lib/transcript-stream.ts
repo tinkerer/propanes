@@ -28,6 +28,9 @@ export interface TranscriptStreamState {
   isSessionDone: boolean;
   /** Session is actively running. */
   isRunning: boolean;
+  /** Session will never produce a transcript (plain shell with no agent
+   *  session attached) — render a definitive empty state, not a spinner. */
+  noTranscript: boolean;
 }
 
 /** Subscribe to a session's JSONL transcript and keep parsing it as new lines
@@ -67,6 +70,12 @@ export function useTranscriptStream(
   const isSessionDone = exitedSessions.value.has(sessionId) || !!terminalStatus;
   const isRunning = sessionRecord?.status === 'running' || sessionRecord?.status === 'pending';
   const runtime = sessionRecord?.runtime;
+  // Plain shell sessions never spawn an agent runtime, so no JSONL will ever
+  // land on disk and "waiting for output" would spin forever. claudeSessionId /
+  // jsonlPath act as escape hatches in case a transcript gets attached later.
+  const noTranscript = sessionRecord?.permissionProfile === 'plain'
+    && !sessionRecord?.claudeSessionId
+    && !sessionRecord?.jsonlPath;
 
   const fileFilter = opts.fileFilter ?? null;
   const tailLines = opts.tailLines ?? (isMobile.value ? 500 : 0);
@@ -84,6 +93,14 @@ export function useTranscriptStream(
     setMessages([]);
     setLoading(true);
     setError(null);
+
+    // No transcript will ever exist — don't poll an endpoint that can only
+    // answer `pending`. If the session record later gains a claudeSessionId /
+    // jsonlPath, the flag flips and this effect re-runs with polling enabled.
+    if (noTranscript) {
+      setLoading(false);
+      return () => { cancelled = true; };
+    }
 
     const fetchJsonl = async () => {
       if (inFlight) return;
@@ -158,7 +175,7 @@ export function useTranscriptStream(
       if (!document.hidden && navigator.onLine !== false) fetchJsonl();
     }, pollMs);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [sessionId, fileFilter, tailLines, pollMs, isSessionDone, runtime]);
+  }, [sessionId, fileFilter, tailLines, pollMs, isSessionDone, runtime, noTranscript]);
 
-  return { messages, loading, error, isSessionDone, isRunning };
+  return { messages, loading, error, isSessionDone, isRunning, noTranscript };
 }

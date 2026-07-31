@@ -62,7 +62,7 @@ export function JsonlView({ sessionId, hideInterruptBar, compact }: Props) {
   // Access the signal to trigger re-renders
   const _sel = jsonlSelectedFile.value;
 
-  const { messages, loading, error, isSessionDone, isRunning } = useTranscriptStream(
+  const { messages, loading, error, isSessionDone, isRunning, noTranscript } = useTranscriptStream(
     sessionId,
     { fileFilter: selectedFile }
   );
@@ -81,12 +81,14 @@ export function JsonlView({ sessionId, hideInterruptBar, compact }: Props) {
 
   const profile = sessionRecord?.permissionProfile;
 
-  if (loading) {
-    const msg = isSessionDone
-      ? 'Loading JSONL...'
-      : isRunning
-        ? 'Session running, waiting for output...'
-        : 'Waiting for agent to start...';
+  if (noTranscript || loading) {
+    const msg = noTranscript
+      ? 'Plain terminal session — no agent transcript. Use the Terminal view.'
+      : isSessionDone
+        ? 'Loading JSONL...'
+        : isRunning
+          ? 'Session running, waiting for output...'
+          : 'Waiting for agent to start...';
     return (
       <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', flex: 1, minHeight: 0 }}>
         <div class="structured-view" style={{ flex: 1, minHeight: 0 }}><div class="sm-empty">{msg}</div></div>

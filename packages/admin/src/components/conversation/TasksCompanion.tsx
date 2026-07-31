@@ -41,7 +41,7 @@ function TaskRow({ t }: { t: TaskInfo }) {
 }
 
 export function TasksCompanion({ sessionId }: TasksCompanionProps) {
-  const { messages, loading, error, isSessionDone, isRunning } = useTranscriptStream(sessionId);
+  const { messages, loading, error, isSessionDone, isRunning, noTranscript } = useTranscriptStream(sessionId);
 
   const summary = useMemo(() => buildSummary(messages), [messages]);
   const tasks = summary.tasks;
@@ -50,6 +50,14 @@ export function TasksCompanion({ sessionId }: TasksCompanionProps) {
   const completed = tasks.filter(t => t.status === 'completed').length;
   const inProgress = tasks.filter(t => t.status === 'in_progress').length;
   const pending = tasks.filter(t => t.status === 'pending').length;
+
+  if (noTranscript) {
+    return (
+      <div class="tasks-companion">
+        <div class="tasks-companion-empty">Plain terminal session — no agent transcript.</div>
+      </div>
+    );
+  }
 
   if (loading && messages.length === 0) {
     const msg = isSessionDone
