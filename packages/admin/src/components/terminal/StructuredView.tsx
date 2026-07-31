@@ -121,7 +121,7 @@ export function StructuredView({ sessionId, chat }: Props) {
   const isWaiting = inputState === 'waiting';
   const fileDrop = useSessionFileDrop(sessionId);
 
-  const { messages, loading, error, isSessionDone, isRunning } = useTranscriptStream(sessionId);
+  const { messages, loading, error, isSessionDone, isRunning, noTranscript } = useTranscriptStream(sessionId);
 
   const { setRef: setScrollRef, showScrollDown, scrollToBottom } = useScrollAnchor({
     resetKey: sessionId,
@@ -248,6 +248,14 @@ export function StructuredView({ sessionId, chat }: Props) {
     if (subMsgs.length === 0) return windowed;
     return [...windowed, ...subMsgs];
   }, [messages, mainMessages, shownCount, hiddenMsgCount]);
+
+  if (noTranscript) {
+    return (
+      <div class="structured-view">
+        <div class="sm-empty">Plain terminal session — no agent transcript. Use the Terminal view.</div>
+      </div>
+    );
+  }
 
   if (loading) {
     const msg = isSessionDone
