@@ -64,10 +64,47 @@ run_as_agent() {
 
 seed_agent_home
 
+# Which propanes tree to run. Default is the baked /app build. A pod can opt
+# into running from the NFS-mounted source tree by dropping a marker file on
+# its persistent volume:
+#
+#   echo /mnt/stage-nfs-src/admin/propanes > /data/propanes-run-from-nfs
+#
+# (an empty marker uses that same default path). The marker lives on /data so
+# the choice survives pod restarts and image rolls without a manifest change.
+# NFS mode only engages when the tree actually has a built server; otherwise
+# we fall back to /app so a missing/unbuilt checkout can't brick the pod.
+PROPANES_APP_DIR=/app
+NFS_MARKER=/data/propanes-run-from-nfs
+if [ -f "$NFS_MARKER" ]; then
+  NFS_DIR="$(head -1 "$NFS_MARKER" | tr -d '[:space:]')"
+  NFS_DIR="${NFS_DIR:-/mnt/stage-nfs-src/admin/propanes}"
+  if [ -f "$NFS_DIR/packages/server/dist/index.js" ]; then
+    PROPANES_APP_DIR="$NFS_DIR"
+    echo "[entrypoint] Running propanes services from $NFS_DIR (marker: $NFS_MARKER)"
+  else
+    echo "[entrypoint] $NFS_MARKER set but $NFS_DIR/packages/server/dist/index.js missing — falling back to /app"
+  fi
+fi
+
+# Run a service in a restart loop so "rebuild on NFS, kill the node process"
+# redeploys it without a pod restart. The launcher-daemon below is exempt: it
+# is this script's foreground process, so its exit intentionally ends the pod.
+supervise() {
+  local script="$1" log="$2"
+  while true; do
+    node "$script" >>"$log" 2>&1 || true
+    echo "[entrypoint $(date -Is)] $script exited, restarting in 2s" >>"$log"
+    sleep 2
+  done
+}
+
 if [ "$PROPANES_ROLE" != "launcher" ]; then
   # 1) ProPanes API and live terminal session service.
-  node dist/session-service.js >/var/log/propanes-session-service.log 2>&1 &
-  node dist/index.js >/var/log/propanes-server.log 2>&1 &
+  cd "$PROPANES_APP_DIR/packages/server"
+  supervise dist/session-service.js /var/log/propanes-session-service.log &
+  supervise dist/index.js /var/log/propanes-server.log &
+  cd /app/packages/server
 fi
 
 # Headed display + noVNC stack.
