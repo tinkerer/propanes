@@ -72,9 +72,12 @@ seed_agent_home
 #
 # (an empty marker uses that same default path). The marker lives on /data so
 # the choice survives pod restarts and image rolls without a manifest change.
-# NFS mode only engages when the tree actually has a built server; otherwise
-# we fall back to /app so a missing/unbuilt checkout can't brick the pod.
+# NFS mode only engages for the artifacts the tree actually has built;
+# otherwise we fall back to /app so a missing/unbuilt checkout can't brick the
+# pod. Server and launcher are gated independently — a tree with a stale or
+# partial build can still serve one of them.
 PROPANES_APP_DIR=/app
+NFS_LAUNCHER=""
 NFS_MARKER=/data/propanes-run-from-nfs
 if [ -f "$NFS_MARKER" ]; then
   NFS_DIR="$(head -1 "$NFS_MARKER" | tr -d '[:space:]')"
@@ -85,11 +88,15 @@ if [ -f "$NFS_MARKER" ]; then
   else
     echo "[entrypoint] $NFS_MARKER set but $NFS_DIR/packages/server/dist/index.js missing — falling back to /app"
   fi
+  if [ -f "$NFS_DIR/packages/server/dist/launcher-daemon.js" ]; then
+    NFS_LAUNCHER="$NFS_DIR/packages/server/dist/launcher-daemon.js"
+  else
+    echo "[entrypoint] $NFS_MARKER set but $NFS_DIR/packages/server/dist/launcher-daemon.js missing — launcher stays on /app"
+  fi
 fi
 
 # Run a service in a restart loop so "rebuild on NFS, kill the node process"
-# redeploys it without a pod restart. The launcher-daemon below is exempt: it
-# is this script's foreground process, so its exit intentionally ends the pod.
+# redeploys it without a pod restart.
 supervise() {
   local script="$1" log="$2"
   while true; do
@@ -143,4 +150,48 @@ export LAUNCHER_ID="${LAUNCHER_ID:-$(hostname)}"
 export LAUNCHER_NAME="${LAUNCHER_NAME:-propanes-inpod}"
 export MAX_SESSIONS="${MAX_SESSIONS:-5}"
 
+# The launcher-daemon is this script's foreground process: when it exits, the
+# entrypoint exits and the pod restarts. That is deliberate for the baked build
+# — it is how a genuinely broken launcher surfaces as CrashLoopBackOff.
+#
+# In NFS mode we supervise it instead, so "rebuild on NFS, kill the launcher"
+# redeploys it in place like the other services. Two guards keep that from
+# hiding a broken build:
+#
+#   * A run that dies faster than LAUNCHER_MIN_UPTIME counts as a failed start.
+#     After LAUNCHER_MAX_FAST_FAILS of those we stop trying NFS and drop to the
+#     baked build for the rest of this pod's life — a bad checkout self-heals
+#     to known-good code instead of looping on it.
+#   * A run that stayed up past that threshold is treated as an intentional
+#     restart (hot-deploy, operator kill), so the failure count resets.
+#
+# The fallback below is the original foreground invocation, so normal pod
+# restart semantics resume the moment we stop using NFS. cwd stays at
+# /app/packages/server either way: node resolves imports from the script's own
+# path, and leaving cwd here keeps the daemon's incidental propanes.db on the
+# container filesystem rather than writing it into the shared NFS tree.
+LAUNCHER_MIN_UPTIME="${LAUNCHER_MIN_UPTIME:-20}"
+LAUNCHER_MAX_FAST_FAILS="${LAUNCHER_MAX_FAST_FAILS:-3}"
+
+if [ -n "$NFS_LAUNCHER" ]; then
+  echo "[entrypoint] Running launcher from $NFS_LAUNCHER (supervised; falls back to /app after $LAUNCHER_MAX_FAST_FAILS fast exits)"
+  fast_fails=0
+  while [ "$fast_fails" -lt "$LAUNCHER_MAX_FAST_FAILS" ]; do
+    started=$(date +%s)
+    run_as_agent node "$NFS_LAUNCHER" || true
+    uptime=$(( $(date +%s) - started ))
+    if [ "$uptime" -lt "$LAUNCHER_MIN_UPTIME" ]; then
+      fast_fails=$((fast_fails + 1))
+      echo "[entrypoint] NFS launcher exited after ${uptime}s (fast failure $fast_fails/$LAUNCHER_MAX_FAST_FAILS); retrying in 2s"
+      sleep 2
+    else
+      fast_fails=0
+      echo "[entrypoint] NFS launcher exited after ${uptime}s; restarting in 2s"
+      sleep 2
+    fi
+  done
+  echo "[entrypoint] NFS launcher failed to stay up — falling back to the baked /app build for the rest of this pod's life"
+fi
+
+cd /app/packages/server
 run_as_agent node dist/launcher-daemon.js
