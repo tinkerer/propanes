@@ -9386,10 +9386,10 @@ body.pw-isolate {
 .dispatch-dialog-textarea:focus {
   border-color: var(--pw-primary);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--pw-primary) 14%, transparent);
-  background: #fff;
+  background: var(--pw-bg-surface);
 }
 .dispatch-dialog-textarea::placeholder {
-  color: var(--pw-text-faint);
+  color: color-mix(in srgb, var(--pw-text-primary) 60%, var(--pw-bg-surface));
 }
 
 .dispatch-dialog-topbar {
@@ -9436,7 +9436,7 @@ body.pw-isolate {
 }
 
 .dispatch-dialog-compose {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .dispatch-dialog-tabs {
