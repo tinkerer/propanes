@@ -205,6 +205,16 @@ npm run build --workspaces
 
 The dev setup runs **two** node processes: the main server (`src/index.ts`, port 3001) and the session-service (`src/session-service.ts`, port 3002). They're watched independently. If session-service code changes aren't taking effect, the service is running stale code — kill the whole `pnpm dev:sessions` chain and relaunch. Live tmux-backed sessions survive the restart via `tryRecoverSession()`.
 
+### Per-user pods: running from NFS
+
+Per-user pods (e.g. propanes.example.com/&lt;user&gt;) boot from the baked `/app` image build by default, but `docker-launcher-entrypoint.sh` supports running the services from the NFS-mounted source tree instead. Opt in by dropping a marker on the pod's persistent volume:
+
+```bash
+echo /mnt/stage-nfs-src/admin/propanes > /data/propanes-run-from-nfs
+```
+
+With the marker set (and a built `packages/server/dist` present on that tree), the entrypoint runs session-service + main server from NFS inside restart loops. Deploying a change is then: build on NFS (`npm run build` in the affected package), `kill` the relevant node process, and the loop respawns it on the new code — no pod update. Admin/widget dist changes need no restart at all (served statically per request). The in-pod launcher-daemon intentionally stays on the baked build — it is the entrypoint's foreground process, so a broken NFS build there would crash-loop the whole pod.
+
 ## Permission Profiles
 
 Agent sessions are spawned with a `permissionProfile` that encodes **two orthogonal axes** — I/O mode × permissions. Profile names follow the `<mode>-<perms>` format so both axes are legible at a glance.
