@@ -264,10 +264,11 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       scheduleOutputFlush(false);
     }
 
-    // Sequenced protocol state
+    // Sequenced protocol state. Input seqs exist for the server's dedup /
+    // ordering only — transmitted input is never buffered for replay (see
+    // ws.onopen), so there is no client-side pending-input map.
     let lastOutputSeq = 0;
     let inputSeq = 0;
-    const pendingInputs = new Map<number, string>();
 
     // Resize bookkeeping (see safeFitAndResize). serverPtySize comes from the
     // session-service history message; lastSentSize is per WebSocket connection
@@ -288,7 +289,6 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
           content: { kind: 'input', data },
           timestamp: new Date().toISOString(),
         });
-        pendingInputs.set(inputSeq, msg);
         ws.send(msg);
       }
     }
@@ -549,14 +549,6 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       }
     }
 
-    function resendPendingInputs() {
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      for (const [seq, serialized] of pendingInputs) {
-        try { ws.send(serialized); } catch { break; }
-      }
-    }
-
     function handleOutput(data: string) {
       if (!gotFirstOutput) {
         gotFirstOutput = true;
@@ -586,7 +578,15 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
         reconnectDelay = 200;
         reconnectAttempts = 0;
         sendReplayRequest();
-        resendPendingInputs();
+        // Deliberately no input replay here. Keystrokes are only ever sent on
+        // an OPEN socket, so anything un-acked at reconnect time is in the
+        // ambiguous "may have reached the PTY" state — the server-side dedup
+        // counter is in-memory and resets to 0 on tmux recovery, so replaying
+        // re-types the operator's last line (+ Enter) into the live TUI. Over
+        // a flaky connection that resubmitted the same prompt turn after turn.
+        // Same policy as send-outbox.ts: a duplicate typed into a terminal is
+        // worse than a drop; a lost keystroke is visible (no echo) and the
+        // operator just retypes it.
         // Sync terminal size with server on (re)connect. Send immediately so a
         // PTY at a different size starts reflowing before history even paints;
         // the delayed retry covers containers whose layout hadn't settled yet
@@ -625,10 +625,9 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
               break;
             }
 
-            case 'input_ack': {
-              pendingInputs.delete(msg.ackSeq);
+            case 'input_ack':
+              // Input is fire-and-forget (no replay buffer) — nothing to prune.
               break;
-            }
 
             // Legacy messages
             case 'history':
@@ -821,7 +820,6 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
             content: { kind: 'resize', cols, rows: rows - 1 },
             timestamp: new Date().toISOString(),
           });
-          pendingInputs.set(inputSeq, bounceMsg);
           ws.send(bounceMsg);
         }
         inputSeq++;
@@ -832,7 +830,6 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
           content: { kind: 'resize', cols, rows },
           timestamp: new Date().toISOString(),
         });
-        pendingInputs.set(inputSeq, msg);
         ws.send(msg);
         lastSentSize = { cols, rows };
       }
