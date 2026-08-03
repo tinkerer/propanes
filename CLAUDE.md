@@ -213,7 +213,13 @@ Per-user pods (e.g. propanes.example.com/&lt;user&gt;) boot from the baked `/app
 echo /mnt/stage-nfs-src/admin/propanes > /data/propanes-run-from-nfs
 ```
 
-With the marker set (and a built `packages/server/dist` present on that tree), the entrypoint runs session-service + main server from NFS inside restart loops. Deploying a change is then: build on NFS (`npm run build` in the affected package), `kill` the relevant node process, and the loop respawns it on the new code — no pod update. Admin/widget dist changes need no restart at all (served statically per request). The in-pod launcher-daemon intentionally stays on the baked build — it is the entrypoint's foreground process, so a broken NFS build there would crash-loop the whole pod.
+With the marker set (and a built `packages/server/dist` present on that tree), the entrypoint runs session-service, the main server **and the launcher-daemon** from NFS inside restart loops. Deploying a change is then: build on NFS (`npm run build` in the affected package), `kill` the relevant node process, and the loop respawns it on the new code — no pod update. Admin/widget dist changes need no restart at all (served statically per request).
+
+Server and launcher are gated independently, so a partially-built tree still serves whichever artifact exists; anything missing stays on `/app`.
+
+The launcher gets an extra guard because it is the entrypoint's foreground process — its exit is normally what surfaces a broken launcher as `CrashLoopBackOff`. In NFS mode it is supervised instead, with a fast-exit fallback: a run that dies in under `LAUNCHER_MIN_UPTIME` (default 20s) counts as a failed start, and after `LAUNCHER_MAX_FAST_FAILS` (default 3) the entrypoint stops using NFS and runs the baked `/app` build in the foreground for the rest of the pod's life — restoring normal pod-restart semantics. A run that stayed up past the threshold is treated as an intentional restart (hot-deploy or operator kill) and resets the counter. Note the guard catches a build that *crashes*, not one that starts cleanly and misbehaves, so treat launcher hot-deploys on pods serving other users' sessions with the same care as any other live deploy.
+
+**Remote agent pods** (launcher ids like `agent-<user>`) are separate deployments with their own baked image and their own `/data` volume. Changes to `launcher-daemon.ts` or anything it bundles (`jsonl-utils`, `tmux-pty`, …) reach them only after an image build/push plus a deployment update — and the marker must exist on *that* pod's volume for it to run from NFS thereafter.
 
 ## Permission Profiles
 
