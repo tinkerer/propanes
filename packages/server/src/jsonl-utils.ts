@@ -3,13 +3,59 @@ import { resolve, join, basename, dirname, normalize, isAbsolute } from 'node:pa
 import { existsSync, readFileSync, readdirSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { sqlite } from './db/index.js';
 
-export function computeJsonlDir(projectDir: string): string {
+export function computeJsonlDir(projectDir: string, homeDir = homedir()): string {
   const sanitized = projectDir.replaceAll('/', '-').replaceAll('.', '-');
-  return join(homedir(), '.claude', 'projects', sanitized);
+  return join(homeDir, '.claude', 'projects', sanitized);
 }
 
-export function computeJsonlPath(projectDir: string, claudeSessionId: string): string {
-  return join(computeJsonlDir(projectDir), `${claudeSessionId}.jsonl`);
+export function computeJsonlPath(projectDir: string, claudeSessionId: string, homeDir = homedir()): string {
+  return join(computeJsonlDir(projectDir, homeDir), `${claudeSessionId}.jsonl`);
+}
+
+/** Resolve the transcript path in the filesystem where the agent actually
+ * ran. The same resolver is used by the control plane for local sessions and
+ * by remote launchers for their private agent-home volume. */
+export function resolveSessionJsonlPath(
+  appProjectDir: string | null,
+  sessionCwd: string | null,
+  sessionRuntime: string | null | undefined,
+  claudeSessionId: string | null,
+  startedAt?: string | null,
+  status?: string | null,
+  homeDir = homedir(),
+): string | null {
+  if (sessionRuntime === 'codex') {
+    return computeCodexJsonlPath(
+      sessionCwd,
+      claudeSessionId,
+      startedAt,
+      status === 'running' || status === 'pending',
+      homeDir,
+    );
+  }
+  if (!claudeSessionId) return null;
+  const projectDir = appProjectDir || process.cwd();
+  const primary = computeJsonlPath(projectDir, claudeSessionId, homeDir);
+  if (existsSync(primary)) return primary;
+  if (sessionCwd && sessionCwd !== projectDir) {
+    const fallback = computeJsonlPath(sessionCwd, claudeSessionId, homeDir);
+    if (existsSync(fallback)) return fallback;
+  }
+  // The session row's cwd can change as the operator `cd`s in the terminal,
+  // while Claude keeps writing under the directory where it originally
+  // started. The UUID filename is exact, so scan the shallow projects folder
+  // as a final fallback (especially important for long-lived remote sessions).
+  const projectsRoot = join(homeDir, '.claude', 'projects');
+  if (existsSync(projectsRoot)) {
+    try {
+      for (const entry of readdirSync(projectsRoot)) {
+        const candidate = join(projectsRoot, entry, `${claudeSessionId}.jsonl`);
+        if (existsSync(candidate)) return candidate;
+      }
+    } catch { /* unreadable home — retain the expected primary below */ }
+  }
+  // Preserve the meaningful expected path while the CLI is still creating it.
+  return primary;
 }
 
 // Codex stores rollout files at ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl,
@@ -30,8 +76,9 @@ export function computeCodexJsonlPath(
   // that cross-contaminated concurrent sessions — see the note below — so it no
   // longer overrides the per-session resolution.
   _preferLatestByCwd = false,
+  homeDir = homedir(),
 ): string | null {
-  const codexRoot = join(homedir(), '.codex', 'sessions');
+  const codexRoot = join(homeDir, '.codex', 'sessions');
   if (!existsSync(codexRoot)) return null;
 
   // Direct lookup by id — rollout files embed the UUID in the filename. This is

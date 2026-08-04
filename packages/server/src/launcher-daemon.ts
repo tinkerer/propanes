@@ -21,6 +21,8 @@ import type {
   ImportSessionFilesResult,
   ExportSessionFiles,
   ExportSessionFilesResult,
+  ReadSessionJsonl,
+  ReadSessionJsonlResult,
   SyncCodebase,
   SyncCodebaseResult,
   SyncCodebaseToContainer,
@@ -37,6 +39,12 @@ import {
   computeJsonlDir,
   exportSessionFiles as exportSessionFilesLocal,
   extractArtifactPaths,
+  resolveSessionJsonlPath,
+  listJsonlFiles,
+  collectJsonlUnits,
+  readJsonlFileDelta,
+  filterJsonlLines,
+  type JsonlUnit,
 } from './jsonl-utils.js';
 
 const SERVER_WS_URL = process.env.SERVER_WS_URL || 'ws://localhost:3001/ws/launcher';
@@ -418,6 +426,136 @@ function handleExportSessionFiles(msg: ExportSessionFiles): void {
   }
 }
 
+function decodeJsonlCursor(cursor: string): Record<string, number> | null {
+  if (cursor === 'init') return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8'));
+    if (decoded?.v !== 1 || !decoded.o || typeof decoded.o !== 'object') return null;
+    const offsets: Record<string, number> = {};
+    for (const [key, value] of Object.entries(decoded.o)) {
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) offsets[key] = value;
+    }
+    return offsets;
+  } catch {
+    return null;
+  }
+}
+
+function injectSubagentId(line: string, subagentId?: string): string {
+  if (!subagentId) return line;
+  try {
+    return JSON.stringify({ ...JSON.parse(line), _subagentId: subagentId });
+  } catch {
+    return line;
+  }
+}
+
+/** Serve transcript deltas from the launcher's private agent-home disk. */
+function handleReadSessionJsonl(msg: ReadSessionJsonl): void {
+  const pending = (): ReadSessionJsonlResult => ({
+    type: 'read_session_jsonl_result',
+    sessionId: msg.sessionId,
+    ok: true,
+    pending: true,
+    cursor: msg.cursor,
+    reset: false,
+    order: [],
+    files: [],
+  });
+  try {
+    const jsonlPath = resolveSessionJsonlPath(
+      msg.projectDir,
+      msg.cwd,
+      msg.runtime,
+      msg.claudeSessionId,
+      msg.startedAt,
+      msg.status,
+      process.env.AGENT_HOME || os.homedir(),
+    );
+    if (!jsonlPath || !existsSync(jsonlPath)) {
+      sendToServer(pending());
+      return;
+    }
+
+    const isCodex = msg.runtime === 'codex';
+    const isLive = msg.status === 'running' || msg.status === 'pending';
+    const splitLines = (value: string) => isCodex
+      ? value.split('\n').filter((line) => line.trim())
+      : filterJsonlLines(value);
+
+    let units: JsonlUnit[];
+    if (msg.fileFilter && !isCodex) {
+      const target = listJsonlFiles(jsonlPath).find((file) => file.id === msg.fileFilter);
+      if (!target || !existsSync(target.filePath)) {
+        sendToServer(pending());
+        return;
+      }
+      const baseDir = path.dirname(jsonlPath);
+      const key = target.filePath.startsWith(baseDir + path.sep)
+        ? target.filePath.slice(baseDir.length + 1)
+        : target.filePath;
+      units = [{ key, path: target.filePath }];
+    } else {
+      units = collectJsonlUnits(jsonlPath, isCodex);
+    }
+
+    const offsets = decodeJsonlCursor(msg.cursor);
+    let reset = offsets === null;
+    const readUnits = () => {
+      const newOffsets: Record<string, number> = {};
+      const chunks: Array<{ key: string; subagentId?: string; lines: string[] }> = [];
+      for (const unit of units) {
+        const from = !reset && offsets && typeof offsets[unit.key] === 'number' ? offsets[unit.key] : 0;
+        const delta = readJsonlFileDelta(unit.path, from, !isLive);
+        if (delta.shrunk) return { newOffsets, chunks, shrunk: true };
+        newOffsets[unit.key] = delta.newOffset;
+        if (delta.text) chunks.push({ key: unit.key, subagentId: unit.subagentId, lines: splitLines(delta.text) });
+      }
+      return { newOffsets, chunks, shrunk: false };
+    };
+
+    let result = readUnits();
+    if (result.shrunk) {
+      reset = true;
+      result = readUnits();
+    }
+    if (reset && msg.tail && msg.tail > 0) {
+      let remaining = msg.tail;
+      for (let i = result.chunks.length - 1; i >= 0; i--) {
+        const lines = result.chunks[i].lines;
+        if (remaining <= 0) result.chunks[i].lines = [];
+        else if (lines.length > remaining) {
+          result.chunks[i].lines = lines.slice(-remaining);
+          remaining = 0;
+        } else remaining -= lines.length;
+      }
+    }
+
+    const response: ReadSessionJsonlResult = {
+      type: 'read_session_jsonl_result',
+      sessionId: msg.sessionId,
+      ok: true,
+      cursor: Buffer.from(JSON.stringify({ v: 1, o: result.newOffsets })).toString('base64url'),
+      reset,
+      order: units.map((unit) => unit.key),
+      files: result.chunks
+        .filter((chunk) => chunk.lines.length > 0)
+        .map((chunk) => ({
+          key: chunk.key,
+          lines: chunk.lines.map((line) => injectSubagentId(line, chunk.subagentId)).join('\n'),
+        })),
+    };
+    sendToServer(response);
+  } catch (err: any) {
+    sendToServer({
+      type: 'read_session_jsonl_result',
+      sessionId: msg.sessionId,
+      ok: false,
+      error: err?.message || 'Failed to read transcript',
+    });
+  }
+}
+
 function handleSyncCodebase(msg: SyncCodebase): void {
   const { sessionId, branch, projectDir, gitRemoteUrl } = msg;
   try {
@@ -652,6 +790,10 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
 
     case 'export_session_files':
       handleExportSessionFiles(msg);
+      break;
+
+    case 'read_session_jsonl':
+      handleReadSessionJsonl(msg);
       break;
 
     case 'sync_codebase':

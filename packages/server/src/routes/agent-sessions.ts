@@ -13,9 +13,9 @@ import { storeUploads } from './uploads.js';
 import { listSessions, sendCommand } from '../sessions.js';
 import { getAdminUser, memberSessionScope, visibleToMember } from '../admin-auth.js';
 import {
-  computeJsonlPath as computeJsonlPathFull,
+  computeJsonlPath,
   computeJsonlDir,
-  computeCodexJsonlPath,
+  resolveSessionJsonlPath,
   findContinuationJsonlsCached,
   readJsonlWithSubagents,
   filterJsonlLines,
@@ -26,11 +26,6 @@ import {
   readJsonlFileDelta,
   type JsonlUnit,
 } from '../jsonl-utils.js';
-
-function computeJsonlPath(projectDir: string | null, claudeSessionId: string | null): string | null {
-  if (!projectDir || !claudeSessionId) return null;
-  return computeJsonlPathFull(projectDir, claudeSessionId);
-}
 
 // Resolve the JSONL path, falling back to session cwd when the app's projectDir doesn't match.
 // Fafo runs use a temp directory as cwd, so the JSONL file lives under that path, not the app's projectDir.
@@ -43,16 +38,7 @@ function resolveJsonlPath(
   startedAt?: string | null,
   status?: string | null,
 ): string | null {
-  if (runtime === 'codex') {
-    return computeCodexJsonlPath(sessionCwd, claudeSessionId, startedAt, status === 'running' || status === 'pending');
-  }
-  const primary = computeJsonlPath(appProjectDir || process.cwd(), claudeSessionId);
-  if (primary && existsSync(primary)) return primary;
-  if (sessionCwd && sessionCwd !== (appProjectDir || process.cwd())) {
-    const fallback = computeJsonlPath(sessionCwd, claudeSessionId);
-    if (fallback && existsSync(fallback)) return fallback;
-  }
-  return primary; // return primary even if missing, so callers get a meaningful error path
+  return resolveSessionJsonlPath(appProjectDir, sessionCwd, runtime, claudeSessionId, startedAt, status);
 }
 
 export const agentSessionRoutes = new Hono();
@@ -471,7 +457,13 @@ async function enrichSessions(rows: SessionRow[]) {
       paneTitle: live?.paneTitle || null,
       paneCommand: live?.paneCommand || null,
       panePath: live?.panePath || null,
-      jsonlPath: resolveJsonlPath(r.appProjectDir, r.cwd, r.claudeSessionId, r.runtime, r.startedAt, r.status),
+      // A remote transcript lives on the launcher's private agent-home disk;
+      // expose an availability marker so Codex sessions (which cannot be
+      // resolved by scanning the control-plane filesystem) still get the
+      // structured-view controls. Plain shells never produce a transcript.
+      jsonlPath: isRemote && r.permissionProfile !== 'plain'
+        ? `remote://${r.launcherId}/${r.id}`
+        : resolveJsonlPath(r.appProjectDir, r.cwd, r.claudeSessionId, r.runtime, r.startedAt, r.status),
       launcherName,
       launcherHostname,
       machineName,
@@ -1026,6 +1018,7 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
       orgId: schema.agentSessions.orgId,
       runtime: sql<string>`coalesce(${schema.agentEndpoints.runtime}, ${schema.agentSessions.runtime}, 'claude')`,
       startedAt: schema.agentSessions.startedAt,
+      launcherId: schema.agentSessions.launcherId,
       appProjectDir: schema.applications.projectDir,
     })
     .from(schema.agentSessions)
@@ -1040,6 +1033,44 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
   }
   if (!visibleToMember(row, getAdminUser(c))) {
     return c.json({ error: 'Session not found' }, 404);
+  }
+
+  // Remote launcher sessions keep CLI state and transcripts on their private
+  // agent-home PVC. Ask that launcher for the same differential snapshot the
+  // local path below would produce; the control plane cannot read that disk.
+  const launcher = row.launcherId ? getLauncher(row.launcherId) : null;
+  if (isDifferential && launcher && !launcher.isLocal) {
+    try {
+      const { ulid } = await import('ulidx');
+      const result = await sendAndWait(row.launcherId!, {
+        type: 'read_session_jsonl' as const,
+        sessionId: ulid(),
+        targetSessionId: id,
+        projectDir: row.appProjectDir,
+        cwd: row.cwd,
+        claudeSessionId: row.claudeSessionId,
+        runtime: (row.runtime === 'codex' ? 'codex' : 'claude'),
+        startedAt: row.startedAt,
+        status: row.status,
+        fileFilter,
+        tail: tailN,
+        cursor: cursorParam || 'init',
+      }, 'read_session_jsonl_result', 10_000) as any;
+      if (!result.ok) return c.json({ error: result.error || 'Remote transcript read failed' }, 502);
+      if (result.pending) return pendingDelta();
+      const files = (result.files || []).map((file: { key: string; lines: string }) => ({
+        key: file.key,
+        lines: redactLines(file.lines.split('\n'), dropImageData, id).join('\n'),
+      }));
+      return c.json({
+        cursor: result.cursor || cursorParam || 'init',
+        reset: !!result.reset,
+        order: result.order || [],
+        files,
+      });
+    } catch (err: any) {
+      return c.json({ error: err?.message || 'Remote launcher unavailable' }, 502);
+    }
   }
 
   const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt, row.status);

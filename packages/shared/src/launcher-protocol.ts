@@ -85,6 +85,18 @@ export interface ExportSessionFilesResult {
   error?: string;
 }
 
+export interface ReadSessionJsonlResult {
+  type: 'read_session_jsonl_result';
+  sessionId: string;
+  ok: boolean;
+  pending?: boolean;
+  cursor?: string;
+  reset?: boolean;
+  order?: string[];
+  files?: Array<{ key: string; lines: string }>;
+  error?: string;
+}
+
 export interface SyncCodebaseResult {
   type: 'sync_codebase_result';
   sessionId: string;
@@ -170,6 +182,7 @@ export type LauncherToServerMessage =
   | HarnessStatusUpdate
   | ImportSessionFilesResult
   | ExportSessionFilesResult
+  | ReadSessionJsonlResult
   | SyncCodebaseResult
   | SyncCodebaseToContainerResult
   | CheckClaudeAuthResult
@@ -292,6 +305,24 @@ export interface ExportSessionFiles {
   artifactPaths: string[];
 }
 
+/** Read a differential transcript snapshot on a remote launcher. `sessionId`
+ * is a request correlation id; `targetSessionId` is the agent session whose
+ * files are being read. */
+export interface ReadSessionJsonl {
+  type: 'read_session_jsonl';
+  sessionId: string;
+  targetSessionId: string;
+  projectDir: string | null;
+  cwd: string | null;
+  claudeSessionId: string | null;
+  runtime: AgentRuntime;
+  startedAt?: string | null;
+  status?: string | null;
+  fileFilter?: string;
+  tail?: number;
+  cursor: string;
+}
+
 export interface SyncCodebase {
   type: 'sync_codebase';
   sessionId: string;
@@ -370,6 +401,7 @@ export type ServerToLauncherMessage =
   | LaunchHarnessSession
   | ImportSessionFiles
   | ExportSessionFiles
+  | ReadSessionJsonl
   | SyncCodebase
   | SyncCodebaseToContainer
   | RestartLauncher
