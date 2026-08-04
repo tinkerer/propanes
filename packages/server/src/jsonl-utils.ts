@@ -386,13 +386,16 @@ export interface JsonlUnit {
   subagentId?: string;
 }
 
-export function collectJsonlUnits(mainJsonlPath: string, isCodex: boolean): JsonlUnit[] {
+export function collectJsonlUnits(mainJsonlPath: string, isCodex: boolean, useContinuationCache = true): JsonlUnit[] {
   const baseDir = dirname(mainJsonlPath);
   const toKey = (p: string) => p.startsWith(baseDir + '/') ? p.slice(baseDir.length + 1) : p;
   if (isCodex) {
     return existsSync(mainJsonlPath) ? [{ key: toKey(mainJsonlPath), path: mainJsonlPath }] : [];
   }
-  const files = [mainJsonlPath, ...findContinuationJsonlsCached(mainJsonlPath)];
+  const continuations = useContinuationCache
+    ? findContinuationJsonlsCached(mainJsonlPath)
+    : findContinuationJsonls(mainJsonlPath);
+  const files = [mainJsonlPath, ...continuations];
   const units: JsonlUnit[] = [];
   for (const fp of files) {
     if (!existsSync(fp)) continue;
@@ -456,7 +459,7 @@ export interface JsonlFileInfo {
 }
 
 // List all JSONL files for a session: main + continuations + subagents
-export function listJsonlFiles(mainJsonlPath: string): JsonlFileInfo[] {
+export function listJsonlFiles(mainJsonlPath: string, useContinuationCache = true): JsonlFileInfo[] {
   const files: JsonlFileInfo[] = [];
   const mainSessionId = basename(mainJsonlPath, '.jsonl');
   let order = 0;
@@ -474,7 +477,9 @@ export function listJsonlFiles(mainJsonlPath: string): JsonlFileInfo[] {
     order = files.length;
   }
 
-  const continuations = findContinuationJsonlsCached(mainJsonlPath);
+  const continuations = useContinuationCache
+    ? findContinuationJsonlsCached(mainJsonlPath)
+    : findContinuationJsonls(mainJsonlPath);
   for (const contPath of continuations) {
     const contId = basename(contPath, '.jsonl');
     files.push({
