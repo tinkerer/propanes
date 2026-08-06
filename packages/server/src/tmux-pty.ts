@@ -248,6 +248,21 @@ export function getTmuxPaneCommand(sessionId: string): string {
   }
 }
 
+/** PID of the process running directly in a Propanes tmux pane. Interactive
+ * agent commands are exec'd, so this is also Claude's live registry key. */
+export function getTmuxPanePid(sessionId: string): number | null {
+  const name = tmuxName(sessionId);
+  try {
+    const raw = execFileSync('tmux', [
+      ...TMUX_SOCKET, 'list-panes', '-t', name, '-F', '#{pane_pid}',
+    ], { stdio: 'pipe', encoding: 'utf-8' }).trim().split('\n')[0];
+    const pid = Number(raw);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
 export function listPwTmuxSessions(): string[] {
   try {
     const output = execFileSync('tmux', [

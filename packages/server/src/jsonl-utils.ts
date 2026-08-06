@@ -23,6 +23,7 @@ export function resolveSessionJsonlPath(
   startedAt?: string | null,
   status?: string | null,
   homeDir = homedir(),
+  liveProcessId?: number | null,
 ): string | null {
   if (sessionRuntime === 'codex') {
     return computeCodexJsonlPath(
@@ -33,6 +34,12 @@ export function resolveSessionJsonlPath(
       homeDir,
     );
   }
+  // `/clear` (and its `/new`/`/reset` aliases) keeps the Claude process alive
+  // but rotates it to a fresh session UUID and transcript. Claude publishes
+  // that current UUID in its per-process registry. Prefer it for a live PTY;
+  // otherwise every structured-view poll remains pinned to the now-idle file
+  // named by the UUID used when Propanes originally launched the process.
+  claudeSessionId = resolveClaudeSessionIdForProcess(liveProcessId, claudeSessionId, homeDir);
   if (!claudeSessionId) return null;
   const projectDir = appProjectDir || process.cwd();
   const primary = computeJsonlPath(projectDir, claudeSessionId, homeDir);
@@ -56,6 +63,25 @@ export function resolveSessionJsonlPath(
   }
   // Preserve the meaningful expected path while the CLI is still creating it.
   return primary;
+}
+
+/** Resolve the current Claude UUID for a live CLI process. The registry is
+ * rewritten in place when `/clear` rotates the conversation. Treat malformed
+ * or stale registry data as absent and retain the database UUID. */
+export function resolveClaudeSessionIdForProcess(
+  processId: number | null | undefined,
+  fallbackSessionId: string | null,
+  homeDir = homedir(),
+): string | null {
+  if (!processId || !Number.isInteger(processId) || processId <= 0) return fallbackSessionId;
+  try {
+    const registry = JSON.parse(readFileSync(join(homeDir, '.claude', 'sessions', `${processId}.json`), 'utf-8'));
+    const current = typeof registry?.sessionId === 'string' ? registry.sessionId.trim() : '';
+    // Session IDs become filenames, so accept Claude's UUID/custom-id alphabet
+    // but never path separators or traversal.
+    if (current && /^[A-Za-z0-9_-]+$/.test(current)) return current;
+  } catch { /* registry missing while Claude starts/exits */ }
+  return fallbackSessionId;
 }
 
 // Codex stores rollout files at ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl,
@@ -384,6 +410,17 @@ export interface JsonlUnit {
   key: string;
   path: string;
   subagentId?: string;
+}
+
+/** A missing prior key means the transcript set was replaced (not extended),
+ * as happens when `/clear` rotates the main file. */
+export function jsonlCursorNeedsReset(
+  offsets: Record<string, number> | null,
+  units: Array<Pick<JsonlUnit, 'key'>>,
+): boolean {
+  if (offsets === null) return true;
+  const unitKeys = new Set(units.map((unit) => unit.key));
+  return Object.keys(offsets).some((key) => !unitKeys.has(key));
 }
 
 export function collectJsonlUnits(mainJsonlPath: string, isCodex: boolean, useContinuationCache = true): JsonlUnit[] {
