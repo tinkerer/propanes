@@ -42,6 +42,7 @@ import {
   resolveSessionJsonlPath,
   listJsonlFiles,
   collectJsonlUnits,
+  jsonlCursorNeedsReset,
   readJsonlFileDelta,
   filterJsonlLines,
   type JsonlUnit,
@@ -471,6 +472,7 @@ function handleReadSessionJsonl(msg: ReadSessionJsonl): void {
       msg.startedAt,
       msg.status,
       process.env.AGENT_HOME || os.homedir(),
+      sessions.get(msg.targetSessionId)?.ptyProcess.pid,
     );
     if (!jsonlPath || !existsSync(jsonlPath)) {
       sendToServer(pending());
@@ -500,7 +502,7 @@ function handleReadSessionJsonl(msg: ReadSessionJsonl): void {
     }
 
     const offsets = decodeJsonlCursor(msg.cursor);
-    let reset = offsets === null;
+    let reset = jsonlCursorNeedsReset(offsets, units);
     const readUnits = () => {
       const newOffsets: Record<string, number> = {};
       const chunks: Array<{ key: string; subagentId?: string; lines: string[] }> = [];

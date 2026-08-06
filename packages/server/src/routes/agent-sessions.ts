@@ -9,6 +9,7 @@ import { killSession } from '../agent-sessions.js';
 import { resumeAgentSession, dispatchTerminalSession, transferSession, getTransfer } from '../dispatch.js';
 import { getSessionLiveStates, inputSessionRemote, sendKeysSessionRemote } from '../session-service-client.js';
 import { getLauncher, sendAndWait } from '../launcher-registry.js';
+import { getTmuxPanePid } from '../tmux-pty.js';
 import { storeUploads } from './uploads.js';
 import { listSessions, sendCommand } from '../sessions.js';
 import { getAdminUser, memberSessionScope, visibleToMember } from '../admin-auth.js';
@@ -23,6 +24,7 @@ import {
   exportSessionFiles,
   listJsonlFiles,
   collectJsonlUnits,
+  jsonlCursorNeedsReset,
   readJsonlFileDelta,
   type JsonlUnit,
 } from '../jsonl-utils.js';
@@ -37,8 +39,12 @@ function resolveJsonlPath(
   runtime?: string | null,
   startedAt?: string | null,
   status?: string | null,
+  agentSessionId?: string,
 ): string | null {
-  return resolveSessionJsonlPath(appProjectDir, sessionCwd, runtime, claudeSessionId, startedAt, status);
+  const liveProcessId = agentSessionId && (status === 'running' || status === 'pending')
+    ? getTmuxPanePid(agentSessionId)
+    : null;
+  return resolveSessionJsonlPath(appProjectDir, sessionCwd, runtime, claudeSessionId, startedAt, status, undefined, liveProcessId);
 }
 
 export const agentSessionRoutes = new Hono();
@@ -862,7 +868,7 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
     return c.json({ error: 'Session not found' }, 404);
   }
 
-  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt, row.status);
+  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt, row.status, id);
   if (!jsonlPath) {
     return c.json({ error: 'No JSONL path available' }, 400);
   }
@@ -870,16 +876,16 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
   // Codex sessions don't have continuations or subagents — there's just one
   // rollout file per session. List it directly.
   const isCodex = row.runtime === 'codex';
-  const resolvedCodexSessionId = isCodex && jsonlPath
+  const resolvedSessionId = isCodex && jsonlPath
     ? basename(jsonlPath, '.jsonl').replace(/^rollout-\d{4}-\d{2}-\d{2}T[\d-]+-/, '')
-    : row.claudeSessionId;
+    : basename(jsonlPath, '.jsonl');
   const files = existsSync(jsonlPath)
     ? (isCodex
-        ? [{ id: `main:${resolvedCodexSessionId || basename(jsonlPath, '.jsonl')}`, claudeSessionId: resolvedCodexSessionId || basename(jsonlPath, '.jsonl'), type: 'main' as const, label: `Codex: ${basename(jsonlPath)}`, filePath: jsonlPath, order: 0, parentSessionId: undefined, agentId: undefined }]
+        ? [{ id: `main:${resolvedSessionId || basename(jsonlPath, '.jsonl')}`, claudeSessionId: resolvedSessionId || basename(jsonlPath, '.jsonl'), type: 'main' as const, label: `Codex: ${basename(jsonlPath)}`, filePath: jsonlPath, order: 0, parentSessionId: undefined, agentId: undefined }]
         : listJsonlFiles(jsonlPath))
     : [];
   return c.json({
-    claudeSessionId: resolvedCodexSessionId,
+    claudeSessionId: resolvedSessionId,
     runtime: row.runtime || 'claude',
     files: files.map(f => ({
       id: f.id,
@@ -1073,7 +1079,7 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
     }
   }
 
-  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt, row.status);
+  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt, row.status, id);
   if (!jsonlPath) {
     if (isDifferential) return pendingDelta();
     return c.json({ error: 'No JSONL path available' }, 400);
@@ -1123,7 +1129,10 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
     // nothing will ever complete it.
     const consumePartial = !isLive;
     const offsets = decodeJsonlCursor(cursorParam);
-    let reset = offsets === null;
+    // A disappeared key means the main transcript rotated (not merely that a
+    // subagent/continuation was added). Reset so mobile tailing applies and the
+    // browser drops buffers belonging to the pre-clear transcript.
+    let reset = jsonlCursorNeedsReset(offsets, units);
 
     const readUnits = () => {
       const newOffsets: Record<string, number> = {};
@@ -1240,7 +1249,7 @@ agentSessionRoutes.get('/:id/jsonl-image/:uuid/:imgIndex', async (c) => {
     return c.json({ error: 'Session not found' }, 404);
   }
 
-  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt, row.status);
+  const jsonlPath = resolveJsonlPath(row.appProjectDir, row.cwd, row.claudeSessionId, row.runtime, row.startedAt, row.status, id);
   if (!jsonlPath || !existsSync(jsonlPath)) {
     return c.json({ error: 'JSONL file not found' }, 404);
   }
