@@ -150,11 +150,16 @@ export class JsonOutputParser {
       if (obj.status === 'compacting') {
         return [{ id: this.genId(), role: 'system', timestamp: Date.now(), content: 'Compacting context…' }];
       }
-      if (obj.subtype === 'compact_boundary') {
-        const meta = obj.compact_metadata || {};
+      if (['compact_boundary', 'compaction', 'context_compaction', 'summary'].includes(obj.subtype)) {
+        // Transcript JSONL uses camelCase while stream-json and older Claude
+        // builds have emitted snake_case. Accept both wire shapes.
+        const meta = obj.compactMetadata || obj.compact_metadata || {};
         const parts = ['Context compacted'];
         if (meta.trigger) parts.push(`Trigger: ${meta.trigger}`);
-        if (typeof meta.pre_tokens === 'number') parts.push(`Before: ${meta.pre_tokens.toLocaleString()} tokens`);
+        const preTokens = meta.preTokens ?? meta.pre_tokens;
+        const postTokens = meta.postTokens ?? meta.post_tokens;
+        if (typeof preTokens === 'number') parts.push(`Before: ${preTokens.toLocaleString()} tokens`);
+        if (typeof postTokens === 'number') parts.push(`After: ${postTokens.toLocaleString()} tokens`);
         return [{ id: this.genId(), role: 'system', timestamp: Date.now(), content: parts.join(' | ') }];
       }
       if (obj.model) this.currentModel = obj.model;

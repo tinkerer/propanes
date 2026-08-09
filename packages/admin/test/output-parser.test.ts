@@ -62,14 +62,23 @@ test('compacting status renders as a system line', () => {
   assert.match(String(msgs[0].content), /compacting/i);
 });
 
-test('compact_boundary renders trigger and pre-token count', () => {
+test('compact_boundary renders real transcript camelCase metadata', () => {
   const msgs = feed([
-    { type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'auto', pre_tokens: 155000 } },
+    { type: 'system', subtype: 'compact_boundary', compactMetadata: { trigger: 'auto', preTokens: 155000, postTokens: 12000 } },
   ]);
   assert.deepEqual(roles(msgs), ['system']);
   assert.match(String(msgs[0].content), /Context compacted/);
   assert.match(String(msgs[0].content), /auto/);
   assert.match(String(msgs[0].content), /155,000/);
+  assert.match(String(msgs[0].content), /12,000/);
+});
+
+test('alternate Claude compaction subtype spellings render as system lines', () => {
+  for (const subtype of ['compaction', 'context_compaction', 'summary']) {
+    const msgs = feed([{ type: 'system', subtype }]);
+    assert.deepEqual(roles(msgs), ['system']);
+    assert.match(String(msgs[0].content), /Context compacted/);
+  }
 });
 
 test('isCompactSummary user message renders as system, not operator input', () => {

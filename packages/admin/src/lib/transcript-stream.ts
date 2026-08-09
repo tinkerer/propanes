@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { JsonOutputParser, type ParsedMessage } from './output-parser.js';
-import { CodexOutputParser } from './codex-output-parser.js';
+import { type ParsedMessage } from './output-parser.js';
+import { TranscriptAccumulator } from './transcript-accumulator.js';
 import { api } from './api.js';
 import { allSessions, exitedSessions } from './sessions.js';
 import { isMobile } from './viewport.js';
@@ -46,8 +46,8 @@ export interface TranscriptStreamState {
  *    multi-MB JSONL parses freeze Safari.
  *  - Polls are differential: an opaque per-file byte-offset cursor is sent
  *    back to the server, which returns only newly appended lines. The merged
- *    transcript is rebuilt locally from per-file buffers because subagent
- *    lines interleave mid-stream (the merge is not append-only).
+ *    transcript is assembled from incremental per-file parsers because
+ *    subagent lines interleave mid-stream (the merge is not append-only).
  *  - In-flight guard prevents request stacking on slow servers — the JSONL
  *    endpoint walks all continuations + subagents per call.
  */
@@ -58,11 +58,10 @@ export function useTranscriptStream(
   const [messages, setMessages] = useState<ParsedMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // Differential-update state: per-file line buffers + the server's merge
-  // order + the opaque cursor. The merged transcript is rebuilt locally from
-  // these, so each poll only downloads lines appended since the last one.
-  const buffers = useRef<Map<string, string>>(new Map());
-  const order = useRef<string[]>([]);
+  // Differential-update state: one incremental parser per physical file plus
+  // the opaque byte cursor. This avoids reparsing an ever-growing transcript
+  // after every small poll.
+  const accumulator = useRef(new TranscriptAccumulator());
   const cursor = useRef<string | null>(null);
 
   const sessionRecord = allSessions.value.find((s: any) => s.id === sessionId);
@@ -87,8 +86,7 @@ export function useTranscriptStream(
 
     // Reset on identity change so the previous session's tail doesn't bleed
     // into the new one mid-fetch.
-    buffers.current = new Map();
-    order.current = [];
+    accumulator.current = new TranscriptAccumulator();
     cursor.current = null;
     setMessages([]);
     setLoading(true);
@@ -119,30 +117,16 @@ export function useTranscriptStream(
           // runs, empty view once it's done. Buffers/cursor stay untouched in
           // case the file reappears.
           setError(null);
-          setLoading(!isSessionDone && buffers.current.size === 0);
+          setLoading(!isSessionDone && !accumulator.current.hasMessages);
           return;
         }
         cursor.current = delta.cursor;
-        order.current = delta.order;
-        if (delta.reset) buffers.current = new Map();
-        for (const f of delta.files) {
-          const prev = buffers.current.get(f.key);
-          buffers.current.set(f.key, prev ? prev + '\n' + f.lines : f.lines);
-        }
         if (!delta.reset && delta.files.length === 0) {
           // Nothing appended since the last poll — keep the current parse.
           setLoading(false);
           return;
         }
-        const text = order.current
-          .map(k => buffers.current.get(k))
-          .filter(Boolean)
-          .join('\n');
-        const parser = runtime === 'codex'
-          ? new CodexOutputParser()
-          : new JsonOutputParser();
-        parser.feed(text + '\n');
-        setMessages(parser.getMessages());
+        setMessages(accumulator.current.apply(runtime, delta.order, delta.files, delta.reset));
         setError(null);
         setLoading(false);
       } catch (err: any) {
