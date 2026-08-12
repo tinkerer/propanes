@@ -172,6 +172,50 @@ export class OverlayPanelManager {
     return id;
   }
 
+  /**
+   * Re-route an existing panel's iframe to a new hash route. The embed query
+   * string is kept identical so only the fragment changes — the browser
+   * performs an in-place fragment navigation and the admin SPA's hash router
+   * picks it up without a full reload. Returns false if the panel is gone
+   * (user closed it).
+   */
+  navigatePanel(id: string, type: PanelType, opts?: { param?: string; appId?: string }): boolean {
+    const state = this.panels.get(id);
+    if (!state) return false;
+    const config = PANEL_CONFIGS[type];
+    const appId = opts?.appId || this.appId;
+    const hashRoute = config.path(appId, opts?.param);
+    const embedMode = config.embedMode || 'true';
+    state.iframe.src = `${this.adminBaseUrl}?embed=${embedMode}&appId=${encodeURIComponent(appId)}#${hashRoute}`;
+    this.bringToFront(id);
+    return true;
+  }
+
+  /**
+   * Show (message) or clear (null) a slim status ribbon over the top of a
+   * panel's iframe — used e.g. while a freshly dispatched session is still
+   * spinning up. Deliberately a ribbon rather than a full veil so the iframe
+   * underneath (session list, or the login form when un-authed) stays usable.
+   */
+  setPanelStatus(id: string, message: string | null) {
+    const state = this.panels.get(id);
+    if (!state) return;
+    const wrap = state.el.querySelector('.pw-overlay-iframe-wrap');
+    if (!wrap) return;
+    let ribbon = wrap.querySelector('.pw-overlay-status') as HTMLElement | null;
+    if (!message) {
+      ribbon?.remove();
+      return;
+    }
+    if (!ribbon) {
+      ribbon = document.createElement('div');
+      ribbon.className = 'pw-overlay-status';
+      ribbon.innerHTML = '<span class="pw-overlay-status-spinner"></span><span class="pw-overlay-status-text"></span>';
+      wrap.appendChild(ribbon);
+    }
+    (ribbon.querySelector('.pw-overlay-status-text') as HTMLElement).textContent = message;
+  }
+
   /** Open or focus the workbench panel */
   openWorkbench(): string {
     if (this.workbenchId && this.panels.has(this.workbenchId)) {
