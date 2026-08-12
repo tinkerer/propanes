@@ -3539,42 +3539,91 @@ export class ProPanesElement {
     }
   }
 
-  // Poll the feedback record until its dispatch produces a session, then open
-  // that session on the current page. On the admin app itself we hash-swap to
-  // the /app/:appId/sessions/:sessionId deep link, which opens the sessions
-  // view scoped to this app and docks the session in the pane tree (instead of
-  // blowing away the layout with the standalone /session page). On any other
-  // host page we open the widget's Sessions overlay panel with the same route,
-  // so the list is filtered to this app and the dispatched session loads.
+  // Open the dispatched session on the current page. The session overlay is
+  // opened *immediately* — same as clicking the Sessions overlay button in the
+  // widget's icon row — with a loading ribbon, then we poll the feedback
+  // record until its dispatch produces a session id and route the panel to it.
+  // (Previously nothing opened until the poll resolved, so a slow-starting or
+  // unauthorized poll meant "Open Session" silently did nothing.)
+  //
+  // On the admin app itself we hash-swap to the /app/:appId/sessions[/:id]
+  // deep link, which opens the sessions view scoped to this app and docks the
+  // session in the pane tree (instead of blowing away the layout with the
+  // standalone /session page). On any other host page the overlay panel hosts
+  // the same route.
   private openDispatchedSession(feedbackId: string) {
     const base = this.apiBase();
-    const navigate = (sessionId: string) => {
-      try {
-        const adminOrigin = new URL(base).origin;
-        if (window.location.origin === adminOrigin && /\/admin\b/.test(window.location.pathname)) {
-          window.location.hash = `#/app/${this.appId}/sessions/${sessionId}`;
-          return;
-        }
-      } catch {}
-      this.overlayManager.openPanel('sessions', { param: sessionId });
+    let onAdminApp = false;
+    try {
+      const adminOrigin = new URL(base, window.location.href).origin;
+      onAdminApp = window.location.origin === adminOrigin && /\/admin\b/.test(window.location.pathname);
+    } catch {}
+
+    let panelId: string | null = null;
+    if (onAdminApp) {
+      window.location.hash = `#/app/${this.appId}/sessions`;
+    } else {
+      panelId = this.overlayManager.openPanel('sessions');
+      this.overlayManager.setPanelStatus(panelId, 'Starting agent session…');
+    }
+
+    const clearStatus = () => {
+      if (panelId) this.overlayManager.setPanelStatus(panelId, null);
     };
+    const navigate = (sessionId: string) => {
+      if (onAdminApp) {
+        window.location.hash = `#/app/${this.appId}/sessions/${sessionId}`;
+        return;
+      }
+      clearStatus();
+      // Panel gone = user closed it while the session was starting; treat
+      // that as a cancel rather than popping a fresh panel at them.
+      if (panelId) this.overlayManager.navigatePanel(panelId, 'sessions', { param: sessionId });
+    };
+
+    const currentToken = () => {
+      try {
+        return sessionStorage.getItem('pw-admin-token-overlay') || localStorage.getItem('pw-admin-token') || '';
+      } catch {
+        return '';
+      }
+    };
+
     const started = Date.now();
+    const DEADLINE_MS = 120000;
+    // Token that last got a 401/403. While it's unchanged there is no point
+    // re-hitting the endpoint (and spamming the console with 401s) — we idle
+    // until the overlay's login flow posts a fresh token via pw-embed-auth.
+    let deniedToken: string | null = null;
     const poll = async () => {
+      const expired = () => Date.now() - started >= DEADLINE_MS;
+      if (deniedToken !== null && currentToken() === deniedToken) {
+        if (expired()) clearStatus();
+        else setTimeout(poll, 1500);
+        return;
+      }
       try {
         const res = await fetch(`${base}/api/v1/admin/feedback/${feedbackId}`, {
           headers: this.adminAuthHeaders(),
         });
-        if (res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          deniedToken = currentToken();
+          if (panelId) this.overlayManager.setPanelStatus(panelId, 'Sign in to open the session');
+        } else if (res.ok) {
           const item = await res.json();
           const match = /started:\s*([0-9A-Za-z]{20,})/.exec(item?.dispatchResponse || '');
           if (match && item?.dispatchStatus === 'running') {
             navigate(match[1]);
             return;
           }
-          if (item?.dispatchStatus === 'error') return;
+          if (item?.dispatchStatus === 'error') {
+            clearStatus();
+            return;
+          }
         }
       } catch {}
-      if (Date.now() - started < 20000) setTimeout(poll, 700);
+      if (expired()) clearStatus();
+      else setTimeout(poll, 700);
     };
     poll();
   }

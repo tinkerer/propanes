@@ -102,6 +102,46 @@ export const OVERLAY_CSS = `
   display: block;
 }
 
+/* Slim status ribbon over the top of the iframe (e.g. "Starting agent
+   session…"). Floats over arbitrary iframe content, so it gets hardcoded
+   opaque paint. It's a ribbon, not a veil — the iframe stays interactive. */
+.pw-overlay-status {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  color: #e2e8f0;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.pw-overlay-status-spinner {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border: 2px solid #334155;
+  border-top-color: #818cf8;
+  border-radius: 50%;
+  animation: pw-status-spin 0.8s linear infinite;
+}
+
+@keyframes pw-status-spin {
+  to { transform: rotate(360deg); }
+}
+
+.pw-overlay-status-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .pw-overlay-iframe-mask {
   position: absolute;
   inset: 0;
