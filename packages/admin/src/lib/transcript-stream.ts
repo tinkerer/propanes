@@ -92,6 +92,13 @@ export function useTranscriptStream(
     setLoading(true);
     setError(null);
 
+    // No session yet (empty id while a view mounts before its session
+    // resolves) — polling would hit /agent-sessions//jsonl and 404.
+    if (!sessionId) {
+      setLoading(false);
+      return () => { cancelled = true; };
+    }
+
     // No transcript will ever exist — don't poll an endpoint that can only
     // answer `pending`. If the session record later gains a claudeSessionId /
     // jsonlPath, the flag flips and this effect re-runs with polling enabled.

@@ -319,6 +319,17 @@ if (isEmbedded.value) {
       if (e.data.appId) {
         selectedAppId.value = e.data.appId;
       }
+      // Hand our token back when the host didn't supply one. LoginPage only
+      // posts pw-embed-auth after an *interactive* login, so a remembered
+      // login left the host widget 401-ing against admin APIs (and showing
+      // "sign in" hints) even though the embed is visibly signed in. Same
+      // trust model as the LoginPage post, but targeted at the init sender.
+      if (!e.data.token) {
+        const token = localStorage.getItem('pw-admin-token');
+        if (token && e.source) {
+          (e.source as Window).postMessage({ type: 'pw-embed-auth', token }, e.origin || '*');
+        }
+      }
     } else if (e.data?.type === 'pw-embed-navigate') {
       if (e.data.route) {
         navigate(e.data.route);
