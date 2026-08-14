@@ -65,7 +65,7 @@ RUN apt-get update \
 # browser cache stays readable at /root/.cache; Claude/Codex agents run as the
 # non-root propanes user with their writable home on /data.
 RUN npm i -g \
-      @anthropic-ai/claude-code@2.1.202 \
+      @anthropic-ai/claude-code@2.1.232 \
       @openai/codex@0.142.5 \
       @schpet/linear-cli@2.2.0 \
       @playwright/mcp@latest \
@@ -74,6 +74,14 @@ RUN npm i -g \
  && ln -s "$(npm root -g)" /root/node_modules \
  && mkdir -p /root/.claude /root/.codex \
  && node -e 'const f="/root/.claude.json";const fs=require("fs");let j={};try{j=JSON.parse(fs.readFileSync(f))}catch(e){};j.mcpServers=Object.assign({},j.mcpServers,{playwright:{type:"http",url:"http://localhost:8931/mcp"}});fs.writeFileSync(f,JSON.stringify(j))'
+
+# In-session `claude update` can't write the root-owned npm-global tree, so
+# swap npm's /usr/local/bin/claude symlink for a shim that prefers a
+# user-owned native install on the persistent /data volume (see the shim).
+COPY docker-claude-shim.sh /usr/local/bin/docker-claude-shim.sh
+RUN rm /usr/local/bin/claude \
+ && cp /usr/local/bin/docker-claude-shim.sh /usr/local/bin/claude \
+ && chmod +x /usr/local/bin/claude /usr/local/bin/docker-claude-shim.sh
 
 # Dev/agent tooling for in-container terminal sessions: enough to fetch and
 # run installers for the rest (az via aka.ms/InstallAzureCLIDeb, aws via the
