@@ -3451,6 +3451,30 @@ export class ProPanesElement {
       this.dispatchMode = 'off';
     }
 
+    // The persisted "⚡ YOLO" mode must bind at submit time, not only in the
+    // send menu's Send-button handler — otherwise an Enter / auto-dispatch
+    // submit with YOLO selected silently dispatched interactive-require with
+    // whatever agent was last saved.
+    if (shouldDispatch && !this.pendingPermissionProfile) {
+      let savedMode: string | null = null;
+      try {
+        savedMode = localStorage.getItem('pw-dispatch-mode');
+      } catch {}
+      if (savedMode === 'yolo') {
+        this.pendingPermissionProfile = 'interactive-yolo';
+        // Mirror the send menu: an explicitly chosen agent keeps priority
+        // (yolo profile is forced onto it); auto-pick only when none is set.
+        let savedAgent: string | null = null;
+        try {
+          savedAgent = localStorage.getItem('pw-dispatch-agent');
+        } catch {}
+        if (!this.dispatchAgentOverride && !savedAgent) {
+          const agent = this.pickYoloAgent(this.cachedAgents);
+          if (agent) this.dispatchAgentOverride = agent.id;
+        }
+      }
+    }
+
     // Screenshot-only submission (no description, no voice, no selected elements, no timeline):
     // upload directly to /api/v1/screenshots — no feedback item created.
     // Tested against rawDescription: a console attachment alone shouldn't
@@ -3602,12 +3626,16 @@ export class ProPanesElement {
         else setTimeout(poll, 1500);
         return;
       }
+      // Pin the token for this request so a fresh token arriving mid-fetch
+      // can't be mistakenly recorded as the denied one (which would park the
+      // poll forever with a good token in hand).
+      const tokenUsed = currentToken();
       try {
         const res = await fetch(`${base}/api/v1/admin/feedback/${feedbackId}`, {
-          headers: this.adminAuthHeaders(),
+          headers: tokenUsed ? { Authorization: `Bearer ${tokenUsed}` } : {},
         });
         if (res.status === 401 || res.status === 403) {
-          deniedToken = currentToken();
+          deniedToken = tokenUsed;
           if (panelId) this.overlayManager.setPanelStatus(panelId, 'Sign in to open the session');
         } else if (res.ok) {
           const item = await res.json();
