@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
+import { BASE_PATH } from '../../lib/base-path.js';
 import { api } from '../../lib/api.js';
 import { loadApplications, navigate } from '../../lib/state.js';
 import { openSession, loadAllSessions } from '../../lib/sessions.js';
@@ -35,7 +36,7 @@ export function AddAppModal({ onClose }: { onClose: () => void }) {
   const [cloneParentDir, setCloneParentDir] = useState('');
   const [cloneDirName, setCloneDirName] = useState('');
 
-  const serverUrl = `${window.location.protocol}//${window.location.host}`;
+  const serverUrl = `${window.location.protocol}//${window.location.host}${BASE_PATH}`;
 
   async function handleSubmit() {
     setError('');

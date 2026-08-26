@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
+import { serverPath } from '../../lib/base-path.js';
 import { api } from '../../lib/api.js';
 import { subscribeAdmin } from '../../lib/admin-ws.js';
 
@@ -206,10 +207,10 @@ export function WiggumRunsPanel({ sessionId }: { sessionId: string }) {
                         </span>
                         {iter.screenshotId && (
                           <img
-                            src={`/api/v1/admin/wiggum/${run.id}/screenshots/${iter.screenshotId}`}
+                            src={serverPath(`/api/v1/admin/wiggum/${run.id}/screenshots/${iter.screenshotId}`)}
                             alt={`#${iter.iteration}`}
                             style={{ width: 48, height: 32, objectFit: 'cover', borderRadius: 3, border: '1px solid var(--pw-border)', cursor: 'pointer' }}
-                            onClick={() => window.open(`/api/v1/admin/wiggum/${run.id}/screenshots/${iter.screenshotId}`, '_blank')}
+                            onClick={() => window.open(serverPath(`/api/v1/admin/wiggum/${run.id}/screenshots/${iter.screenshotId}`), '_blank')}
                           />
                         )}
                       </div>

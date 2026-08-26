@@ -1,4 +1,5 @@
 import { signal } from '@preact/signals';
+import { serverPath } from '../../lib/base-path.js';
 import { marked } from 'marked';
 import { ElementCard } from './ElementCard.js';
 
@@ -127,7 +128,7 @@ export function SpecView({
     if (block.kind === 'screenshot') {
       const ss = screenshots.find((s) => s.id === block.content);
       if (!ss) return <span key={`ss-${i}`} class="spec-block spec-block-missing">[screenshot {block.content} not found]</span>;
-      const src = `/api/v1/images/${ss.id}${cacheBuster ? `?t=${cacheBuster}` : ''}`;
+      const src = serverPath(`/api/v1/images/${ss.id}${cacheBuster ? `?t=${cacheBuster}` : ''}`);
       return (
         <div key={`ss-${i}`} class={`spec-block spec-block-screenshot${margin ? ' spec-margin-item' : ''}`}>
           <img
@@ -192,7 +193,7 @@ export function SpecView({
                   <img
                     key={ss.id}
                     class="spec-embed-screenshot"
-                    src={`/api/v1/images/${ss.id}${cacheBuster ? `?t=${cacheBuster}` : ''}`}
+                    src={serverPath(`/api/v1/images/${ss.id}${cacheBuster ? `?t=${cacheBuster}` : ''}`)}
                     alt={ss.filename || 'Screenshot'}
                     onClick={() => onScreenshotClick?.(ss)}
                   />
@@ -244,7 +245,7 @@ export function SpecView({
               <img
                 key={ss.id}
                 class="spec-embed-screenshot"
-                src={`/api/v1/images/${ss.id}${cacheBuster ? `?t=${cacheBuster}` : ''}`}
+                src={serverPath(`/api/v1/images/${ss.id}${cacheBuster ? `?t=${cacheBuster}` : ''}`)}
                 alt={ss.filename || 'Screenshot'}
                 onClick={() => onScreenshotClick?.(ss)}
               />

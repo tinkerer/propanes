@@ -250,6 +250,20 @@ async function serveAdminIndex(c: any) {
   }
   const key = resolveAdminAppApiKey();
   if (key) html = html.split(ADMIN_KEY_SENTINEL).join(key);
+  // Behind a path-prefixed reverse proxy (the platform dashboard mounts this
+  // whole server at /propanes and its widget embeds /propanes/admin/ in
+  // overlay panels) the shell's absolute /admin/… asset URLs escape the
+  // prefix and the HOST app answers them with its own index.html — the
+  // white-iframe "text/html is not a module script" failure. When the shell
+  // is served at /admin/ itself (one path segment deep, any prefix stripped
+  // by the proxy), the same assets are reachable relatively and relative
+  // URLs survive any mount prefix, so rewrite them. The /, /<user>, and bare
+  // /admin mounts keep absolute URLs — relative ones would resolve outside
+  // /admin/ there. The SPA handles the API-call half itself by deriving the
+  // prefix from location.pathname (admin/src/lib/base-path.ts).
+  if (/^\/admin\/[^/]*$/.test(c.req.path)) {
+    html = html.replaceAll('"/admin/', '"./');
+  }
   c.header('Content-Type', 'text/html; charset=utf-8');
   c.header('Cache-Control', 'no-cache, no-store, must-revalidate');
   return c.body(html);

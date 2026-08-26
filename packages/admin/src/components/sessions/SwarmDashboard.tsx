@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'preact/hooks';
+import { serverPath } from '../../lib/base-path.js';
 import { marked } from 'marked';
 import { api } from '../../lib/api.js';
 import { launchFAFOAssistant } from '../../lib/agent-constants.js';
@@ -765,12 +766,12 @@ function RunCell({ run, detail }: { run: SwarmRun; detail: SwarmDetail }) {
   const isDimmed = run.survived === false;
   const isSurvivor = run.survived === true;
 
-  const targetUrl = `/api/v1/admin/wiggum/swarms/${detail.id}/target`;
+  const targetUrl = serverPath(`/api/v1/admin/wiggum/swarms/${detail.id}/target`);
   const latestScreenshot = run.screenshots.length > 0
     ? run.screenshots[Math.min(selectedScreenshot, run.screenshots.length - 1)]
     : null;
   const screenshotUrl = latestScreenshot
-    ? (latestScreenshot.url || `/api/v1/admin/wiggum/${run.id}/screenshots/${latestScreenshot.id}`)
+    ? serverPath(latestScreenshot.url || `/api/v1/admin/wiggum/${run.id}/screenshots/${latestScreenshot.id}`)
     : null;
 
   const submitFeedback = async (rating: number) => {
@@ -1012,7 +1013,7 @@ function RunCell({ run, detail }: { run: SwarmRun; detail: SwarmDetail }) {
               {run.screenshots.map((ss: any, i: number) => (
                 <img
                   key={ss.id}
-                  src={ss.url || `/api/v1/admin/wiggum/${run.id}/screenshots/${ss.id}`}
+                  src={serverPath(ss.url || `/api/v1/admin/wiggum/${run.id}/screenshots/${ss.id}`)}
                   style={{
                     width: 100, height: 66, objectFit: 'cover', borderRadius: 4,
                     border: `2px solid ${i === selectedScreenshot ? '#7c3aed' : 'var(--pw-border)'}`,

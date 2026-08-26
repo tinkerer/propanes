@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { serverPath } from '../lib/base-path.js';
 import { api } from '../lib/api.js';
 import { subscribeAdmin } from '../lib/admin-ws.js';
 import { SwarmDashboard } from '../components/sessions/SwarmDashboard.js';
@@ -461,7 +462,7 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
 
           {iter.screenshotId && (
             <img
-              src={`/api/v1/admin/wiggum/${run.id}/screenshots/${iter.screenshotId}`}
+              src={serverPath(`/api/v1/admin/wiggum/${run.id}/screenshots/${iter.screenshotId}`)}
               alt={`Iteration ${iter.iteration}`}
               style={{
                 width: 120,
@@ -472,7 +473,7 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
                 cursor: 'pointer',
                 flexShrink: 0,
               }}
-              onClick={() => window.open(`/api/v1/admin/wiggum/${run.id}/screenshots/${iter.screenshotId}`, '_blank')}
+              onClick={() => window.open(serverPath(`/api/v1/admin/wiggum/${run.id}/screenshots/${iter.screenshotId}`), '_blank')}
             />
           )}
         </div>
@@ -487,7 +488,7 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
               .map((iter) => (
                 <div key={iter.iteration} style={{ textAlign: 'center', flexShrink: 0 }}>
                   <img
-                    src={`/api/v1/admin/wiggum/${run.id}/screenshots/${iter.screenshotId}`}
+                    src={serverPath(`/api/v1/admin/wiggum/${run.id}/screenshots/${iter.screenshotId}`)}
                     alt={`Iteration ${iter.iteration}`}
                     style={{
                       width: 200,
@@ -497,7 +498,7 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
                       border: '1px solid #333',
                       cursor: 'pointer',
                     }}
-                    onClick={() => window.open(`/api/v1/admin/wiggum/${run.id}/screenshots/${iter.screenshotId}`, '_blank')}
+                    onClick={() => window.open(serverPath(`/api/v1/admin/wiggum/${run.id}/screenshots/${iter.screenshotId}`), '_blank')}
                   />
                   <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>#{iter.iteration}</div>
                 </div>

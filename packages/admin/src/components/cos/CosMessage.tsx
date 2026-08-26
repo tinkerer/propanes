@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
+import { serverPath } from '../../lib/base-path.js';
 import {
   getSessionIdForThread,
   retryFailedAssistantMessage,
@@ -114,7 +115,7 @@ export function getAgentAvatarSrc(agentId: string | null | undefined): string | 
     // compiler; cast through unknown so the avatar path picks up the
     // configured base URL without dragging vite/client types into tsconfig.
     const env = (import.meta as unknown as { env?: { BASE_URL?: string } }).env;
-    return `${env?.BASE_URL ?? '/'}chief-of-staff-avatar.svg`;
+    return serverPath(`${env?.BASE_URL ?? '/'}chief-of-staff-avatar.svg`);
   }
   return null;
 }

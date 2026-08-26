@@ -1,4 +1,5 @@
 import { useSignal, useSignalEffect } from '@preact/signals';
+import { serverPath } from '../lib/base-path.js';
 import { useRef, useEffect } from 'preact/hooks';
 import { createPortal } from 'preact/compat';
 import { marked } from 'marked';
@@ -579,7 +580,7 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
                 fb={fb}
                 onEdit={() => { editDescValue.value = fb.description || ''; editingDescription.value = true; }}
                 onScreenshotClick={(ss: any) => {
-                  lightboxSrc.value = `/api/v1/images/${ss.id}${cacheBuster.value ? `?t=${cacheBuster.value}` : ''}`;
+                  lightboxSrc.value = serverPath(`/api/v1/images/${ss.id}${cacheBuster.value ? `?t=${cacheBuster.value}` : ''}`);
                   lightboxImageId.value = ss.id;
                   lightboxFeedbackId.value = fb.id;
                   cropMode.value = false;
@@ -838,7 +839,7 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
               <section class="detail-section">
                 <h4>Voice Recording</h4>
                 <VoicePlayback
-                  audioUrl={`/api/v1/audio/${fb.audioFiles[0].id}`}
+                  audioUrl={serverPath(`/api/v1/audio/${fb.audioFiles[0].id}`)}
                   duration={fb.data.voiceRecording.duration || 0}
                   transcript={fb.data.voiceRecording.transcript || []}
                   interactions={fb.data.voiceRecording.interactions || []}
@@ -880,10 +881,10 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
                     <div key={s.id} style="position:relative">
                       <img
                         class="screenshot-img"
-                        src={`/api/v1/images/${s.id}${cacheBuster.value ? `?t=${cacheBuster.value}` : ''}`}
+                        src={serverPath(`/api/v1/images/${s.id}${cacheBuster.value ? `?t=${cacheBuster.value}` : ''}`)}
                         alt={s.filename}
                         onClick={() => {
-                          lightboxSrc.value = `/api/v1/images/${s.id}${cacheBuster.value ? `?t=${cacheBuster.value}` : ''}`;
+                          lightboxSrc.value = serverPath(`/api/v1/images/${s.id}${cacheBuster.value ? `?t=${cacheBuster.value}` : ''}`);
                           lightboxImageId.value = s.id;
                           lightboxFeedbackId.value = fb.id;
                           cropMode.value = false;
@@ -1074,7 +1075,7 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
                 onSaved={(mode, newScreenshot) => {
                   if (mode === 'replace') {
                     cacheBuster.value = Date.now();
-                    lightboxSrc.value = `/api/v1/images/${lightboxImageId.value}?t=${cacheBuster.value}`;
+                    lightboxSrc.value = serverPath(`/api/v1/images/${lightboxImageId.value}?t=${cacheBuster.value}`);
                   } else if (newScreenshot) {
                     const fb2 = feedback.value;
                     if (fb2) {
@@ -1082,7 +1083,7 @@ export function FeedbackDetailPage({ id, appId, embedded }: { id: string; appId:
                       feedback.value = { ...fb2 };
                     }
                     lightboxImageId.value = newScreenshot.id;
-                    lightboxSrc.value = `/api/v1/images/${newScreenshot.id}`;
+                    lightboxSrc.value = serverPath(`/api/v1/images/${newScreenshot.id}`);
                   }
                   cropMode.value = false;
                 }}

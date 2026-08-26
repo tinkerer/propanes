@@ -1,3 +1,6 @@
+// Must be the first import: patches fetch/WS/EventSource with the mount
+// prefix before any other module can issue a request.
+import { serverPath } from './lib/base-path.js';
 import { render } from 'preact';
 import { App } from './components/shell/App.js';
 import './lib/settings.js';
@@ -54,8 +57,8 @@ async function resolveAdminWidgetApiKey(): Promise<string | undefined> {
 
 async function installAdminFeedbackWidget() {
   const widgetScript = document.createElement('script');
-  widgetScript.src = '/widget/propanes.js';
-  widgetScript.dataset.endpoint = '/api/v1/feedback';
+  widgetScript.src = serverPath('/widget/propanes.js');
+  widgetScript.dataset.endpoint = serverPath('/api/v1/feedback');
   widgetScript.dataset.mode = 'always';
   widgetScript.dataset.position = 'bottom-right';
   const appKey = await resolveAdminWidgetApiKey();

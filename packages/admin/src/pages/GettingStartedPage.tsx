@@ -1,4 +1,5 @@
 import { useSignal } from '@preact/signals';
+import { serverPath } from '../lib/base-path.js';
 import { useRef, useEffect } from 'preact/hooks';
 import { marked } from 'marked';
 
@@ -75,7 +76,7 @@ export function GettingStartedPage() {
     <div>
       <div class="page-header">
         <h2>Getting Started</h2>
-        <a href="/GETTING_STARTED.md" target="_blank" class="btn btn-sm" style="text-decoration:none">
+        <a href={serverPath('/GETTING_STARTED.md')} target="_blank" class="btn btn-sm" style="text-decoration:none">
           Raw Markdown
         </a>
       </div>

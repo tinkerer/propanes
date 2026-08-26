@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { serverPath } from '../../lib/base-path.js';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { lastTerminalInput } from '../../lib/sessions.js';
@@ -449,7 +450,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       const pathWord = w || '';
       if (/^(\/|~\/)/.test(pathWord) && pathWord.length > 1) {
         const filePath = pathWord.startsWith('~/') ? `/home/${pathWord.slice(2)}` : pathWord;
-        const fileUrl = `/files${filePath}`;
+        const fileUrl = serverPath(`/files${filePath}`);
         const pLabel = pathWord.length > 35 ? pathWord.slice(0, 35) + '\u2026' : pathWord;
         items.push({ label: `Open "${pLabel}" in pane`, action: () => {
           openUrlCompanion(`${location.protocol}//${location.host}${fileUrl}`);
