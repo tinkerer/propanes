@@ -3783,7 +3783,7 @@ export class ProPanesElement {
       if (!res.ok) {
         throw await apiResponseError(res);
       }
-      return res.json();
+      return this.readRecordedFeedback(res);
     } else {
       const res = await this.fetchWithContext(this.config.endpoint, {
         method: 'POST',
@@ -3794,8 +3794,28 @@ export class ProPanesElement {
       if (!res.ok) {
         throw await apiResponseError(res);
       }
-      return res.json();
+      return this.readRecordedFeedback(res);
     }
+  }
+
+  // The POST response body is the server's confirmation that the item was
+  // recorded — it echoes the created record with its `id`. A 2xx alone isn't
+  // enough: a reverse proxy or gateway in front of ProPanes can answer with an
+  // unexpected 2xx body (or none), which would otherwise read as success and
+  // make handleSubmit() clear the user's prompt on a phantom save. Treat a 2xx
+  // that doesn't parse to an object carrying an `id` as a failed submit, so the
+  // caller's catch keeps the typed prompt intact.
+  private async readRecordedFeedback(res: Response): Promise<{ id: string; [k: string]: unknown }> {
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      throw new Error('Feedback was not recorded — the server returned an unexpected response. Your text was kept.');
+    }
+    if (!body || typeof body !== 'object' || !(body as { id?: unknown }).id) {
+      throw new Error('Feedback was not recorded — the server did not confirm it. Your text was kept.');
+    }
+    return body as { id: string; [k: string]: unknown };
   }
 
   private async submitAppend(feedbackId: string, description: string) {
