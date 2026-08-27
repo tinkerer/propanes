@@ -924,6 +924,34 @@ export const WIDGET_CSS = `
   fill: currentColor;
 }
 
+/* In-flight: swap the paper-plane for a spinner and lock the button so a
+   submit can't be re-fired while its POST is round-tripping. */
+.pw-send-btn.pw-send-busy {
+  cursor: default;
+  transform: none;
+}
+.pw-send-btn.pw-send-busy:hover {
+  background: #1d9bf0;
+}
+.pw-send-btn.pw-send-busy.pw-dispatch-active:hover {
+  background: #eab308;
+}
+.pw-send-btn.pw-send-busy svg {
+  display: none;
+}
+.pw-send-btn.pw-send-busy::after {
+  content: '';
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: pw-send-spin 0.6s linear infinite;
+}
+@keyframes pw-send-spin {
+  to { transform: rotate(360deg); }
+}
+
 .pw-send-dropdown-toggle {
   height: 32px;
   width: 24px;

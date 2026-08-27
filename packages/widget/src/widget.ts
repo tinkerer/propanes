@@ -244,6 +244,12 @@ export class ProPanesElement {
   private pickerCleanup: (() => void) | null = null;
   private overlayManager: OverlayPanelManager;
   private appId: string;
+  // Guards handleSubmit against re-entry. All three entry points (Enter, the
+  // send button, the send-menu Send item) route through handleSubmit, and the
+  // POST's round-trip is long enough that rapid Enter/clicks would otherwise
+  // each read the still-populated input and fire a duplicate submit before the
+  // first cleared it.
+  private isSubmitting = false;
   // Hydrated in constructor once appId + sessionId are known. Reads from the
   // (appId, sessionId)-scoped key first, then falls back to the legacy
   // unscoped 'pw-widget-draft' key so existing drafts aren't lost on upgrade.
@@ -3380,6 +3386,13 @@ export class ProPanesElement {
       return;
     }
 
+    // A submit is already in flight — ignore the extra Enter/click so we don't
+    // record duplicate feedback items (the send button also shows a spinner,
+    // but the guard is what actually prevents the duplicate).
+    if (this.isSubmitting) return;
+    this.isSubmitting = true;
+    this.setSendButtonBusy(true);
+
     // Console capture rides along inside the description as a fenced code
     // block so the agent gets it without needing a new server-side schema.
     // Mirrors how the admin InterruptBar appends "Recent browser console
@@ -3442,6 +3455,9 @@ export class ProPanesElement {
         errorEl.classList.remove('pw-hidden');
         input.disabled = false;
         input.focus();
+      } finally {
+        this.isSubmitting = false;
+        this.setSendButtonBusy(false);
       }
       return;
     }
@@ -3560,7 +3576,19 @@ export class ProPanesElement {
     } finally {
       this.dispatchAgentOverride = null;
       this.pendingPermissionProfile = null;
+      this.isSubmitting = false;
+      this.setSendButtonBusy(false);
     }
+  }
+
+  // Toggle the send button's in-flight state: disabled + a spinner in place of
+  // the paper-plane, so a submit visibly can't be re-fired. Targets both send
+  // button layouts (plain, and the dispatch send-group).
+  private setSendButtonBusy(busy: boolean) {
+    const btn = this.shadow.querySelector('#pw-send-btn') as HTMLButtonElement | null;
+    if (!btn) return;
+    btn.classList.toggle('pw-send-busy', busy);
+    btn.disabled = busy;
   }
 
   // Open the dispatched session on the current page. The session overlay is
