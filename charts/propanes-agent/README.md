@@ -38,7 +38,7 @@ Then set the user's `launcher_id` in ProPanes to `agent-maksym`.
 
 ## Credentials
 
-For an empty seed, leave the four `agentAuthSecret.data` values as empty
+For an empty seed, leave the `agentAuthSecret.data` values as empty
 strings. To seed credentials, either edit a private values file or pre-create
 the Secret and set:
 
@@ -52,8 +52,17 @@ The expected Secret keys are:
 
 - `claude-credentials.json`
 - `claude-config.json`
+- `claude-settings.json`
 - `codex-auth.json`
 - `codex-config.toml`
+
+`claude-settings.json` seeds Claude Code's `settings.json` and is the one key
+the entrypoint re-applies on every start rather than only when absent: its
+`env` block (model pinning, provider switches) is operator config and stays
+authoritative, while the home's own keys — theme, `tui`, and whatever `/model`
+last saved — are preserved. Leave it empty unless the pod talks to a specific
+provider; per-user pods where the user logs into their own Claude account do
+not need it.
 
 ## noVNC access
 

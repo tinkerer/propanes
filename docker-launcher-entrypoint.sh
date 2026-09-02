@@ -32,6 +32,26 @@ seed_agent_home() {
     cp "$AGENT_AUTH_SEED_DIR/codex-config.toml" "$AGENT_HOME/.codex/config.toml"
   fi
 
+  # Claude Code settings: the seed carries the operator-owned model/provider
+  # wiring (ANTHROPIC_MODEL, the ANTHROPIC_DEFAULT_*_MODEL aliases, the Bedrock
+  # switches). Unlike the seeds above this one is re-applied on every start,
+  # because `/model` saves the user's pick into this same file on the
+  # persistent volume: a copy-if-absent seed could never repair a home whose
+  # pinned models had gone stale, which is how one `/model` pick took every
+  # later session on the GovCloud pod down with a 400.
+  #
+  # Merge rather than overwrite. The seed's `env` keys win, since that is the
+  # operator's provider config and it has to stay authoritative. Every other
+  # key already in the home is kept — theme, tui, and the user's own `model`
+  # pick — and keys the seed introduces are added when the home lacks them.
+  # A missing, empty, or unparseable seed leaves the file untouched.
+  if [ -s "$AGENT_AUTH_SEED_DIR/claude-settings.json" ]; then
+    node -e 'const fs=require("fs");const seedPath=process.argv[1],targetPath=process.argv[2];let seed;try{seed=JSON.parse(fs.readFileSync(seedPath,"utf8"))}catch{};if(!seed||typeof seed!=="object"||Array.isArray(seed))process.exit(0);let cur;try{cur=JSON.parse(fs.readFileSync(targetPath,"utf8"))}catch{};if(!cur||typeof cur!=="object"||Array.isArray(cur))cur={};const out={...cur};for(const k of Object.keys(seed))if(k!=="env"&&!(k in out))out[k]=seed[k];const env={...(cur.env&&typeof cur.env==="object"?cur.env:{}),...(seed.env&&typeof seed.env==="object"?seed.env:{})};if(Object.keys(env).length)out.env=env;fs.writeFileSync(targetPath,JSON.stringify(out,null,2)+"\n")' \
+      "$AGENT_AUTH_SEED_DIR/claude-settings.json" \
+      "$AGENT_HOME/.claude/settings.json" \
+      || echo "[entrypoint] claude-settings.json seed failed; leaving $AGENT_HOME/.claude/settings.json unchanged"
+  fi
+
   node -e 'const fs=require("fs");const seed=process.env.AGENT_AUTH_SEED_DIR+"/claude-config.json";const f=process.env.AGENT_HOME+"/.claude.json";let j={};try{j=JSON.parse(fs.readFileSync(f,"utf8"))}catch{};if(!j.oauthAccount&&fs.existsSync(seed)){try{j={...JSON.parse(fs.readFileSync(seed,"utf8")),...j}}catch{}};j.mcpServers=Object.assign({},j.mcpServers,{playwright:{type:"http",url:"http://localhost:8931/mcp"}});fs.writeFileSync(f,JSON.stringify(j))'
 
   chown -R "$AGENT_USER:$AGENT_USER" "$AGENT_HOME"
