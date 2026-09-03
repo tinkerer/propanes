@@ -33,3 +33,42 @@ test('fresh database permits a terminal session without feedback or endpoint', (
     `).run();
   });
 });
+
+test('fresh database provides reusable global Claude and Codex profiles', () => {
+  const agents = sqlite.prepare(`
+    SELECT name, app_id AS appId, is_default AS isDefault, mode, runtime,
+           permission_profile AS permissionProfile
+      FROM agent_endpoints ORDER BY runtime, permission_profile
+  `).all() as Array<Record<string, unknown>>;
+
+  assert.deepEqual(agents, [
+    {
+      name: 'Claude Interactive',
+      appId: null,
+      isDefault: 1,
+      mode: 'interactive',
+      runtime: 'claude',
+      permissionProfile: 'interactive-require',
+    },
+    {
+      name: 'Claude YOLO',
+      appId: null,
+      isDefault: 0,
+      mode: 'interactive',
+      runtime: 'claude',
+      permissionProfile: 'interactive-yolo',
+    },
+    {
+      name: 'Codex YOLO',
+      appId: null,
+      isDefault: 0,
+      mode: 'interactive',
+      runtime: 'codex',
+      permissionProfile: 'interactive-yolo',
+    },
+  ]);
+
+  runMigrations();
+  const count = sqlite.prepare('SELECT count(*) AS count FROM agent_endpoints').get() as { count: number };
+  assert.equal(count.count, 3, 'migration is idempotent');
+});

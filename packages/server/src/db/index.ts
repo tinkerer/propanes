@@ -1145,6 +1145,35 @@ export function runMigrations() {
     `);
   } catch { /* non-fatal */ }
 
+  // Agent endpoints are configuration presets for dispatch, not app-owned
+  // resources. Keep the common local profiles shared so a fresh install — and
+  // any app added later — gets the useful Workbench/ticket launcher choices
+  // without repeating agent setup. A user's existing global profile wins.
+  const builtinAgents = [
+    { name: 'Claude Interactive', runtime: 'claude', permissionProfile: 'interactive-require', isDefault: 1 },
+    { name: 'Claude YOLO', runtime: 'claude', permissionProfile: 'interactive-yolo', isDefault: 0 },
+    { name: 'Codex YOLO', runtime: 'codex', permissionProfile: 'interactive-yolo', isDefault: 0 },
+  ] as const;
+  const findGlobalAgent = sqlite.prepare(`
+    SELECT id FROM agent_endpoints
+     WHERE app_id IS NULL AND runtime = ? AND permission_profile = ?
+     LIMIT 1
+  `);
+  const insertGlobalAgent = sqlite.prepare(`
+    INSERT INTO agent_endpoints
+      (id, name, url, is_default, app_id, mode, runtime,
+       permission_profile, isolation, created_at, updated_at)
+    VALUES (?, ?, '', ?, NULL, 'interactive', ?, ?, 'shared', ?, ?)
+  `);
+  for (const agent of builtinAgents) {
+    if (findGlobalAgent.get(agent.runtime, agent.permissionProfile)) continue;
+    const now = new Date().toISOString();
+    insertGlobalAgent.run(
+      ulid(), agent.name, agent.isDefault, agent.runtime,
+      agent.permissionProfile, now, now,
+    );
+  }
+
   const configCount = sqlite.prepare('SELECT count(*) as cnt FROM tmux_configs').get() as { cnt: number };
   if (configCount.cnt === 0) {
     const now = new Date().toISOString();
