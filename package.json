@@ -3,6 +3,9 @@
   "private": true,
   "packageManager": "pnpm@9.14.2",
   "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "doctor": "bash scripts/setup.sh --doctor",
+    "seed": "node scripts/seed-local.mjs",
     "dev": "turbo dev",
     "build": "turbo build",
     "test": "turbo test",

@@ -26,8 +26,39 @@ Now you're cooking with gases.
 ## Quick start
 
 ```bash
-git clone <repo> propanes
+git clone https://github.com/tinkerer/propanes.git
 cd propanes
+./scripts/setup.sh
+```
+
+That one command takes a bare machine to an open dashboard: it checks for git,
+node >= 22 and tmux (installing whatever is missing via brew/apt/dnf/pacman),
+activates the pinned pnpm, installs and builds the workspace, downloads the
+Playwright chromium build, boots the server, registers this checkout as an
+application with `claude` and `codex` yolo agent endpoints, and opens
+`http://localhost:3001/admin/`. It is idempotent — re-running on a configured
+machine just brings the dashboard back up.
+
+| Command | Does |
+|---|---|
+| `pnpm setup` | The full bootstrap above |
+| `pnpm doctor` | Report missing prerequisites and exit, changing nothing |
+| `pnpm seed` | Re-register the local app + agent endpoints against a running server |
+
+Useful flags: `--doctor`, `-y` (don't ask before installing system deps),
+`--no-open`, `--no-start`, `--no-playwright`, `--no-seed`, `--port N`.
+
+`pnpm setup` finishes with an **agent runtime readiness** report, because an
+installed CLI is not the same as a dispatchable one. Both runtimes have
+one-time gates that Propanes can detect but cannot answer for you — notably
+Claude Code's "trust this folder" dialog and, for the `*-yolo` profiles, its
+Bypass Permissions acceptance. Until those are accepted once, a dispatched
+session starts and then sits waiting for input. The report prints the exact
+command to clear each one.
+
+### Doing it by hand
+
+```bash
 pnpm install
 pnpm dev
 ```
