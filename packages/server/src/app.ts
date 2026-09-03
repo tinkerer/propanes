@@ -221,6 +221,32 @@ app.use('/widget/*', serveStatic({ root: '../widget/dist/', rewriteRequestPath: 
 // no-cache to always pick up fresh builds + current key.
 const ADMIN_DIST = resolvePath(process.cwd(), '../admin/dist');
 const ADMIN_KEY_SENTINEL = '__ADMIN_API_KEY__';
+
+// PROPANES_BASE_PATH — the path prefix this server is reachable at from the
+// browser, when a reverse proxy mounts it below the origin root
+// (e.g. https://host/propanes/). Empty (the default) means served at the root.
+//
+// The proxy is expected to STRIP the prefix before forwarding, so the routes
+// below stay mounted at '/' and nothing here needs to change. What the server
+// cannot otherwise know is what the *browser* sees — and the admin SPA has to
+// know, because every server URL it builds is root-relative and would escape
+// the mount.
+//
+// Previously the SPA guessed, deriving the prefix from the '/admin' segment of
+// its own document path (admin/src/lib/base-path.ts). That works for the
+// /admin/ shell but silently fails for the two other shells this server
+// exposes — the service root ('/') and per-user workspaces ('/<user>') — where
+// there is no '/admin' marker to match, so the prefix resolves to '' and every
+// request escapes the mount. Setting this makes the server authoritative and
+// removes the guess.
+//
+// Normalised to either '' or '/segment' (leading slash, no trailing slash).
+export const BASE_PATH: string = (() => {
+  const raw = (process.env.PROPANES_BASE_PATH ?? '').trim();
+  if (!raw || raw === '/') return '';
+  const withLead = raw.startsWith('/') ? raw : `/${raw}`;
+  return withLead.replace(/\/+$/, '');
+})();
 const SELF_PROJECT_DIR = resolvePath(process.cwd(), '..', '..');
 
 function resolveAdminAppApiKey(): string | null {
@@ -250,19 +276,33 @@ async function serveAdminIndex(c: any) {
   }
   const key = resolveAdminAppApiKey();
   if (key) html = html.split(ADMIN_KEY_SENTINEL).join(key);
-  // Behind a path-prefixed reverse proxy (the platform dashboard mounts this
-  // whole server at /propanes and its widget embeds /propanes/admin/ in
-  // overlay panels) the shell's absolute /admin/… asset URLs escape the
-  // prefix and the HOST app answers them with its own index.html — the
-  // white-iframe "text/html is not a module script" failure. When the shell
-  // is served at /admin/ itself (one path segment deep, any prefix stripped
-  // by the proxy), the same assets are reachable relatively and relative
-  // URLs survive any mount prefix, so rewrite them. The /, /<user>, and bare
-  // /admin mounts keep absolute URLs — relative ones would resolve outside
-  // /admin/ there. The SPA handles the API-call half itself by deriving the
-  // prefix from location.pathname (admin/src/lib/base-path.ts).
+
+  // Tell the SPA its mount prefix instead of making it infer one. This lands
+  // before any module script, so base-path.ts sees it at import time (it
+  // patches fetch/WebSocket/EventSource on first import).
+  if (BASE_PATH) {
+    html = html.replace(
+      /<head(\s[^>]*)?>/i,
+      (m) => `${m}<script>window.__PROPANES_BASE_PATH__=${JSON.stringify(BASE_PATH)}</script>`
+    );
+  }
+
+  // Asset URLs. The bundle is built with base '/admin/', so the shell's script
+  // and link tags point at absolute /admin/… paths that escape a prefixed
+  // mount — the host app answers them with its own index.html, which surfaces
+  // as the "text/html is not a module script" white-iframe failure.
+  //
+  // Two ways out, and which one is correct depends on where the shell is
+  // being served:
+  //   - At /admin/ itself the assets sit alongside the document, so relative
+  //     URLs reach them under any prefix without the server knowing it.
+  //   - At the root or per-user shells ('/', '/<user>') relative URLs would
+  //     resolve to the wrong directory, so the prefix has to be written in.
+  //     That is only possible now that BASE_PATH is configured.
   if (/^\/admin\/[^/]*$/.test(c.req.path)) {
     html = html.replaceAll('"/admin/', '"./');
+  } else if (BASE_PATH) {
+    html = html.replaceAll('"/admin/', `"${BASE_PATH}/admin/`);
   }
   c.header('Content-Type', 'text/html; charset=utf-8');
   c.header('Cache-Control', 'no-cache, no-store, must-revalidate');

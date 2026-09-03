@@ -19,9 +19,27 @@
 // The matching server half: app.ts serves the /admin/ shell with RELATIVE
 // asset URLs so the bundle itself loads under any prefix.
 
-const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
-const marker = pathname.match(/^(.*)\/admin(?:\/|$)/);
-export const BASE_PATH: string = marker ? marker[1] : '';
+// The server injects window.__PROPANES_BASE_PATH__ into the shell when
+// PROPANES_BASE_PATH is configured (see serveAdminIndex in server/src/app.ts).
+// Prefer it: the server knows the mount, the browser can only guess.
+//
+// The guess below is kept as a fallback for shells served by an older server
+// build. It reads the prefix off the '/admin' segment of the document path,
+// which is right for the /admin/ shell but yields '' for the service root and
+// per-user shells ('/', '/<user>') — there is no marker to match there, so
+// every request escapes the mount. That is the gap the injected value closes.
+function resolveBasePath(): string {
+  if (typeof window === 'undefined') return '';
+  const injected = (window as unknown as { __PROPANES_BASE_PATH__?: unknown })
+    .__PROPANES_BASE_PATH__;
+  if (typeof injected === 'string') {
+    return injected === '/' ? '' : injected.replace(/\/+$/, '');
+  }
+  const marker = window.location.pathname.match(/^(.*)\/admin(?:\/|$)/);
+  return marker ? marker[1] : '';
+}
+
+export const BASE_PATH: string = resolveBasePath();
 
 /** Prefix a root-relative server path for use OUTSIDE fetch/WS/EventSource
  *  (img/audio src, href, window.open) — those go out unpatched. */
