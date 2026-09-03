@@ -15,6 +15,7 @@ import { DispatchDialog } from '../dispatch/DispatchDialog.js';
 import { SetupAssistantDialog } from '../dispatch/SetupAssistantDialog.js';
 import { PageView } from './PageView.js';
 import { ChiefOfStaffBubble } from '../cos/ChiefOfStaffBubble.js';
+import { serverPath, BASE_PATH } from '../../lib/base-path.js';
 
 const isTauri = !!(window as any).__TAURI__ || !!(window as any).__TAURI_INTERNALS__;
 
@@ -131,9 +132,19 @@ export function App() {
         // Keep the URL on the operator's own workspace path (/<username>) on
         // reload/bookmark. Skip when embedded (widget/workbench popout).
         if (u?.username && !isEmbedded.value) {
-          const seg = window.location.pathname.split('/').filter(Boolean)[0] || '';
+          // Compare against the path INSIDE the mount: under a prefix the
+          // first segment is the prefix itself, so a raw split would never
+          // match the username and would rewrite the URL on every load.
+          const rel = BASE_PATH && window.location.pathname.startsWith(BASE_PATH)
+            ? window.location.pathname.slice(BASE_PATH.length)
+            : window.location.pathname;
+          const seg = rel.split('/').filter(Boolean)[0] || '';
           if (seg !== u.username) {
-            window.history.replaceState(null, '', '/' + encodeURIComponent(u.username) + window.location.hash);
+            window.history.replaceState(
+              null,
+              '',
+              serverPath('/' + encodeURIComponent(u.username)) + window.location.hash
+            );
           }
         }
       })

@@ -1,6 +1,7 @@
 import { signal } from '@preact/signals';
 import { api } from '../lib/api.js';
 import { setToken, navigate, isEmbedded, loadCurrentUser } from '../lib/state.js';
+import { serverPath } from '../lib/base-path.js';
 
 const username = signal('');
 const password = signal('');
@@ -23,7 +24,7 @@ export function LoginPage() {
       // of a shared /admin. Cosmetic vanity path — the SPA hash-routes within.
       const uname: string | undefined = result.user?.username;
       if (uname && !isEmbedded.value) {
-        window.history.replaceState(null, '', '/' + encodeURIComponent(uname));
+        window.history.replaceState(null, '', serverPath('/' + encodeURIComponent(uname)));
       }
       navigate('/');
     } catch (err: any) {
