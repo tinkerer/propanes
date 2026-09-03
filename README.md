@@ -69,10 +69,11 @@ Agent processes are isolated separately. `docker-launcher-entrypoint.sh` starts
 `HOME=/data/agent-home`. On startup it copies Claude and Codex auth from the
 read-only `/var/run/propanes-agent-auth` Kubernetes Secret into writable files
 under `/data/agent-home`. The secret's `claude-settings.json` key is merged
-into `settings.json` on every start rather than copied once, so the operator's
-model/provider pinning stays authoritative even after `/model` has written the
-user's pick into that same file; the home's other keys are preserved. The
-entrypoint then points `/root/.claude`, `/root/.codex`, and
+into `settings.json` as bootstrap defaults: it supplies only the keys the home
+does not already have, at the top level and inside `env`, so a fresh home comes
+up pointed at the right provider while an existing one — which is what `/model`
+writes into and what an operator hand-edits — always wins. The entrypoint then
+points `/root/.claude`, `/root/.codex`, and
 `/root/.claude.json` at that writable home for CLI compatibility. This keeps
 Claude/Codex credential refreshes writable without running YOLO agent sessions
 as root.

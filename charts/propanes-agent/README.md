@@ -56,13 +56,12 @@ The expected Secret keys are:
 - `codex-auth.json`
 - `codex-config.toml`
 
-`claude-settings.json` seeds Claude Code's `settings.json` and is the one key
-the entrypoint re-applies on every start rather than only when absent: its
-`env` block (model pinning, provider switches) is operator config and stays
-authoritative, while the home's own keys — theme, `tui`, and whatever `/model`
-last saved — are preserved. Leave it empty unless the pod talks to a specific
-provider; per-user pods where the user logs into their own Claude account do
-not need it.
+`claude-settings.json` seeds Claude Code's `settings.json` with the model and
+provider wiring. It is merged as bootstrap defaults, supplying only the keys the
+home lacks (top level and inside `env`) — the live file wins every conflict,
+since that is what `/model` writes into and what an operator hand-edits. Leave
+it empty unless the pod talks to a specific provider; per-user pods where the
+user logs into their own Claude account do not need it.
 
 ## noVNC access
 
