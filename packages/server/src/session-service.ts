@@ -5,7 +5,7 @@ import type { Server } from 'node:http';
 import * as pty from 'node-pty';
 import { eq, desc } from 'drizzle-orm';
 import { ulid } from 'ulidx';
-import { db, schema } from './db/index.js';
+import { db, schema, runMigrations } from './db/index.js';
 import type { AgentRuntime, PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
 import { STREAM_PROFILE_PTY_COLS } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
@@ -33,6 +33,15 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // ---------- Message buffer ----------
+
+// On a fresh checkout `pnpm dev` boots index.ts and session-service.ts
+// concurrently, and only index.ts used to call runMigrations(). Whichever lost
+// the race, session-service constructed MessageBuffer against a schema-less
+// database and died with `no such table: pending_messages` -- leaving the API
+// up but every terminal dead until someone manually restarted it. The
+// statements are all CREATE TABLE IF NOT EXISTS, so running them from both
+// processes is idempotent (WAL + busy_timeout serializes the concurrent DDL).
+runMigrations();
 
 const messageBuffer = new MessageBuffer();
 
