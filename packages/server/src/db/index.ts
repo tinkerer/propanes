@@ -103,8 +103,8 @@ export function runMigrations() {
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS agent_sessions (
       id TEXT PRIMARY KEY,
-      feedback_id TEXT NOT NULL REFERENCES feedback_items(id) ON DELETE CASCADE,
-      agent_endpoint_id TEXT NOT NULL REFERENCES agent_endpoints(id) ON DELETE CASCADE,
+      feedback_id TEXT REFERENCES feedback_items(id) ON DELETE CASCADE,
+      agent_endpoint_id TEXT REFERENCES agent_endpoints(id) ON DELETE CASCADE,
       permission_profile TEXT NOT NULL DEFAULT 'interactive-require',
       status TEXT NOT NULL DEFAULT 'pending',
       pid INTEGER,
@@ -358,58 +358,6 @@ export function runMigrations() {
   // ALTER targets (machines, harness_configs, sprite_configs, wiggum_*) are
   // created later in this function, so attempting the ALTER here would be a
   // no-op silently swallowed by the try/catch on a fresh DB.
-
-  // Migration: make feedback_id and agent_endpoint_id nullable for plain terminal sessions
-  try {
-    sqlite.exec(`DROP TABLE IF EXISTS agent_sessions_new`);
-    const info = sqlite.pragma(`table_info(agent_sessions)`) as { name: string; notnull: number }[];
-    const feedbackCol = info.find(c => c.name === 'feedback_id');
-    if (feedbackCol && feedbackCol.notnull === 1) {
-      sqlite.exec(`
-        CREATE TABLE agent_sessions_new (
-          id TEXT PRIMARY KEY,
-          feedback_id TEXT REFERENCES feedback_items(id) ON DELETE CASCADE,
-          agent_endpoint_id TEXT REFERENCES agent_endpoints(id) ON DELETE CASCADE,
-          runtime TEXT NOT NULL DEFAULT 'claude',
-          permission_profile TEXT NOT NULL DEFAULT 'interactive-require',
-          parent_session_id TEXT,
-          status TEXT NOT NULL DEFAULT 'pending',
-          pid INTEGER,
-          exit_code INTEGER,
-          output_log TEXT,
-          output_bytes INTEGER NOT NULL DEFAULT 0,
-          last_output_seq INTEGER NOT NULL DEFAULT 0,
-          last_input_seq INTEGER NOT NULL DEFAULT 0,
-          tmux_session_name TEXT,
-          launcher_id TEXT,
-          claude_session_id TEXT,
-          created_at TEXT NOT NULL,
-          started_at TEXT,
-          completed_at TEXT
-        );
-        INSERT INTO agent_sessions_new (
-          id, feedback_id, agent_endpoint_id, runtime, permission_profile,
-          status, pid, exit_code, output_log, output_bytes,
-          created_at, started_at, completed_at,
-          parent_session_id, last_output_seq, last_input_seq,
-          tmux_session_name, launcher_id
-        )
-        SELECT
-          id, feedback_id, agent_endpoint_id, 'claude', permission_profile,
-          status, pid, exit_code, output_log, output_bytes,
-          created_at, started_at, completed_at,
-          parent_session_id, last_output_seq, last_input_seq,
-          tmux_session_name, launcher_id
-        FROM agent_sessions;
-        DROP TABLE agent_sessions;
-        ALTER TABLE agent_sessions_new RENAME TO agent_sessions;
-        CREATE INDEX IF NOT EXISTS idx_agent_sessions_feedback ON agent_sessions(feedback_id);
-        CREATE INDEX IF NOT EXISTS idx_agent_sessions_status ON agent_sessions(status);
-      `);
-    }
-  } catch {
-    // Migration already applied or table doesn't exist yet
-  }
 
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS pending_messages (
@@ -964,6 +912,41 @@ export function runMigrations() {
       sqlite.exec(stmt);
     } catch {
       // Column already exists
+    }
+  }
+
+  // Plain terminal sessions have neither a feedback item nor an agent
+  // endpoint. This rebuild must run after the ALTER pass: on a fresh database
+  // those later columns did not exist when the old migration attempted to
+  // copy them, so its swallowed error left both foreign keys NOT NULL.
+  const sessionColumns = sqlite.pragma(`table_info(agent_sessions)`) as { name: string; notnull: number }[];
+  if (sessionColumns.some(c =>
+    (c.name === 'feedback_id' || c.name === 'agent_endpoint_id') && c.notnull === 1
+  )) {
+    const table = sqlite.prepare(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_sessions'`
+    ).get() as { sql: string };
+    const indexSql = (sqlite.prepare(
+      `SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'agent_sessions' AND sql IS NOT NULL`
+    ).all() as { sql: string }[]).map(row => row.sql);
+    const columns = sessionColumns.map(c => `"${c.name.replaceAll('"', '""')}"`).join(', ');
+    const replacementSql = table.sql
+      .replace(/^CREATE TABLE\s+["'`]?agent_sessions["'`]?/i, 'CREATE TABLE agent_sessions_new')
+      .replace(/feedback_id\s+TEXT\s+NOT NULL/i, 'feedback_id TEXT')
+      .replace(/agent_endpoint_id\s+TEXT\s+NOT NULL/i, 'agent_endpoint_id TEXT');
+
+    sqlite.exec('DROP TABLE IF EXISTS agent_sessions_new');
+    sqlite.exec('PRAGMA foreign_keys = OFF');
+    try {
+      sqlite.transaction(() => {
+        sqlite.exec(replacementSql);
+        sqlite.exec(`INSERT INTO agent_sessions_new (${columns}) SELECT ${columns} FROM agent_sessions`);
+        sqlite.exec('DROP TABLE agent_sessions');
+        sqlite.exec('ALTER TABLE agent_sessions_new RENAME TO agent_sessions');
+        for (const sql of indexSql) sqlite.exec(sql);
+      })();
+    } finally {
+      sqlite.exec('PRAGMA foreign_keys = ON');
     }
   }
 
