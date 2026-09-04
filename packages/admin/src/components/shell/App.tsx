@@ -3,6 +3,7 @@ import { ComponentChildren } from 'preact';
 import { isAuthenticated, currentRoute, currentUser, loadApplications, loadCurrentUser, isEmbedded, isCompanion, isWorkbench, isCosEmbed, clearToken } from '../../lib/state.js';
 import { setChiefOfStaffOpen } from '../../lib/chief-of-staff.js';
 import { connectAdminWs } from '../../lib/admin-ws.js';
+import { IS_PREFIXED_ADMIN_MOUNT } from '../../lib/base-path.js';
 import { initNotifications } from '../../lib/notifications.js';
 import { isolatedComponent, getIsolateEntry, getIsolateParams } from '../../lib/isolate.js';
 import { Layout } from './Layout.js';
@@ -128,9 +129,10 @@ export function App() {
     // the entire admin Settings section (Users/Agents/Usage/Infra/Wiggum).
     loadCurrentUser()
       .then((u) => {
-        // Keep the URL on the operator's own workspace path (/<username>) on
-        // reload/bookmark. Skip when embedded (widget/workbench popout).
-        if (u?.username && !isEmbedded.value) {
+        // Keep ordinary root/vanity URLs on the operator's own workspace path.
+        // An explicit /admin mount may sit behind a reverse-proxy prefix, so
+        // replacing it with /<username> would escape that mount.
+        if (u?.username && !isEmbedded.value && !IS_PREFIXED_ADMIN_MOUNT) {
           const seg = window.location.pathname.split('/').filter(Boolean)[0] || '';
           if (seg !== u.username) {
             window.history.replaceState(null, '', '/' + encodeURIComponent(u.username) + window.location.hash);

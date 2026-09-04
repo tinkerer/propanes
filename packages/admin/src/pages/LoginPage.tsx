@@ -1,6 +1,7 @@
 import { signal } from '@preact/signals';
 import { api } from '../lib/api.js';
 import { setToken, navigate, isEmbedded, loadCurrentUser } from '../lib/state.js';
+import { IS_PREFIXED_ADMIN_MOUNT } from '../lib/base-path.js';
 
 const username = signal('');
 const password = signal('');
@@ -19,10 +20,10 @@ export function LoginPage() {
       if (isEmbedded.value) {
         window.parent.postMessage({ type: 'pw-embed-auth', token: result.token }, '*');
       }
-      // Land each operator on their own workspace path (/<username>) instead
-      // of a shared /admin. Cosmetic vanity path — the SPA hash-routes within.
+      // Use the cosmetic vanity path for direct logins, but preserve
+      // /prefix/admin when the SPA is behind a reverse proxy.
       const uname: string | undefined = result.user?.username;
-      if (uname && !isEmbedded.value) {
+      if (uname && !isEmbedded.value && !IS_PREFIXED_ADMIN_MOUNT) {
         window.history.replaceState(null, '', '/' + encodeURIComponent(uname));
       }
       navigate('/');

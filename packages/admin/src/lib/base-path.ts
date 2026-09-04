@@ -19,9 +19,15 @@
 // The matching server half: app.ts serves the /admin/ shell with RELATIVE
 // asset URLs so the bundle itself loads under any prefix.
 
-const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
-const marker = pathname.match(/^(.*)\/admin(?:\/|$)/);
-export const BASE_PATH: string = marker ? marker[1] : '';
+export function resolveAdminMount(pathname: string): { basePath: string; mounted: boolean } {
+  const marker = pathname.match(/^(.*)\/admin(?:\/|$)/);
+  const basePath = marker ? marker[1] : '';
+  return { basePath, mounted: Boolean(basePath) };
+}
+
+const mount = resolveAdminMount(typeof window !== 'undefined' ? window.location.pathname : '');
+export const BASE_PATH: string = mount.basePath;
+export const IS_PREFIXED_ADMIN_MOUNT = mount.mounted;
 
 /** Prefix a root-relative server path for use OUTSIDE fetch/WS/EventSource
  *  (img/audio src, href, window.open) — those go out unpatched. */
