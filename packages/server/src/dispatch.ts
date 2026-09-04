@@ -1,7 +1,7 @@
 import { ulid } from 'ulidx';
 import { eq, and, sql } from 'drizzle-orm';
 import { homedir } from 'node:os';
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { execSync } from 'node:child_process';
 import type {
@@ -469,6 +469,10 @@ export async function dispatchFeedbackToAgent(params: {
       permissionProfile,
       allowedTools: agent.allowedTools || (app as any)?.defaultAllowedTools || null,
       launcherId: launcherId || undefined,
+      attachmentFiles: screenshots.map((s) => ({
+        filename: s.filename,
+        absPath: resolve(process.env.UPLOAD_DIR || 'uploads', s.filename),
+      })),
       ownerUserId: params.ownerUserId ?? feedback.ownerUserId ?? null,
       orgId: params.orgId ?? feedback.orgId ?? null,
     });
@@ -647,6 +651,8 @@ export async function dispatchAgentSession(params: {
   launcherId?: string | null;
   ownerUserId?: string | null;
   orgId?: string | null;
+  /** Files referenced by /tmp paths in the prompt and needed on the agent host. */
+  attachmentFiles?: Array<{ filename: string; absPath: string }>;
 }): Promise<{ sessionId: string }> {
   const sessionId = ulid();
   const now = new Date().toISOString();
@@ -829,6 +835,23 @@ export async function dispatchAgentSession(params: {
         }
       }
 
+      // Feedback screenshots are persisted on the API server. A remote
+      // launcher has a different /tmp, so materialize each referenced file on
+      // that host before starting the agent. This uses the same transport as
+      // files pasted into an already-running session.
+      for (const attachment of params.attachmentFiles ?? []) {
+        const contentBase64 = readFileSync(attachment.absPath).toString('base64');
+        const result = await sendAndWait(launcher.id, {
+          type: 'write_file' as const,
+          sessionId: ulid(),
+          filename: attachment.filename,
+          contentBase64,
+        }, 'write_file_result', 30_000) as { ok?: boolean; path?: string; error?: string };
+        if (!result.ok) {
+          throw new Error(`Failed to copy attachment ${attachment.filename} to launcher: ${result.error || 'unknown error'}`);
+        }
+      }
+
       // Route to remote launcher
       const msg: LaunchSession = {
         type: 'launch_session',
@@ -852,6 +875,10 @@ export async function dispatchAgentSession(params: {
       }
     })().catch((err) => {
       console.error(`[dispatch] Async remote launch failed for ${sessionId}:`, err);
+      db.update(schema.agentSessions)
+        .set({ status: 'failed', completedAt: new Date().toISOString() })
+        .where(eq(schema.agentSessions.id, sessionId))
+        .run();
     });
   } else {
     // Local spawn — fire-and-forget, errors are handled in spawnLocal
