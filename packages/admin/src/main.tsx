@@ -43,8 +43,11 @@ async function resolveAdminWidgetApiKey(): Promise<string | undefined> {
 
   try {
     const token = localStorage.getItem('pw-admin-token');
+    // The login screen also mounts the feedback widget. Avoid probing an
+    // admin-only endpoint until an admin session actually exists.
+    if (!token) return undefined;
     const res = await fetch('/api/v1/admin/applications', {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) return undefined;
     const apps = await res.json() as Array<{ name?: string; apiKey?: string; projectDir?: string }>;
