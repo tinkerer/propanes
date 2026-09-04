@@ -42,7 +42,10 @@ async function resolveAdminWidgetApiKey(): Promise<string | undefined> {
   if (injected && injected !== ADMIN_KEY_SENTINEL) return injected;
 
   try {
-    const res = await fetch('/api/v1/admin/applications');
+    const token = localStorage.getItem('pw-admin-token');
+    const res = await fetch('/api/v1/admin/applications', {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
     if (!res.ok) return undefined;
     const apps = await res.json() as Array<{ name?: string; apiKey?: string; projectDir?: string }>;
     const adminApp =

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import { api } from '../../lib/api.js';
 import { openFileCompanion } from '../../lib/sessions.js';
+import { browsableAppId } from '../../lib/app-id.js';
 
 type Entry = { name: string; type: 'file' | 'dir'; size?: number; ext?: string };
 type GitFile = { path: string; status: string; staged: string; unstaged: string };
@@ -28,6 +29,7 @@ interface Props {
 }
 
 export function SidebarFilesDrawer({ appId, open, onToggle }: Props) {
+  const fileAppId = browsableAppId(appId);
   const [tab, setTab] = useState<'files' | 'changes'>('files');
   const [projectDir, setProjectDir] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -35,17 +37,17 @@ export function SidebarFilesDrawer({ appId, open, onToggle }: Props) {
   const treeControlsRef = useRef<{ expandAll: () => void; collapseAll: () => void } | null>(null);
 
   useEffect(() => {
-    if (!appId) { setProjectDir(null); return; }
-    api.browseFiles(appId).then((r) => {
+    if (!fileAppId) { setProjectDir(null); setError(null); return; }
+    api.browseFiles(fileAppId).then((r) => {
       setProjectDir(r.path);
       setError(null);
     }).catch((e: any) => setError(e.message));
-  }, [appId]);
+  }, [fileAppId]);
 
   return (
-    <div class="sidebar-files-drawer" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', flex: open && appId ? 1 : 'none' }}>
+    <div class="sidebar-files-drawer" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', flex: open && fileAppId ? 1 : 'none' }}>
       <div class="sidebar-files-header">
-        {tab === 'files' && open && appId && (
+        {tab === 'files' && open && fileAppId && (
           <button
             class="sidebar-file-tree-toggle"
             onClick={(e) => {
@@ -64,14 +66,14 @@ export function SidebarFilesDrawer({ appId, open, onToggle }: Props) {
           <button class={tab === 'changes' ? 'active' : ''} onClick={() => setTab('changes')}>{'\u{1F504}'}</button>
         </div>
       </div>
-      {open && appId && (
+      {open && fileAppId && (
         <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
           {error ? (
             <div style={{ padding: '8px 12px', color: '#e06c75', fontSize: '12px' }}>{error}</div>
           ) : tab === 'files' ? (
-            <SidebarFileTree appId={appId} projectDir={projectDir} controlsRef={treeControlsRef} onAllExpandedChange={setAllExpanded} />
+            <SidebarFileTree appId={fileAppId} projectDir={projectDir} controlsRef={treeControlsRef} onAllExpandedChange={setAllExpanded} />
           ) : (
-            <SidebarGitChanges appId={appId} projectDir={projectDir} />
+            <SidebarGitChanges appId={fileAppId} projectDir={projectDir} />
           )}
         </div>
       )}
