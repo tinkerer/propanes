@@ -185,6 +185,7 @@ export function buildManifests(
     stringData: {
       'claude-credentials.json': '',
       'claude-config.json': '',
+      'claude-settings.json': '',
       'codex-auth.json': '',
       'codex-config.toml': '',
     },
