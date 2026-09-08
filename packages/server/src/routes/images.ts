@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { ulid } from 'ulidx';
 import { db, schema } from '../db/index.js';
+import { linkToTmp, unlinkTmp, uploadAbsPath } from '../tmp-links.js';
 import { verifyToken } from '../auth.js';
 import { isGlobalAdmin, resolveAdminUser, visibleToMember, type AdminUser } from '../admin-auth.js';
 import type { Context } from 'hono';
@@ -71,7 +72,9 @@ imageRoutes.put('/:id', async (c) => {
   if (!(file instanceof File)) return c.json({ error: 'Missing image file' }, 400);
 
   const buf = Buffer.from(await file.arrayBuffer());
-  await writeFile(join(UPLOAD_DIR, screenshot.filename), buf);
+  const absPath = uploadAbsPath(screenshot.filename);
+  await writeFile(absPath, buf);
+  await linkToTmp(absPath, screenshot.filename);
   await db.update(schema.feedbackScreenshots)
     .set({ size: buf.byteLength })
     .where(eq(schema.feedbackScreenshots.id, id));
@@ -97,7 +100,11 @@ imageRoutes.post('/', async (c) => {
   const buf = Buffer.from(await file.arrayBuffer());
 
   await mkdir(UPLOAD_DIR, { recursive: true });
-  await writeFile(join(UPLOAD_DIR, filename), buf);
+  const absPath = uploadAbsPath(filename);
+  await writeFile(absPath, buf);
+  // Agents receive these as /tmp/<filename> (see dispatch.ts) — without the
+  // symlink the dispatched prompt points at a file that doesn't exist.
+  const path = await linkToTmp(absPath, filename);
 
   const now = new Date().toISOString();
   await db.insert(schema.feedbackScreenshots).values({
@@ -109,7 +116,7 @@ imageRoutes.post('/', async (c) => {
     createdAt: now,
   });
 
-  return c.json({ id: screenshotId, feedbackId, filename, size: buf.byteLength });
+  return c.json({ id: screenshotId, feedbackId, filename, path, size: buf.byteLength });
 });
 
 imageRoutes.delete('/:id', async (c) => {
@@ -128,6 +135,7 @@ imageRoutes.delete('/:id', async (c) => {
   } catch {
     // file may already be gone
   }
+  await unlinkTmp(screenshot.filename);
 
   await db.delete(schema.feedbackScreenshots).where(eq(schema.feedbackScreenshots.id, id));
   return c.json({ id, deleted: true });

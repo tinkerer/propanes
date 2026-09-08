@@ -30,6 +30,7 @@ import { extractArtifactPaths, exportSessionFiles } from './jsonl-utils.js';
 import { launchSpriteSession } from './sprite-sessions.js';
 import { createWorktreeIsolate, type Isolate } from './isolates.js';
 import { beginUsage } from './metering.js';
+import { resolveUploadPath } from './tmp-links.js';
 
 export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, tags: string[], screenshots: (typeof schema.feedbackScreenshots.$inferSelect)[], audioFiles: (typeof schema.feedbackAudio.$inferSelect)[] = []): FeedbackItem {
   let titleHistory: FeedbackItem['titleHistory'] = [];
@@ -209,11 +210,13 @@ export function renderPromptTemplate(
     customData = `Custom data: ${JSON.stringify(fb.data, null, 2)}`;
   }
 
-  // Screenshots live on disk under uploads/ and are symlinked from /tmp at
-  // submit time (see routes/feedback.ts::linkToTmp). For local-machine agents
-  // the /tmp/<filename> path is directly readable; for remote launchers the
-  // path won't resolve but the filename is still recognisable.
-  const screenshotPaths = (fb.screenshots || []).map((s) => `/tmp/${s.filename}`);
+  // Screenshots live on disk under uploads/ and are symlinked from /tmp when
+  // they're stored (see tmp-links.ts::linkToTmp). resolveUploadPath re-creates a
+  // link that's missing — rows written before images.ts linked them, or after a
+  // /tmp sweep — and falls back to the absolute uploads path if it can't, so we
+  // never hand an agent a /tmp path that isn't there. For remote launchers
+  // neither path resolves, but the filename is still recognisable.
+  const screenshotPaths = (fb.screenshots || []).map((s) => resolveUploadPath(s.filename));
   let screenshotText = '';
   if (screenshotPaths.length) {
     screenshotText = screenshotPaths

@@ -1,26 +1,10 @@
 import { Hono } from 'hono';
 import { ulid } from 'ulidx';
 import { eq } from 'drizzle-orm';
-import { writeFile, mkdir, symlink, unlink } from 'node:fs/promises';
+import { writeFile, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
-const TMP_LINK_DIR = '/tmp';
-
-async function linkToTmp(absPath: string, filename: string): Promise<string> {
-  const tmpPath = join(TMP_LINK_DIR, filename);
-  try {
-    await unlink(tmpPath);
-  } catch {
-    // not present, fine
-  }
-  try {
-    await symlink(absPath, tmpPath);
-    return tmpPath;
-  } catch {
-    // symlink failed (e.g. cross-device, permissions) — fall back to the real path
-    return absPath;
-  }
-}
+import { linkToTmp } from '../tmp-links.js';
 import { feedbackSubmitSchema } from '@propanes/shared';
 import { db, schema } from '../db/index.js';
 import { getSession } from '../sessions.js';

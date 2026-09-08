@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
 import { ulid } from 'ulidx';
 import { eq, desc } from 'drizzle-orm';
-import { readFile, writeFile, mkdir, symlink, unlink } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { join, resolve, extname, basename } from 'node:path';
 import { db, schema } from '../db/index.js';
 import { getSession } from '../sessions.js';
+import { linkToTmp, unlinkTmp } from '../tmp-links.js';
 
 // Generic file uploads — mirrors the screenshots flow but for arbitrary files
 // dragged into the admin composer. Files are written to UPLOAD_DIR and
@@ -12,18 +13,7 @@ import { getSession } from '../sessions.js';
 // path. The admin shows a "copy path" affordance for the returned /tmp path.
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
-const TMP_LINK_DIR = '/tmp';
 
-async function linkToTmp(absPath: string, filename: string): Promise<string> {
-  const tmpPath = join(TMP_LINK_DIR, filename);
-  try { await unlink(tmpPath); } catch {}
-  try {
-    await symlink(absPath, tmpPath);
-    return tmpPath;
-  } catch {
-    return absPath;
-  }
-}
 
 // Keep a recognizable, filesystem-safe version of the original name. We prefix
 // with a ULID for collision-freedom, so the human-facing part can be lossy.
@@ -176,7 +166,7 @@ uploadRoutes.delete('/:id', async (c) => {
     .get();
   if (!row) return c.json({ error: 'Upload not found' }, 404);
   try { await unlink(join(UPLOAD_DIR, row.filename)); } catch {}
-  try { await unlink(join(TMP_LINK_DIR, row.filename)); } catch {}
+  await unlinkTmp(row.filename);
   db.delete(schema.uploads).where(eq(schema.uploads.id, id)).run();
   return c.json({ id, deleted: true });
 });
