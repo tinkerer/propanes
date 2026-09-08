@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import * as os from 'node:os';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import * as path from 'node:path';
 import * as pty from 'node-pty';
 import { execSync } from 'node:child_process';
@@ -19,6 +19,8 @@ import type {
   LaunchHarnessSession,
   ImportSessionFiles,
   ImportSessionFilesResult,
+  ImportAttachments,
+  ImportAttachmentsResult,
   ExportSessionFiles,
   ExportSessionFilesResult,
   ReadSessionJsonl,
@@ -371,6 +373,49 @@ function handleImportSessionFiles(msg: ImportSessionFiles): void {
       ok: false,
       jsonlFilesWritten: 0,
       artifactFilesWritten: 0,
+      error: err.message,
+    };
+    sendToServer(result);
+  }
+}
+
+// Land feedback attachments on this machine so the /tmp/<filename> paths the
+// server baked into the prompt resolve here too. Filenames are server-minted
+// ULIDs, but they arrive over the wire — refuse anything with a path separator
+// so a hostile filename can't escape destDir.
+function handleImportAttachments(msg: ImportAttachments): void {
+  const { sessionId, destDir, files } = msg;
+  const written: string[] = [];
+  try {
+    mkdirSync(destDir, { recursive: true });
+    for (const f of files) {
+      const base = path.basename(f.filename);
+      if (!base || base !== f.filename || base === '.' || base === '..') {
+        console.warn(`[launcher] Skipping attachment with unsafe filename: ${f.filename}`);
+        continue;
+      }
+      const target = path.join(destDir, base);
+      // Replace rather than write through: if a launcher shares a host with the
+      // server, the destination may already be the server's symlink into its
+      // uploads dir, and writing through it would edit the original.
+      try { unlinkSync(target); } catch { /* nothing there */ }
+      writeFileSync(target, Buffer.from(f.contentBase64, 'base64'));
+      written.push(target);
+    }
+    const result: ImportAttachmentsResult = {
+      type: 'import_attachments_result',
+      sessionId,
+      ok: true,
+      written,
+    };
+    sendToServer(result);
+    console.log(`[launcher] Imported ${written.length} attachment(s) for session ${sessionId} into ${destDir}`);
+  } catch (err: any) {
+    const result: ImportAttachmentsResult = {
+      type: 'import_attachments_result',
+      sessionId,
+      ok: false,
+      written,
       error: err.message,
     };
     sendToServer(result);
@@ -788,6 +833,10 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
 
     case 'import_session_files':
       handleImportSessionFiles(msg);
+      break;
+
+    case 'import_attachments':
+      handleImportAttachments(msg);
       break;
 
     case 'export_session_files':

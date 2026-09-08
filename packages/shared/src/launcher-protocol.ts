@@ -76,6 +76,15 @@ export interface ImportSessionFilesResult {
   error?: string;
 }
 
+export interface ImportAttachmentsResult {
+  type: 'import_attachments_result';
+  sessionId: string;
+  ok: boolean;
+  /** Absolute paths written on the launcher, in request order. */
+  written: string[];
+  error?: string;
+}
+
 export interface ExportSessionFilesResult {
   type: 'export_session_files_result';
   sessionId: string;
@@ -181,6 +190,7 @@ export type LauncherToServerMessage =
   | LauncherSessionEnded
   | HarnessStatusUpdate
   | ImportSessionFilesResult
+  | ImportAttachmentsResult
   | ExportSessionFilesResult
   | ReadSessionJsonlResult
   | SyncCodebaseResult
@@ -297,6 +307,17 @@ export interface ImportSessionFiles {
   artifactFiles: Array<{ path: string; content: string }>;
 }
 
+/** Ship feedback attachments (screenshots) to a remote launcher so the
+ * /tmp paths embedded in the dispatched prompt actually resolve there.
+ * Contents are base64 — these are binary images, unlike the utf-8 JSONL and
+ * artifact payloads of ImportSessionFiles. */
+export interface ImportAttachments {
+  type: 'import_attachments';
+  sessionId: string;
+  destDir: string;
+  files: Array<{ filename: string; contentBase64: string }>;
+}
+
 export interface ExportSessionFiles {
   type: 'export_session_files';
   sessionId: string;
@@ -400,6 +421,7 @@ export type ServerToLauncherMessage =
   | StopHarness
   | LaunchHarnessSession
   | ImportSessionFiles
+  | ImportAttachments
   | ExportSessionFiles
   | ReadSessionJsonl
   | SyncCodebase

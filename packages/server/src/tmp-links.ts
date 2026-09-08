@@ -1,4 +1,4 @@
-import { symlink, unlink } from 'node:fs/promises';
+import { readFile, symlink, unlink } from 'node:fs/promises';
 import { existsSync, lstatSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
@@ -64,5 +64,25 @@ export function resolveUploadPath(filename: string): string {
     return tmpPath;
   } catch {
     return absPath;
+  }
+}
+
+/** Canonical directory attachments are exposed from, on this host and on any
+ * remote launcher we ship them to — keeping prompt paths identical either way. */
+export const ATTACHMENT_DIR = TMP_LINK_DIR;
+
+/**
+ * Read an uploaded file for transfer to a remote launcher. Returns null when
+ * the upload is missing, so a deleted or never-written file is skipped rather
+ * than shipping an empty placeholder over the wire.
+ */
+export async function readUploadForTransfer(
+  filename: string,
+): Promise<{ filename: string; contentBase64: string } | null> {
+  try {
+    const buf = await readFile(uploadAbsPath(filename));
+    return { filename, contentBase64: buf.toString('base64') };
+  } catch {
+    return null;
   }
 }
