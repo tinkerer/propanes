@@ -1,5 +1,7 @@
 // admin-ws.ts — WebSocket client for /ws/admin push notifications
 
+import { onWake } from './wake.js';
+
 type Callback = (data: any) => void;
 
 const subscribers = new Map<string, Set<Callback>>();
@@ -9,6 +11,7 @@ let token: string | null = null;
 let reconnectDelay = 1000;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let visibilityHandler: (() => void) | null = null;
+let offWake: (() => void) | null = null;
 
 export function connectAdminWs() {
   token = localStorage.getItem('pw-admin-token');
@@ -88,6 +91,23 @@ export function connectAdminWs() {
     };
     document.addEventListener('visibilitychange', visibilityHandler);
   }
+
+  if (!offWake) {
+    // A machine that slept (or booted with this tab restored before Wi-Fi was
+    // up) leaves us either disconnected with a backoff timer half a minute out
+    // or parked with no timer at all, because the timer froze with the host —
+    // either way the page stops updating until the operator reloads it. A wake
+    // event retries immediately. An OPEN socket is left alone: the visibility
+    // handler above already tears this channel down whenever the tab hides.
+    offWake = onWake(() => {
+      if (ws && ws.readyState === WebSocket.OPEN) return;
+      if (document.hidden) return;
+      if (ws) { try { ws.close(); } catch { /* already closing */ } ws = null; }
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      reconnectDelay = 1000;
+      connectAdminWs();
+    });
+  }
 }
 
 function scheduleReconnect() {
@@ -126,6 +146,10 @@ export function disconnectAdminWs() {
   if (visibilityHandler) {
     document.removeEventListener('visibilitychange', visibilityHandler);
     visibilityHandler = null;
+  }
+  if (offWake) {
+    offWake();
+    offWake = null;
   }
   subscribers.clear();
 }

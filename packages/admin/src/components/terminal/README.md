@@ -39,10 +39,17 @@ Mounts one Terminal per session inside a container ref. FitAddon handles PTY dim
 - If mount is cancelled before its turn, removed from queue without incrementing counter.
 - **Critical gotcha**: Each Terminal instance parses every byte in the buffer, so MAX_HISTORY_BYTES=40KB is enforced. Old scrollback beyond that is dropped to avoid 500KB+ escape sequence chains freezing page load.
 
-**WebSocket protocol** (sequenced_input / sequenced_output / input_ack):
+**WebSocket protocol** (sequenced_input / sequenced_output / input_ack / ping / pong):
 - Client sends input with incrementing seq; server acks with ackSeq.
-- Server can emit output replay requests on reconnect; client maintains pendingInputs map to resend unacked commands.
+- Output is replayed from `lastOutputSeq` on reconnect (`replay_request`). Input is **never** replayed: an un-acked keystroke may or may not have reached the PTY, and re-typing a line (+ Enter) into a live TUI is worse than dropping it. See the comment in `ws.onopen`.
 - Terminal response sequences (DA1/DA2/DSR) filtered to prevent junk input during reconnect timeouts.
+
+**Liveness** (`checkLiveness` / `reconnectNow`, `lib/wake.ts`):
+- A socket that died with the machine (laptop sleep, Wi-Fi change, a reboot whose restored tab loads before the network is up) stays in `readyState === OPEN` for minutes: `send()` succeeds and every keystroke vanishes. That is the "I have to refresh before I can type" bug.
+- After `PING_IDLE_MS` (25s) of silence, and on every wake event, the terminal pings. No `pong` within `PONG_TIMEOUT_MS` (8s) ⇒ the socket is dead ⇒ `reconnectNow()` replaces it (handlers detached first so the forced close can't race a second reconnect).
+- Wake events come from `lib/wake.ts`: visibilitychange→visible, window focus, `online`, plus a clock-gap detector (a timer that fires late is the only signal a lid-close/open gives you when the tab never lost focus).
+- Exhausted reconnects no longer park on a keystroke alone (`parkUntilRetry`) — that keystroke is consumed by the retry, which looks exactly like "typing does nothing". A wake event kicks it too.
+- Old servers don't answer pings (the session-service ignores unknown types). The first unanswered probe reconnects once and then sets `serverAnswersPing = false`, so an un-restarted server degrades to the previous behavior instead of reconnect-looping.
 
 **Ctrl+click text selection overlay** (AgentTerminal.tsx:210–426):
 - createds SVG-like div highlighting over terminal grid.

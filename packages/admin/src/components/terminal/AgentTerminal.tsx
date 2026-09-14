@@ -6,11 +6,35 @@ import { lastTerminalInput } from '../../lib/sessions.js';
 import { copyText } from '../../lib/clipboard.js';
 import { openUrlCompanion } from '../../lib/companion-state.js';
 import { recordPerfEntry } from '../../lib/perf.js';
+import { onWake } from '../../lib/wake.js';
 import { useSessionFileDrop, SessionDropOverlay } from './SessionFileDrop.js';
 import type { InputState } from '../../lib/sessions.js';
 
 const MAX_RECONNECT_ATTEMPTS = 10;
 const RECONNECT_BACKOFF_CAP_MS = 30_000;
+
+// Liveness probe. A socket that died while the machine slept still reports
+// readyState OPEN (see lib/wake.ts), so silence alone proves nothing — we ask.
+// After PING_IDLE_MS without a byte from the server we send a ping; if nothing
+// comes back within PONG_TIMEOUT_MS the socket is dead and we reconnect.
+const PING_IDLE_MS = 25_000;
+const PONG_TIMEOUT_MS = 8_000;
+// How often a pane that has exhausted its reconnects tries again on its own.
+// Slow enough not to hammer a server that is genuinely down, often enough that
+// an unattended pane is live again shortly after the server is.
+const PARKED_RETRY_MS = 60_000;
+
+// Does this server answer liveness pings? A server that predates the pong
+// handler forwards the ping to the session-service, which ignores unknown
+// message types — so silence there means "old server", not "dead socket", and
+// treating it as a dead socket would reconnect every pane every half minute.
+// The admin bundle is served statically and updates the moment it is built,
+// while the server only picks up the handler on restart, so that window is
+// real. Learn the answer once per page load: the first unanswered probe still
+// reconnects (a dead socket is the likelier reading, and reconnecting is the
+// safe move either way) but stops us probing again. Reconnects driven by a
+// socket that actually closed are never gated on this.
+let serverAnswersPing: boolean | null = null;
 
 // Stagger terminal mounts to avoid overwhelming the browser on page load.
 // At most MOUNT_CONCURRENCY xterm instances initialize simultaneously; the
@@ -202,6 +226,14 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let reconnectDelay = 200;
     let reconnectAttempts = 0;
+    // Liveness bookkeeping (see checkLiveness / reconnectNow).
+    let lastServerMessageAt = Date.now();
+    let pongTimer: ReturnType<typeof setTimeout> | null = null;
+    let livenessTimer: ReturnType<typeof setInterval> | null = null;
+    // Set while reconnects are exhausted and we are parked waiting to retry.
+    let retryOnKeyHandler: { dispose: () => void } | null = null;
+    let parkedSince = 0;
+    let parkNoticeShown = false;
     let gotFirstOutput = false;
     let waitingDots: ReturnType<typeof setInterval> | null = null;
     let outputQueue = '';
@@ -291,6 +323,12 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
           timestamp: new Date().toISOString(),
         });
         ws.send(msg);
+      } else {
+        // The keystroke is dropped (deliberately — see ws.onopen), but a
+        // socket we can't send on is one we should be replacing: kick the
+        // reconnect now so the operator's next keystroke has somewhere to go
+        // instead of waiting out a backoff they can't see.
+        checkLiveness();
       }
     }
 
@@ -568,6 +606,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
 
       // New socket = the server has no size on record for it yet.
       lastSentSize = null;
+      lastServerMessageAt = Date.now();
 
       const token = localStorage.getItem('pw-admin-token');
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -578,6 +617,8 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       ws.onopen = () => {
         reconnectDelay = 200;
         reconnectAttempts = 0;
+        parkedSince = 0;
+        parkNoticeShown = false;
         sendReplayRequest();
         // Deliberately no input replay here. Keystrokes are only ever sent on
         // an OPEN socket, so anything un-acked at reconnect time is in the
@@ -597,6 +638,9 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       };
 
       ws.onmessage = (event) => {
+        // Any byte from the server is proof of life, whatever it says.
+        lastServerMessageAt = Date.now();
+        if (pongTimer) { clearTimeout(pongTimer); pongTimer = null; }
         try {
           const msg = JSON.parse(event.data);
           switch (msg.type) {
@@ -628,6 +672,11 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
 
             case 'input_ack':
               // Input is fire-and-forget (no replay buffer) — nothing to prune.
+              break;
+
+            case 'pong':
+              // Liveness answer; the clearTimeout above was the whole point.
+              serverAnswersPing = true;
               break;
 
             // Legacy messages
@@ -727,14 +776,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
         if (event.code === 4010) {
           reconnectAttempts++;
           if (reconnectAttempts > 3) {
-            writeTerminal('\r\n\x1b[90m--- Session service unavailable. Click terminal or press any key to retry. ---\x1b[0m\r\n');
-            const retryHandler = term.onData(() => {
-              retryHandler.dispose();
-              reconnectAttempts = 0;
-              reconnectDelay = 200;
-              writeTerminal('\x1b[90mReconnecting...\x1b[0m\r\n');
-              connect();
-            });
+            parkUntilRetry('\r\n\x1b[90m--- Session service unavailable. Click terminal or press any key to retry. ---\x1b[0m\r\n');
             return;
           }
           reconnectTimer = setTimeout(() => connect(), 5000);
@@ -743,14 +785,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
 
         reconnectAttempts++;
         if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-          writeTerminal('\r\n\x1b[31m--- Connection lost. Click terminal or press any key to retry. ---\x1b[0m\r\n');
-          const retryHandler = term.onData(() => {
-            retryHandler.dispose();
-            reconnectAttempts = 0;
-            reconnectDelay = 200;
-            writeTerminal('\x1b[90mReconnecting...\x1b[0m\r\n');
-            connect();
-          });
+          parkUntilRetry('\r\n\x1b[31m--- Connection lost. Click terminal or press any key to retry. ---\x1b[0m\r\n');
           return;
         }
 
@@ -762,7 +797,104 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       };
     }
 
+    // Reconnects exhausted: park until something kicks us — a keystroke, or a
+    // wake event via checkLiveness. Before this the keystroke was the ONLY way
+    // back, and it is consumed by the retry (no echo, nothing sent), which is
+    // exactly what a machine coming back from sleep looks like to the operator:
+    // "typing does nothing until I refresh".
+    function parkUntilRetry(message: string) {
+      parkedSince = Date.now();
+      // Say it once. Re-parking after each slow retry would otherwise stamp the
+      // same notice into the pane every minute for as long as the server is down.
+      if (!parkNoticeShown) {
+        writeTerminal(message);
+        parkNoticeShown = true;
+      }
+      if (retryOnKeyHandler) return;
+      const handler = term.onData(() => {
+        if (retryOnKeyHandler !== handler) return;
+        retryOnKeyHandler = null;
+        handler.dispose();
+        writeTerminal('\x1b[90mReconnecting...\x1b[0m\r\n');
+        reconnectNow();
+      });
+      retryOnKeyHandler = handler;
+    }
+
+    // Force a fresh socket now, discarding any pending backoff. Callers that
+    // are retrying a parked pane pass resetAttempts=false so a failure re-parks
+    // after ONE attempt instead of burning the whole backoff ladder again.
+    function reconnectNow(resetAttempts = true) {
+      if (cleanedUp.current || hasExited.current) return;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      if (pongTimer) { clearTimeout(pongTimer); pongTimer = null; }
+      if (retryOnKeyHandler) { retryOnKeyHandler.dispose(); retryOnKeyHandler = null; }
+      if (resetAttempts) {
+        reconnectAttempts = 0;
+        reconnectDelay = 200;
+      }
+      const stale = wsRef.current;
+      if (stale) {
+        // Drop the handlers before closing: the close we are about to force
+        // must not schedule a second reconnect racing this one.
+        stale.onopen = null;
+        stale.onmessage = null;
+        stale.onclose = null;
+        stale.onerror = null;
+        wsRef.current = null;
+        try { stale.close(); } catch { /* already closing */ }
+      }
+      connect();
+    }
+
+    // Is this socket actually carrying traffic? A machine that slept, or a
+    // network that changed underneath us, leaves a socket that still reads
+    // OPEN and delivers nothing — the browser won't notice until TCP gives up
+    // minutes later. Make it prove itself instead of trusting keystrokes to it.
+    function checkLiveness(force = false) {
+      if (cleanedUp.current || hasExited.current) return;
+      const ws = wsRef.current;
+      if (!ws || ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+        if (retryOnKeyHandler) {
+          // Parked after exhausting reconnects. A wake event retries at once;
+          // otherwise keep it to one quiet attempt a minute.
+          if (!force && Date.now() - parkedSince < PARKED_RETRY_MS) return;
+          reconnectNow(false);
+          return;
+        }
+        // Disconnected, with a backoff timer possibly half a minute out.
+        // Retry right now.
+        reconnectNow();
+        return;
+      }
+      if (ws.readyState === WebSocket.CONNECTING) return; // still in flight
+      if (pongTimer) return; // probe already outstanding
+      if (serverAnswersPing === false) return; // nothing would answer
+      try {
+        ws.send(JSON.stringify({ type: 'ping', sessionId, ts: Date.now() }));
+      } catch {
+        reconnectNow();
+        return;
+      }
+      pongTimer = setTimeout(() => {
+        pongTimer = null;
+        // Unanswered. If we have never seen a pong we cannot tell a dead
+        // socket from a server that doesn't speak this, so reconnect once and
+        // then stop probing until the page is reloaded against a newer server.
+        if (serverAnswersPing === null) serverAnswersPing = false;
+        reconnectNow();
+      }, PONG_TIMEOUT_MS);
+    }
+
     connect();
+
+    // Probe after any stretch of silence, and whenever the machine or tab
+    // comes back — the two ways an apparently-OPEN socket turns out to be dead.
+    livenessTimer = setInterval(() => {
+      if (Date.now() - lastServerMessageAt < PING_IDLE_MS) return;
+      checkLiveness();
+    }, PING_IDLE_MS);
+    const offWake = onWake(() => checkLiveness(true));
 
     // Terminal auto-response sequences (DA1, DA2, DSR cursor position report).
     // xterm.js generates these in response to queries from the shell. On reconnect
@@ -905,6 +1037,10 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
 
     return () => {
       cleanedUp.current = true;
+      offWake();
+      if (livenessTimer) clearInterval(livenessTimer);
+      if (pongTimer) clearTimeout(pongTimer);
+      if (retryOnKeyHandler) { retryOnKeyHandler.dispose(); retryOnKeyHandler = null; }
       safeFitAndResizeRef.current = () => {};
       terminalDisposed = true;
       outputQueue = '';
