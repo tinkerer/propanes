@@ -40,6 +40,7 @@ import { PopoutSingletonBar } from './PopoutSingletonBar.js';
 import { PopoutMultiTabBar } from './PopoutMultiTabBar.js';
 import { PopoutSplitPane } from './PopoutSplitPane.js';
 import { usePopoutPanelHotkeys } from './usePopoutPanelHotkeys.js';
+import { beginDragShield, edgeCursor } from '../../lib/drag-shield.js';
 
 import {
   popoutIdMenuOpen,
@@ -187,12 +188,14 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
     const baseTop = curTop - curOffset;
     startPos.current = { mx: e.clientX, my: e.clientY, x: fr.x, y: fr.y, w: fr.w, h: fr.h, dockedHeight: currentPanel.dockedHeight, dockedTopOffset: curOffset, dockedBaseTop: baseTop };
     const startDockedW = currentPanel.dockedWidth;
+    const releaseShield = beginDragShield(edgeCursor(edge));
     const onMove = (ev: MouseEvent) => {
       if (!resizing.current) return;
       handleResizeMove(ev, panel.id, resizing.current, startPos.current, startDockedW);
     };
     const onUp = () => {
       resizing.current = null;
+      releaseShield();
       wrapperRef.current?.classList.remove('popout-dragging');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
@@ -208,6 +211,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
     const container = (e.currentTarget as HTMLElement).parentElement;
     if (!container) return;
     container.classList.add('dragging');
+    const releaseShield = beginDragShield('col-resize');
     const containerRect = container.getBoundingClientRect();
     const onMove = (ev: MouseEvent) => {
       if (!splitDragging.current) return;
@@ -215,6 +219,7 @@ function PanelView({ panel }: { panel: PopoutPanelState }) {
     };
     const onUp = () => {
       splitDragging.current = false;
+      releaseShield();
       container.classList.remove('dragging');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);

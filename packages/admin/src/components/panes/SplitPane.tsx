@@ -1,6 +1,7 @@
 import { useRef, useCallback } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import type { SplitDirection } from '../../lib/pane-tree.js';
+import { beginDragShield } from '../../lib/drag-shield.js';
 
 interface SplitPaneProps {
   direction: SplitDirection;
@@ -36,6 +37,8 @@ export function SplitPane({ direction, ratio, splitId, onRatioChange, first, sec
     if (!container) return;
 
     container.classList.add('pane-dragging');
+    // Shield iframes so the drag keeps tracking (and can end) over them.
+    const releaseShield = beginDragShield(direction === 'horizontal' ? 'col-resize' : 'row-resize');
 
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current || !container) return;
@@ -61,6 +64,7 @@ export function SplitPane({ direction, ratio, splitId, onRatioChange, first, sec
 
     const onUp = () => {
       dragging.current = false;
+      releaseShield();
       container.classList.remove('pane-dragging');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);

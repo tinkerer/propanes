@@ -83,6 +83,7 @@ import { ctrlShiftHeld } from '../../lib/shortcuts.js';
 import { copyText, copyWithTooltip } from '../../lib/clipboard.js';
 import { TerminalPicker } from '../pickers/TerminalPicker.js';
 import { SessionIdMenu } from '../sessions/SessionIdMenu.js';
+import { beginDragShield } from '../../lib/drag-shield.js';
 
 const statusMenuOpen = signal<{ sessionId: string; x: number; y: number } | null>(null);
 const renamingSessionId = signal<string | null>(null);
@@ -707,6 +708,7 @@ export function GlobalTerminalPanel() {
       panelMinimized.value = false;
     }
     panelMaximized.value = false;
+    const releaseShield = beginDragShield('row-resize');
     const onMove = (ev: MouseEvent) => {
       if (!dragging.current) return;
       const newH = window.innerHeight - ev.clientY;
@@ -714,6 +716,7 @@ export function GlobalTerminalPanel() {
     };
     const onUp = () => {
       dragging.current = false;
+      releaseShield();
       panelResizing.value = false;
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
@@ -729,6 +732,7 @@ export function GlobalTerminalPanel() {
     const container = (e.currentTarget as HTMLElement).parentElement;
     if (!container) return;
     container.classList.add('dragging');
+    const releaseShield = beginDragShield('col-resize');
     const containerRect = container.getBoundingClientRect();
     const onMove = (ev: MouseEvent) => {
       if (!splitDragging.current) return;
@@ -737,6 +741,7 @@ export function GlobalTerminalPanel() {
     };
     const onUp = () => {
       splitDragging.current = false;
+      releaseShield();
       container.classList.remove('dragging');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);

@@ -9031,6 +9031,26 @@ body.pw-isolate {
   min-height: 0;
 }
 
+/* Markdown URLs render in-pane instead of showing raw source in the iframe. */
+.iframe-companion-markdown {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Transparent overlay installed during a divider/panel drag (see
+   lib/drag-shield.ts) so iframes underneath can't swallow mousemove/mouseup
+   and strand the drag. */
+.drag-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  background: transparent;
+}
+body.drag-shield-active {
+  user-select: none;
+}
+
 /* ── Request Panel ── */
 
 .request-panel-trigger {
