@@ -12,6 +12,7 @@ import { MessageBuffer } from './message-buffer.js';
 import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, listPwTmuxSessions, getTmuxPaneCommand, detachTmuxClients } from './tmux-pty.js';
 import { detectClaudeAuthRequired, detectClaudeTrustPrompt, stripTerminalControl } from './claude-auth-detect.js';
 import { mergePrUrls } from './pr-detect.js';
+import { createRecoveryParking } from './session-recovery.js';
 
 const PORT = parseInt(process.env.SESSION_SERVICE_PORT || '3002', 10);
 
@@ -20,15 +21,31 @@ delete process.env.CLAUDECODE;
 const MAX_OUTPUT_LOG = 500 * 1024; // 500KB
 const FLUSH_INTERVAL = 10_000; // 10s
 
+// Flipped once the HTTP/WS server is listening. Everything before that point
+// is startup: a throw there means we will never bind :3002, and "continuing"
+// would leave a process that is alive, reports healthy to systemd, and serves
+// nothing — every session pane then attaches, paints history and silently
+// swallows input until someone restarts the service. Crash instead so
+// Restart=always does its job. See docs/session-service-boot-race.md.
+let listening = false;
+
 // Safety net: node-pty's onData fires synchronously during a ReadStream read;
 // any throw from a handler bubbles up as an uncaughtException and kills the
 // whole session-service, dropping every live AgentTerminal's WebSocket. Log
 // and keep running instead — individual callers still catch their own
 // expected errors, this is the last-resort guard against bugs.
 process.on('uncaughtException', (err) => {
+  if (!listening) {
+    console.error('[session-service] fatal error during startup:', err);
+    process.exit(1);
+  }
   console.error('[session-service] uncaughtException (continuing):', err);
 });
 process.on('unhandledRejection', (reason) => {
+  if (!listening) {
+    console.error('[session-service] fatal rejection during startup:', reason);
+    process.exit(1);
+  }
   console.error('[session-service] unhandledRejection (continuing):', reason);
 });
 
@@ -422,6 +439,17 @@ function syncFeedbackDispatchStatus(sessionId: string, sessionStatus: string): v
 }
 
 function appendSessionAuditMarker(sessionId: string, marker: string): void {
+  try {
+    appendSessionAuditMarkerUnsafe(sessionId, marker);
+  } catch (err) {
+    // Concurrent writers can return SQLITE_BUSY even with busy_timeout (see
+    // message-buffer.ts). An audit line is never worth aborting the caller —
+    // this used to take down startup recovery entirely.
+    console.error(`[session-service] audit marker failed for ${sessionId}:`, err);
+  }
+}
+
+function appendSessionAuditMarkerUnsafe(sessionId: string, marker: string): void {
   const existing = db
     .select({ outputLog: schema.agentSessions.outputLog })
     .from(schema.agentSessions)
@@ -895,7 +923,13 @@ function applyEffectiveSize(
 }
 
 function writeToSession(sessionId: string, data: string): void {
-  const proc = activeSessions.get(sessionId);
+  let proc = activeSessions.get(sessionId);
+  // Keystroke for a session parked in recovery: try to reattach right now so
+  // the operator's first key revives the pane instead of vanishing, rather
+  // than waiting out the parking lot's next scheduled retry.
+  if (!proc && recoveryParking.isParked(sessionId)) {
+    if (recoveryParking.tryNow(sessionId)) proc = activeSessions.get(sessionId);
+  }
   if (proc && proc.status === 'running') {
     proc.ptyProcess.write(data);
     markUserInput(sessionId, proc, data);
@@ -995,6 +1029,48 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
   }
 }
 
+function sendLiveHistory(proc: AgentProcess, ws: WebSocket): void {
+  try {
+    ws.send(JSON.stringify({
+      type: 'history',
+      data: stripTerminalFillRuns(proc.outputBuffer),
+      lastInputAckSeq: proc.lastInputAckSeq,
+      inputState: proc.inputState,
+      cols: proc.ptyProcess.cols,
+      rows: proc.ptyProcess.rows,
+    }));
+  } catch { /* socket went away */ }
+}
+
+// Viewers attached to a session we could not reattach yet. See
+// session-recovery.ts for why they are parked instead of silently accepted.
+const recoveryParking = createRecoveryParking<WebSocket>({
+  attemptRecovery: (sessionId) => {
+    if (activeSessions.has(sessionId)) return true;
+    const session = db
+      .select()
+      .from(schema.agentSessions)
+      .where(eq(schema.agentSessions.id, sessionId))
+      .get();
+    if (!session || session.status !== 'running') return false;
+    if (!tryRecoverSession(session)) return false;
+    console.log(`[session-service] Late recovery succeeded for ${sessionId}`);
+    return true;
+  },
+  onRecovered: (sessionId, sockets) => {
+    const proc = activeSessions.get(sessionId);
+    if (!proc) return;
+    for (const ws of sockets) {
+      proc.adminSockets.add(ws);
+      // The client RIS-replaces the screen when a second history arrives, so
+      // the snapshot it painted while we were recovering is swapped for the
+      // live buffer rather than appended to it — and its input sequence
+      // counter resyncs from lastInputAckSeq.
+      sendLiveHistory(proc, ws);
+    }
+  },
+});
+
 function markSessionStale(sessionId: string): void {
   const now = new Date().toISOString();
   appendSessionAuditMarker(sessionId, 'session-service WebSocket attach could not recover running DB row; marked failed');
@@ -1046,6 +1122,10 @@ function attachAdminSocket(sessionId: string, ws: WebSocket): boolean {
           `session-service WebSocket attach could not recover running DB row; left running because tmuxAvailable=${tmuxAvailable} tmuxExists=${tmuxExists}`
         );
         ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(session.outputLog || '') }));
+        // No PTY behind this socket yet — park it and keep retrying the
+        // reattach so the pane becomes typable on its own. Returning here
+        // without parking is what forced the operator to reload the page.
+        recoveryParking.park(sessionId, ws);
         return true;
       }
       // Recovery failed and the backing tmux session is definitively gone.
@@ -1099,6 +1179,7 @@ function detachAdminSocket(sessionId: string, ws: WebSocket): void {
     pending.delete(ws);
     if (pending.size === 0) pendingConnections.delete(sessionId);
   }
+  recoveryParking.release(sessionId, ws);
 }
 
 // ---------- Session recovery ----------
@@ -1348,7 +1429,13 @@ wsServer.on('connection', (ws, req) => {
 
         // Sequenced protocol messages
         case 'sequenced_input': {
-          const proc = activeSessions.get(sessionId);
+          // The browser speaks the sequenced protocol, so this — not the
+          // legacy 'input' path — is where a keystroke into a pane parked in
+          // recovery lands. Try the reattach before giving up on it.
+          let proc = activeSessions.get(sessionId);
+          if (!proc && recoveryParking.isParked(sessionId)) {
+            if (recoveryParking.tryNow(sessionId)) proc = activeSessions.get(sessionId);
+          }
           if (!proc) break;
           // Dedup: only process if seq is new
           if (msg.seq > proc.lastInputAckSeq) {
@@ -1392,9 +1479,19 @@ wsServer.on('connection', (ws, req) => {
 
 // ---------- Start ----------
 
-recoverSessions();
+// Recovery is best-effort. It used to run unguarded at top level, so a throw
+// (SQLITE_BUSY against the main server at boot) aborted module evaluation
+// before serve() ran — and the uncaughtException guard below kept the process
+// alive, leaving a service that was "active (running)" but never bound :3002.
+// See docs/session-service-boot-race.md.
+try {
+  recoverSessions();
+} catch (err) {
+  console.error('[session-service] recoverSessions failed at startup (continuing):', err);
+}
 
 const server = serve({ fetch: app.fetch, port: PORT }, () => {
+  listening = true;
   console.log(`[session-service] Running on http://localhost:${PORT}`);
 });
 

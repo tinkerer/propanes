@@ -16,10 +16,19 @@ export function safeDir(dir: string): string {
 const TMUX_PREFIX = 'pw-';
 const PW_TMUX_CONF = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'tmux-pw.conf');
 
-let tmuxAvailable: boolean | null = null;
+let tmuxAvailable = false;
+let tmuxProbedAt = 0;
+const TMUX_PROBE_RETRY_MS = 5000;
 
 export function isTmuxAvailable(): boolean {
-  if (tmuxAvailable !== null) return tmuxAvailable;
+  // Only a positive result is cached for good. A negative one is re-probed:
+  // `tmux -V` can fail transiently (fork failure under boot load), and caching
+  // that for the lifetime of the process meant no session could ever be
+  // recovered again — every pane opened read-only until the service restarted.
+  if (tmuxAvailable) return true;
+  const now = Date.now();
+  if (tmuxProbedAt && now - tmuxProbedAt < TMUX_PROBE_RETRY_MS) return false;
+  tmuxProbedAt = now;
   try {
     execSync('tmux -V', { stdio: 'pipe' });
     tmuxAvailable = true;

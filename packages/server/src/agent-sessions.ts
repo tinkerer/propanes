@@ -281,6 +281,28 @@ export function detachAdmin(sessionId: string, ws: WsWebSocket): void {
   adminBridges.delete(ws);
 }
 
+/**
+ * Is this message an AgentTerminal liveness ping the main server should answer
+ * itself rather than forward upstream?
+ *
+ * A socket that died with its machine (laptop sleep, VPN drop, NAT rebind)
+ * stays in readyState OPEN in the browser for minutes — send() keeps
+ * succeeding while every keystroke disappears. The terminal pings; a missing
+ * pong is what tells it to reconnect instead of stranding the operator with a
+ * pane they have to reload the page to type into.
+ *
+ * The payload must be parsed, not pattern-matched: a user typing `ping` into a
+ * terminal produces an input message that contains the same bytes.
+ */
+export function isLivenessPing(data: string): boolean {
+  if (data.length > 256 || !data.includes('"ping"')) return false;
+  try {
+    return (JSON.parse(data) as { type?: unknown } | null)?.type === 'ping';
+  } catch {
+    return false;
+  }
+}
+
 export function forwardToService(ws: WsWebSocket, data: string): void {
   const bridge = adminBridges.get(ws);
   if (!bridge) return;

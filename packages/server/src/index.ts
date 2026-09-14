@@ -13,6 +13,7 @@ import {
   attachAdmin,
   detachAdmin,
   forwardToService,
+  isLivenessPing,
   broadcastToLauncherSessionAdmins,
   cleanupOrphanedSessions,
 } from './agent-sessions.js';
@@ -376,7 +377,15 @@ agentWss.on('connection', async (ws, req) => {
   console.log(`Admin attached to agent session: ${sessionId}`);
 
   ws.on('message', (raw) => {
-    forwardToService(ws, raw.toString());
+    const text = raw.toString();
+    // Answer the terminal's liveness probe here; the session-service has no
+    // use for it and the browser only needs to know this socket still carries
+    // traffic. See isLivenessPing.
+    if (isLivenessPing(text)) {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'pong', sessionId }));
+      return;
+    }
+    forwardToService(ws, text);
   });
 
   ws.on('close', () => {
