@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { eq, desc, ne, and, inArray, or, sql } from 'drizzle-orm';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { hostname as osHostname } from 'node:os';
@@ -991,20 +991,27 @@ function computeJsonlEtag(units: JsonlUnit[], tailN: number): string {
   return `W/"${h.digest('hex')}"`;
 }
 
-agentSessionRoutes.get('/:id/jsonl', async (c) => {
+interface JsonlRequestParams {
+  /** optional: specific file id like "main:uuid", "cont:uuid", "sub:uuid:agentId" */
+  fileFilter?: string;
+  /** Optional: return only the last N lines of the merged output. Keeps the
+   *  initial payload small for mobile clients that freeze parsing multi-MB
+   *  JSONL synchronously. Desktop callers can omit it for the full history. */
+  tail?: string;
+  /** Differential updates: 'init' (first poll) or an opaque cursor from a
+   *  previous response. Switches the response to JSON with only the bytes
+   *  appended since the cursor, instead of the entire merged transcript. */
+  cursor?: string;
+}
+
+const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
   const id = c.req.param('id');
-  const fileFilter = c.req.query('file'); // optional: specific file id like "main:uuid", "cont:uuid", "sub:uuid:agentId"
-  // Optional: return only the last N lines of the merged output. Keeps the
-  // initial payload small for mobile clients that freeze parsing multi-MB
-  // JSONL synchronously. Desktop callers can omit it for the full history.
-  const tailParam = c.req.query('tail');
+  const fileFilter = params.fileFilter;
+  const tailParam = params.tail;
   const tailN = tailParam ? Math.max(0, parseInt(tailParam, 10) || 0) : 0;
   // Treat any tail request as a mobile client for redaction purposes.
   const dropImageData = tailN > 0;
-  // Differential updates: ?cursor=init (first poll) or an opaque cursor from a
-  // previous response. Switches the response to JSON with only the bytes
-  // appended since the cursor, instead of the entire merged transcript.
-  const cursorParam = c.req.query('cursor');
+  const cursorParam = params.cursor;
   const isDifferential = cursorParam !== undefined && cursorParam !== '';
   // Expected-missing transcript: the agent is still spinning up, the session
   // has no resolvable JSONL path (plain terminal), or a filtered file vanished.
@@ -1209,6 +1216,29 @@ agentSessionRoutes.get('/:id/jsonl', async (c) => {
   const out = tailN > 0 ? allLines.slice(-tailN) : allLines;
   c.header('ETag', etag);
   return c.text(redactLines(out, dropImageData, id).join('\n'));
+};
+
+agentSessionRoutes.get('/:id/jsonl', (c) =>
+  handleJsonlRequest(c, {
+    fileFilter: c.req.query('file'),
+    tail: c.req.query('tail'),
+    cursor: c.req.query('cursor'),
+  }),
+);
+
+// Same handler, cursor in the body. The differential cursor carries a byte
+// offset per physical transcript file, so a session with hundreds of subagent
+// JSONLs produces a cursor tens of kilobytes long — far past Node's 16 KB
+// header cap, which answers the poll with an unhelpful HTTP 431. Posting the
+// cursor keeps long sessions pollable regardless of how many files they span.
+agentSessionRoutes.post('/:id/jsonl', async (c) => {
+  const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
+  const { file, tail, cursor } = body as Record<string, unknown>;
+  return handleJsonlRequest(c, {
+    fileFilter: typeof file === 'string' && file ? file : undefined,
+    tail: typeof tail === 'number' || typeof tail === 'string' ? String(tail) : undefined,
+    cursor: typeof cursor === 'string' ? cursor : undefined,
+  });
 });
 
 // Serve a single inline image out of a session's JSONL transcript. The mobile

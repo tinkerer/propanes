@@ -570,10 +570,19 @@ export const api = {
     id: string,
     opts: { fileFilter?: string; tail?: number; cursor?: string | null } = {},
   ): Promise<{ cursor: string; reset: boolean; order: string[]; files: Array<{ key: string; lines: string }>; pending?: boolean }> => {
-    const params: string[] = [`cursor=${encodeURIComponent(opts.cursor || 'init')}`];
-    if (opts.fileFilter) params.push(`file=${encodeURIComponent(opts.fileFilter)}`);
-    if (opts.tail && opts.tail > 0) params.push(`tail=${opts.tail}`);
-    const res = await authFetch(`/admin/agent-sessions/${id}/jsonl?${params.join('&')}`);
+    // POST, not GET: the cursor carries a byte offset per physical transcript
+    // file, so a session with hundreds of subagent JSONLs produces a cursor
+    // tens of kilobytes long. In a query string that overruns Node's header
+    // cap and the poll comes back as HTTP 431.
+    const res = await authFetch(`/admin/agent-sessions/${id}/jsonl`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cursor: opts.cursor || 'init',
+        ...(opts.fileFilter ? { file: opts.fileFilter } : {}),
+        ...(opts.tail && opts.tail > 0 ? { tail: opts.tail } : {}),
+      }),
+    });
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
       try {

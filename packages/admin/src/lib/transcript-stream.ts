@@ -7,6 +7,27 @@ import { isMobile } from './viewport.js';
 
 const TERMINAL_STATUSES = new Set(['completed', 'exited', 'failed', 'deleted', 'archived', 'killed']);
 
+// Statuses that mean "the request itself was too big", i.e. the cursor is at
+// fault rather than the transcript: 413 payload, 414 URI, 431 headers.
+const CURSOR_REJECTION_STATUSES = new Set([413, 414, 431]);
+const isCursorRejection = (status: unknown) =>
+  typeof status === 'number' && CURSOR_REJECTION_STATUSES.has(status);
+
+/** Never render a bare `HTTP 431` at the operator — a status code alone tells
+ *  them nothing about what broke or whether it will recover. */
+function describeTranscriptError(err: any, polling: boolean): string {
+  const retry = polling ? ' Retrying on the next poll…' : ' Reopen the view to try again.';
+  const status = err?.status;
+  if (isCursorRejection(status)) {
+    return `The server rejected this transcript request as too large.${retry}`;
+  }
+  const msg = err?.message || String(err);
+  if (/^HTTP \d+$/.test(msg)) {
+    return `Couldn't load the transcript (${msg}).${retry}`;
+  }
+  return msg;
+}
+
 export interface UseTranscriptStreamOpts {
   /** When set, pass `?file=` to the JSONL endpoint to filter to one transcript
    *  file (main / continuation / subagent). null/undefined = merged stream. */
@@ -111,11 +132,26 @@ export function useTranscriptStream(
       if (inFlight) return;
       inFlight = true;
       try {
-        const delta = await api.getJsonlDelta(sessionId, {
-          fileFilter: fileFilter || undefined,
-          tail: tailLines,
-          cursor: cursor.current,
-        });
+        let delta;
+        try {
+          delta = await api.getJsonlDelta(sessionId, {
+            fileFilter: fileFilter || undefined,
+            tail: tailLines,
+            cursor: cursor.current,
+          });
+        } catch (err: any) {
+          // A cursor the server won't accept (too large for an intermediate
+          // proxy, stale encoding after a deploy) must not strand the view on
+          // an error wall — drop it and ask for a fresh full snapshot once.
+          if (!cursor.current || !isCursorRejection(err?.status)) throw err;
+          cursor.current = null;
+          accumulator.current = new TranscriptAccumulator();
+          delta = await api.getJsonlDelta(sessionId, {
+            fileFilter: fileFilter || undefined,
+            tail: tailLines,
+            cursor: null,
+          });
+        }
         if (cancelled) return;
         if (delta.pending) {
           // Transcript not on disk (yet) — the server answers 200 + pending
@@ -150,7 +186,7 @@ export function useTranscriptStream(
           setError(null);
           setLoading(false);
         } else {
-          setError(err?.message || String(err));
+          setError(describeTranscriptError(err, !isSessionDone && pollMs > 0));
           setLoading(false);
         }
       } finally {
