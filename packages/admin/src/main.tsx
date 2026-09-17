@@ -51,10 +51,13 @@ async function resolveAdminWidgetApiKey(): Promise<string | undefined> {
     });
     if (!res.ok) return undefined;
     const apps = await res.json() as Array<{ name?: string; apiKey?: string; projectDir?: string }>;
+    // Mirror the server's admin-app match (server/src/admin-app.ts): the row's
+    // name casing drifts ("ProPanes Admin") and the widget must not guess
+    // among several apps — that files admin feedback into the wrong one.
     const adminApp =
-      apps.find((app) => app.name === 'Propanes Admin') ||
-      apps.find((app) => typeof app.projectDir === 'string' && /\/propanes\/?$/.test(app.projectDir)) ||
-      apps[0];
+      apps.find((app) => typeof app.name === 'string' && /^\s*pro\s*panes(\s+admin)?\s*$/i.test(app.name)) ||
+      apps.find((app) => typeof app.projectDir === 'string' && /\/propanes\/?$/i.test(app.projectDir)) ||
+      (apps.length === 1 ? apps[0] : undefined);
     return adminApp?.apiKey;
   } catch {
     return undefined;
