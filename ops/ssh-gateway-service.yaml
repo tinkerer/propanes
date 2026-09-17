@@ -1,3 +1,8 @@
+# NOT DEPLOYED — removed 2026-07-31 for SOC 2 (public port 22 on the AKS NSG
+# failed the "Public SSH denied" check). Terminal access goes through the
+# propanes CLI protocol instead. Do not re-apply without a
+# loadBalancerSourceRanges allowlist and a Vanta exception.
+#
 # Exposes the Propanes SSH gateway (ssh-gateway.ts, enabled via
 # SSH_GATEWAY_PORT on the control-plane deployment) outside the cluster.
 #
