@@ -1,7 +1,8 @@
 // "PR #123" tag shown next to a session wherever it's listed. The server
-// detects GitHub PR URLs in session output (pr-detect.ts) and exposes them as
-// `prUrls` — string[] from the list API, raw JSON string from the single-row
-// endpoint — so normalize both here.
+// detects GitHub PR URLs in the session's PTY output (pr-detect.ts) and in its
+// transcript on disk (pr-transcript-scan.ts — where collapsed `gh pr` results
+// live) and exposes them as `prUrls` — string[] from the list API, raw JSON
+// string from the single-row endpoint — so normalize both here.
 
 export function parsePrUrls(prUrls: unknown): string[] {
   let arr: unknown = prUrls;

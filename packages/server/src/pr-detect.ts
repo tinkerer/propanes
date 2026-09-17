@@ -54,7 +54,11 @@ export function extractPrUrls(raw: string): string[] {
  * nothing changed (callers skip the DB write).
  */
 export function mergePrUrls(existingJson: string | null | undefined, text: string): string | null {
-  const detected = extractPrUrls(text);
+  return mergePrUrlList(existingJson, extractPrUrls(text));
+}
+
+/** Same as mergePrUrls, for URLs already extracted (e.g. from a transcript scan). */
+export function mergePrUrlList(existingJson: string | null | undefined, detected: string[]): string | null {
   if (!detected.length) return null;
   let existing: string[] = [];
   if (existingJson) {

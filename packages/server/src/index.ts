@@ -41,7 +41,7 @@ import { dispatchPendingFollowups } from './routes/admin/session-followups.js';
 import { startRetentionSweeper } from './routes/admin/cos-retention.js';
 import { ensureCosThreadsForOrphanSessions } from './cos-inbox.js';
 import { detectClaudeAuthRequired } from './claude-auth-detect.js';
-import { mergePrUrls } from './pr-detect.js';
+import { mergePrUrls, mergePrUrlList } from './pr-detect.js';
 import { startSshGateway } from './ssh-gateway.js';
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -513,6 +513,23 @@ launcherWss.on('connection', (ws, req) => {
                 .where(eq(schema.agentSessions.id, msg.sessionId))
                 .run();
             }
+          }
+          break;
+        }
+
+        case 'launcher_session_pr_urls': {
+          const row = db
+            .select({ prUrls: schema.agentSessions.prUrls })
+            .from(schema.agentSessions)
+            .where(eq(schema.agentSessions.id, msg.sessionId))
+            .get();
+          if (!row) break;
+          const merged = mergePrUrlList(row.prUrls, msg.prUrls);
+          if (merged) {
+            db.update(schema.agentSessions)
+              .set({ prUrls: merged })
+              .where(eq(schema.agentSessions.id, msg.sessionId))
+              .run();
           }
           break;
         }
