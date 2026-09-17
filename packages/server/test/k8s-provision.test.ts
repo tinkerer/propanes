@@ -78,4 +78,5 @@ test('agent-auth seed secret ships empty (user logs in interactively)', () => {
   const authSecret = manifests.filter((m) => m.kind === 'Secret')[1] as any;
   assert.equal(authSecret.metadata.name, 'propanes-agent-auth-maksym');
   assert.equal(authSecret.stringData['claude-credentials.json'], '');
+  assert.equal(authSecret.stringData['claude-settings.json'], '');
 });
