@@ -56,12 +56,11 @@ export function hydrateFeedback(row: typeof schema.feedbackItems.$inferSelect, t
   };
 }
 
-// Single trailing line appended to dispatched prompts. This replaced the old
-// multi-line "[AGENT NOTE] … [/AGENT NOTE]" preamble (removed 2026-06-11) —
-// the only load-bearing part was the <cos-reply> protocol, which the Inbox
-// thread persistence and the slack-bot extract from session output. Keep it
-// one sentence: it shows up verbatim in the session's first user message.
-export const COS_REPLY_DISPATCH_HINT = `(Implement directly. When done, wrap a 1–4 sentence summary — changed files/commits, what you verified, follow-ups — in <cos-reply>…</cos-reply> tags; only wrapped text reaches the Inbox thread.)`;
+// Shared workflow and reply instructions appended to initial dispatch prompts,
+// including custom templates. Keep the trailing parenthetical format compatible
+// with the admin's stripDispatchBoilerplate helper. The Inbox thread persistence
+// and slack-bot extract the <cos-reply> summary from session output.
+export const COS_REPLY_DISPATCH_HINT = `(Implement directly. If this task generates code or docs changes: before committing and pushing any PR changes (including review follow-ups), inspect the repository instructions and CI configuration, run the required quality checks locally using the same commands and configuration as CI (including mypy/type checks where configured, lint, formatting checks, and relevant tests), and fix failures before pushing. If a required check cannot run locally, report the check and blocker explicitly; do not claim it passed. Commit and open a PR for your work. After opening a PR, monitor the CI, conflicts and reviewer comments, make any updates required to pass CI, resolve conflicts and get reviewer approval. When done, wrap a 1–4 sentence summary — changed files/commits, what you verified, follow-ups — in <cos-reply>…</cos-reply> tags; only wrapped text reaches the Inbox thread.)`;
 
 export const DEFAULT_PROMPT_TEMPLATE = `Feedback: {{feedback.url}}
 API access: curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "\${PROPANES_API_URL:-http://localhost:3001}/api/v1/admin/feedback/{{feedback.id}}" (both env vars are preset in this session; all /api/v1/admin/* routes need the bearer token)
@@ -950,6 +949,10 @@ export async function dispatchAgentSession(params: {
       }
     })().catch((err) => {
       console.error(`[dispatch] Async remote launch failed for ${sessionId}:`, err);
+      db.update(schema.agentSessions)
+        .set({ status: 'failed', completedAt: new Date().toISOString() })
+        .where(eq(schema.agentSessions.id, sessionId))
+        .run();
     });
   } else {
     // Local spawn — fire-and-forget, errors are handled in spawnLocal

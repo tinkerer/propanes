@@ -14,3 +14,6 @@ uploads/
 packages/harness/artifacts/
 .claude/settings.local.json
 .claude/worktrees/
+
+# setup.sh runtime state (dev.log, dev.pid)
+.propanes/

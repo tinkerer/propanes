@@ -4,6 +4,8 @@ import { timed, bindRouteSignal } from './perf.js';
 import { isolatedComponent } from './isolate.js';
 import { openPageView, openSettingsPanel } from './companion-state.js';
 import { initEmbedGestures } from './embed-gestures.js';
+import { COS_WORKSPACE_ID } from './app-id.js';
+export { COS_WORKSPACE_ID } from './app-id.js';
 
 // Embed mode detection
 const params = new URLSearchParams(window.location.search);
@@ -129,9 +131,6 @@ export async function loadApprovals(appId: string): Promise<typeof api.getApprov
     return { approvals: [] } as any;
   }
 }
-
-// CoS workspace constant — spans all apps, default when none registered.
-export const COS_WORKSPACE_ID = '__cos__';
 
 // Whenever the selected workspace changes, refresh its channel list.
 effect(() => {

@@ -11,6 +11,7 @@ import type {
   LauncherSessionStarted,
   LauncherSessionOutput,
   LauncherSessionEnded,
+  LauncherSessionPrUrls,
   HarnessStatusUpdate,
   ServerToLauncherMessage,
   LauncherCapabilities,
@@ -49,6 +50,7 @@ import {
   filterJsonlLines,
   type JsonlUnit,
 } from './jsonl-utils.js';
+import { newTranscriptCursor, scanTranscriptForPrUrls, type TranscriptScanCursor } from './pr-transcript-scan.js';
 
 const SERVER_WS_URL = process.env.SERVER_WS_URL || 'ws://localhost:3001/ws/launcher';
 const LAUNCHER_ID = process.env.LAUNCHER_ID || `launcher-${os.hostname()}`;
@@ -59,6 +61,8 @@ const MACHINE_ID = process.env.MACHINE_ID || undefined;
 const LAUNCHER_VERSION = (globalThis as any).__LAUNCHER_VERSION__ || '0.1.0';
 
 const MAX_OUTPUT_LOG = 500 * 1024;
+// How often a running agent's transcript is re-read for PR URLs.
+const PR_SCAN_INTERVAL_MS = 10_000;
 
 interface LocalSession {
   sessionId: string;
@@ -67,6 +71,50 @@ interface LocalSession {
   totalBytes: number;
   outputSeq: number;
   status: 'running' | 'completed' | 'failed' | 'killed';
+  /** Where this agent's transcript lives, for PR detection. Unset for harness (docker exec) sessions. */
+  transcript?: {
+    cwd: string;
+    runtime: AgentRuntime;
+    claudeSessionId: string;
+    startedAt: string;
+    cursor: TranscriptScanCursor;
+    /** URLs already sent to the server, so each is reported once. */
+    reported: Set<string>;
+  };
+  prScanTimer?: ReturnType<typeof setInterval>;
+}
+
+/** Read the transcript since the last scan and report any PR URLs not yet sent. */
+function reportTranscriptPrUrls(session: LocalSession, final: boolean): void {
+  const t = session.transcript;
+  if (!t) return;
+  try {
+    const jsonlPath = resolveSessionJsonlPath(
+      t.cwd,
+      t.cwd,
+      t.runtime,
+      t.claudeSessionId,
+      t.startedAt,
+      final ? session.status : 'running',
+      process.env.AGENT_HOME || os.homedir(),
+      final ? null : session.ptyProcess.pid,
+    );
+    const fresh = scanTranscriptForPrUrls(jsonlPath, t.cursor, final).filter((u) => !t.reported.has(u));
+    if (!fresh.length) return;
+    for (const u of fresh) t.reported.add(u);
+    const msg: LauncherSessionPrUrls = { type: 'launcher_session_pr_urls', sessionId: session.sessionId, prUrls: fresh };
+    sendToServer(msg);
+  } catch (err) {
+    console.error(`[launcher] transcript PR scan failed for ${session.sessionId}:`, err);
+  }
+}
+
+function stopTranscriptPrScan(session: LocalSession): void {
+  if (session.prScanTimer) {
+    clearInterval(session.prScanTimer);
+    session.prScanTimer = undefined;
+  }
+  reportTranscriptPrUrls(session, true);
 }
 
 const sessions = new Map<string, LocalSession>();
@@ -296,6 +344,20 @@ function spawnSession(params: {
   };
   sessions.set(sessionId, session);
 
+  // A resume keeps writing to the resumed UUID's transcript.
+  const transcriptId = claudeSessionId || resumeSessionId;
+  if (transcriptId) {
+    session.transcript = {
+      cwd,
+      runtime,
+      claudeSessionId: transcriptId,
+      startedAt: new Date().toISOString(),
+      cursor: newTranscriptCursor(),
+      reported: new Set(),
+    };
+    session.prScanTimer = setInterval(() => reportTranscriptPrUrls(session, false), PR_SCAN_INTERVAL_MS);
+  }
+
   const started: LauncherSessionStarted = {
     type: 'launcher_session_started',
     sessionId,
@@ -315,6 +377,7 @@ function spawnSession(params: {
   ptyProcess.onExit(({ exitCode }) => {
     session.status = exitCode === 0 ? 'completed' : 'failed';
     sendSequenced(session, { kind: 'exit', exitCode, status: session.status });
+    stopTranscriptPrScan(session);
 
     const ended: LauncherSessionEnded = {
       type: 'launcher_session_ended',
@@ -963,6 +1026,10 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
       try {
         const filename = path.basename(msg.filename || 'file');
         const destPath = path.join(os.tmpdir(), filename);
+        // Replace rather than write through. When a launcher shares a host with
+        // the API server, the destination is already the server's symlink into
+        // its uploads dir, and writing through it would edit the stored original.
+        try { unlinkSync(destPath); } catch { /* nothing there */ }
         writeFileSync(destPath, Buffer.from(msg.contentBase64, 'base64'));
         const result: WriteSessionFileResult = { type: 'write_file_result', sessionId: msg.sessionId, ok: true, path: destPath };
         sendToServer(result);

@@ -5,14 +5,18 @@ import type { Server } from 'node:http';
 import * as pty from 'node-pty';
 import { eq, desc } from 'drizzle-orm';
 import { ulid } from 'ulidx';
-import { db, schema } from './db/index.js';
+import { db, schema, runMigrations } from './db/index.js';
 import type { AgentRuntime, PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
 import { STREAM_PROFILE_PTY_COLS } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
-import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, listPwTmuxSessions, getTmuxPaneCommand, detachTmuxClients } from './tmux-pty.js';
+import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, listPwTmuxSessions, getTmuxPaneCommand, detachTmuxClients, getTmuxPanePid } from './tmux-pty.js';
 import { detectClaudeAuthRequired, detectClaudeTrustPrompt, stripTerminalControl } from './claude-auth-detect.js';
-import { mergePrUrls } from './pr-detect.js';
 import { createRecoveryParking } from './session-recovery.js';
+import { mergePrUrls, mergePrUrlList } from './pr-detect.js';
+import { newTranscriptCursor, scanTranscriptForPrUrls, type TranscriptScanCursor } from './pr-transcript-scan.js';
+import { resolveSessionJsonlPath } from './jsonl-utils.js';
+import { backfillTranscriptPrUrls } from './pr-backfill.js';
+import { homedir } from 'node:os';
 
 const PORT = parseInt(process.env.SESSION_SERVICE_PORT || '3002', 10);
 
@@ -20,6 +24,9 @@ const PORT = parseInt(process.env.SESSION_SERVICE_PORT || '3002', 10);
 delete process.env.CLAUDECODE;
 const MAX_OUTPUT_LOG = 500 * 1024; // 500KB
 const FLUSH_INTERVAL = 10_000; // 10s
+// Where the agents' `.claude/projects` transcripts live (the launcher-daemon
+// uses the same rule; on the control plane ~/.claude is usually a symlink).
+const AGENT_HOME = process.env.AGENT_HOME || homedir();
 
 // Flipped once the HTTP/WS server is listening. Everything before that point
 // is startup: a throw there means we will never bind :3002, and "continuing"
@@ -50,6 +57,15 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // ---------- Message buffer ----------
+
+// On a fresh checkout `pnpm dev` boots index.ts and session-service.ts
+// concurrently, and only index.ts used to call runMigrations(). Whichever lost
+// the race, session-service constructed MessageBuffer against a schema-less
+// database and died with `no such table: pending_messages` -- leaving the API
+// up but every terminal dead until someone manually restarted it. The
+// statements are all CREATE TABLE IF NOT EXISTS, so running them from both
+// processes is idempotent (WAL + busy_timeout serializes the concurrent DDL).
+runMigrations();
 
 const messageBuffer = new MessageBuffer();
 
@@ -162,6 +178,11 @@ interface AgentProcess {
   tmuxSessionName: string | null;
   /** JSON array of GitHub PR URLs detected in output (mirrors the pr_urls column) */
   prUrlsJson: string | null;
+  /** Claude/Codex session UUID from the row — locates the transcript for PR detection. */
+  claudeSessionId: string | null;
+  startedAt: string | null;
+  /** How far into the transcript the PR scan has read. */
+  transcriptCursor: TranscriptScanCursor;
 }
 
 const activeSessions = new Map<string, AgentProcess>();
@@ -468,12 +489,50 @@ function appendProcAuditMarker(proc: AgentProcess, marker: string): void {
   proc.totalBytes += Buffer.byteLength(line);
 }
 
-// Scan the accumulated output for GitHub PR URLs (flush-time, not per-chunk —
-// a badge can lag up to one FLUSH_INTERVAL). Once a URL lands in prUrlsJson it
-// sticks even after the buffer truncates past it.
-function scanPrUrls(proc: AgentProcess): void {
+// Scan for GitHub PR URLs (flush-time, not per-chunk — a badge can lag up to
+// one FLUSH_INTERVAL). Two sources: the accumulated PTY output, and the
+// agent's transcript on disk, which is where the URL usually is — Claude Code
+// collapses the `gh pr create` / `gh pr view` result on screen, so a session
+// working on a PR often never paints its URL. Once a URL lands in prUrlsJson
+// it sticks even after the buffer truncates past it.
+function scanPrUrls(proc: AgentProcess, final = false): void {
   const updated = mergePrUrls(proc.prUrlsJson, proc.outputBuffer);
   if (updated) proc.prUrlsJson = updated;
+  scanTranscriptPrUrls(proc, final);
+}
+
+function scanTranscriptPrUrls(proc: AgentProcess, final: boolean): void {
+  try {
+    if (!proc.claudeSessionId) {
+      // Terminal sessions have no transcript; agent rows may get the UUID
+      // filled in after spawn, so keep looking until it appears.
+      const row = db
+        .select({ claudeSessionId: schema.agentSessions.claudeSessionId })
+        .from(schema.agentSessions)
+        .where(eq(schema.agentSessions.id, proc.sessionId))
+        .get();
+      proc.claudeSessionId = row?.claudeSessionId || null;
+      if (!proc.claudeSessionId) return;
+    }
+    // The live pid lets the resolver follow `/clear`, which rotates Claude to
+    // a fresh transcript UUID mid-process.
+    const livePid = final ? null : (proc.tmuxSessionName ? getTmuxPanePid(proc.sessionId) : proc.ptyProcess.pid);
+    const path = resolveSessionJsonlPath(
+      proc.cwd,
+      proc.cwd,
+      proc.runtime,
+      proc.claudeSessionId,
+      proc.startedAt,
+      final ? proc.status : 'running',
+      AGENT_HOME,
+      livePid,
+    );
+    const urls = scanTranscriptForPrUrls(path, proc.transcriptCursor, final);
+    const updated = mergePrUrlList(proc.prUrlsJson, urls);
+    if (updated) proc.prUrlsJson = updated;
+  } catch (err) {
+    console.error(`[session-service] transcript PR scan failed for ${proc.sessionId}:`, err);
+  }
 }
 
 function flushOutput(sessionId: string): void {
@@ -615,6 +674,9 @@ function spawnSession(params: {
     suppressAuthCompanion,
     tmuxSessionName,
     prUrlsJson: existingRow?.prUrls || null,
+    claudeSessionId: claudeSessionId || resumeSessionId || null,
+    startedAt: new Date().toISOString(),
+    transcriptCursor: newTranscriptCursor(),
   };
 
   activeSessions.set(sessionId, proc);
@@ -803,7 +865,7 @@ function wireOnExit(proc: AgentProcess, ptyProcess: pty.IPty): void {
 
     sendSequenced(proc, { kind: 'exit', exitCode, status: proc.status });
 
-    scanPrUrls(proc);
+    scanPrUrls(proc, true);
     const completedAt = new Date().toISOString();
     db.update(schema.agentSessions)
       .set({
@@ -858,6 +920,7 @@ function killSessionProcess(sessionId: string): boolean {
   clearInterval(proc.flushTimer);
   sendSequenced(proc, { kind: 'exit', exitCode: -1, status: 'killed' });
 
+  scanPrUrls(proc, true);
   const now = new Date().toISOString();
   db.update(schema.agentSessions)
     .set({
@@ -866,6 +929,7 @@ function killSessionProcess(sessionId: string): boolean {
       outputBytes: proc.totalBytes,
       lastOutputSeq: proc.outputSeq,
       completedAt: now,
+      prUrls: proc.prUrlsJson,
     })
     .where(eq(schema.agentSessions.id, sessionId))
     .run();
@@ -1017,6 +1081,9 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
       suppressAuthCompanion: false,
       tmuxSessionName: session.tmuxSessionName || `pw-${session.id}`,
       prUrlsJson: session.prUrls || null,
+      claudeSessionId: session.claudeSessionId || null,
+      startedAt: session.startedAt || null,
+      transcriptCursor: newTranscriptCursor(),
     };
 
     activeSessions.set(session.id, proc);
@@ -1489,6 +1556,19 @@ try {
 } catch (err) {
   console.error('[session-service] recoverSessions failed at startup (continuing):', err);
 }
+
+// Give ended sessions that predate transcript scanning their PR badges. Off
+// the startup path so a slow disk never delays recovery or the listen.
+setTimeout(() => {
+  try {
+    const r = backfillTranscriptPrUrls(AGENT_HOME);
+    if (r.scanned || r.missing || r.scrubbed) {
+      console.log(`[session-service] PR badge backfill: scanned ${r.scanned}, tagged ${r.tagged}, no transcript ${r.missing}, scrubbed ${r.scrubbed}`);
+    }
+  } catch (err) {
+    console.error('[session-service] PR badge backfill failed:', err);
+  }
+}, 5_000).unref();
 
 const server = serve({ fetch: app.fetch, port: PORT }, () => {
   listening = true;

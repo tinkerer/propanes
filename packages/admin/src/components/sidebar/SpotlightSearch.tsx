@@ -3,6 +3,7 @@ import { applications, navigate } from '../../lib/state.js';
 import { allSessions, openSession, getSessionLabel, loadAllSessions } from '../../lib/sessions.js';
 import { recentResults, type RecentResult } from '../../lib/settings.js';
 import { api } from '../../lib/api.js';
+import { PrBadges, prSearchText } from '../PrBadges.js';
 import {
   chiefOfStaffAgents,
   chiefOfStaffActiveId,
@@ -19,6 +20,7 @@ interface SearchResult {
   snippet?: string;
   icon: string;
   route: string;
+  prUrls?: unknown;
   cos?: {
     agentId: string;
     threadId: string;
@@ -94,7 +96,7 @@ export function SpotlightSearch({ onClose }: Props) {
       return;
     }
 
-    const lower = q.toLowerCase();
+    const lower = q.trim().toLowerCase();
     const matched: SearchResult[] = [];
 
     for (const app of applications.value) {
@@ -114,7 +116,7 @@ export function SpotlightSearch({ onClose }: Props) {
       if (s.status === 'deleted') continue;
       const customLabel = getSessionLabel(s.id);
       const label = customLabel || s.title || s.feedbackTitle || s.agentName || s.id;
-      const searchable = [label, s.id, s.title, s.paneTitle, s.paneCommand, s.panePath].filter(Boolean).join(' ').toLowerCase();
+      const searchable = [label, s.id, s.title, s.paneTitle, s.paneCommand, s.panePath, prSearchText(s.prUrls)].filter(Boolean).join(' ').toLowerCase();
       if (searchable.includes(lower)) {
         const isPlain = s.permissionProfile === 'plain';
         const plainLabel = s.title
@@ -127,6 +129,7 @@ export function SpotlightSearch({ onClose }: Props) {
           id: s.id,
           title: customLabel || (isPlain ? `\u{1F5A5}\uFE0F ${plainLabel}` : (s.title || s.feedbackTitle || s.agentName || `Session ${s.id.slice(-6)}`)),
           subtitle: s.status,
+          prUrls: s.prUrls,
           icon: isPlain ? '\u{1F4BB}' : '\u26A1',
           route: '',
         });
@@ -366,7 +369,7 @@ export function SpotlightSearch({ onClose }: Props) {
               ref={inputRef}
               type="text"
               class="spotlight-input"
-              placeholder="Search applications, tickets, sessions..."
+              placeholder="Search applications, tickets, sessions, PRs..."
               value={query}
               onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
               onKeyDown={handleKeyDown}
@@ -443,7 +446,7 @@ export function SpotlightSearch({ onClose }: Props) {
                     onClick={() => { openSession(r.sessionId); onClose(); }}
                     onMouseEnter={() => setAdvancedSelectedIndex(i)}
                   >
-                    <span class="spotlight-result-icon">{r.errorCount > 0 ? '\u{1F534}' : '\u{1F7E2}'}</span>
+                    <span class="spotlight-result-icon">{r.errorCount > 0 ? '\u{1F534}' : '\u{1F535}'}</span>
                     <div class="spotlight-result-text">
                       <span class="spotlight-result-title">
                         {r.feedbackTitle || r.agentName || `Session ${r.sessionId.slice(-8)}`}
@@ -518,6 +521,7 @@ export function SpotlightSearch({ onClose }: Props) {
                           <div class="spotlight-result-text">
                             <span class="spotlight-result-title">{r.title}</span>
                             {r.subtitle && <span class="spotlight-result-subtitle">{r.subtitle}</span>}
+                            <PrBadges prUrls={r.prUrls} compact />
                             {r.snippet && <span class="spotlight-result-snippet">{r.snippet}</span>}
                           </div>
                           <span class="spotlight-result-type">{r.type === 'cos-message' ? 'ops' : r.type}</span>

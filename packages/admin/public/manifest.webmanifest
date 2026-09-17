@@ -2,21 +2,21 @@
   "name": "ProPanes Admin",
   "short_name": "ProPanes",
   "description": "Feedback overlay + agent session bridge admin dashboard",
-  "start_url": "/admin/",
-  "scope": "/admin/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#f8fafc",
   "theme_color": "#1d9bf0",
   "icons": [
     {
-      "src": "/admin/favicon.png",
+      "src": "./favicon.png",
       "sizes": "32x32",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/admin/apple-touch-icon.png",
+      "src": "./apple-touch-icon.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"

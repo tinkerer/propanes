@@ -60,6 +60,18 @@ export interface LauncherSessionEnded {
   outputLog: string;
 }
 
+/**
+ * GitHub PR URLs newly found in the session's transcript on the launcher's
+ * disk. The server can't read that file itself, and the PTY stream alone
+ * misses most of them (collapsed tool results), so the launcher scans and
+ * reports; the server merges into `agent_sessions.pr_urls`.
+ */
+export interface LauncherSessionPrUrls {
+  type: 'launcher_session_pr_urls';
+  sessionId: string;
+  prUrls: string[];
+}
+
 export interface HarnessStatusUpdate {
   type: 'harness_status';
   harnessConfigId: string;
@@ -188,6 +200,7 @@ export type LauncherToServerMessage =
   | LauncherSessionStarted
   | LauncherSessionOutput
   | LauncherSessionEnded
+  | LauncherSessionPrUrls
   | HarnessStatusUpdate
   | ImportSessionFilesResult
   | ImportAttachmentsResult

@@ -28,6 +28,12 @@
 // which is right for the /admin/ shell but yields '' for the service root and
 // per-user shells ('/', '/<user>') — there is no marker to match there, so
 // every request escapes the mount. That is the gap the injected value closes.
+export function resolveAdminMount(pathname: string): { basePath: string; mounted: boolean } {
+  const marker = pathname.match(/^(.*)\/admin(?:\/|$)/);
+  const basePath = marker ? marker[1] : '';
+  return { basePath, mounted: Boolean(basePath) };
+}
+
 function resolveBasePath(): string {
   if (typeof window === 'undefined') return '';
   const injected = (window as unknown as { __PROPANES_BASE_PATH__?: unknown })
@@ -35,8 +41,7 @@ function resolveBasePath(): string {
   if (typeof injected === 'string') {
     return injected === '/' ? '' : injected.replace(/\/+$/, '');
   }
-  const marker = window.location.pathname.match(/^(.*)\/admin(?:\/|$)/);
-  return marker ? marker[1] : '';
+  return resolveAdminMount(window.location.pathname).basePath;
 }
 
 export const BASE_PATH: string = resolveBasePath();

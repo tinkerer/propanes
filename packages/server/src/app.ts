@@ -5,6 +5,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { readFile } from 'node:fs/promises';
 import { resolve as resolvePath } from 'node:path';
 import { eq } from 'drizzle-orm';
+import { enforceIpAllowlist } from './access-control.js';
 import { db, schema } from './db/index.js';
 import { feedbackRoutes } from './routes/feedback.js';
 import { adminRoutes } from './routes/admin/index.js';
@@ -30,6 +31,12 @@ import { requireAdminAuth } from './admin-auth.js';
 export const app = new Hono();
 
 app.use('*', logger());
+
+// Network access control. A no-op unless PROPANES_ALLOWED_IPS is set, so
+// existing deployments are unaffected. Deliberately mounted BEFORE auth: a
+// disallowed source should never reach a credential check at all. See
+// access-control.ts for why a prefix-mounted deployment needs this.
+app.use('*', enforceIpAllowlist);
 // Reflect the request Origin header instead of returning "*". A wildcard
 // Access-Control-Allow-Origin is rejected by browsers whenever the request
 // uses credentials-mode "include" (cookies, auth headers on cross-origin

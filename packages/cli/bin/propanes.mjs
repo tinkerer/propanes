@@ -49,7 +49,21 @@ function saveConfig(cfg) {
 function normalizeServer(input) {
   let url = input;
   if (!/^https?:\/\//.test(url)) url = `https://${url}`;
-  return new URL(url).origin;
+  const u = new URL(url);
+  // Keep a path prefix. Propanes is commonly reverse-proxied UNDER one on
+  // single-hostname deployments -- e.g. https://host/propanes alongside another
+  // app at https://host/ -- and returning only .origin silently dropped it, so
+  // every request went to the HOST app instead. The visible symptom is a login
+  // that "succeeds" and lands on the host app's own page: /cli-auth 404s there
+  // and its router redirects, so nothing ever reaches propanes and the browser
+  // never hands a session back.
+  //
+  // Every call site builds `${server}/...`, and attach derives its WebSocket
+  // base with server.replace(/^http/, 'ws'), so preserving the path here is
+  // sufficient for all of them. Tokens become keyed by full base URL rather
+  // than origin, which is strictly more correct: two mounts on one origin are
+  // two different servers and must not share a token.
+  return u.origin + u.pathname.replace(/\/+$/, '');
 }
 
 function resolveServer(flags, cfg, { required = true } = {}) {
