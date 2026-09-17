@@ -5,6 +5,13 @@ import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE
 import { formatAgentOption, agentSortCmp, isDispatchableAgent, pickYoloAgent } from '../../lib/agent-matrix.js';
 import { openSession, loadAllSessions, ensureAgentsLoaded } from '../../lib/sessions.js';
 import { UnifiedComposer, type UnifiedComposerData } from '../feedback/UnifiedComposer.js';
+import {
+  QDP_PANEL_W as PANEL_W,
+  QDP_PANEL_H as PANEL_H,
+  type PanelSize,
+  resizeFromBottomLeft,
+  clampPanelSize,
+} from '../../lib/qdp-resize.js';
 
 export type DispatchType = 'agent' | 'yolo' | 'wiggum' | 'fafo' | 'structured' | 'powwow';
 
@@ -31,6 +38,8 @@ interface DispatchSettings {
   agentId: string;
   posX?: number;
   posY?: number;
+  width?: number;
+  height?: number;
 }
 
 function loadSettings(appKey: string): DispatchSettings | null {
@@ -39,8 +48,16 @@ function loadSettings(appKey: string): DispatchSettings | null {
     if (!raw) return null;
     const all = JSON.parse(raw);
     // Prefer per-app settings (incl. position); otherwise inherit the last
-    // dispatch type + agent used anywhere so the choice feels sticky.
-    return all[appKey] || all[LAST_USED_KEY] || null;
+    // dispatch type + agent used anywhere so the choice feels sticky. The
+    // panel size is a global preference, so it fills in from the shared
+    // bucket whenever the per-app entry predates resizing.
+    const perApp = all[appKey];
+    const last = all[LAST_USED_KEY];
+    if (!perApp) return last || null;
+    if (perApp.width == null && last?.width != null) {
+      return { ...perApp, width: last.width, height: last.height };
+    }
+    return perApp;
   } catch {
     return null;
   }
@@ -52,8 +69,15 @@ function saveSettings(appKey: string, settings: DispatchSettings) {
     const all = raw ? JSON.parse(raw) : {};
     all[appKey] = settings;
     // Position is per-app/anchor-driven, so the global bucket only carries the
-    // dispatch type + agent selection.
-    all[LAST_USED_KEY] = { dispatchType: settings.dispatchType, agentId: settings.agentId };
+    // dispatch type + agent selection (and the panel size, which is a user
+    // preference rather than an app-specific one).
+    const prev = all[LAST_USED_KEY] || {};
+    all[LAST_USED_KEY] = {
+      dispatchType: settings.dispatchType,
+      agentId: settings.agentId,
+      width: settings.width ?? prev.width,
+      height: settings.height ?? prev.height,
+    };
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(all));
   } catch { /* ignore */ }
 }
@@ -78,14 +102,16 @@ interface Props {
   transient?: boolean;
 }
 
-const PANEL_W = 400;
-const PANEL_H = 220;
-
 // Keep a point within the viewport so the popup can't open off-screen.
-function clampToViewport(x: number, y: number): { x: number; y: number } {
-  const maxX = Math.max(8, window.innerWidth - PANEL_W - 8);
-  const maxY = Math.max(8, window.innerHeight - PANEL_H - 8);
+function clampToViewport(x: number, y: number, w = PANEL_W, h = PANEL_H): { x: number; y: number } {
+  const maxX = Math.max(8, window.innerWidth - w - 8);
+  const maxY = Math.max(8, window.innerHeight - h - 8);
   return { x: Math.min(Math.max(8, x), maxX), y: Math.min(Math.max(8, y), maxY) };
+}
+
+function loadSize(settings: DispatchSettings | null): PanelSize | null {
+  if (!settings) return null;
+  return clampPanelSize(settings.width, settings.height, window.innerWidth);
 }
 
 function isComposerFloatingChrome(target: EventTarget | null): boolean {
@@ -108,17 +134,24 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
   const [error, setError] = useState('');
   const [agents, setAgents] = useState<any[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>(settings?.agentId || '');
+  // null = default CSS width + natural (content-driven) height. Set once the
+  // user drags the corner handle; persisted alongside the position.
+  const [size, setSize] = useState<PanelSize | null>(() => loadSize(settings));
+  const [isResizing, setIsResizing] = useState(false);
   const [pos, setPos] = useState<{ x: number; y: number }>(() => {
+    const w = size?.w ?? PANEL_W;
+    const h = size?.h ?? PANEL_H;
     // Anchor next to the [+] that opened us. The button position is the user's
     // point of focus, so the composer appears right where they clicked instead
     // of stranded at screen-center or a stale dragged-off-screen position.
-    if (anchor) return clampToViewport(anchor.x, anchor.y);
+    if (anchor) return clampToViewport(anchor.x, anchor.y, w, h);
     if (settings?.posX != null && settings?.posY != null) {
-      return clampToViewport(settings.posX, settings.posY);
+      return clampToViewport(settings.posX, settings.posY, w, h);
     }
-    return clampToViewport(Math.round(window.innerWidth / 2 - PANEL_W / 2), Math.round(window.innerHeight * 0.3));
+    return clampToViewport(Math.round(window.innerWidth / 2 - w / 2), Math.round(window.innerHeight * 0.3), w, h);
   });
   const dragging = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const resizing = useRef<{ startX: number; startY: number; origX: number; origW: number; origH: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const appId = appKey === '__unlinked__' ? '' : appKey;
@@ -151,8 +184,15 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
   // user's per-app defaults)
   useEffect(() => {
     if (transient) return;
-    saveSettings(appKey, { dispatchType, agentId: selectedAgentId, posX: pos.x, posY: pos.y });
-  }, [dispatchType, selectedAgentId, appKey, pos.x, pos.y, transient]);
+    saveSettings(appKey, {
+      dispatchType,
+      agentId: selectedAgentId,
+      posX: pos.x,
+      posY: pos.y,
+      width: size?.w,
+      height: size?.h,
+    });
+  }, [dispatchType, selectedAgentId, appKey, pos.x, pos.y, size?.w, size?.h, transient]);
 
   // Drag handling
   const onMouseDown = useCallback((e: MouseEvent) => {
@@ -160,8 +200,37 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
     e.preventDefault();
   }, [pos]);
 
+  // Resize handling (bottom-left corner handle, like the widget's panel).
+  // The handle sits inside the panel so the click-away listener ignores it.
+  const onResizeMouseDown = useCallback((e: MouseEvent) => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    resizing.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origX: pos.x,
+      origW: panel.offsetWidth,
+      origH: panel.offsetHeight,
+    };
+    setIsResizing(true);
+    e.preventDefault();
+    e.stopPropagation();
+  }, [pos.x]);
+
   useEffect(() => {
     function onMouseMove(e: MouseEvent) {
+      if (resizing.current) {
+        const r = resizing.current;
+        const next = resizeFromBottomLeft(
+          { x: r.origX, w: r.origW, h: r.origH },
+          e.clientX - r.startX,
+          e.clientY - r.startY,
+          window.innerWidth,
+        );
+        setSize({ w: next.w, h: next.h });
+        setPos((p) => ({ x: next.x, y: p.y }));
+        return;
+      }
       if (!dragging.current) return;
       const dx = e.clientX - dragging.current.startX;
       const dy = e.clientY - dragging.current.startY;
@@ -169,6 +238,10 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
     }
     function onMouseUp() {
       dragging.current = null;
+      if (resizing.current) {
+        resizing.current = null;
+        setIsResizing(false);
+      }
     }
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
@@ -307,10 +380,17 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
   return createPortal(
     <div
       ref={panelRef}
-      class="qdp-panel"
-      style={{ left: pos.x, top: pos.y }}
+      class={`qdp-panel${size ? ' is-sized' : ''}${isResizing ? ' is-resizing' : ''}`}
+      style={size
+        ? { left: pos.x, top: pos.y, width: size.w, height: size.h }
+        : { left: pos.x, top: pos.y }}
       onClick={(e) => e.stopPropagation()}
     >
+      <div
+        class="qdp-resize-handle"
+        title="Drag to resize"
+        onMouseDown={onResizeMouseDown}
+      />
       <div class="qdp-header" onMouseDown={onMouseDown}>
         <span class="qdp-title">
           <span class="qdp-title-kicker">New Session</span>
