@@ -1,7 +1,26 @@
 // "PR #123" tag shown next to a session wherever it's listed. The server
-// detects GitHub PR URLs in session output (pr-detect.ts) and exposes them as
-// `prUrls` — string[] from the list API, raw JSON string from the single-row
-// endpoint — so normalize both here.
+// detects GitHub PR URLs in the session's PTY output (pr-detect.ts) and in its
+// transcript on disk (pr-transcript-scan.ts — where collapsed `gh pr` results
+// live) and exposes them as `prUrls` — string[] from the list API, raw JSON
+// string from the single-row endpoint — so normalize both here. Rows stored
+// before the detector stopped fabricating character-dropped URLs are scrubbed
+// on read too (dropShadowedPrUrls), so a badge never links to `workbenhai`.
+
+// Mirror of the server's pr-detect.ts dropShadowedPrUrls: a URL that is a
+// strict subsequence of another one here is the same URL with characters
+// lost in the PTY, so it goes.
+export function dropShadowedPrUrls(urls: string[]): string[] {
+  const unique = [...new Set(urls)];
+  return unique.filter((u) => !unique.some((other) => other !== u && other.length > u.length && isSubsequence(u, other)));
+}
+
+function isSubsequence(short: string, long: string): boolean {
+  let i = 0;
+  for (let j = 0; j < long.length && i < short.length; j++) {
+    if (long[j] === short[i]) i++;
+  }
+  return i === short.length;
+}
 
 export function parsePrUrls(prUrls: unknown): string[] {
   let arr: unknown = prUrls;
@@ -9,7 +28,7 @@ export function parsePrUrls(prUrls: unknown): string[] {
     try { arr = JSON.parse(arr); } catch { return []; }
   }
   if (!Array.isArray(arr)) return [];
-  return [...new Set(arr.filter((u): u is string => typeof u === 'string' && u.includes('/pull/')))];
+  return dropShadowedPrUrls(arr.filter((u): u is string => typeof u === 'string' && u.includes('/pull/')));
 }
 
 export function prNumberFromUrl(url: string): string {
