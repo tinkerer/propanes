@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { db, schema } from '../../db/index.js';
+import { isAdminApp } from '../../admin-app.js';
 import { dispatchAgentSession } from '../../dispatch.js';
 import { computeJsonlPath, computeCodexJsonlPath, findContinuationJsonls } from '../../jsonl-utils.js';
 
@@ -208,8 +209,7 @@ function summarizeBaseline(monitor: ReturnType<typeof monitorJson>) {
 function ensureSeedMonitor(appId: string) {
   const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
   if (!app) return;
-  const isPropanesAdmin = app.name === 'Propanes Admin' || /\/propanes\/?$/.test(app.projectDir);
-  if (!isPropanesAdmin) return;
+  if (!isAdminApp(app)) return;
   const existing = db.select().from(schema.flatterMonitors)
     .where(and(
       eq(schema.flatterMonitors.appId, appId),

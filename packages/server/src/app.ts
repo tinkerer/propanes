@@ -4,9 +4,8 @@ import { logger } from 'hono/logger';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { readFile } from 'node:fs/promises';
 import { resolve as resolvePath } from 'node:path';
-import { eq } from 'drizzle-orm';
 import { enforceIpAllowlist } from './access-control.js';
-import { db, schema } from './db/index.js';
+import { resolveAdminApp } from './admin-app.js';
 import { feedbackRoutes } from './routes/feedback.js';
 import { adminRoutes } from './routes/admin/index.js';
 import { imageRoutes } from './routes/images.js';
@@ -224,8 +223,11 @@ app.use('/widget/*', serveStatic({ root: '../widget/dist/', rewriteRequestPath: 
 // The admin's index.html embeds the feedback widget with a hardcoded
 // `data-app-key` that must match the admin app's current apiKey in the DB.
 // Hardcoding drifts whenever the DB is reseeded — so we swap a sentinel
-// (`__ADMIN_API_KEY__`) at serve time with the live key. Serves with
-// no-cache to always pick up fresh builds + current key.
+// (`__ADMIN_API_KEY__`) at serve time with the live key (see admin-app.ts
+// for how the admin app is identified). Serves with no-cache to always pick
+// up fresh builds + current key. When no admin app can be identified the
+// sentinel is left in place: the widget then omits X-API-Key rather than
+// filing admin feedback into some other application.
 const ADMIN_DIST = resolvePath(process.cwd(), '../admin/dist');
 const ADMIN_KEY_SENTINEL = '__ADMIN_API_KEY__';
 
@@ -254,23 +256,9 @@ export const BASE_PATH: string = (() => {
   const withLead = raw.startsWith('/') ? raw : `/${raw}`;
   return withLead.replace(/\/+$/, '');
 })();
-const SELF_PROJECT_DIR = resolvePath(process.cwd(), '..', '..');
 
 function resolveAdminAppApiKey(): string | null {
-  const byDir = db
-    .select({ apiKey: schema.applications.apiKey })
-    .from(schema.applications)
-    .where(eq(schema.applications.projectDir, SELF_PROJECT_DIR))
-    .get();
-  if (byDir?.apiKey) return byDir.apiKey;
-  const byName = db
-    .select({ apiKey: schema.applications.apiKey })
-    .from(schema.applications)
-    .where(eq(schema.applications.name, 'Propanes Admin'))
-    .get();
-  if (byName?.apiKey) return byName.apiKey;
-  const any = db.select({ apiKey: schema.applications.apiKey }).from(schema.applications).get();
-  return any?.apiKey ?? null;
+  return resolveAdminApp()?.apiKey ?? null;
 }
 
 async function serveAdminIndex(c: any) {
