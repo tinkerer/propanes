@@ -1466,8 +1466,8 @@ recoverSessions();
 setTimeout(() => {
   try {
     const r = backfillTranscriptPrUrls(AGENT_HOME);
-    if (r.scanned || r.missing) {
-      console.log(`[session-service] PR badge backfill: scanned ${r.scanned}, tagged ${r.tagged}, no transcript ${r.missing}`);
+    if (r.scanned || r.missing || r.scrubbed) {
+      console.log(`[session-service] PR badge backfill: scanned ${r.scanned}, tagged ${r.tagged}, no transcript ${r.missing}, scrubbed ${r.scrubbed}`);
     }
   } catch (err) {
     console.error('[session-service] PR badge backfill failed:', err);

@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import { and, desc, eq, gt, isNotNull, isNull, notInArray } from 'drizzle-orm';
 import { db, schema } from './db/index.js';
 import { resolveSessionJsonlPath } from './jsonl-utils.js';
-import { mergePrUrlList } from './pr-detect.js';
+import { canonicalizePrUrls, mergePrUrlList } from './pr-detect.js';
 import { newTranscriptCursor, scanTranscriptForPrUrls } from './pr-transcript-scan.js';
 
 export const BACKFILL_WINDOW_DAYS = 30;
@@ -22,6 +22,29 @@ export interface BackfillResult {
   tagged: number;
   /** Rows whose transcript could not be found (left untouched). */
   missing: number;
+  /** Rows whose stored URLs contained damaged duplicates that were scrubbed. */
+  scrubbed: number;
+}
+
+/**
+ * Scrub stored lists that still carry PTY-damaged duplicates (see
+ * dropShadowedPrUrls) recorded before the detector learned to avoid them.
+ * DB-only; cheap enough to run every boot.
+ */
+export function scrubStoredPrUrls(): number {
+  const rows = db
+    .select({ id: schema.agentSessions.id, prUrls: schema.agentSessions.prUrls })
+    .from(schema.agentSessions)
+    .where(isNotNull(schema.agentSessions.prUrls))
+    .all();
+  let scrubbed = 0;
+  for (const row of rows) {
+    const cleaned = canonicalizePrUrls(row.prUrls);
+    if (cleaned === null) continue;
+    db.update(schema.agentSessions).set({ prUrls: cleaned }).where(eq(schema.agentSessions.id, row.id)).run();
+    scrubbed++;
+  }
+  return scrubbed;
 }
 
 export function backfillTranscriptPrUrls(agentHome: string, now = Date.now()): BackfillResult {
@@ -46,7 +69,7 @@ export function backfillTranscriptPrUrls(agentHome: string, now = Date.now()): B
     .limit(BACKFILL_MAX_ROWS)
     .all();
 
-  const result: BackfillResult = { scanned: 0, tagged: 0, missing: 0 };
+  const result: BackfillResult = { scanned: 0, tagged: 0, missing: 0, scrubbed: scrubStoredPrUrls() };
   for (const row of rows) {
     let path: string | null = null;
     try {

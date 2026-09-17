@@ -8,11 +8,19 @@
 //      split a candidate, and the join pass below recovers those.
 //   2. tmux/PTY repaints hard-wrap long lines at the pane width, splitting a
 //      URL mid-token. A second pass with line breaks removed catches these.
+//   3. A cursor-forward (CSI n C) is the renderer skipping cells whose content
+//      did not change since the last frame — the text under it is NOT in the
+//      stream. Joining across it fabricates a URL missing exactly those
+//      characters (`workben` + `hai`), so it becomes a hard break the join
+//      pass never removes.
+
+const HARD_BREAK = '\u0000';
 
 const PR_URL_RE = /https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d{1,7})/g;
 
 function stripControlToSeparators(data: string): string {
   return data
+    .replace(/\x1b\[[0-9]*C/g, HARD_BREAK)             // CUF: skipped, unchanged cells
     .replace(/\x1b\[\??[0-9;]*[a-zA-Z]/g, '\n')      // CSI (incl. DECSET)
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '\n') // OSC
     .replace(/\x1b\([A-Z]/g, '\n')                    // charset designators
@@ -59,7 +67,7 @@ export function mergePrUrls(existingJson: string | null | undefined, text: strin
 
 /** Same as mergePrUrls, for URLs already extracted (e.g. from a transcript scan). */
 export function mergePrUrlList(existingJson: string | null | undefined, detected: string[]): string | null {
-  if (!detected.length) return null;
+  if (!detected.length && !existingJson) return null;
   let existing: string[] = [];
   if (existingJson) {
     try {
@@ -72,5 +80,36 @@ export function mergePrUrlList(existingJson: string | null | undefined, detected
   for (const url of detected) {
     if (!merged.has(url)) { merged.add(url); changed = true; }
   }
-  return changed ? JSON.stringify([...merged]) : null;
+  // Also scrub damaged URLs already stored once the intact one is known.
+  const cleaned = dropShadowedPrUrls([...merged]);
+  if (cleaned.length !== merged.size) changed = true;
+  return changed ? JSON.stringify(cleaned) : null;
+}
+
+/**
+ * Drop URLs that are a strict subsequence of another URL in the list.
+ *
+ * PTY-derived detections can lose characters (hazard 3 above, before it was
+ * handled) or digits (a wrapped number): `workbenhai/workbench/pull/1356`
+ * next to the real `workbenchai/workbench/pull/1356`, `pull/1` next to
+ * `pull/1356`. Both damaged forms are the intact URL with characters deleted,
+ * so when the intact one is also present the damaged one goes. Order is kept.
+ * The admin's PrBadges.tsx carries the same scrub for rows stored before this.
+ */
+export function dropShadowedPrUrls(urls: string[]): string[] {
+  const unique = [...new Set(urls)];
+  return unique.filter((u) => !unique.some((other) => other !== u && other.length > u.length && isSubsequence(u, other)));
+}
+
+function isSubsequence(short: string, long: string): boolean {
+  let i = 0;
+  for (let j = 0; j < long.length && i < short.length; j++) {
+    if (long[j] === short[i]) i++;
+  }
+  return i === short.length;
+}
+
+/** Re-run the scrub on a stored value; null when it is already clean. */
+export function canonicalizePrUrls(existingJson: string | null | undefined): string | null {
+  return mergePrUrlList(existingJson, []);
 }

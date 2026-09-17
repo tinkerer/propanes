@@ -54,8 +54,11 @@ test('backfills ended sessions from their transcripts, once', () => {
   insert('S_OLD', 'aaaaaaaa-0000-0000-0000-000000000006', 'killed', null, ancient);
   writeTranscript('aaaaaaaa-0000-0000-0000-000000000006', JSON.stringify({ type: 'pr-link', prUrl: PR }) + '\n');
   insert('S_TERMINAL', null, 'killed', null, recent);
+  insert('S_DAMAGED', 'aaaaaaaa-0000-0000-0000-000000000007', 'killed',
+    JSON.stringify(['https://github.com/workbenhai/workbench/pull/1356', PR, 'https://github.com/workbenchai/workbench/pull/1356', 'https://github.com/workbenchai/workbench/pull/1']), recent);
 
-  assert.deepEqual(backfillTranscriptPrUrls(home), { scanned: 2, tagged: 1, missing: 1 });
+  assert.deepEqual(backfillTranscriptPrUrls(home), { scanned: 2, tagged: 1, missing: 1, scrubbed: 1 });
+  assert.equal(prUrlsOf('S_DAMAGED'), JSON.stringify([PR, 'https://github.com/workbenchai/workbench/pull/1356']));
   assert.equal(prUrlsOf('S_HIT'), JSON.stringify([PR]));
   assert.equal(prUrlsOf('S_NONE'), '[]');
   assert.equal(prUrlsOf('S_MISSING'), null);
@@ -65,5 +68,5 @@ test('backfills ended sessions from their transcripts, once', () => {
   assert.equal(prUrlsOf('S_TERMINAL'), null);
 
   // Second boot: only the transcript-less row is looked at again, nothing is rewritten.
-  assert.deepEqual(backfillTranscriptPrUrls(home), { scanned: 0, tagged: 0, missing: 1 });
+  assert.deepEqual(backfillTranscriptPrUrls(home), { scanned: 0, tagged: 0, missing: 1, scrubbed: 0 });
 });
