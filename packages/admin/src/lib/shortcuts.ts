@@ -65,6 +65,9 @@ function normalizeCode(code: string): string {
 
 function handleKeyDown(e: KeyboardEvent) {
   if (!shortcutsEnabled.value) return;
+  // Let accessible dialogs handle Escape and their own keyboard navigation.
+  // This listener runs in capture phase, before the dialog's handler.
+  if (e.target instanceof Element && e.target.closest('[role="dialog"][aria-modal="true"]')) return;
   const code = normalizeCode(e.code);
   const ctrlOrMeta = stickyMode || e.ctrlKey || e.metaKey;
   const shiftHeld = stickyMode || e.shiftKey;

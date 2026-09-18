@@ -3,12 +3,13 @@ import { api } from '../../lib/api.js';
 import { PopupMenu } from './PopupMenu.js';
 
 interface DirPickerProps {
+  inputId?: string;
   value: string;
   onInput: (value: string) => void;
   placeholder?: string;
 }
 
-export function DirPicker({ value, onInput, placeholder }: DirPickerProps) {
+export function DirPicker({ value, onInput, placeholder, inputId }: DirPickerProps) {
   const [open, setOpen] = useState(false);
   const [browsePath, setBrowsePath] = useState('');
   const [parent, setParent] = useState<string | null>(null);
@@ -56,6 +57,7 @@ export function DirPicker({ value, onInput, placeholder }: DirPickerProps) {
     <div class="dir-picker">
       <div class="dir-picker-input-row">
         <input
+          id={inputId}
           type="text"
           value={value}
           onInput={(e) => onInput((e.target as HTMLInputElement).value)}

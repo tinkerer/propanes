@@ -2,6 +2,7 @@ import { useSignal } from '@preact/signals';
 import { serverPath } from '../lib/base-path.js';
 import { useRef, useEffect } from 'preact/hooks';
 import { marked } from 'marked';
+import { OnboardingGuide } from '../components/ui/OnboardingGuide.js';
 
 function addCopyButtons(container: HTMLElement) {
   for (const pre of container.querySelectorAll('pre')) {
@@ -69,18 +70,18 @@ export function GettingStartedPage() {
     }
   }, [html.value]);
 
-  if (loading.value) return <div style="padding:40px;color:#64748b">Loading...</div>;
-  if (error.value) return <div class="error-msg" style="padding:24px">{error.value}</div>;
-
   return (
-    <div>
+    <div class="onboarding-page">
+      <OnboardingGuide />
+      <details class="onboarding-reference"><summary>Technical setup & API reference</summary>
       <div class="page-header">
         <h2>Getting Started</h2>
         <a href={serverPath('/GETTING_STARTED.md')} target="_blank" class="btn btn-sm" style="text-decoration:none">
           Raw Markdown
         </a>
       </div>
-      <div ref={contentRef} class="getting-started-content" dangerouslySetInnerHTML={{ __html: html.value }} />
+      {loading.value ? <p>Loading reference…</p> : error.value ? <p role="alert">{error.value}</p> : <div ref={contentRef} class="getting-started-content" dangerouslySetInnerHTML={{ __html: html.value }} />}
+      </details>
     </div>
   );
 }

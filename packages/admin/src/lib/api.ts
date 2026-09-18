@@ -453,8 +453,8 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  scaffoldApp: (data: { name: string; parentDir: string; projectName: string }) =>
-    request<{ id: string; apiKey: string; projectDir: string }>('/admin/applications/scaffold', {
+  scaffoldApp: (data: { name: string; parentDir: string; projectName: string; port?: number }) =>
+    request<{ id: string; apiKey: string; projectDir: string; appUrl: string; port: number }>('/admin/applications/scaffold', {
       method: 'POST',
       body: JSON.stringify(data),
     }),

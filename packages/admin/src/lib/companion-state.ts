@@ -391,6 +391,12 @@ export function openPageView(viewId: string) {
 
 export function openSettingsPanel(settingsKey: string) {
   const tabId = `settings:${settingsKey}`;
+  // The getting-started guide is a primary task, not a terminal companion.
+  // Keep it in the main pane so new users can read the whole setup flow.
+  if (settingsKey === 'getting-started') {
+    openPageView(tabId);
+    return;
+  }
 
   const existingLeaf = findLeafWithTab(tabId);
   if (existingLeaf) {

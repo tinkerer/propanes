@@ -605,6 +605,7 @@ export class ProPanesElement {
     modeLabel.textContent = 'Mode:';
     modeLabel.style.cssText = 'font-size:11px;color:#94a3b8;flex-shrink:0';
     const modeSel = document.createElement('select');
+    modeSel.setAttribute('aria-label', 'Send mode');
     modeSel.className = 'pw-send-menu-target-select';
     const savedMode = localStorage.getItem('pw-dispatch-mode') || 'dispatch';
     modeSel.innerHTML = [
@@ -618,6 +619,7 @@ export class ProPanesElement {
     modeSel.addEventListener('change', () => {
       localStorage.setItem('pw-dispatch-mode', modeSel.value);
       agentSel.options[0].textContent = modeSel.value === 'yolo' ? 'Auto' : 'Default';
+      sendBtn.disabled = modeSel.value !== 'submit' && !agentsAvailable;
     });
     modeRow.append(modeLabel, modeSel);
     menu.appendChild(modeRow);
@@ -629,6 +631,7 @@ export class ProPanesElement {
     agentLabel.textContent = 'Agent:';
     agentLabel.style.cssText = 'font-size:11px;color:#94a3b8;flex-shrink:0';
     const agentSel = document.createElement('select');
+    agentSel.setAttribute('aria-label', 'Agent');
     agentSel.className = 'pw-send-menu-target-select';
     agentSel.innerHTML = `<option value="">${savedMode === 'yolo' ? 'Auto' : 'Default'}</option>`;
     agentSel.value = localStorage.getItem('pw-dispatch-agent') || '';
@@ -647,13 +650,43 @@ export class ProPanesElement {
     agentSettingsLink.addEventListener('click', (e) => e.stopPropagation());
     agentRow.append(agentLabel, agentSel, agentSettingsLink);
     menu.appendChild(agentRow);
+    let agentsAvailable = false;
+    const agentHint = document.createElement('div');
+    agentHint.style.cssText = 'font-size:12px;color:#cbd5e1;padding:8px 12px;line-height:1.5;max-width:260px';
+    agentHint.textContent = 'Loading agents…';
+    agentHint.setAttribute('role', 'status');
+    menu.appendChild(agentHint);
+    const signInButton = document.createElement('button');
+    signInButton.className = 'pw-send-menu-item';
+    signInButton.textContent = 'Sign in to ProPanes';
+    signInButton.style.display = 'none';
+    signInButton.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menu.remove();
+      this.overlayManager.openPanel('settings');
+    });
+    menu.appendChild(signInButton);
 
     // Populate agents from API
     const agentOrigin = this.apiBase();
     fetch(`${agentOrigin}/api/v1/admin/agents${this.appId ? `?appId=${this.appId}` : ''}`, { headers: this.adminAuthHeaders() })
-      .then(r => r.json())
+      .then(async r => {
+        if (r.status === 401 || r.status === 403) {
+          signInButton.style.display = '';
+          throw new Error('Sign in here to choose an agent. Your app and admin use separate browser sessions.');
+        }
+        if (!r.ok) throw new Error('Could not load agents. Close this menu and try again.');
+        return r.json();
+      })
       .then((agents: any[]) => {
-        if (!agents?.length) return;
+        if (!Array.isArray(agents)) throw new Error('Could not load agents. Close this menu and try again.');
+        if (!agents.length) {
+          agentHint.textContent = 'No agents yet. Open Agent settings (⚙) to add one, then reopen this menu. You can still choose Submit only to save feedback.';
+          return;
+        }
+        agentsAvailable = true;
+        agentHint.hidden = true;
+        sendBtn.disabled = false;
         this.cachedAgents = agents;
         for (const a of agents) {
           const opt = document.createElement('option');
@@ -666,7 +699,7 @@ export class ProPanesElement {
         }
         agentSel.value = localStorage.getItem('pw-dispatch-agent') || '';
       })
-      .catch(() => {});
+      .catch((err) => { agentHint.textContent = err.message || 'Could not load agents.'; });
 
     // Dispatch target selector
     const targetRow = document.createElement('div');
@@ -715,6 +748,7 @@ export class ProPanesElement {
 
     // Send button
     const sendBtn = document.createElement('button');
+    sendBtn.disabled = modeSel.value !== 'submit';
     sendBtn.className = 'pw-send-menu-item pw-send-menu-send-btn';
     sendBtn.textContent = 'Send';
     sendBtn.addEventListener('click', (e) => {
@@ -1138,6 +1172,8 @@ export class ProPanesElement {
   private renderTrigger() {
     const btn = document.createElement('button');
     btn.className = `pw-trigger ${this.config.position}`;
+    btn.setAttribute('aria-label', 'Open ProPanes prompt widget');
+    btn.title = 'Open ProPanes prompt widget';
     btn.innerHTML = `<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H5.2L4 17.2V4h16v12z"/></svg>`;
     this.shadow.appendChild(btn);
 
@@ -1428,7 +1464,7 @@ export class ProPanesElement {
       <div class="pw-input-area">
         <div class="pw-attach-chips pw-hidden" id="pw-attach-chips"></div>
         <div class="pw-composer-row">
-          <textarea class="pw-textarea" id="pw-chat-input" placeholder="What's on your mind?" rows="1" autocomplete="off"></textarea>
+          <textarea class="pw-textarea" id="pw-chat-input" aria-label="Describe a change" placeholder="Describe a change to this app…" rows="1" autocomplete="off"></textarea>
           <div class="pw-toolbar">
             <span class="pw-camera-countdown pw-hidden" id="pw-camera-countdown"></span>
             ${this.sessionBridge.screenshotIncludeWidget ? `

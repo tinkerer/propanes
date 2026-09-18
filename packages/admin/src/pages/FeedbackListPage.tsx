@@ -1,7 +1,7 @@
 import { useSignal, useSignalEffect } from '@preact/signals';
 import { useEffect, useRef, useCallback } from 'preact/hooks';
 import { api } from '../lib/api.js';
-import { currentRoute, navigate } from '../lib/state.js';
+import { currentRoute, navigate, applications } from '../lib/state.js';
 import { openSession, sessionInputStates, openFeedbackItem, feedbackTitleCache } from '../lib/sessions.js';
 import { openDispatchDialog, dispatchDialogResult } from '../components/dispatch/DispatchDialog.js';
 import { copyWithTooltip } from '../lib/clipboard.js';
@@ -858,8 +858,13 @@ export function FeedbackListPage({ appId }: { appId: string }) {
             })()}
             {items.value.length === 0 && !loading.value && (
               <tr>
-                <td colSpan={8} style="text-align:center;padding:32px;color:#94a3b8">
-                  No tickets found
+                <td colSpan={8} class="feedback-empty-state">
+                  <strong>{activeFilterCount ? 'No tickets match your filters' : 'Your first prompt starts here'}</strong>
+                  <p>{activeFilterCount ? 'Try a different search or clear your filters.' : 'Open your app’s widget and describe a change. Your prompt and the agent’s work will appear here.'}</p>
+                  {!activeFilterCount && <>
+                    {(() => { const url = applications.value.find(a => a.id === appId)?.serverUrl; return url && /^https?:\/\//.test(url) ? <a class="btn btn-primary" href={url} target="_blank" rel="noopener">Open app ↗</a> : null; })()}
+                    <button class="btn" onClick={() => navigate('/settings/getting-started')}>Follow the starter guide</button>
+                  </>}
                 </td>
               </tr>
             )}

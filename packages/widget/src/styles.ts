@@ -1105,6 +1105,11 @@ export const WIDGET_CSS = `
   background: #1a8cd8 !important;
 }
 
+.pw-send-menu-send-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .pw-flash {
   position: absolute;
   top: 50%;

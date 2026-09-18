@@ -9,10 +9,26 @@ see ${baseUrl}/GETTING_STARTED.md Follow these steps to register this project, c
 
 ---
 
+## Before you start
+
+For a new project, open [Getting Started](${baseUrl}/admin/#/settings/getting-started) and choose **Create an app → Hello World**. The starter includes Vite hot reload and the widget. Choose a free preview port, start the dev server, then follow the prompts in the guide.
+
+All \`/api/v1/admin/*\` requests below require a bearer token. Dispatched agents already receive \`PROPANES_TOKEN\` and \`PROPANES_API_URL\`. In a normal terminal, log in with your ProPanes credentials and put the returned token in \`PROPANES_TOKEN\`:
+
+\`\`\`bash
+curl -s -X POST ${baseUrl}/api/v1/auth/login \\
+  -H "Content-Type: application/json" \\
+  -d '{"username":"<YOUR_USERNAME>","password":"<YOUR_PASSWORD>"}'
+export PROPANES_TOKEN='<TOKEN_FROM_RESPONSE>'
+\`\`\`
+
+The widget's public app key identifies the app; it is not an admin login. If your app is on another port or origin, use **Sign in to ProPanes** in the widget's dispatch menu before choosing an agent.
+
 ## 1. Register your application
 
 \`\`\`bash
 curl -X POST ${baseUrl}/api/v1/admin/applications \\
+  -H "Authorization: Bearer $PROPANES_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{
     "name": "My App",
@@ -36,22 +52,26 @@ agent endpoints to this application.
 
 ## 2. Create an agent endpoint
 
+Install and sign in to the agent CLI on the server machine first. Permission profiles control whether the agent asks for approval. The headless example uses a streaming profile so approvals can be handled in ProPanes.
+
 Pick a dispatch mode:
 
 | Mode | What happens |
 |------|-------------|
 | \`webhook\` | POST JSON payload to a URL (existing behavior) |
-| \`headless\` | Run \`claude -p "<prompt>" --output-format text\` in projectDir |
-| \`interactive\` | Create a tmux session and send \`claude -p\` into it |
+| \`headless\` | Run the configured CLI in projectDir; the permission profile controls I/O and approval behavior |
+| \`interactive\` | Open an interactive agent terminal; approvals follow the permission profile |
 
 ### Headless example (recommended for automation)
 
 \`\`\`bash
 curl -X POST ${baseUrl}/api/v1/admin/agents \\
+  -H "Authorization: Bearer $PROPANES_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{
     "name": "Claude Code (headless)",
     "mode": "headless",
+    "permissionProfile": "headless-stream-require",
     "appId": "<APP_ID>",
     "isDefault": true,
     "promptTemplate": "You are working on {{app.name}}.\\n\\nApp description: {{app.description}}\\n\\nThe user reported feedback from their browser session at {{session.url}} (viewport {{session.viewport}}).\\n\\nTitle: {{feedback.title}}\\nDescription: {{feedback.description}}\\n\\nConsole logs:\\n{{feedback.consoleLogs}}\\n\\nNetwork errors:\\n{{feedback.networkErrors}}\\n\\nCustom data:\\n{{feedback.data}}\\n\\nTags: {{feedback.tags}}\\n\\nAdditional instructions:\\n{{instructions}}\\n\\nThe propanes server is at ${baseUrl}. The browser session may still be live — you can interact with it via the agent API (see below).\\n\\nAvailable hooks the app exposes: {{app.hooks}}"
@@ -62,6 +82,7 @@ curl -X POST ${baseUrl}/api/v1/admin/agents \\
 
 \`\`\`bash
 curl -X POST ${baseUrl}/api/v1/admin/agents \\
+  -H "Authorization: Bearer $PROPANES_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{
     "name": "Claude Code (interactive)",
@@ -75,6 +96,7 @@ curl -X POST ${baseUrl}/api/v1/admin/agents \\
 
 \`\`\`bash
 curl -X POST ${baseUrl}/api/v1/admin/agents \\
+  -H "Authorization: Bearer $PROPANES_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{
     "name": "My webhook",
@@ -135,6 +157,7 @@ Once a user submits feedback, dispatch it from the admin UI at
 
 \`\`\`bash
 curl -X POST ${baseUrl}/api/v1/admin/dispatch \\
+  -H "Authorization: Bearer $PROPANES_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{
     "feedbackId": "<FEEDBACK_ID>",
@@ -212,6 +235,7 @@ DEV_URL="<e.g. http://localhost:5173>"
 
 # Register application
 RESULT=$(curl -s -X POST $PW_SERVER/api/v1/admin/applications \\
+  -H "Authorization: Bearer $PROPANES_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d "{
     \\"name\\": \\"$APP_NAME\\",
@@ -229,10 +253,12 @@ echo "API Key: $API_KEY"
 
 # Create headless agent endpoint
 AGENT=$(curl -s -X POST $PW_SERVER/api/v1/admin/agents \\
+  -H "Authorization: Bearer $PROPANES_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d "{
     \\"name\\": \\"$APP_NAME agent\\",
     \\"mode\\": \\"headless\\",
+    \\"permissionProfile\\": \\"headless-stream-require\\",
     \\"appId\\": \\"$APP_ID\\",
     \\"isDefault\\": true,
     \\"promptTemplate\\": \\"Fix this issue in {{app.name}}:\\\\n\\\\nTitle: {{feedback.title}}\\\\nDescription: {{feedback.description}}\\\\n\\\\nConsole: {{feedback.consoleLogs}}\\\\nNetwork errors: {{feedback.networkErrors}}\\\\n\\\\n{{instructions}}\\"

@@ -17,11 +17,7 @@ import { UsersPage } from '../../pages/UsersPage.js';
 import { UsagePage } from '../../pages/UsagePage.js';
 
 function NoApp() {
-  return (
-    <div style={{ padding: 24, color: 'var(--pw-text-muted)', textAlign: 'center' }}>
-      No apps configured. Open Settings to add one.
-    </div>
-  );
+  return <GettingStartedPage />;
 }
 
 function renderMobileRoute(route: string) {
@@ -62,7 +58,7 @@ function renderMobileRoute(route: string) {
   if (route.startsWith('/settings')) return <GettingStartedPage />;
 
   const aid = selectedAppId.value || applications.value[0]?.id;
-  if (!aid) return <NoApp />;
+  if (!applications.value.length || !aid) return <NoApp />;
   return <FeedbackListPage appId={aid} />;
 }
 

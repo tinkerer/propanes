@@ -1483,7 +1483,7 @@ export function LeafPane({ leaf }: LeafPaneProps) {
         );
       })()}
 
-      {activeId && !activeId.startsWith('view:') && !activeId.startsWith('cos:') && (
+      {activeId && !activeId.startsWith('view:') && !activeId.startsWith('cos:') && !activeId.startsWith('settings:') && (
         <PaneHeader
           sessionId={activeId}
           sessionMap={sessionMap}

@@ -3,7 +3,7 @@ import { ulid } from 'ulidx';
 import { eq } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { applicationSchema, applicationUpdateSchema } from '@propanes/shared';
 import type { ControlAction, RequestPanelConfig } from '@propanes/shared';
@@ -11,6 +11,7 @@ import { db, schema } from '../db/index.js';
 import { dispatchTerminalSession, dispatchAgentSession } from '../dispatch.js';
 import { inputSessionRemote, getSessionStatus } from '../session-service-client.js';
 import { getAdminUser, memberAppScope } from '../admin-auth.js';
+import { starterProject } from '../starter-project.js';
 
 export const applicationRoutes = new Hono();
 
@@ -19,9 +20,11 @@ function generateApiKey(): string {
 }
 
 function parseAppJson(app: typeof schema.applications.$inferSelect) {
+  const hooks = JSON.parse(app.hooks);
   return {
     ...app,
-    hooks: JSON.parse(app.hooks),
+    // Early scaffold/clone versions stored {}. The public schema is a list.
+    hooks: Array.isArray(hooks) ? hooks : [],
     controlActions: JSON.parse(app.controlActions || '[]'),
     requestPanel: JSON.parse(app.requestPanel || '{}'),
     subApps: JSON.parse(app.subApps || '[]'),
@@ -39,15 +42,18 @@ applicationRoutes.get('/', async (c) => {
 
 applicationRoutes.post('/scaffold', async (c) => {
   const body = await c.req.json();
-  const { name, parentDir, projectName } = body;
+  const { name, parentDir, projectName, port = 5173 } = body;
 
-  if (!name || !parentDir || !projectName) {
+  if (typeof name !== 'string' || !name.trim() || typeof parentDir !== 'string' || !parentDir || typeof projectName !== 'string' || !projectName) {
     return c.json({ error: 'name, parentDir, and projectName are required' }, 400);
+  }
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    return c.json({ error: 'port must be an integer between 1024 and 65535' }, 400);
   }
   if (!/^[a-zA-Z0-9_-]+$/.test(projectName)) {
     return c.json({ error: 'projectName must be alphanumeric (with _ or -)' }, 400);
   }
-  if (!existsSync(parentDir)) {
+  if (!existsSync(parentDir) || !statSync(parentDir).isDirectory()) {
     return c.json({ error: `parentDir does not exist: ${parentDir}` }, 400);
   }
 
@@ -62,34 +68,15 @@ applicationRoutes.post('/scaffold', async (c) => {
 
   const host = c.req.header('host') || 'localhost:3001';
   const proto = c.req.header('x-forwarded-proto') || 'http';
-  const serverUrl = `${proto}://${host}`;
+  const mount = (process.env.PROPANES_BASE_PATH || '').replace(/\/+$/, '');
+  const serverUrl = (process.env.PW_PUBLIC_BASE_URL || `${proto}://${host}${mount}`).replace(/\/+$/, '');
 
   mkdirSync(projectDir, { recursive: true });
 
-  writeFileSync(join(projectDir, 'index.html'), `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${name}</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 60px auto; padding: 0 20px; }
-    h1 { color: #333; }
-  </style>
-</head>
-<body>
-  <h1>${name}</h1>
-  <p>Your app is ready. The feedback widget is loaded below.</p>
-  <script src="${serverUrl}/widget.js" data-server="${serverUrl}" data-api-key="${apiKey}"></script>
-</body>
-</html>
-`);
-
-  writeFileSync(join(projectDir, 'package.json'), JSON.stringify({
-    name: projectName,
-    version: '0.0.1',
-    scripts: { start: 'npx serve .' },
-  }, null, 2) + '\n');
+  for (const [file, content] of Object.entries(starterProject(name, projectName, serverUrl, apiKey, port))) {
+    writeFileSync(join(projectDir, file), content);
+  }
+  const appUrl = `http://localhost:${port}`;
 
   const scaffoldUser = getAdminUser(c);
   await db.insert(schema.applications).values({
@@ -97,15 +84,17 @@ applicationRoutes.post('/scaffold', async (c) => {
     name,
     apiKey,
     projectDir,
-    serverUrl,
-    hooks: '{}',
+    serverUrl: appUrl,
+    description: 'Hello World starter with Vite hot reload and the ProPanes prompt widget.',
+    controlActions: JSON.stringify([{ id: 'dev', label: 'Start dev server', command: 'npm install && npm run dev', icon: '▶' }]),
+    hooks: '[]',
     ownerUserId: scaffoldUser.id,
     orgId: scaffoldUser.orgId,
     createdAt: now,
     updatedAt: now,
   });
 
-  return c.json({ id, apiKey, projectDir }, 201);
+  return c.json({ id, apiKey, projectDir, appUrl, port }, 201);
 });
 
 applicationRoutes.post('/clone', async (c) => {
@@ -144,7 +133,7 @@ applicationRoutes.post('/clone', async (c) => {
     name,
     apiKey,
     projectDir,
-    hooks: '{}',
+    hooks: '[]',
     ownerUserId: cloneUser.id,
     orgId: cloneUser.orgId,
     createdAt: now,
@@ -260,8 +249,8 @@ function buildOnboardPrompt(request: string, baseUrl: string): string {
   parts.push('');
   parts.push('### Scaffold a new project');
   parts.push('POST /api/v1/admin/applications/scaffold');
-  parts.push('Body: { name, parentDir, projectName }');
-  parts.push('Creates a hello-world project with widget already embedded.');
+  parts.push('Body: { name, parentDir, projectName, port? }');
+  parts.push('Creates a Vite hello-world project with hot reload, widget already embedded, and a Start dev server control. Run npm install && npm run dev in the returned projectDir.');
   parts.push('');
   parts.push('### Clone a git repo');
   parts.push('POST /api/v1/admin/applications/clone');
@@ -279,7 +268,7 @@ function buildOnboardPrompt(request: string, baseUrl: string): string {
 
   parts.push('## Widget Embed Snippet');
   parts.push('After creating the app, you\'ll get an apiKey. Embed the widget with:');
-  parts.push(`<script src="${baseUrl}/widget.js" data-server="${baseUrl}" data-api-key="API_KEY"></script>`);
+  parts.push(`<script src="${baseUrl}/widget/propanes.js" data-endpoint="${baseUrl}/api/v1/feedback" data-app-key="API_KEY" data-mode="always"></script>`);
   parts.push('');
 
   parts.push('## Instructions');
