@@ -1,4 +1,17 @@
 /* Shared workspace presentation. Keep pane sizing, mounting and terminal fonts intact. */
+.standalone-session-root { background: var(--pw-terminal-bg); color: var(--pw-terminal-foreground); }
+/* Embedded session frames can inherit a light admin preference. Their chrome
+   must still use a matched dark surface/foreground, like the terminal below. */
+.standalone-session-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; min-height: 42px; flex-shrink: 0; font-size: 12px; background: var(--pw-terminal-bg); color: var(--pw-terminal-foreground); border-bottom: 1px solid var(--pw-terminal-border); color-scheme: dark; }
+.standalone-session-toolbar .session-id-label,
+.standalone-session-toolbar .view-mode-select { background: var(--pw-terminal-hover); color: var(--pw-terminal-foreground); border: 1px solid var(--pw-terminal-border); border-radius: 5px; padding: 4px 7px; flex-shrink: 0; font-size: 12px; }
+.standalone-session-toolbar .session-feedback-link { color: var(--pw-terminal-foreground); flex: 0 1 auto; }
+.standalone-session-toolbar .mobile-session-back { color: var(--pw-terminal-foreground); flex-shrink: 0; }
+.standalone-session-toolbar .session-feedback-link:hover,
+.standalone-session-toolbar .mobile-session-back:hover { background: var(--pw-terminal-hover); }
+.standalone-session-toolbar :focus-visible { outline-color: var(--pw-terminal-foreground); outline-offset: 2px; }
+.standalone-session-title { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.standalone-session-status { color: var(--pw-terminal-foreground); white-space: nowrap; }
 body { -webkit-font-smoothing: antialiased; }
 button, input, select, textarea { font-family: inherit; }
 :where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
@@ -16,6 +29,15 @@ button, input, select, textarea { font-family: inherit; }
 .control-bar-sep { height: 20px; }
 
 .sidebar-nav-view { background: var(--pw-sidebar-bg); color: var(--pw-sidebar-text); }
+.sessions-list-view, .sidebar-files-drawer { background: var(--pw-sidebar-bg); color: var(--pw-sidebar-text); }
+.sidebar-running-badge, .sidebar-waiting-badge { color: var(--pw-sidebar-text-bright); }
+.sidebar-files-drawer { border-color: var(--pw-sidebar-divider); }
+.sidebar-files-header, .sidebar-file-entry { color: var(--pw-sidebar-text); }
+.sidebar-files-header:hover, .sidebar-file-entry.dir,
+.sidebar-files-tab-switcher button.active { color: var(--pw-sidebar-text-bright); }
+.sidebar-file-entry:hover, .sidebar-files-tab-switcher button.active { background: var(--pw-sidebar-hover); }
+.sidebar-file-tree-toggle, .sidebar-file-chevron, .sidebar-files-tab-switcher button { color: var(--pw-sidebar-text); }
+.pane-tab-collapse-btn, .pane-tab-new-btn, .pane-tab-close-btn { background: var(--pw-sidebar-bg); color: var(--pw-sidebar-text); border-color: var(--pw-sidebar-divider); }
 .sidebar-header { height: 72px; padding: 14px 12px; border-bottom: 1px solid var(--pw-sidebar-divider); margin-bottom: 8px; }
 .sidebar-title { font-size: 19px; letter-spacing: -.04em; }
 .sidebar-tagline { font-size: 11px; margin-top: 3px; }
@@ -35,6 +57,8 @@ button, input, select, textarea { font-family: inherit; }
 
 .singleton-handle { min-height: 30px; background: var(--pw-sidebar-bg); color: var(--pw-sidebar-text); border-color: var(--pw-sidebar-divider); font-size: 10px; letter-spacing: .08em; padding: 5px 10px; }
 .pane-leaf-tabs { min-height: 36px; background: var(--pw-sidebar-bg); border-color: var(--pw-sidebar-divider); }
+.terminal-tab-bar { background: var(--pw-sidebar-bg); border-color: var(--pw-sidebar-divider); }
+.terminal-tab-bar .terminal-collapse-btn { background: var(--pw-sidebar-bg); color: var(--pw-sidebar-text); border-color: var(--pw-sidebar-divider); }
 .pane-leaf-tab { font-size: 12px; padding: 8px 12px; gap: 7px; color: var(--pw-sidebar-text); border-color: var(--pw-sidebar-divider); }
 .pane-leaf-tab:hover { background: var(--pw-sidebar-hover); color: var(--pw-sidebar-text-bright); }
 .pane-leaf-tab.active { background: var(--pw-sidebar-hover); color: var(--pw-sidebar-text-bright); box-shadow: inset 0 -2px var(--pw-primary); }

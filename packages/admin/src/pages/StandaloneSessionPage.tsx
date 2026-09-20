@@ -81,7 +81,7 @@ export function StandaloneSessionPage({ sessionId }: { sessionId: string }) {
   const mode = getViewMode(sessionId) || viewMode.value;
   const mobile = isMobile.value;
   const selectableMode = mobile && mode === 'split' ? 'structured' : mode;
-  const idMenuAnchorRef = useRef<HTMLSpanElement>(null);
+  const idMenuAnchorRef = useRef<HTMLButtonElement>(null);
 
   const title = standaloneTitle(sessionId, sess, isExited);
   useEffect(() => {
@@ -91,8 +91,8 @@ export function StandaloneSessionPage({ sessionId }: { sessionId: string }) {
   const showIdMenu = !companion && idMenuOpen.value;
 
   return (
-    <div class="standalone-session-root" style={{ background: 'var(--pw-bg)', color: 'var(--pw-text)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderBottom: '1px solid var(--pw-border)', fontSize: 12 }}>
+    <div class="standalone-session-root">
+      <div class="standalone-session-toolbar" role="region" aria-label="Session controls">
         {mobile && (
           <button
             class="mobile-session-back"
@@ -104,18 +104,20 @@ export function StandaloneSessionPage({ sessionId }: { sessionId: string }) {
           </button>
         )}
         {companion ? (
-          <span style={{ fontWeight: 600 }}>{title}</span>
+              <span class="standalone-session-title">{title}</span>
         ) : (
           <>
-            <span
+            <button
+              type="button"
               ref={idMenuAnchorRef}
               class="session-id-label"
-              style={{ fontWeight: 600, cursor: 'pointer' }}
+              aria-label="Session actions"
+              aria-expanded={showIdMenu}
               onClick={(e) => { e.stopPropagation(); idMenuOpen.value = !idMenuOpen.value; }}
               title="Session actions"
             >
               pw-{sessionId.slice(-6)} <span class="id-dropdown-caret">{'▾'}</span>
-            </span>
+            </button>
             {showIdMenu && (
               <SessionIdMenu
                 sessionId={sessionId}
@@ -128,7 +130,7 @@ export function StandaloneSessionPage({ sessionId }: { sessionId: string }) {
             )}
           </>
         )}
-        {isExited && <span style={{ color: 'var(--pw-text-muted)' }}>(exited)</span>}
+        {isExited && <span class="standalone-session-status">(exited)</span>}
         {!companion && sess?.feedbackId && sess?.feedbackTitle && (
           <button
             class="session-feedback-link"
@@ -142,6 +144,7 @@ export function StandaloneSessionPage({ sessionId }: { sessionId: string }) {
         {!companion && sess?.jsonlPath && (
           <select
             class="view-mode-select"
+            aria-label="Session view"
             value={selectableMode}
             onChange={(e) => {
               const v = (e.target as HTMLSelectElement).value as ViewMode;

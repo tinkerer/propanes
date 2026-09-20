@@ -2,6 +2,9 @@
 
 /* ==================== Theme Variables ==================== */
 :root {
+  --pw-pty-dark-grey: #171717;
+  --pw-pty-black: #000000;
+  --pw-pty-graphite: #292929;
   --pw-primary-on: #ffffff;
   /* Surface */
   --pw-bg-body: #faf9f6;
@@ -11,18 +14,18 @@
   --pw-bg-inset: #faf9f6;
   --pw-bg-hover: #f5f4f1;
 
-  /* Sidebar (always dark, slightly darker in dark mode) */
-  --pw-sidebar-bg: #202020;
-  --pw-sidebar-hover: #353535;
-  --pw-sidebar-active: #555555;
-  --pw-sidebar-text: #aaaaaa;
-  --pw-sidebar-text-bright: #f1f0ed;
+  /* Workspace chrome follows the selected theme; terminals stay dark. */
+  --pw-sidebar-bg: #f1f0ed;
+  --pw-sidebar-hover: #e5e5e5;
+  --pw-sidebar-active: #d4d4d4;
+  --pw-sidebar-text: #555555;
+  --pw-sidebar-text-bright: #171717;
   --pw-sidebar-muted: #737373;
-  --pw-sidebar-divider: #353535;
-  --pw-sidebar-input-bg: #171717;
-  --pw-sidebar-count-bg: #555555;
-  --pw-sidebar-count-text: #d4d4d4;
-  --pw-sidebar-title: #fb923c;
+  --pw-sidebar-divider: #d4d4d4;
+  --pw-sidebar-input-bg: #ffffff;
+  --pw-sidebar-count-bg: #e5e5e5;
+  --pw-sidebar-count-text: #555555;
+  --pw-sidebar-title: #92400e;
 
   /* Text */
   --pw-text-primary: #171717;
@@ -75,6 +78,8 @@
 
   /* Terminal panel */
   --pw-terminal-bg: #202020;
+  --pw-terminal-foreground: #e5e5e5;
+  --pw-terminal-hover: #353535;
   --pw-terminal-border: #555555;
   --pw-terminal-text-dim: #737373;
 
@@ -83,11 +88,18 @@
 
 /* Dark theme */
 html[data-theme="dark"] {
+  --pw-pty-dark-grey: #171717;
+  --pw-pty-black: #000000;
+  --pw-pty-graphite: #292929;
   --pw-primary: #e5e5e5;
   --pw-primary-hover: #ffffff;
   --pw-primary-on: #171717;
   --pw-success: #d4d4d4;
   --pw-sidebar-text-bright: #f1f0ed;
+  --pw-sidebar-text: #aaaaaa;
+  --pw-sidebar-muted: #737373;
+  --pw-sidebar-count-text: #d4d4d4;
+  --pw-sidebar-title: #fb923c;
   --pw-bg-body: #171717;
   --pw-bg-surface: #202020;
   --pw-bg-raised: #353535;
@@ -137,6 +149,8 @@ html[data-theme="dark"] {
   --pw-code-block-text: #e5e5e5;
 
   --pw-terminal-bg: #171717;
+  --pw-terminal-foreground: #e5e5e5;
+  --pw-terminal-hover: #353535;
   --pw-terminal-border: #353535;
   --pw-terminal-text-dim: #737373;
 }
@@ -144,11 +158,18 @@ html[data-theme="dark"] {
 /* System preference fallback */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    --pw-pty-dark-grey: #171717;
+    --pw-pty-black: #000000;
+    --pw-pty-graphite: #292929;
     --pw-primary: #e5e5e5;
     --pw-primary-hover: #ffffff;
     --pw-primary-on: #171717;
     --pw-success: #d4d4d4;
     --pw-sidebar-text-bright: #f1f0ed;
+  --pw-sidebar-text: #aaaaaa;
+  --pw-sidebar-muted: #737373;
+  --pw-sidebar-count-text: #d4d4d4;
+  --pw-sidebar-title: #fb923c;
     --pw-bg-body: #171717;
     --pw-bg-surface: #202020;
     --pw-bg-raised: #353535;
@@ -198,6 +219,8 @@ html[data-theme="dark"] {
     --pw-code-block-text: #e5e5e5;
 
     --pw-terminal-bg: #171717;
+  --pw-terminal-foreground: #e5e5e5;
+  --pw-terminal-hover: #353535;
     --pw-terminal-border: #353535;
     --pw-terminal-text-dim: #737373;
   }

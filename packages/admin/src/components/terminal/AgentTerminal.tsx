@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { effect } from '@preact/signals';
+import { terminalColor } from '../../lib/settings.js';
 import { serverPath } from '../../lib/base-path.js';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -168,7 +170,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       fontSize: 13,
       fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
       theme: {
-        background: '#1e293b',
+        background: getComputedStyle(document.documentElement).getPropertyValue('--pw-terminal-bg').trim(),
         foreground: '#e2e8f0',
         cursor: '#93c5fd',
         selectionBackground: '#334155',
@@ -189,6 +191,20 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
         brightCyan: '#38bdf8',
         brightWhite: '#f8fafc',
       },
+    });
+
+    // Repaint the existing PTY; do not reconnect or discard its scrollback.
+    const stopTerminalTheme = effect(() => {
+      const preset = terminalColor.value;
+      const style = getComputedStyle(document.documentElement);
+      term.options.theme = {
+        ...term.options.theme,
+        background: style.getPropertyValue(`--pw-pty-${preset}`).trim(),
+        foreground: style.getPropertyValue('--pw-terminal-foreground').trim(),
+        cursor: style.getPropertyValue('--pw-terminal-foreground').trim(),
+        black: style.getPropertyValue(`--pw-pty-${preset}`).trim(),
+        selectionBackground: style.getPropertyValue('--pw-terminal-hover').trim(),
+      };
     });
 
     const fit = new FitAddon();
@@ -1037,6 +1053,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
 
     return () => {
       cleanedUp.current = true;
+      stopTerminalTheme();
       offWake();
       if (livenessTimer) clearInterval(livenessTimer);
       if (pongTimer) clearTimeout(pongTimer);

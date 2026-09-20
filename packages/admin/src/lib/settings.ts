@@ -12,6 +12,22 @@ function loadSetting<T>(key: string, fallback: T): T {
 }
 
 export const theme = signal<Theme>(loadSetting('pw-theme', 'system'));
+export type TerminalColor = 'dark-grey' | 'black' | 'graphite';
+export function normalizeTerminalColor(value: unknown): TerminalColor {
+  return value === 'black' || value === 'graphite' ? value : 'dark-grey';
+}
+export const terminalColor = signal<TerminalColor>(normalizeTerminalColor(loadSetting('pw-terminal-color', 'dark-grey')));
+effect(() => {
+  const value = terminalColor.value;
+  localStorage.setItem('pw-terminal-color', JSON.stringify(value));
+  document.documentElement.style.setProperty('--pw-terminal-bg', `var(--pw-pty-${value})`);
+});
+// Keep embedded session frames and separate tabs in sync with Preferences.
+window.addEventListener('storage', event => {
+  if (event.key !== 'pw-terminal-color') return;
+  try { terminalColor.value = normalizeTerminalColor(JSON.parse(event.newValue || 'null')); }
+  catch { terminalColor.value = 'dark-grey'; }
+});
 export const shortcutsEnabled = signal<boolean>(loadSetting('pw-shortcuts-enabled', true));
 export const tooltipsEnabled = signal<boolean>(loadSetting('pw-tooltips-enabled', true));
 export const showTabs = signal<boolean>(loadSetting('pw-show-tabs', true));

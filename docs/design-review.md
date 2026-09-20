@@ -33,3 +33,10 @@ has been redesigned. Component-local terminal/transcript colors, the expanded
 widget, and dense advanced configuration screens still need a focused pass.
 The four-pane sidebar remains available; simplifying that default layout is a
 separate information-architecture decision. No remote push or deployment.
+
+## Screenshot follow-ups
+
+- Light mode now includes the navigation, sessions, terminals list, file tree and pane chrome instead of retaining a dark sidebar.
+- Open Session's standalone toolbar no longer uses undefined `--pw-bg`/`--pw-text` variables. It has explicit dark PTY surface and readable paired text in both workspace themes.
+- Preferences → Terminal appearance now provides Very dark grey (`#171717`, default), Black and Graphite. The choice persists locally and updates mounted xterm instances and other same-origin tabs/frames without recreating terminals or restarting sessions.
+- `session-toolbar-review.mjs` checks desktop/mobile toolbar contrast, keyboard actions, actual xterm backgrounds, cross-tab preference updates and persistence. It sends no terminal input and does not accept the CLI's workspace-trust prompt.

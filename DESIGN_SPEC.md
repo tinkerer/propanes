@@ -87,7 +87,8 @@ The token system has fixed semantic meanings. Do not repurpose them:
 | `--pw-success*`       | Positive/running state — neutral, distinguished by labels, icons and motion |
 | `--pw-text-*`         | Greys for body/secondary/muted/faint text        |
 | `--pw-bg-*`           | Neutral surfaces at various elevations          |
-| `--pw-sidebar-*`      | Charcoal chrome; `--pw-sidebar-title` is orange (`#fb923c`) — the restrained flame brand mark |
+| `--pw-sidebar-*`      | Theme-aware workspace chrome: warm light grey or charcoal; restrained orange brand mark |
+| `--pw-pty-*`, `--pw-terminal-*` | Independent dark PTY surfaces and paired light foreground; default `#171717`, selectable in Preferences |
 
 ### 2.3 Adding a new token
 

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'preact/hooks';
+import { terminalColor, type TerminalColor } from '../lib/settings.js';
 import { theme, setTheme, shortcutsEnabled, tooltipsEnabled, showTabs, arrowTabSwitching, multiDigitTabs, autoNavigateToFeedback, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoOpenChildCompanions, inlineElementChipsEnabled, popoutMode, localBridgeUrl, sshConfigs, type Theme, type PopoutMode, type SshConfig } from '../lib/settings.js';
 import { perfOverlayEnabled, perfServerEnabled } from '../lib/perf.js';
 import { getAllShortcuts } from '../lib/shortcuts.js';
@@ -270,6 +271,19 @@ export function SettingsPage() {
                 {t.label}
               </button>
             ))}
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Terminal appearance</h3>
+          <div class="form-group">
+            <label for="terminal-color">PTY background</label>
+            <select id="terminal-color" value={terminalColor.value} onChange={e => { terminalColor.value = e.currentTarget.value as TerminalColor; }}>
+              <option value="dark-grey">Very dark grey (default)</option>
+              <option value="black">Black</option>
+              <option value="graphite">Graphite</option>
+            </select>
+            <p class="settings-toggle-desc">Independent of light/dark mode. Updates open terminals without restarting sessions. Saved in this browser.</p>
           </div>
         </div>
 
