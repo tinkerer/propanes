@@ -1,4 +1,5 @@
 import { currentRoute, navigate, selectedAppId } from '../../lib/state.js';
+import { NavIcon } from '../ui/NavIcon.js';
 
 type TabKey = 'tickets' | 'sessions' | 'live' | 'settings';
 
@@ -19,11 +20,11 @@ function activeTab(route: string): TabKey | null {
   return null;
 }
 
-const TABS: { key: TabKey; label: string; icon: string }[] = [
-  { key: 'tickets', label: 'Tickets', icon: '\u{1F4DD}' },
-  { key: 'sessions', label: 'Sessions', icon: '\u{1F4E1}' },
-  { key: 'live', label: 'Live', icon: '\u{1F7E2}' },
-  { key: 'settings', label: 'Settings', icon: '\u{2699}\u{FE0F}' },
+const TABS: { key: TabKey; label: string }[] = [
+  { key: 'tickets', label: 'Tickets' },
+  { key: 'sessions', label: 'Sessions' },
+  { key: 'live', label: 'Live' },
+  { key: 'settings', label: 'Settings' },
 ];
 
 export function MobileNav() {
@@ -40,7 +41,7 @@ export function MobileNav() {
           onClick={() => navigate(pathFor(t.key, appId))}
           aria-current={active === t.key ? 'page' : undefined}
         >
-          <span class="mobile-nav-icon" aria-hidden="true">{t.icon}</span>
+          <span class="mobile-nav-icon" aria-hidden="true"><NavIcon name={t.key} /></span>
           <span class="mobile-nav-label">{t.label}</span>
         </button>
       ))}

@@ -325,7 +325,7 @@ export function HarnessSubCard({ h }: { h: any }) {
                 {h.hostTerminalAccess && h.launcherId && <button class="btn btn-sm" onClick={() => handleSpawnHostTerminal(h.launcherId)}>Host Terminal</button>}
                 <button
                   class="btn btn-sm"
-                  style={expandedSetupWizard.value === h.id ? 'background:var(--pw-primary);color:#fff' : ''}
+                  style={expandedSetupWizard.value === h.id ? 'background:var(--pw-primary);color:var(--pw-primary-on)' : ''}
                   onClick={() => expandedSetupWizard.value = expandedSetupWizard.value === h.id ? null : h.id}
                 >Setup</button>
                 <button class="btn btn-sm" onClick={() => handleHarnessStop(h.id)}>Stop</button>

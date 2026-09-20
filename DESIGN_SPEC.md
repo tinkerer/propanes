@@ -6,32 +6,35 @@ colors outside the allowed palette without an explicit amendment to this file.
 
 ## 1. The Flame Palette
 
-The propanes brand is "flame on slate": a dark/light slate-grey base with
-a narrow set of warm accents, plus a green reserved for the running/active
-indicator. No purples, no pinks, no teals, no cyans.
+The ProPanes workspace uses neutral charcoal and warm-white surfaces, with
+orange reserved for the small brand mark and navigation indicator. Avoid
+blue-tinted surfaces, glowing controls and decorative accent-colored cards.
+Blue remains available for meaningful information, not as a default wash.
+No greens, purples, pinks, teals or cyans.
 
 ### 1.1 Allowed color families
 
 | Family       | Role                                    | Hex anchors                            |
 | ------------ | --------------------------------------- | -------------------------------------- |
 | Black        | Pure black, overlays                    | `#000000`, `rgba(0,0,0,*)`             |
-| Grey (slate) | Surfaces, text, borders, code blocks    | `#020617` `#0f172a` `#1e293b` `#334155` `#475569` `#64748b` `#94a3b8` `#cbd5e1` `#e2e8f0` `#f1f5f9` `#f8fafc` `#ffffff` |
+| Grey / neutral | Surfaces, text, borders, code blocks | `#111111` `#171717` `#202020` `#292929` `#353535` `#555555` `#737373` `#aaaaaa` `#d4d4d4` `#e5e5e5` `#efeeeb` `#f1f0ed` `#faf9f6` `#ffffff` |
 | White        | Surfaces on light, text on dark         | `#ffffff`                              |
 | Blue (flame) | Primary brand accent, info, links, "done" | `#1d9bf0` `#0f7ac7` `#38bdf8` `#60a5fa` `#93c5fd` `#bae6fd` `#e0f2fe` `#075985` `#0c4a6e` |
 | Red (flame)  | Danger, destructive, errors             | `#dc2626` `#ef4444` `#fecaca` `#fef2f2` `#7f1d1d` `#450a0a` |
 | Orange (flame) | Warning, active/ignite, "Cook It"      | `#f59e0b` `#fb923c` `#ffb347` `#fde68a` `#fef3c7` `#92400e` `#78350f` `#451a03` |
 | Yellow (flame) | Highlight, attention, waiting-for-input | `#eab308` `#facc15` `#fcd34d` `#fef08a` `#fde047` `#a16207` |
-| Green        | Running / active / healthy / success    | `#22c55e` `#16a34a` `#86efac` `#bbf7d0` `#dcfce7` `#14532d` |
 
-These lists are anchors, not exhaustive. Any `slate-*`, `blue-*`, `red-*`,
-`orange-*`, `amber/yellow-*`, or `green-*` step from the Tailwind scale is
-acceptable. Any color that is clearly in a different hue family (purple,
+These lists are anchors, not exhaustive. Neutral grey and warm-white shades,
+`blue-*`, `red-*`, `orange-*`, or `amber/yellow-*` are acceptable. Existing
+slate tokens may remain in terminal-specific surfaces during migration.
+Any color that is clearly in a different hue family (green, purple,
 pink, teal, cyan, magenta, indigo-leaning-purple) is NOT.
 
 ### 1.2 Disallowed families
 
 The following hue families are **prohibited**:
 
+- **Green**: running and successful states use labels, neutral indicators and shape.
 - **Purple / Violet**: `#8b5cf6`, `#a78bfa`, `#5b21b6`, `#c4b5fd`, `#7e22ce`
 - **Pink / Magenta / Rose**: `#f472b6`, `#9d174d`, `#ec4899`, `#fce7f3`
 - **Teal / Cyan**: `#22d3ee`, `#2dd4bf`, `#5eead4`
@@ -78,13 +81,13 @@ The token system has fixed semantic meanings. Do not repurpose them:
 
 | Token family          | Meaning                                          |
 | --------------------- | ------------------------------------------------ |
-| `--pw-primary*`       | Brand blue — links, primary buttons, focus rings |
+| `--pw-primary*`       | High-contrast neutral — primary buttons and focus rings; `--pw-primary-on` is the paired foreground |
 | `--pw-danger*`        | Red — destructive actions, errors                |
 | `--pw-warning*`       | Orange — warnings, pending, in-flight            |
-| `--pw-success*`       | Positive/running state — green (`#22c55e`). Historical note: briefly flame-yellow, reverted to green. |
+| `--pw-success*`       | Positive/running state — neutral, distinguished by labels, icons and motion |
 | `--pw-text-*`         | Greys for body/secondary/muted/faint text        |
-| `--pw-bg-*`           | Slate surfaces at various elevations             |
-| `--pw-sidebar-*`      | Dark slate chrome; `--pw-sidebar-title` is orange (`#ffb347`) — this is the flame brand mark |
+| `--pw-bg-*`           | Neutral surfaces at various elevations          |
+| `--pw-sidebar-*`      | Charcoal chrome; `--pw-sidebar-title` is orange (`#fb923c`) — the restrained flame brand mark |
 
 ### 2.3 Adding a new token
 
@@ -120,6 +123,18 @@ differentiation MUST come from:
   than opening a sprawling refactor.
 
 ## 4. Amendments
+
+### 19 September 2026: neutral workspace direction
+
+Requested by the owner after review of the blue/slate design: the saturated
+scheme felt generic and “vibe coded.” Use typography, spacing and borders for
+hierarchy instead. Primary actions are charcoal on light backgrounds and
+off-white on dark backgrounds; always pair them with `--pw-primary-on`.
+Cards are flat, not glowing; tutorial steps use plain numbers rather than
+colored tiles. Navigation uses a consistent stroke-icon family. This update
+also resolves the older green exception in this document against AGENTS.md.
+Legacy component-local colors should migrate as those components are edited;
+do not mistake this workspace pass for a completed terminal/widget re-theme.
 
 Amending this spec requires:
 

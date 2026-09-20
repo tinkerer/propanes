@@ -17,22 +17,22 @@ export const WIDGET_CSS = `
   z-index: 2147483647;
   width: 48px;
   height: 48px;
-  border-radius: 50%;
-  background: #1d9bf0;
-  border: none;
+  border-radius: 12px;
+  background: #292929;
+  border: 1px solid #737373;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 12px rgba(29, 155, 240, 0.4);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
   transition: transform 0.2s, box-shadow 0.2s;
   touch-action: none;
   -webkit-tap-highlight-color: transparent;
 }
 
 .pw-trigger:hover {
-  transform: scale(1.1);
-  box-shadow: 0 6px 16px rgba(29, 155, 240, 0.5);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.24);
 }
 
 .pw-trigger svg {

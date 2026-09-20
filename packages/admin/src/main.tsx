@@ -11,6 +11,7 @@ import { UpdateBanner } from './components/ui/UpdateBanner.js';
 import { isEmbedded, isCompanion } from './lib/state.js';
 import '@xterm/xterm/css/xterm.css';
 import './app.css';
+import './workspace-design.css';
 
 declare global {
   interface Window {

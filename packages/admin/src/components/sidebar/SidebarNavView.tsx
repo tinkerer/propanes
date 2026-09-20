@@ -12,6 +12,7 @@ import { subscribeAdmin } from '../../lib/admin-ws.js';
 import { sidebarCollapsed, sidebarAnimating, toggleSidebar, sidebarWidth, openSettingsPanel, openPageView } from '../../lib/sessions.js';
 import { loadChannelThreads } from '../../pages/ChannelPage.js';
 import { Tooltip } from '../ui/Tooltip.js';
+import { NavIcon, type NavIconName } from '../ui/NavIcon.js';
 
 const KIND_DOT: Record<ChannelKind, string> = {
   prod: '#ef4444',
@@ -61,15 +62,14 @@ async function pollLiveConnections() {
   }
 }
 
-const settingsItems = [
-  { path: '/settings/users', label: 'Users', icon: '\u{1F465}', adminOnly: true },
-  { path: '/settings/usage', label: 'Usage', icon: '\u{1F4CA}', adminOnly: true },
-  { path: '/settings/agents', label: 'Agents', icon: '\u{1F916}', adminOnly: true },
-  { path: '/settings/infrastructure', label: 'Infrastructure', icon: '\u{1F3D7}', adminOnly: true },
-  { path: '/settings/wiggum', label: 'Wiggum', icon: '\u{1F575}', adminOnly: true },
-  { path: '/settings/user-guide', label: 'User Guide', icon: '\u{1F4D6}' },
-  { path: '/settings/getting-started', label: 'Getting Started', icon: '\u{1F680}' },
-  { path: '/settings/preferences', label: 'Preferences', icon: '\u2699' },
+const settingsItems: { path: string; label: string; icon: NavIconName; adminOnly?: boolean }[] = [
+  { path: '/settings/agents', label: 'Agents', icon: 'agents', adminOnly: true },
+  { path: '/settings/infrastructure', label: 'Infrastructure', icon: 'infrastructure', adminOnly: true },
+  { path: '/settings/users', label: 'Users', icon: 'users', adminOnly: true },
+  { path: '/settings/usage', label: 'Usage', icon: 'usage', adminOnly: true },
+  { path: '/settings/wiggum', label: 'Wiggum', icon: 'wiggum', adminOnly: true },
+  { path: '/settings/user-guide', label: 'User Guide', icon: 'guide' },
+  { path: '/settings/preferences', label: 'Preferences', icon: 'settings' },
 ];
 
 function ChannelSubsection({ appId, route }: { appId: string; route: string }) {
@@ -215,13 +215,13 @@ export function SidebarNavView() {
     <div class="sidebar-nav-view" style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
       <div class="sidebar-header">
         <Tooltip text={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} shortcut="Ctrl+\" position="right">
-          <button class="sidebar-toggle" onClick={toggleSidebar}>
+          <button class="sidebar-toggle" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={toggleSidebar}>
             &#9776;
           </button>
         </Tooltip>
         <div class="sidebar-brand">
           <span class="sidebar-title">ProPanes</span>
-          <span class="sidebar-tagline">Now you&apos;re cooking with gases</span>
+          <span class="sidebar-tagline">Your app workspace</span>
         </div>
         {!collapsed && (
           <a
@@ -234,7 +234,11 @@ export function SidebarNavView() {
           </a>
         )}
       </div>
-      <nav>
+      <nav aria-label="Workspace navigation">
+        <a href="#/settings/getting-started" class={`sidebar-app-item ${route === '/settings/getting-started' ? 'active' : ''}`} aria-current={route === '/settings/getting-started' ? 'page' : undefined} title="Getting Started" onClick={e => { e.preventDefault(); openSettingsPanel('getting-started'); }}>
+          <span class="nav-icon"><NavIcon name="start" /></span>
+          {!collapsed && <span class="nav-label">Getting Started</span>}
+        </a>
         {!collapsed && (
           <div class="sidebar-section-header">
             Apps
@@ -255,7 +259,7 @@ export function SidebarNavView() {
                 onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/tickets`); }}
                 title={collapsed ? app.name : undefined}
               >
-                <span class="nav-icon">{'\u{1F4BB}'}</span>
+                <span class="nav-icon"><NavIcon name="app" /></span>
                 <span class="nav-label">{app.name}</span>
               </a>
               {isSelected && !collapsed && (
@@ -265,7 +269,7 @@ export function SidebarNavView() {
                     class={route === `/app/${app.id}/tickets` || route.startsWith(`/app/${app.id}/tickets/`) || route === `/app/${app.id}/feedback` || route.startsWith(`/app/${app.id}/feedback/`) ? 'active' : ''}
                     onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/tickets`); openPageView('view:feedback'); }}
                   >
-                    {'\u{1F4CB}'} Tickets
+                    <NavIcon name="tickets" /> Tickets
                     {fbCounts[app.id]?.total > 0 && <span class="sidebar-count">{fbCounts[app.id].total}</span>}
                   </a>
                   <a
@@ -273,14 +277,14 @@ export function SidebarNavView() {
                     class={route === `/app/${app.id}/sessions` ? 'active' : ''}
                     onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/sessions`); openPageView('view:sessions-page'); }}
                   >
-                    {'\u26A1'} Sessions
+                    <NavIcon name="sessions" /> Sessions
                   </a>
                   <a
                     href={`#/app/${app.id}/live`}
                     class={route === `/app/${app.id}/live` ? 'active' : ''}
                     onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/live`); openPageView('view:live'); }}
                   >
-                    {'\u{1F310}'} Live
+                    <NavIcon name="live" /> Live
                     {(liveConnectionCounts.value[app.id] || 0) > 0 && (
                       <span class="sidebar-count">{liveConnectionCounts.value[app.id]}</span>
                     )}
@@ -290,21 +294,21 @@ export function SidebarNavView() {
                     class={route === `/app/${app.id}/wiggum` ? 'active' : ''}
                     onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/wiggum`); openPageView('view:wiggum'); }}
                   >
-                    {'\u{1F9EC}'} FAFO / Wiggum
+                    <NavIcon name="wiggum" /> FAFO / Wiggum
                   </a>
                   <a
                     href={`#/app/${app.id}/flatter`}
                     class={route === `/app/${app.id}/flatter` ? 'active' : ''}
                     onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/flatter`); openPageView('view:flatter'); }}
                   >
-                    {'\u{1F3A8}'} Flatter
+                    <NavIcon name="flatter" /> Flatter
                   </a>
                   <a
                     href={`#/app/${app.id}/approvals`}
                     class={route === `/app/${app.id}/approvals` ? 'active' : ''}
                     onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/approvals`); openPageView('view:approvals'); }}
                   >
-                    {'\u{1F512}'} Approvals
+                    <NavIcon name="approvals" /> Approvals
                     {(pendingApprovalCountByApp.value[app.id] || 0) > 0 && (
                       <span class="sidebar-count">{pendingApprovalCountByApp.value[app.id]}</span>
                     )}
@@ -316,7 +320,7 @@ export function SidebarNavView() {
                       class={route === `/app/${app.id}/settings` ? 'active' : ''}
                       onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/settings`); openPageView('view:app-settings'); }}
                     >
-                      {'\u2699'} Settings
+                      <NavIcon name="settings" /> Settings
                     </a>
                   )}
                 </div>
@@ -332,7 +336,7 @@ export function SidebarNavView() {
               onClick={(e) => { e.preventDefault(); navigate('/app/__unlinked__/tickets'); }}
               title={collapsed ? 'Unlinked' : undefined}
             >
-              <span class="nav-icon">{'\u{1F517}'}</span>
+              <span class="nav-icon"><NavIcon name="link" /></span>
               <span class="nav-label">Unlinked</span>
               {!collapsed && unlinkedCount.value > 0 && <span class="sidebar-count">{unlinkedCount.value}</span>}
             </a>
@@ -343,7 +347,7 @@ export function SidebarNavView() {
                   class={route.startsWith('/app/__unlinked__/tickets') || route.startsWith('/app/__unlinked__/feedback') ? 'active' : ''}
                   onClick={(e) => { e.preventDefault(); navigate('/app/__unlinked__/tickets'); }}
                 >
-                  {'\u{1F4CB}'} Tickets
+                  <NavIcon name="tickets" /> Tickets
                 </a>
               </div>
             )}
@@ -356,7 +360,7 @@ export function SidebarNavView() {
             <div class="sidebar-section-header">Sites</div>
             {liveSites.value.map((site) => (
               <div key={site.origin} class="sidebar-site-item" title={site.origin}>
-                <span class="nav-icon">{'\u{1F310}'}</span>
+                <span class="nav-icon"><NavIcon name="live" /></span>
                 <span class="nav-label">{site.hostname}</span>
                 <span class="sidebar-count">{site.count}</span>
               </div>
@@ -379,7 +383,7 @@ export function SidebarNavView() {
               onClick={(e) => { e.preventDefault(); openSettingsPanel(key); }}
               title={collapsed ? item.label : undefined}
             >
-              <span class="nav-icon">{item.icon}</span>
+              <span class="nav-icon"><NavIcon name={item.icon} /></span>
               <span class="nav-label">{item.label}</span>
             </a>
           );
@@ -394,7 +398,7 @@ export function SidebarNavView() {
           }}
           title={collapsed ? 'Logout' : undefined}
         >
-          <span class="nav-icon">{'\u21A9'}</span>
+          <span class="nav-icon"><NavIcon name="logout" /></span>
           <span class="nav-label">Logout</span>
         </a>
       </nav>
