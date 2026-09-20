@@ -161,10 +161,13 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
     const ownerToken = Symbol();
     resizeOwners.set(sessionId, ownerToken);
     const isResizeOwner = () => resizeOwners.get(sessionId) === ownerToken;
-    const claimResizeOwnership = () => { resizeOwners.set(sessionId, ownerToken); };
+    const claimResizeOwnership = () => {
+      if (!isResizeOwner()) lastSentSize = null;
+      resizeOwners.set(sessionId, ownerToken);
+    };
 
     const term = new Terminal({
-      cursorBlink: true,
+      cursorBlink: false,
       rightClickSelectsWord: false,
       scrollback: 5000,
       fontSize: 13,
@@ -940,7 +943,10 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       fit.fit();
       // Only the resize owner sends resize commands to the server.
       // Another terminal instance for the same session may exist (e.g. autojump).
-      if (!isResizeOwner()) return;
+      // Ownership is local to this document. A background tab/iframe can have
+      // its own owner for the same PTY; letting it resize the remote session
+      // fights the focused view and makes CLI redraws/cursors jump.
+      if (!isResizeOwner() || document.hidden || !document.hasFocus()) return;
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
         if (term.cols > 300 || term.rows > 120) return;
@@ -1047,8 +1053,11 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
     }
     document.addEventListener('visibilitychange', onVisibilityChange);
 
-    // Bounce resize when browser window regains focus
+    // Another document may resize this PTY while we're unfocused. Re-register
+    // our size once on return; subsequent focus/observer events are deduped.
+    function onWindowBlur() { lastSentSize = null; }
     function onWindowFocus() { setTimeout(() => safeFitAndResize(true), 50); }
+    window.addEventListener('blur', onWindowBlur);
     window.addEventListener('focus', onWindowFocus);
 
     return () => {
@@ -1081,6 +1090,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       term.textarea?.removeEventListener('focus', onTermFocus);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('focus', onWindowFocus);
+      window.removeEventListener('blur', onWindowBlur);
       flushInputBuffer();
       if (outputFlushRaf) cancelAnimationFrame(outputFlushRaf);
       if (resizeRaf) cancelAnimationFrame(resizeRaf);

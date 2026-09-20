@@ -18,6 +18,8 @@ import { CosEnqueuedList } from './CosEnqueuedList.js';
 import { selectedAppId } from '../../lib/state.js';
 import { getSessionIdForThread, getThreadMeta, cosThreadMeta } from '../../lib/cos-thread-meta.js';
 import { AgentTerminal } from '../terminal/AgentTerminal.js';
+import { SessionInputBar } from '../conversation/SessionInputBar.js';
+import { sessionInputStates } from '../../lib/sessions.js';
 import { openSession, openThreadAsInteractive, setViewMode } from '../../lib/sessions.js';
 import {
   cosActiveThread,
@@ -355,6 +357,9 @@ export function ThreadPanel({
           <CosEnqueuedList followups={threadFollowups} scope="thread" />
         </div>
       )}
+      {isInteractiveSession && sessionId && <div class="cos-thread-panel-composer">
+        <SessionInputBar sessionId={sessionId} inputState={sessionInputStates.value.get(sessionId) || 'idle'} isRunning={threadMeta?.sessionStatus === 'running' || threadMeta?.sessionStatus === 'pending'} lastMessage={jsonlRaw[jsonlRaw.length - 1]} />
+      </div>}
       {!isInteractiveSession && <div class="cos-thread-panel-composer">
         <CosComposer
           ref={composerRef}

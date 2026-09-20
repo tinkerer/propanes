@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { marked } from 'marked';
+import { alphaFeaturesEnabled } from '../lib/settings.js';
 import { api } from '../lib/api.js';
 import { loadAllSessions, resumeSession } from '../lib/sessions.js';
 import { FlatterAssistButton } from '../components/dispatch/FlatterAssistButton.js';
@@ -54,6 +55,11 @@ function statusTone(status: string) {
 }
 
 export function FlatterPage({ appId }: { appId: string }) {
+  if (!alphaFeaturesEnabled.value) return <div class="legacy-feature-notice"><h2>Flatter is an alpha feature</h2><p>Enable “Alpha test new features” in Preferences to try it. Existing data is preserved while disabled.</p><a href="#/settings/preferences">Open Preferences</a></div>;
+  return <EnabledFlatterPage appId={appId} />;
+}
+
+function EnabledFlatterPage({ appId }: { appId: string }) {
   const [state, setState] = useState<FlatterState>(EMPTY_STATE);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState('');

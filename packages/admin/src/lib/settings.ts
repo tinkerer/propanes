@@ -12,6 +12,25 @@ function loadSetting<T>(key: string, fallback: T): T {
 }
 
 export const theme = signal<Theme>(loadSetting('pw-theme', 'system'));
+export const alphaFeaturesEnabled = signal<boolean>(loadSetting<boolean>('pw-alpha-features', false) === true);
+effect(() => { localStorage.setItem('pw-alpha-features', JSON.stringify(alphaFeaturesEnabled.value)); });
+window.addEventListener('storage', event => {
+  if (event.key === 'pw-alpha-features') alphaFeaturesEnabled.value = event.newValue === 'true';
+});
+export type StructuredColor = 'black' | 'charcoal' | 'workspace';
+function normalizeStructuredColor(value: unknown): StructuredColor {
+  return value === 'charcoal' || value === 'workspace' ? value : 'black';
+}
+export const structuredColor = signal<StructuredColor>(normalizeStructuredColor(loadSetting('pw-structured-color', 'black')));
+effect(() => {
+  localStorage.setItem('pw-structured-color', JSON.stringify(structuredColor.value));
+  document.documentElement.dataset.structuredColor = structuredColor.value;
+});
+window.addEventListener('storage', event => {
+  if (event.key !== 'pw-structured-color') return;
+  try { structuredColor.value = normalizeStructuredColor(JSON.parse(event.newValue || 'null')); }
+  catch { structuredColor.value = 'black'; }
+});
 export type TerminalColor = 'dark-grey' | 'black' | 'graphite';
 export function normalizeTerminalColor(value: unknown): TerminalColor {
   return value === 'black' || value === 'graphite' ? value : 'dark-grey';

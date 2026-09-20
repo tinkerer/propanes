@@ -1,5 +1,6 @@
 import { useRef, useCallback, useEffect, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
+import { isOpenSession } from '../../lib/open-session-counts.js';
 import { type ViewMode } from '../terminal/SessionViewToggle.js';
 import type { LeafNode } from '../../lib/pane-tree.js';
 import { PopupMenu } from '../pickers/PopupMenu.js';
@@ -398,7 +399,7 @@ function getSingletonMeta(sid: string): SingletonMeta {
       plusKind: 'claude',
       countSuffix: () => {
         const count = allSessions.value.filter((s: any) => (
-          s.status !== 'deleted'
+          isOpenSession(s)
           && s.machineId === machineId
           && (!appId || s.appId === appId)
         )).length;
@@ -419,7 +420,7 @@ function getSingletonMeta(sid: string): SingletonMeta {
         plusKind: 'claude',
         countSuffix: () => {
           const allSess2 = allSessions.value;
-          const agents = allSess2.filter((s: any) => s.permissionProfile !== 'plain' && s.status !== 'deleted');
+          const agents = allSess2.filter((s: any) => s.permissionProfile !== 'plain' && isOpenSession(s));
           return ` (${agents.length})`;
         },
         extraBadges: () => {
@@ -440,7 +441,7 @@ function getSingletonMeta(sid: string): SingletonMeta {
         label: 'Terminals',
         plusKind: 'new',
         countSuffix: () => {
-          const terminals = allSessions.value.filter((s: any) => s.permissionProfile === 'plain' && s.status !== 'deleted');
+          const terminals = allSessions.value.filter((s: any) => s.permissionProfile === 'plain' && isOpenSession(s));
           return ` (${terminals.length})`;
         },
       };

@@ -7,11 +7,11 @@ type Entry = { name: string; type: 'file' | 'dir'; size?: number; ext?: string }
 type GitFile = { path: string; status: string; staged: string; unstaged: string };
 
 const STATUS_COLORS: Record<string, string> = {
-  modified: '#e5c07b',
-  added: '#98c379',
-  deleted: '#e06c75',
-  untracked: '#888',
-  renamed: '#61afef',
+  modified: 'var(--pw-text-secondary)',
+  added: 'var(--pw-text-secondary)',
+  deleted: 'var(--pw-danger)',
+  untracked: 'var(--pw-text-muted)',
+  renamed: 'var(--pw-text-secondary)',
 };
 
 const STATUS_LETTERS: Record<string, string> = {
@@ -69,9 +69,9 @@ export function SidebarFilesDrawer({ appId, open, onToggle }: Props) {
       {open && fileAppId && (
         <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
           {error ? (
-            <div style={{ padding: '8px 12px', color: '#e06c75', fontSize: '12px' }}>{error}</div>
+            <div style={{ padding: '8px 12px', color: 'var(--pw-danger)', fontSize: '12px' }}>{error}</div>
           ) : tab === 'files' ? (
-            <SidebarFileTree appId={fileAppId} projectDir={projectDir} controlsRef={treeControlsRef} onAllExpandedChange={setAllExpanded} />
+            <SidebarFileTree key={fileAppId} appId={fileAppId} projectDir={projectDir} controlsRef={treeControlsRef} onAllExpandedChange={setAllExpanded} />
           ) : (
             <SidebarGitChanges appId={fileAppId} projectDir={projectDir} />
           )}
@@ -95,7 +95,34 @@ function SidebarFileTree({ appId, projectDir, controlsRef, onAllExpandedChange }
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [allExpanded, setAllExpanded] = useState(false);
   const cache = useRef<Map<string, Entry[]>>(new Map());
-  const [loaded, setLoaded] = useState(false);
+  const [pathDraft, setPathDraft] = useState('');
+  const [absolutePath, setAbsolutePath] = useState('');
+  const [parent, setParent] = useState<string | null>(null);
+  const [pathError, setPathError] = useState('');
+  const navigationRequest = useRef(0);
+
+  async function navigateDir(path: string) {
+    const request = ++navigationRequest.current;
+    setLoading(p => new Set([...p, '__root__']));
+    setPathError('');
+    try {
+      const result = await api.browseFiles(appId, path);
+      if (request !== navigationRequest.current) return;
+      setCurrentPath(result.relativePath);
+      setAbsolutePath(result.path);
+      setPathDraft(result.path);
+      setParent(result.parent);
+      setEntries(result.entries);
+      setExpandedDirs(new Map());
+      cache.current.clear();
+      setAllExpanded(false);
+      onAllExpandedChange(false);
+    } catch (error: any) {
+      if (request === navigationRequest.current) setPathError(error.message || 'Unable to open directory');
+    } finally {
+      if (request === navigationRequest.current) setLoading(p => { const n = new Set(p); n.delete('__root__'); return n; });
+    }
+  }
 
   const loadDir = useCallback(async (path: string): Promise<Entry[]> => {
     if (cache.current.has(path)) return cache.current.get(path)!;
@@ -105,24 +132,9 @@ function SidebarFileTree({ appId, projectDir, controlsRef, onAllExpandedChange }
   }, [appId]);
 
   useEffect(() => {
-    setLoaded(false);
-    setCurrentPath('.');
-    setEntries([]);
-    setExpandedDirs(new Map());
-    cache.current.clear();
+    void navigateDir('.');
+    return () => { navigationRequest.current++; };
   }, [appId]);
-
-  useEffect(() => {
-    if (loaded) return;
-    setLoaded(true);
-    setLoading((p) => new Set([...p, '__root__']));
-    loadDir('.').then((e) => {
-      setEntries(e);
-      setLoading((p) => { const n = new Set(p); n.delete('__root__'); return n; });
-    }).catch(() => {
-      setLoading((p) => { const n = new Set(p); n.delete('__root__'); return n; });
-    });
-  }, [loaded, loadDir]);
 
   async function toggleDir(dirPath: string) {
     if (expandedDirs.has(dirPath)) {
@@ -139,7 +151,7 @@ function SidebarFileTree({ appId, projectDir, controlsRef, onAllExpandedChange }
   }
 
   async function expandAll() {
-    const queue = [...entries.filter((e) => e.type === 'dir').map((e) => e.name)];
+    const queue = entries.filter(e => e.type === 'dir').map(e => currentPath === '.' ? e.name : `${currentPath}/${e.name}`);
     const newExpanded = new Map(expandedDirs);
     while (queue.length > 0) {
       const batch = queue.splice(0, 10);
@@ -189,6 +201,7 @@ function SidebarFileTree({ appId, projectDir, controlsRef, onAllExpandedChange }
             class={`sidebar-file-entry${isDir ? ' dir' : ''}`}
             style={{ paddingLeft: `${8 + depth * 14}px` }}
             onClick={() => isDir ? toggleDir(entryPath) : handleFileClick(entryPath)}
+            onDblClick={() => { if (isDir) void navigateDir(entryPath); }}
           >
             {isDir && (
               <span class={`sidebar-file-chevron${isExpanded ? ' expanded' : ''}`}>
@@ -197,6 +210,7 @@ function SidebarFileTree({ appId, projectDir, controlsRef, onAllExpandedChange }
             )}
             <span class="sidebar-file-icon">{isDir ? '\u{1F4C1}' : '\u{1F4C4}'}</span>
             <span class="sidebar-file-name">{entry.name}</span>
+            {isDir && <button class="sidebar-file-open-dir" aria-label={`Open directory ${entry.name}`} title="Open directory" onClick={e => { e.stopPropagation(); void navigateDir(entryPath); }}>↳</button>}
           </div>
           {isExpanded && children && renderEntries(children, entryPath, depth + 1)}
         </div>
@@ -206,8 +220,14 @@ function SidebarFileTree({ appId, projectDir, controlsRef, onAllExpandedChange }
 
   return (
     <div class="sidebar-file-tree">
+      <form class="sidebar-path-bar" onSubmit={e => { e.preventDefault(); if (pathDraft.trim()) void navigateDir(pathDraft.trim().startsWith('/') ? pathDraft.trim() : `${currentPath}/${pathDraft.trim()}`); }}>
+        <input aria-label="Current directory" value={pathDraft} title={absolutePath} placeholder="Project directory" onInput={e => setPathDraft(e.currentTarget.value)} onKeyDown={e => { if (e.key === 'Escape') setPathDraft(absolutePath); }} />
+        <button type="submit" disabled={loading.has('__root__')} aria-label="Go to directory">Go</button>
+      </form>
+      <button class="sidebar-parent-dir" disabled={parent === null || loading.has('__root__')} title={parent === null ? 'At project root' : 'Go to parent directory'} onClick={() => { if (parent !== null) void navigateDir(parent); }}>↑ .. <span>Parent directory</span></button>
+      {pathError && <div class="sidebar-path-error" role="alert">{pathError}</div>}
       {loading.has('__root__') ? (
-        <div style={{ padding: '8px 12px', color: '#64748b', fontSize: '12px' }}>Loading...</div>
+        <div style={{ padding: '8px 12px', color: 'var(--pw-text-muted)', fontSize: '12px' }}>Loading...</div>
       ) : (
         renderEntries(entries, currentPath, 0)
       )}

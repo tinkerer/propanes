@@ -12,6 +12,7 @@ import { subscribeAdmin } from '../../lib/admin-ws.js';
 import { sidebarCollapsed, sidebarAnimating, toggleSidebar, sidebarWidth, openSettingsPanel, openPageView } from '../../lib/sessions.js';
 import { loadChannelThreads } from '../../pages/ChannelPage.js';
 import { Tooltip } from '../ui/Tooltip.js';
+import { alphaFeaturesEnabled } from '../../lib/settings.js';
 import { NavIcon, type NavIconName } from '../ui/NavIcon.js';
 
 const KIND_DOT: Record<ChannelKind, string> = {
@@ -67,7 +68,6 @@ const settingsItems: { path: string; label: string; icon: NavIconName; adminOnly
   { path: '/settings/infrastructure', label: 'Infrastructure', icon: 'infrastructure', adminOnly: true },
   { path: '/settings/users', label: 'Users', icon: 'users', adminOnly: true },
   { path: '/settings/usage', label: 'Usage', icon: 'usage', adminOnly: true },
-  { path: '/settings/wiggum', label: 'Wiggum', icon: 'wiggum', adminOnly: true },
   { path: '/settings/user-guide', label: 'User Guide', icon: 'guide' },
   { path: '/settings/preferences', label: 'Preferences', icon: 'settings' },
 ];
@@ -289,26 +289,19 @@ export function SidebarNavView() {
                       <span class="sidebar-count">{liveConnectionCounts.value[app.id]}</span>
                     )}
                   </a>
-                  <a
-                    href={`#/app/${app.id}/wiggum`}
-                    class={route === `/app/${app.id}/wiggum` ? 'active' : ''}
-                    onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/wiggum`); openPageView('view:wiggum'); }}
-                  >
-                    <NavIcon name="wiggum" /> FAFO / Wiggum
-                  </a>
-                  <a
+                  {alphaFeaturesEnabled.value && <a
                     href={`#/app/${app.id}/flatter`}
                     class={route === `/app/${app.id}/flatter` ? 'active' : ''}
                     onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/flatter`); openPageView('view:flatter'); }}
                   >
-                    <NavIcon name="flatter" /> Flatter
-                  </a>
+                    <NavIcon name="flatter" /> Flatter <span class="sidebar-count">α</span>
+                  </a>}
                   <a
                     href={`#/app/${app.id}/approvals`}
                     class={route === `/app/${app.id}/approvals` ? 'active' : ''}
                     onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/approvals`); openPageView('view:approvals'); }}
                   >
-                    <NavIcon name="approvals" /> Approvals
+                    <NavIcon name="approvals" /> Review approvals
                     {(pendingApprovalCountByApp.value[app.id] || 0) > 0 && (
                       <span class="sidebar-count">{pendingApprovalCountByApp.value[app.id]}</span>
                     )}

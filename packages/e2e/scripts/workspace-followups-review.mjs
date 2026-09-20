@@ -1,0 +1,58 @@
+import { chromium, expect } from '@playwright/test';
+const base = process.env.PROPANES_REVIEW_URL || 'http://localhost:3101';
+const browser = await chromium.launch();
+const context = await browser.newContext({ viewport: { width: 1500, height: 1000 } });
+const page = await context.newPage();
+const errors = [];
+page.on('pageerror', e => errors.push(e.message));
+try {
+  const auth = await context.request.post(base + '/api/v1/auth/login', { data: { username: 'admin', password: 'admin' } });
+  const { token } = await auth.json();
+  await context.addInitScript(token => { localStorage.setItem('pw-admin-token', token); localStorage.setItem('pw-hints-enabled', 'false'); }, token);
+  const headers = { Authorization: 'Bearer ' + token };
+  const apps = await (await context.request.get(base + '/api/v1/admin/applications', { headers })).json();
+  const app = apps.find(a => a.name === '3D STEP Viewer');
+  expect(app).toBeTruthy();
+  await page.goto(base + '/admin/#/app/' + app.id + '/tickets');
+  const path = page.getByRole('textbox', { name: 'Current directory' });
+  await expect(path).toHaveValue(app.projectDir);
+  await path.fill(app.projectDir + '/public');
+  await path.press('Enter');
+  await expect(path).toHaveValue(app.projectDir + '/public');
+  await expect(page.getByRole('button', { name: 'Open directory samples', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Open directory samples', exact: true }).click();
+  await expect(path).toHaveValue(app.projectDir + '/public/samples');
+  await page.getByRole('button', { name: /Parent directory/ }).click();
+  await expect(path).toHaveValue(app.projectDir + '/public');
+  await path.fill('does-not-exist'); await path.press('Enter');
+  await expect(page.locator('.sidebar-path-error')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open directory samples', exact: true })).toBeVisible();
+  await path.fill(app.projectDir); await path.press('Enter');
+  await expect(page.getByRole('button', { name: /Parent directory/ })).toBeDisabled();
+  const sessions = await (await context.request.get(base + '/api/v1/admin/agent-sessions', { headers })).json();
+  const open = sessions.filter(s => ['running', 'pending'].includes(s.status));
+  await expect(page.locator('.singleton-label').filter({ hasText: /^Sessions \(/ })).toHaveText(`Sessions (${open.filter(s => s.permissionProfile !== 'plain').length})`);
+  await expect(page.locator('.singleton-label').filter({ hasText: /^Terminals \(/ })).toHaveText(`Terminals (${open.filter(s => s.permissionProfile === 'plain').length})`);
+  await expect(page.locator('.sidebar-nav-view').getByRole('link', { name: /FAFO|Wiggum|Flatter/ })).toHaveCount(0);
+  await page.goto(base + '/admin/#/app/' + app.id + '/flatter');
+  await expect(page.getByRole('heading', { name: 'Flatter is an alpha feature' })).toBeVisible();
+  await page.goto(base + '/admin/#/settings/preferences');
+  await expect(page.getByLabel('Alpha test new features')).not.toBeChecked();
+  await page.getByText('Alpha test new features', { exact: true }).click();
+  await expect(page.locator('.sidebar-nav-view').getByRole('link', { name: /Flatter/ })).toHaveCount(1);
+  await page.getByText('Alpha test new features', { exact: true }).click();
+  await expect(page.getByLabel('Structured background')).toHaveValue('black');
+  await page.getByLabel('Structured background').selectOption('workspace');
+  await expect(page.locator('html')).toHaveAttribute('data-structured-color', 'workspace');
+  await page.getByLabel('Structured background').selectOption('black');
+  await page.getByRole('button', { name: 'Open Ops chat', exact: true }).first().click();
+  await expect(page.locator('.cos-popout').first()).toBeVisible();
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await page.waitForTimeout(250);
+    await expect(page.locator('.cos-popout').first()).toHaveCSS('background-color', theme === 'light' ? 'rgb(250, 249, 246)' : 'rgb(23, 23, 23)');
+    await page.screenshot({ path: `/tmp/propanes-followups-${theme}.png` });
+  }
+  expect(errors).toEqual([]);
+  console.log('PASS: directory navigation/recovery, open counts, alpha gate, structured preference, CoS themes; no page errors');
+} finally { await browser.close(); }

@@ -120,6 +120,7 @@ export function ApprovalQueuePage() {
 
   return (
     <div style={{ padding: 16, width: '100%', overflow: 'auto' }}>
+      <p style={{ color: 'var(--pw-text-secondary)', fontSize: 13, lineHeight: 1.6, marginBottom: 16 }}>Review agent work before it starts. Requests appear here only when a channel has “Require approval” enabled. Approve to dispatch the work, or deny it with a reason.</p>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <h2 style={{ margin: 0, fontSize: 18, color: 'var(--pw-text)' }}>
           {'\u{1F512}'} Approvals

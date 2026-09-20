@@ -1,0 +1,65 @@
+/* One workspace palette for CoS. No panel-local dark locks. */
+:root {
+  --pw-bg: var(--pw-bg-body);
+  --pw-text: var(--pw-text-primary);
+  --pw-secondary-text: var(--pw-text-secondary);
+  --pw-input-bg: var(--pw-bg-surface);
+  --pw-accent: var(--pw-primary);
+  --pw-transcript-bg: #000000;
+  --pw-transcript-surface: #171717;
+  --pw-transcript-raised: #292929;
+  --pw-transcript-text: #e5e5e5;
+  --pw-transcript-secondary: #aaaaaa;
+  --pw-transcript-border: #353535;
+}
+html[data-theme="dark"] {
+  --pw-transcript-bg: #000000;
+  --pw-transcript-surface: #171717;
+  --pw-transcript-raised: #292929;
+  --pw-transcript-text: #e5e5e5;
+  --pw-transcript-secondary: #aaaaaa;
+  --pw-transcript-border: #353535;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pw-transcript-bg: #000000;
+    --pw-transcript-surface: #171717;
+    --pw-transcript-raised: #292929;
+    --pw-transcript-text: #e5e5e5;
+    --pw-transcript-secondary: #aaaaaa;
+    --pw-transcript-border: #353535;
+  }
+}
+.cos-popout, .cos-thread-side, .cos-learnings-side, .cos-artifact-side { background: var(--pw-bg-body); color: var(--pw-text-primary); border-color: var(--pw-border); }
+.cos-popout .popout-tab-bar, .cos-popout .popout-header,
+.cos-popout .cos-thin-toolbar { background: var(--pw-bg-surface); color: var(--pw-text-primary); border-color: var(--pw-border); }
+.cos-popout .popout-header button, .cos-popout .popout-tab-bar button { color: var(--pw-text-secondary); }
+.cos-popout .popout-header button:hover { color: var(--pw-text-primary); background: var(--pw-bg-hover); }
+.cos-popout .cos-msg-text, .cos-popout .cos-row-content { color: var(--pw-text-primary); }
+.cos-popout .cos-channel-list { background: var(--pw-bg-sunken); }
+.conv-avatar, .conv-avatar-user, .conv-avatar-assistant { background: var(--pw-bg-raised); color: var(--pw-text-primary); border-color: var(--pw-border); }
+
+/* Only structured transcripts opt into an independent reading theme. */
+html:not([data-structured-color="workspace"]) :is(.structured-view-wrap, .structured-view, .conversation-view-structured, .conversation-view-empty) {
+  --pw-bg-body: var(--pw-transcript-bg);
+  --pw-bg-surface: var(--pw-transcript-surface);
+  --pw-bg-raised: var(--pw-transcript-raised);
+  --pw-bg-sunken: var(--pw-transcript-bg);
+  --pw-bg-hover: var(--pw-transcript-raised);
+  --pw-text-primary: var(--pw-transcript-text);
+  --pw-text-secondary: var(--pw-transcript-secondary);
+  --pw-text-muted: var(--pw-transcript-secondary);
+  --pw-primary: var(--pw-transcript-text);
+  --pw-primary-text: var(--pw-transcript-text);
+  --pw-primary-on: var(--pw-transcript-bg);
+  --pw-primary-soft: var(--pw-transcript-raised);
+  --pw-border: var(--pw-transcript-border);
+  --pw-border-light: var(--pw-transcript-border);
+  --pw-bg: var(--pw-bg-body);
+  --pw-text: var(--pw-text-primary);
+}
+html[data-structured-color="charcoal"] { --pw-transcript-bg: var(--pw-pty-dark-grey); }
+.structured-view-wrap, .structured-view, .conversation-view-structured, .conversation-view-empty { background: var(--pw-bg-body); color: var(--pw-text-primary); }
+.conversation-view-structured .conv-row, .structured-view .sm-group { border-bottom: 1px solid var(--pw-border); border-radius: 0; padding-top: 12px; padding-bottom: 12px; }
+.conversation-view-structured .conv-message-text, .structured-view .sm-assistant-content { line-height: 1.7; }
+.conversation-view-structured :is(pre, code), .structured-view :is(pre, code) { background: var(--pw-bg-surface); color: var(--pw-text-primary); }

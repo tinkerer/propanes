@@ -825,13 +825,14 @@ export function WiggumPage() {
 
   return (
     <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div class="legacy-feature-notice" role="note"><strong>FAFO / Wiggum is deprecated.</strong> Use agent-native goals and subagents for new work. Existing runs and controls remain available for compatibility; no runs have been stopped.</div>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <h2 style={{ margin: 0, fontSize: 18, color: 'var(--pw-text)' }}>FAFO / Wiggum</h2>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <button
             class="btn btn-sm"
-            style={{ background: '#7c3aed', color: '#fff' }}
+            style={{ background: 'var(--pw-bg-raised)', color: 'var(--pw-text-primary)' }}
             onClick={async () => {
               try {
                 setError(null);

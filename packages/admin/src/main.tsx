@@ -12,6 +12,7 @@ import { isEmbedded, isCompanion } from './lib/state.js';
 import '@xterm/xterm/css/xterm.css';
 import './app.css';
 import './workspace-design.css';
+import './conversation-theme.css';
 
 declare global {
   interface Window {

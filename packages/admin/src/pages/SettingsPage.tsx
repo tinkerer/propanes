@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'preact/hooks';
-import { terminalColor, type TerminalColor } from '../lib/settings.js';
+import { alphaFeaturesEnabled } from '../lib/settings.js';
+import { terminalColor, type TerminalColor, structuredColor, type StructuredColor } from '../lib/settings.js';
 import { theme, setTheme, shortcutsEnabled, tooltipsEnabled, showTabs, arrowTabSwitching, multiDigitTabs, autoNavigateToFeedback, showHotkeyHints, autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoOpenChildCompanions, inlineElementChipsEnabled, popoutMode, localBridgeUrl, sshConfigs, type Theme, type PopoutMode, type SshConfig } from '../lib/settings.js';
 import { perfOverlayEnabled, perfServerEnabled } from '../lib/perf.js';
 import { getAllShortcuts } from '../lib/shortcuts.js';
@@ -285,6 +286,27 @@ export function SettingsPage() {
             </select>
             <p class="settings-toggle-desc">Independent of light/dark mode. Updates open terminals without restarting sessions. Saved in this browser.</p>
           </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Structured view appearance</h3>
+          <div class="form-group">
+            <label for="structured-color">Structured background</label>
+            <select id="structured-color" value={structuredColor.value} onChange={e => { structuredColor.value = e.currentTarget.value as StructuredColor; }}>
+              <option value="black">Black (default)</option>
+              <option value="charcoal">Charcoal</option>
+              <option value="workspace">Match workspace</option>
+            </select>
+            <p class="settings-toggle-desc">Applies to structured session transcripts. CoS chat follows the workspace appearance; PTY colors remain independent.</p>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>Experimental features</h3>
+          <label class="settings-toggle-row">
+            <span><span class="settings-toggle-label">Alpha test new features</span><br /><span class="settings-toggle-desc">Enable experimental tools such as Flatter. These features may change or be unstable. Off by default; saved in this browser.</span></span>
+            <span class="toggle-switch"><input type="checkbox" aria-label="Alpha test new features" checked={alphaFeaturesEnabled.value} onChange={e => { alphaFeaturesEnabled.value = e.currentTarget.checked; }} /><span class="toggle-slider" /></span>
+          </label>
         </div>
 
         <div class="settings-section">

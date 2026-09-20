@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from 'preact/hooks';
+import { SessionReplySummary } from './SessionReplySummary.js';
 import { ConversationView } from '../conversation/ConversationView.js';
 import { cosMessageToConversation } from '../../lib/conversation.js';
 import { selectedAppId } from '../../lib/state.js';
@@ -358,6 +359,7 @@ export function ThreadBlock({
           </div>
         </div>
       )}
+      {!hasReplies && getSessionIdForThread(threadServerId) && <div class="cos-thread-children"><SessionReplySummary sessionId={getSessionIdForThread(threadServerId)!} onOpen={onOpenInPanel} /></div>}
       {(hasReplies || dispatches.length > 0) && (
         <div class="cos-thread-children">
           {userMsg && hasReplies && (
