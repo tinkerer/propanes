@@ -18,7 +18,7 @@ const PANEL_CONFIGS: Record<PanelType, PanelConfig> = {
   detail: { icon: '\u{1F4CB}', title: 'Feedback Detail', path: (a, p) => `/app/${a}/feedback/${p}`, width: 650, height: 600 },
   sessions: { icon: '\u26A1', title: 'Sessions', path: (a, p) => p ? `/app/${a}/sessions/${p}` : `/app/${a}/sessions`, width: 650, height: 500 },
   files: { icon: '\u{1F4C2}', title: 'Files', path: (a) => `/app/${a}/sessions`, width: 650, height: 500 },
-  settings: { icon: '\u2699', title: 'Settings', path: () => '/settings/applications', width: 550, height: 500 },
+  settings: { icon: '\u2699', title: 'Settings', path: () => '/settings/preferences', width: 550, height: 500 },
   terminal: { icon: '\u{1F4BB}', title: 'Terminal', path: (a) => `/app/${a}/sessions`, width: 750, height: 500 },
   workbench: { icon: '\u2B1A', title: 'ProPanes Overlay', path: (a) => `/app/${a}/sessions`, width: 900, height: 600, embedMode: 'workbench' },
   cos: { icon: '★', title: 'Ops', path: () => '/', width: 480, height: 620, embedMode: 'cos' },
@@ -55,6 +55,11 @@ const MIN_SCALE = 0.4;
 const MAX_SCALE = 2.5;
 
 const PERSIST_KEY = 'pw-workbench-layout';
+export const ALPHA_FEATURES_KEY = 'pw-alpha-features';
+
+export function alphaFeaturesEnabled(): boolean {
+  try { return localStorage.getItem(ALPHA_FEATURES_KEY) === 'true'; } catch { return false; }
+}
 const DOCK_SNAP_DISTANCE = 40;
 
 let nextZ = 2147483600;
@@ -344,6 +349,12 @@ export class OverlayPanelManager {
     } else if (data.type === 'pw-embed-gesture') {
       // Two-finger pan / pinch-zoom from inside the iframe
       this.handleGesture(e, data);
+    } else if (data.type === 'pw-embed-prefs') {
+      // Browser-local admin preferences mirrored into the host origin so the
+      // widget's admin menu can honor them on cross-origin host pages too.
+      if (typeof data.alphaFeatures === 'boolean') {
+        try { localStorage.setItem(ALPHA_FEATURES_KEY, String(data.alphaFeatures)); } catch { /* ignore */ }
+      }
     }
   }
 
