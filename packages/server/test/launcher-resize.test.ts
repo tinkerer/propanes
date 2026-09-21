@@ -1,9 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { eq } from 'drizzle-orm';
-import { db, schema } from '../src/db/index.js';
-import { registerLauncher, unregisterLauncher } from '../src/launcher-registry.js';
-import { attachAdmin, detachAdmin, forwardToService } from '../src/agent-sessions.js';
+
+const tempDir = mkdtempSync(join(tmpdir(), 'propanes-launcher-resize-test-'));
+process.env.DB_PATH = join(tempDir, 'test.db');
+const { db, schema, sqlite, runMigrations } = await import('../src/db/index.js');
+const { registerLauncher, unregisterLauncher } = await import('../src/launcher-registry.js');
+const { attachAdmin, detachAdmin, forwardToService } = await import('../src/agent-sessions.js');
+runMigrations();
+test.after(() => {
+  sqlite.close();
+  rmSync(tempDir, { recursive: true, force: true });
+});
 
 // A duck-typed stand-in for a `ws` WebSocket: records everything sent to it and
 // reports OPEN (readyState 1).

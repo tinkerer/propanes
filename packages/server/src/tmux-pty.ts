@@ -1,7 +1,8 @@
-import { execSync, execFileSync, spawnSync } from 'node:child_process';
+import { execSync, execFile, execFileSync, spawnSync } from 'node:child_process';
 import { writeFileSync, unlinkSync, chmodSync, existsSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import * as pty from 'node-pty';
@@ -186,6 +187,30 @@ export function killTmuxSession(sessionId: string): boolean {
   const name = tmuxName(sessionId);
   const r = spawnSync('tmux', [...TMUX_SOCKET, 'kill-session', '-t', name], { stdio: 'pipe' });
   return r.status === 0;
+}
+
+const execFileAsync = promisify(execFile);
+
+/** Repaint the attached client's complete screen without resizing the agent. */
+export async function refreshTmuxClient(ptyProcess: Pick<pty.IPty, 'pid'>): Promise<boolean> {
+  if (ptyProcess.pid <= 0) return false;
+  try {
+    // node-pty exposes the tmux attach process PID, but not its TTY path.
+    // Match that client explicitly so another viewer is never targeted.
+    const { stdout } = await execFileAsync('tmux', [
+      ...TMUX_SOCKET, 'list-clients', '-F', '#{client_pid} #{client_tty}',
+    ], { timeout: 1000 });
+    const prefix = `${ptyProcess.pid} `;
+    const client = stdout.split('\n').find((line) => line.startsWith(prefix))?.slice(prefix.length);
+    if (!client) return false;
+    // Keep the event loop free to drain the PTY while tmux writes the repaint.
+    await execFileAsync('tmux', [
+      ...TMUX_SOCKET, 'refresh-client', '-t', client,
+    ], { timeout: 1000 });
+    return true;
+  } catch {
+    return false; // The client may have exited during attach/recovery.
+  }
 }
 
 export function captureTmuxPane(sessionId: string): string {

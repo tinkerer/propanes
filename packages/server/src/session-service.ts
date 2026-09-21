@@ -9,7 +9,7 @@ import { db, schema, runMigrations } from './db/index.js';
 import type { AgentRuntime, PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
 import { STREAM_PROFILE_PTY_COLS } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
-import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, listPwTmuxSessions, getTmuxPaneCommand, detachTmuxClients, getTmuxPanePid } from './tmux-pty.js';
+import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, listPwTmuxSessions, getTmuxPaneCommand, detachTmuxClients, getTmuxPanePid, refreshTmuxClient } from './tmux-pty.js';
 import { detectClaudeAuthRequired, detectClaudeTrustPrompt, stripTerminalControl } from './claude-auth-detect.js';
 import { createRecoveryParking } from './session-recovery.js';
 import { mergePrUrls, mergePrUrlList } from './pr-detect.js';
@@ -1106,6 +1106,13 @@ function sendLiveHistory(proc: AgentProcess, ws: WebSocket): void {
       cols: proc.ptyProcess.cols,
       rows: proc.ptyProcess.rows,
     }));
+    // The rolling byte buffer contains terminal deltas, not a screen snapshot.
+    // Idle TUI animations can evict every static line, leaving a newly opened
+    // overlay with only dots. Subscribe before requesting a full tmux repaint
+    // so it follows history through the normal sequenced output stream.
+    if (proc.tmuxSessionName && !needsWideStreamPty(proc.runtime, proc.permissionProfile)) {
+      refreshTmuxClient(proc.ptyProcess);
+    }
   } catch { /* socket went away */ }
 }
 
@@ -1150,11 +1157,8 @@ function markSessionStale(sessionId: string): void {
 function attachAdminSocket(sessionId: string, ws: WebSocket): boolean {
   const proc = activeSessions.get(sessionId);
   if (proc) {
-    // Send full history + lastInputAckSeq so client can resume its counter.
-    // cols/rows = current PTY size, so the client can skip redundant resize
-    // bounces when its pane already matches (avoids TUI repaint flicker).
-    ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(proc.outputBuffer), lastInputAckSeq: proc.lastInputAckSeq, inputState: proc.inputState, cols: proc.ptyProcess.cols, rows: proc.ptyProcess.rows }));
     proc.adminSockets.add(ws);
+    sendLiveHistory(proc, ws);
     return true;
   }
 
@@ -1177,8 +1181,8 @@ function attachAdminSocket(sessionId: string, ws: WebSocket): boolean {
       // DB says running but not in activeSessions — try tmux recovery
       if (tryRecoverSession(session)) {
         const recovered = activeSessions.get(sessionId)!;
-        ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(recovered.outputBuffer), cols: recovered.ptyProcess.cols, rows: recovered.ptyProcess.rows }));
         recovered.adminSockets.add(ws);
+        sendLiveHistory(recovered, ws);
         return true;
       }
       const tmuxAvailable = isTmuxAvailable();
