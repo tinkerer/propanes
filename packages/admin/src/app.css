@@ -10754,6 +10754,8 @@ body.pw-isolate {
   background: transparent;
   color: var(--pw-text-secondary, #888);
   cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
   white-space: nowrap;
   flex-shrink: 0;
   border-right: 1px solid var(--pw-terminal-border, #333);
