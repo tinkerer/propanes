@@ -20,6 +20,7 @@ import { unreadNotificationCount, openNotificationCenter } from '../../lib/notif
 import { ChiefOfStaffToggle } from '../cos/ChiefOfStaffBubble.js';
 import { isMobile } from '../../lib/viewport.js';
 import { NavIcon } from '../ui/NavIcon.js';
+import { alphaFeaturesEnabled } from '../../lib/settings.js';
 
 function getSessionMruLabel(sessionId: string, sessionMap: Map<string, any>): string {
   const custom = getSessionLabel(sessionId);
@@ -284,7 +285,7 @@ export function ControlBar() {
         )}
       </button>
 
-      <ChiefOfStaffToggle />
+      {alphaFeaturesEnabled.value && <ChiefOfStaffToggle />}
     </div>
   );
 }

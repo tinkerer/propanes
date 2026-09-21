@@ -304,7 +304,7 @@ export function SettingsPage() {
         <div class="settings-section">
           <h3>Experimental features</h3>
           <label class="settings-toggle-row">
-            <span><span class="settings-toggle-label">Alpha test new features</span><br /><span class="settings-toggle-desc">Enable experimental tools such as Flatter. These features may change or be unstable. Off by default; saved in this browser.</span></span>
+            <span><span class="settings-toggle-label">Alpha test new features</span><br /><span class="settings-toggle-desc">Enable experimental tools such as Flatter, the Ops (CoS) chat, and Review approvals. These features may change or be unstable. Off by default; saved in this browser.</span></span>
             <span class="toggle-switch"><input type="checkbox" aria-label="Alpha test new features" checked={alphaFeaturesEnabled.value} onChange={e => { alphaFeaturesEnabled.value = e.currentTarget.checked; }} /><span class="toggle-slider" /></span>
           </label>
         </div>

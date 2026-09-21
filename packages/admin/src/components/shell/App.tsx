@@ -15,6 +15,7 @@ import { DispatchDialog } from '../dispatch/DispatchDialog.js';
 import { SetupAssistantDialog } from '../dispatch/SetupAssistantDialog.js';
 import { PageView } from './PageView.js';
 import { ChiefOfStaffBubble } from '../cos/ChiefOfStaffBubble.js';
+import { alphaFeaturesEnabled } from '../../lib/settings.js';
 import { serverPath, BASE_PATH } from '../../lib/base-path.js';
 
 const isTauri = !!(window as any).__TAURI__ || !!(window as any).__TAURI_INTERNALS__;
@@ -188,7 +189,7 @@ export function App() {
         <Layout />
         <DispatchDialog />
         <SetupAssistantDialog />
-        <ChiefOfStaffBubble floatingButton={false} />
+        {alphaFeaturesEnabled.value && <ChiefOfStaffBubble floatingButton={false} />}
       </>
     );
   }
@@ -205,7 +206,7 @@ export function App() {
         <GlobalTerminalPanel />
         <DispatchDialog />
         <SetupAssistantDialog />
-        <ChiefOfStaffBubble />
+        {alphaFeaturesEnabled.value && <ChiefOfStaffBubble />}
       </div>
     );
   }
@@ -215,7 +216,7 @@ export function App() {
       <Layout />
       <DispatchDialog />
       <SetupAssistantDialog />
-      <ChiefOfStaffBubble floatingButton={false} />
+      {alphaFeaturesEnabled.value && <ChiefOfStaffBubble floatingButton={false} />}
     </>
   );
 }

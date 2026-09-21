@@ -51,7 +51,7 @@ import {
 import { api } from '../../lib/api.js';
 import { setFocusedLeaf } from '../../lib/pane-tree.js';
 import { ctrlShiftHeld } from '../../lib/shortcuts.js';
-import { autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce } from '../../lib/settings.js';
+import { autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce, alphaFeaturesEnabled } from '../../lib/settings.js';
 import { selectedAppId, applications, navigate, loadChannels, channelsByApp, activeChannelSlug, COS_WORKSPACE_ID } from '../../lib/state.js';
 import { PopupMenu } from '../pickers/PopupMenu.js';
 import { QuickDispatchPopup, type DispatchType } from '../dispatch/QuickDispatchPopup.js';
@@ -596,9 +596,11 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
           const childrenByParent = new Map<string, any[]>();
           const childIds = new Set<string>();
 
-          // Group by swarmId, wiggumRunId, or CoS agent+app. CoS sessions split
-          // per (agentId, appId) so work for different apps lands under its own
-          // app instead of all collapsing into one cross-app "Inbox".
+          // Group by swarmId, wiggumRunId, or CoS agent+app. CoS groups only
+          // exist in the flat view with alpha features on; when grouped by app
+          // (or with the Ops chat hidden) CoS sessions render as ordinary
+          // sessions under their app rather than as a nested "Inbox" tree.
+          const groupCos = alphaFeaturesEnabled.value && !sessionGroupByApp.value;
           const swarmGroups = new Map<string, { label: string; type: string; children: any[]; appId: string | null }>();
           const swarmChildIds = new Set<string>();
           const cosAgents = chiefOfStaffAgents.value;
@@ -630,7 +632,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
               }
               grp.children.push(s);
               swarmChildIds.add(s.id);
-            } else {
+            } else if (groupCos) {
               const cos = cosGroupForSession(s);
               if (cos) {
                 const agentId = cos.agentId || 'default';
@@ -965,19 +967,16 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                       {appSwarms && [...appSwarms.entries()].map(([key, grp]) => {
                         const exp = sessionExpandedParents.value.has(key);
                         const activeCount = grp.children.filter((c: any) => c.status === 'running').length;
-                        const isCos = grp.type === 'cos';
                         return (
-                          <div key={`sgrp-${key}`} class={`sidebar-session-tree${isCos ? ' sidebar-cos-group' : ''}`}>
+                          <div key={`sgrp-${key}`} class="sidebar-session-tree">
                             <div class="sidebar-session-tree-row">
                               <button class="sidebar-tree-toggle" onClick={(e) => { e.stopPropagation(); toggleExpandedParent(key); }}>
                                 {exp ? '\u25be' : '\u25b8'}
                               </button>
                               <span class="sidebar-tree-count">{grp.children.length}</span>
-                              {isCos && <span class="sidebar-cos-badge">CoS</span>}
                               <span style={{ fontSize: 11, color: 'var(--pw-text-faint)', fontWeight: 600, cursor: 'pointer', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (isCos) { toggleExpandedParent(key); return; }
                                   const swarmAppId = grp.appId || appKey;
                                   if (swarmAppId && swarmAppId !== '__unlinked__') navigate(`/app/${swarmAppId}/wiggum`);
                                 }}>
@@ -989,13 +988,13 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   anchorFromEvent(e);
-                                  quickDispatchInitialType.value = isCos ? 'powwow' : 'wiggum';
+                                  quickDispatchInitialType.value = 'wiggum';
                                   toggleQuickDispatch(appKey, qdpInstanceId);
                                 }}
-                                title={isCos ? 'New powwow in this app' : 'New wiggum in this app'}
+                                title="New wiggum in this app"
                               >+</button>
                             </div>
-                            {exp && <div class="sidebar-session-tree-children">{isCos ? renderCosChildren(grp.children) : grp.children.map((it: any) => renderItem(it))}</div>}
+                            {exp && <div class="sidebar-session-tree-children">{grp.children.map((it: any) => renderItem(it))}</div>}
                           </div>
                         );
                       })}

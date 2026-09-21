@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import { applications, navigate } from '../../lib/state.js';
 import { allSessions, openSession, getSessionLabel, loadAllSessions } from '../../lib/sessions.js';
-import { recentResults, type RecentResult } from '../../lib/settings.js';
+import { recentResults, alphaFeaturesEnabled, type RecentResult } from '../../lib/settings.js';
 import { api } from '../../lib/api.js';
 import { PrBadges, prSearchText } from '../PrBadges.js';
 import {
@@ -145,7 +145,9 @@ export function SpotlightSearch({ onClose }: Props) {
       try {
         const [feedbackRes, cosRes] = await Promise.all([
           api.getFeedback({ search: q, limit: 10 }).catch(() => ({ items: [] as any[] })),
-          api.searchCosMessages({ q, limit: 15 }).catch(() => ({ results: [] as any[] })),
+          alphaFeaturesEnabled.value
+            ? api.searchCosMessages({ q, limit: 15 }).catch(() => ({ results: [] as any[] }))
+            : Promise.resolve({ results: [] as any[] }),
         ]);
         const agentNameById = new Map(chiefOfStaffAgents.value.map((a) => [a.id, a.name]));
         setResults((prev) => {

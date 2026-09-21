@@ -189,9 +189,12 @@ export function SidebarNavView() {
   const hasUnlinked = unlinkedCount.value > 0;
   const fbCounts = appFeedbackCounts.value;
   const channelsSnapshot = channelsByApp.value;
-  const approvalPollingAppIds = apps
-    .filter((app) => (channelsSnapshot[app.id] || []).some((channel) => channel.policy?.requireApproval))
-    .map((app) => app.id);
+  const alpha = alphaFeaturesEnabled.value;
+  const approvalPollingAppIds = alpha
+    ? apps
+      .filter((app) => (channelsSnapshot[app.id] || []).some((channel) => channel.policy?.requireApproval))
+      .map((app) => app.id)
+    : [];
   const approvalPollingKey = approvalPollingAppIds.join('|');
 
   useEffect(() => {
@@ -289,23 +292,23 @@ export function SidebarNavView() {
                       <span class="sidebar-count">{liveConnectionCounts.value[app.id]}</span>
                     )}
                   </a>
-                  {alphaFeaturesEnabled.value && <a
+                  {alpha && <a
                     href={`#/app/${app.id}/flatter`}
                     class={route === `/app/${app.id}/flatter` ? 'active' : ''}
                     onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/flatter`); openPageView('view:flatter'); }}
                   >
                     <NavIcon name="flatter" /> Flatter <span class="sidebar-count">α</span>
                   </a>}
-                  <a
+                  {alpha && <a
                     href={`#/app/${app.id}/approvals`}
                     class={route === `/app/${app.id}/approvals` ? 'active' : ''}
                     onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/approvals`); openPageView('view:approvals'); }}
                   >
-                    <NavIcon name="approvals" /> Review approvals
+                    <NavIcon name="approvals" /> Review approvals <span class="sidebar-count">α</span>
                     {(pendingApprovalCountByApp.value[app.id] || 0) > 0 && (
                       <span class="sidebar-count">{pendingApprovalCountByApp.value[app.id]}</span>
                     )}
-                  </a>
+                  </a>}
                   <ChannelSubsection appId={app.id} route={route} />
                   {isAdminUser.value && (
                     <a

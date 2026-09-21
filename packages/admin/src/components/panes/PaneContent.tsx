@@ -1,5 +1,6 @@
 import { SessionViewToggle } from '../terminal/SessionViewToggle.js';
 import { ChiefOfStaffBubble } from '../cos/ChiefOfStaffBubble.js';
+import { alphaFeaturesEnabled } from '../../lib/settings.js';
 import { StructuredView } from '../terminal/StructuredView.js';
 import { SessionSummaryView } from '../sessions/SessionSummaryView.js';
 import { FeedbackCompanionView } from '../feedback/FeedbackCompanionView.js';
@@ -133,7 +134,9 @@ export function renderTabContent(
   if (sid.startsWith('cos:')) {
     return (
       <div key={sid} style={{ display: isVisible ? 'flex' : 'none', width: '100%', flex: 1, minHeight: 0 }}>
-        <ChiefOfStaffBubble mode="pane" floatingButton={false} />
+        {alphaFeaturesEnabled.value
+          ? <ChiefOfStaffBubble mode="pane" floatingButton={false} />
+          : <div class="legacy-feature-notice"><h2>Ops chat is an alpha feature</h2><p>Enable “Alpha test new features” in Preferences to use it. Existing threads are preserved while disabled.</p><a href="#/settings/preferences">Open Preferences</a></div>}
       </div>
     );
   }
