@@ -3278,8 +3278,10 @@ select:focus, textarea:focus {
   right: -3px;
   bottom: -3px;
   border-radius: 50%;
-  border: 1.5px solid transparent;
-  border-top-color: rgba(34, 197, 94, 0.8);
+  /* Closed faint track + one bright segment: reads as an orbiting spinner
+     rather than a cracked ring (a lone tapered quarter-arc looked broken). */
+  border: 1.5px solid rgba(34, 197, 94, 0.25);
+  border-top-color: #22c55e;
   animation: spin-ring 1s linear infinite;
   will-change: transform;
 }
@@ -3992,9 +3994,10 @@ select:focus, textarea:focus {
   right: -3px;
   bottom: -3px;
   border-radius: 50%;
-  border: 1.5px solid transparent;
-  border-top-color: rgba(34, 197, 94, 0.8);
+  border: 1.5px solid rgba(34, 197, 94, 0.25);
+  border-top-color: #22c55e;
   animation: spin-ring 1s linear infinite;
+  will-change: transform;
 }
 .session-status-dot.completed { background: #3b82f6; }
 .session-status-dot.failed { background: #ef4444; }
@@ -7998,8 +8001,10 @@ kbd {
   right: -3px;
   bottom: -3px;
   border-radius: 50%;
-  border: 1.5px solid transparent;
-  border-top-color: rgba(34, 197, 94, 0.8);
+  /* Closed faint track + one bright segment: reads as an orbiting spinner
+     rather than a cracked ring (a lone tapered quarter-arc looked broken). */
+  border: 1.5px solid rgba(34, 197, 94, 0.25);
+  border-top-color: #22c55e;
   animation: spin-ring 1s linear infinite;
   will-change: transform;
 }
