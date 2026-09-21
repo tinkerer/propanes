@@ -1,5 +1,6 @@
 import { WebSocket as WsWebSocket } from 'ws';
 import { eq } from 'drizzle-orm';
+import { ViewerSizes } from './viewer-sizes.js';
 import { db, schema } from './db/index.js';
 import type { AgentRuntime, PermissionProfile, InputToSession, ResizeSessionRequest } from '@propanes/shared';
 import {
@@ -46,12 +47,15 @@ const launcherSessionAdmins = new Map<string, Set<WsWebSocket>>();
 // single shared resource but every browser/pane attaches at its own viewport
 // size, and — unlike local sessions, where session-service sees a distinct
 // upstream socket per browser — the launcher receives all viewers' resizes
-// multiplexed over one WS and can't tell them apart. So we do the "largest
-// attached viewer wins" reconciliation here (the last point where per-browser
-// identity exists) and forward only the max to the launcher, mirroring the
-// local fix in session-service. Without this, a shorter concurrent viewer
-// shrinks the PTY and taller panes paint the TUI in only the top rows.
-const adminSizes = new Map<WsWebSocket, { cols: number; rows: number }>();
+// multiplexed over one WS and can't tell them apart. So the per-viewer
+// bookkeeping lives here (the last point where per-browser identity exists):
+// the newest request wins, a detaching viewer hands the PTY to the next most
+// recent one, and every viewer is told the grid to mirror. Same policy as
+// session-service for local sessions — see ViewerSizes.
+const adminSizes = new ViewerSizes<WsWebSocket>();
+// Last size forwarded to the launcher per session, so viewers are only told
+// about actual changes.
+const launcherPtySizes = new Map<string, { cols: number; rows: number }>();
 
 const MAX_PTY_COLS = 300;
 const MAX_PTY_ROWS = 120;
@@ -74,26 +78,26 @@ function extractResize(parsed: any): { cols: number; rows: number } | null {
   return null;
 }
 
-// Per-axis max of every attached viewer's recorded size for this session.
-function largestSizeForSession(sessionId: string): { cols: number; rows: number } | null {
+// Size the launcher PTY to the most recent request among this session's
+// attached viewers and tell all of them which grid to emulate.
+function applyLauncherSize(launcherId: string, sessionId: string): void {
   const admins = launcherSessionAdmins.get(sessionId);
-  if (!admins) return null;
-  let cols = 0, rows = 0;
-  for (const a of admins) {
-    const s = adminSizes.get(a);
-    if (!s) continue;
-    if (s.cols > cols) cols = s.cols;
-    if (s.rows > rows) rows = s.rows;
-  }
-  if (cols <= 0 || rows <= 0) return null;
-  return { cols, rows };
-}
-
-function sendResizeToLauncher(launcherId: string, sessionId: string, cols: number, rows: number): void {
+  if (!admins) return;
+  const size = adminSizes.latest(admins);
+  if (!size) return;
   const launcher = getLauncher(launcherId);
   if (launcher && launcher.ws.readyState === 1) {
-    const msg: ResizeSessionRequest = { type: 'resize_session', sessionId, cols, rows };
+    const msg: ResizeSessionRequest = { type: 'resize_session', sessionId, cols: size.cols, rows: size.rows };
     try { launcher.ws.send(JSON.stringify(msg)); } catch {}
+  }
+  const prev = launcherPtySizes.get(sessionId);
+  if (prev && prev.cols === size.cols && prev.rows === size.rows) return;
+  launcherPtySizes.set(sessionId, size);
+  const notice = JSON.stringify({ type: 'pty_size', sessionId, cols: size.cols, rows: size.rows });
+  for (const a of admins) {
+    if (a.readyState === 1) {
+      try { a.send(notice); } catch {}
+    }
   }
 }
 
@@ -269,13 +273,15 @@ export function detachAdmin(sessionId: string, ws: WsWebSocket): void {
     const admins = launcherSessionAdmins.get(sessionId);
     if (admins) {
       admins.delete(ws);
-      if (admins.size === 0) launcherSessionAdmins.delete(sessionId);
+      if (admins.size === 0) {
+        launcherSessionAdmins.delete(sessionId);
+        launcherPtySizes.delete(sessionId);
+      }
     }
-    // Drop this viewer's recorded size and shrink the launcher PTY back to the
-    // largest remaining viewer, so a closed large pane can't pin the PTY.
+    // Drop this viewer's recorded size and hand the launcher PTY to the next
+    // most recent viewer, so a closed pane doesn't pin the PTY to its size.
     if (adminSizes.delete(ws) && bridge.kind === 'launcher') {
-      const max = largestSizeForSession(sessionId);
-      if (max) sendResizeToLauncher(bridge.launcherId, sessionId, max.cols, max.rows);
+      applyLauncherSize(bridge.launcherId, sessionId);
     }
   }
   adminBridges.delete(ws);
@@ -331,14 +337,12 @@ export function forwardToService(ws: WsWebSocket, data: string): void {
     if (launcher && launcher.ws.readyState === 1) {
       try {
         const parsed = JSON.parse(data);
-        // Resize is reconciled across all attached viewers: record this
-        // viewer's size and forward the per-axis max, not the raw request, so a
-        // shorter concurrent pane can't shrink the shared PTY (see adminSizes).
+        // Resize is tracked per viewer so a detach can fall back to the next
+        // most recent one; the newest request is what the launcher gets.
         const resize = extractResize(parsed);
         if (resize) {
           adminSizes.set(ws, clampSize(resize.cols, resize.rows));
-          const max = largestSizeForSession(bridge.sessionId);
-          if (max) sendResizeToLauncher(bridge.launcherId, bridge.sessionId, max.cols, max.rows);
+          applyLauncherSize(bridge.launcherId, bridge.sessionId);
           return;
         }
         const msg: InputToSession = {

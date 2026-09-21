@@ -5,6 +5,7 @@ import type { Server } from 'node:http';
 import * as pty from 'node-pty';
 import { eq, desc } from 'drizzle-orm';
 import { ulid } from 'ulidx';
+import { ViewerSizes } from './viewer-sizes.js';
 import { db, schema, runMigrations } from './db/index.js';
 import type { AgentRuntime, PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
 import { STREAM_PROFILE_PTY_COLS } from '@propanes/shared';
@@ -145,16 +146,21 @@ interface AgentProcess {
   totalBytes: number;
   outputSeq: number;
   lastInputAckSeq: number;
+  /**
+   * Highest input seq accepted from each attached viewer. Every browser (and
+   * every reconnect) numbers its own input from its own counter, so dedup has
+   * to be per socket: one shared high-water mark let whichever viewer had sent
+   * more drop the other's keystrokes and resizes as "already seen".
+   */
+  inputSeqBySocket: Map<WebSocket, number>;
   adminSockets: Set<WebSocket>;
   /**
    * Per-connected-client requested PTY size. The tmux/PTY is a single shared
    * resource but multiple browsers/panes attach to it at different viewport
-   * sizes. We size the PTY to the LARGEST requested dimensions (per-axis max)
-   * so no viewer is ever truncated — mirroring tmux `window-size largest`.
-   * Last-writer-wins (the old behaviour) let a short pane shrink the PTY and
-   * leave taller panes painting blank rows below the content.
+   * sizes; the most recent (focused) request wins and other viewers mirror
+   * the resulting grid — see ViewerSizes for why not the largest.
    */
-  clientSizes: Map<WebSocket, { cols: number; rows: number }>;
+  clientSizes: ViewerSizes<WebSocket>;
   status: 'running' | 'completed' | 'failed' | 'killed';
   flushTimer: ReturnType<typeof setInterval>;
   inputState: InputState;
@@ -660,8 +666,9 @@ function spawnSession(params: {
     totalBytes: 0,
     outputSeq: 0,
     lastInputAckSeq: 0,
+    inputSeqBySocket: new Map(),
     adminSockets: new Set(),
-    clientSizes: new Map(),
+    clientSizes: new ViewerSizes(),
     status: 'running',
     flushTimer: setInterval(() => flushOutput(sessionId), FLUSH_INTERVAL),
     inputState: 'active' as InputState,
@@ -946,44 +953,47 @@ function resizeSessionProcess(sessionId: string, cols: number, rows: number, ws?
   const safeRows = Math.max(2, Math.min(Number(rows) || 40, MAX_INTERACTIVE_ROWS));
   const safeCols = Math.max(20, Math.min(Number(cols) || DEFAULT_COLS, MAX_INTERACTIVE_COLS));
 
-  // Record this client's requested size so the shared PTY can be sized to the
-  // largest attached viewer (see clientSizes). A resize with no originating
-  // socket (HTTP /resize, recovery) is applied directly without being recorded.
-  if (ws) proc.clientSizes.set(ws, { cols: safeCols, rows: safeRows });
-
-  applyEffectiveSize(proc, { cols: safeCols, rows: safeRows });
+  // Record this client's requested size so the PTY can fall back to the next
+  // most recent viewer when this one detaches (see clientSizes). A resize with
+  // no originating socket (HTTP /resize, recovery) is applied without being
+  // recorded. Either way the newest request is the one the PTY takes.
+  const size = { cols: safeCols, rows: safeRows };
+  if (ws) proc.clientSizes.set(ws, size);
+  applyPtySize(proc, size);
 }
 
-// Resize the shared PTY to the per-axis maximum of every connected client's
-// requested size, so the tallest/widest viewer always gets a fully-painted TUI
-// and no viewer is truncated. `fallback` is used when no client size is on
-// record (e.g. an HTTP resize before any socket registered, or recovery).
-function applyEffectiveSize(
-  proc: AgentProcess,
-  fallback?: { cols: number; rows: number },
-): void {
+// Re-derive the PTY size from the viewers still attached — used when the
+// viewer whose size the PTY currently has goes away.
+function applyEffectiveSize(proc: AgentProcess): void {
+  proc.clientSizes.prune(proc.adminSockets);
+  const size = proc.clientSizes.latest();
+  if (size) applyPtySize(proc, size);
+}
+
+function applyPtySize(proc: AgentProcess, size: { cols: number; rows: number }): void {
   if (proc.status !== 'running') return;
-
-  // Drop sizes for sockets that are no longer attached so a closed pane can't
-  // keep the PTY pinned to its (possibly larger) dimensions forever.
-  for (const sock of proc.clientSizes.keys()) {
-    if (!proc.adminSockets.has(sock)) proc.clientSizes.delete(sock);
-  }
-
-  let cols = fallback?.cols ?? 0;
-  let rows = fallback?.rows ?? 0;
-  for (const size of proc.clientSizes.values()) {
-    if (size.cols > cols) cols = size.cols;
-    if (size.rows > rows) rows = size.rows;
-  }
-  if (cols <= 0 || rows <= 0) return;
-
   // Stream profiles parse stream-json from PTY output. Narrowing the PTY would
   // cause tmux to hard-wrap each JSON line at the column boundary, breaking
   // JSON.parse in cos-turn-consumer.ts. Pin cols to the wide value regardless
   // of what the frontend xterm requested.
-  const effectiveCols = needsWideStreamPty(proc.runtime, proc.permissionProfile) ? STREAM_PROFILE_COLS : cols;
-  proc.ptyProcess.resize(effectiveCols, rows);
+  const cols = needsWideStreamPty(proc.runtime, proc.permissionProfile) ? STREAM_PROFILE_COLS : size.cols;
+  const rows = size.rows;
+  const changed = proc.ptyProcess.cols !== cols || proc.ptyProcess.rows !== rows;
+  proc.ptyProcess.resize(cols, rows);
+  // Tell every viewer the grid it must emulate. Sent before the PTY's redraw
+  // bytes so a mirroring pane has resized its xterm by the time they arrive.
+  if (changed) broadcastPtySize(proc, cols, rows);
+}
+
+function broadcastPtySize(proc: AgentProcess, cols: number, rows: number): void {
+  const serialized = JSON.stringify({ type: 'pty_size', sessionId: proc.sessionId, cols, rows });
+  for (const ws of proc.adminSockets) {
+    try {
+      ws.send(serialized);
+    } catch {
+      proc.adminSockets.delete(ws);
+    }
+  }
 }
 
 function writeToSession(sessionId: string, data: string): void {
@@ -1065,8 +1075,9 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
       totalBytes: captured.length,
       outputSeq: session.lastOutputSeq ?? 0,
       lastInputAckSeq: session.lastInputSeq ?? 0,
+      inputSeqBySocket: new Map(),
       adminSockets: new Set(),
-      clientSizes: new Map(),
+      clientSizes: new ViewerSizes(),
       status: 'running',
       flushTimer: setInterval(() => flushOutput(session.id), FLUSH_INTERVAL),
       inputState: 'active' as InputState,
@@ -1101,7 +1112,7 @@ function sendLiveHistory(proc: AgentProcess, ws: WebSocket): void {
     ws.send(JSON.stringify({
       type: 'history',
       data: stripTerminalFillRuns(proc.outputBuffer),
-      lastInputAckSeq: proc.lastInputAckSeq,
+      lastInputAckSeq: proc.inputSeqBySocket.get(ws) ?? 0,
       inputState: proc.inputState,
       cols: proc.ptyProcess.cols,
       rows: proc.ptyProcess.rows,
@@ -1238,9 +1249,9 @@ function detachAdminSocket(sessionId: string, ws: WebSocket): void {
   const proc = activeSessions.get(sessionId);
   if (proc) {
     proc.adminSockets.delete(ws);
-    // Drop this viewer's size and shrink the PTY back to the remaining viewers
-    // so a closed large pane doesn't leave the PTY pinned wider/taller than any
-    // pane still showing the session.
+    proc.inputSeqBySocket.delete(ws);
+    // Drop this viewer's size and hand the PTY to the next most recent viewer
+    // so a closed pane doesn't leave the PTY at a size no one is looking at.
     if (proc.clientSizes.delete(ws) && proc.clientSizes.size > 0) {
       applyEffectiveSize(proc);
     }
@@ -1508,9 +1519,10 @@ wsServer.on('connection', (ws, req) => {
             if (recoveryParking.tryNow(sessionId)) proc = activeSessions.get(sessionId);
           }
           if (!proc) break;
-          // Dedup: only process if seq is new
-          if (msg.seq > proc.lastInputAckSeq) {
-            proc.lastInputAckSeq = msg.seq;
+          // Dedup per viewer socket: only process if seq is new for this sender
+          if (msg.seq > (proc.inputSeqBySocket.get(ws) ?? 0)) {
+            proc.inputSeqBySocket.set(ws, msg.seq);
+            if (msg.seq > proc.lastInputAckSeq) proc.lastInputAckSeq = msg.seq;
             const content = msg.content;
             if (content.kind === 'input' && content.data) {
               writeToSession(sessionId, content.data);

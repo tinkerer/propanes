@@ -698,6 +698,14 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
               serverAnswersPing = true;
               break;
 
+            case 'pty_size':
+              // Another viewer (or our own request) resized the shared PTY.
+              if (typeof msg.cols === 'number' && typeof msg.rows === 'number' && msg.cols > 0 && msg.rows > 0) {
+                serverPtySize = { cols: msg.cols, rows: msg.rows };
+                safeFitAndResize();
+              }
+              break;
+
             // Legacy messages
             case 'history':
               // Resume input seq from server's last acknowledged seq
@@ -937,16 +945,50 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       flushInputBuffer();
     });
 
+    // Only the resize owner in the focused, visible document drives the PTY
+    // size. Another terminal instance for the same session may exist (e.g.
+    // autojump), and a background tab/iframe can have its own owner for the
+    // same PTY; letting it resize the remote session fights the focused view
+    // and makes CLI redraws/cursors jump.
+    function isDrivingPtySize() {
+      return isResizeOwner() && !document.hidden && document.hasFocus();
+    }
+
+    // A viewer that is not driving the size must still emulate the PTY's own
+    // grid. Letting fit() pick a smaller grid than the PTY makes xterm clamp
+    // every cursor move to its bottom row, so the TUI paints as garbage with a
+    // cursor that jumps on each redraw. Instead adopt the PTY grid and scale
+    // the whole terminal down to fit the pane; clicking into it makes this
+    // viewer the driver and returns it to 1:1.
+    function mirrorPtyGrid(): boolean {
+      const el = containerRef.current;
+      if (!el || !serverPtySize) return false;
+      const { cols, rows } = serverPtySize;
+      if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows);
+      const screen = term.element?.querySelector<HTMLElement>('.xterm-screen');
+      if (!term.element || !screen || !screen.offsetWidth || !screen.offsetHeight) return true;
+      const scale = Math.min(1, el.clientWidth / screen.offsetWidth, el.clientHeight / screen.offsetHeight);
+      term.element.style.width = `${screen.offsetWidth}px`;
+      term.element.style.transformOrigin = 'top left';
+      term.element.style.transform = scale < 1 ? `scale(${scale})` : '';
+      return true;
+    }
+
+    function clearMirrorScale() {
+      if (!term.element) return;
+      term.element.style.width = '';
+      term.element.style.transform = '';
+    }
+
     function safeFitAndResize(bounce = false) {
       const el = containerRef.current;
       if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return;
+      if (!isDrivingPtySize()) {
+        if (!mirrorPtyGrid()) fit.fit();
+        return;
+      }
+      clearMirrorScale();
       fit.fit();
-      // Only the resize owner sends resize commands to the server.
-      // Another terminal instance for the same session may exist (e.g. autojump).
-      // Ownership is local to this document. A background tab/iframe can have
-      // its own owner for the same PTY; letting it resize the remote session
-      // fights the focused view and makes CLI redraws/cursors jump.
-      if (!isResizeOwner() || document.hidden || !document.hasFocus()) return;
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
         if (term.cols > 300 || term.rows > 120) return;
@@ -965,7 +1007,11 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
         const doBounce = bounce && sizeUnchanged && historyTruncated;
         if (doBounce) historyTruncated = false; // one forced repaint is enough
         // Size already registered on this socket and no repaint needed — no-op.
-        if (!doBounce && sentMatches) return;
+        // Unless the PTY has since been resized under us by another viewer
+        // (pty_size said so): then what we last sent is stale and must go
+        // again, or this pane keeps emulating a grid the PTY no longer has.
+        const ptyDrifted = serverPtySize !== null && !serverMatches;
+        if (!doBounce && sentMatches && !ptyDrifted) return;
         if (doBounce && term.rows > 1) {
           inputSeq++;
           const bounceMsg = JSON.stringify({
@@ -1167,7 +1213,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       onDrop={fileDrop.onDrop}
       onPasteCapture={fileDrop.onPaste}
     >
-      <div ref={containerRef} style={{ width: '100%', height: '100%' }} onClick={() => termRef.current?.focus()} />
+      <div ref={containerRef} style={{ width: '100%', height: '100%', overflow: 'hidden' }} onClick={() => termRef.current?.focus()} />
       <SessionDropOverlay drop={fileDrop} />
       {showScrollDown && (
         <button

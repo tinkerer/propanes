@@ -41,7 +41,16 @@ function lastResize(launcherWs: any): { cols: number; rows: number } | null {
 const seqResize = (seq: number, cols: number, rows: number) =>
   JSON.stringify({ type: 'sequenced_input', seq, content: { kind: 'resize', cols, rows } });
 
-test('launcher PTY sizes to largest attached viewer, not last writer', () => {
+// Latest pty_size notice a viewer socket received, or null.
+function lastPtySize(viewer: any): { cols: number; rows: number } | null {
+  for (let i = viewer.sent.length - 1; i >= 0; i--) {
+    const m = viewer.sent[i];
+    if (m.type === 'pty_size') return { cols: m.cols, rows: m.rows };
+  }
+  return null;
+}
+
+test('launcher PTY follows the most recent viewer request and tells every viewer', () => {
   const launcherId = 'test-launcher-resize';
   const sessionId = 'test-session-resize-1';
   const launcherWs = fakeSocket();
@@ -74,31 +83,34 @@ test('launcher PTY sizes to largest attached viewer, not last writer', () => {
     assert.ok(attachAdmin(sessionId, a), 'admin A attaches');
     assert.ok(attachAdmin(sessionId, b), 'admin B attaches');
 
-    // A requests a tall/wide size.
     forwardToService(a, seqResize(1, 150, 55));
     assert.deepEqual(lastResize(launcherWs), { cols: 150, rows: 55 }, 'A sets the PTY size');
+    assert.deepEqual(lastPtySize(b), { cols: 150, rows: 55 }, 'B is told the grid to mirror');
 
-    // B requests a smaller size while A is still attached — must NOT shrink it.
+    // B (focused now) asks for a smaller size — the PTY follows the newest
+    // request; a smaller pane must never be left emulating a larger grid.
     forwardToService(b, seqResize(1, 100, 30));
-    assert.deepEqual(lastResize(launcherWs), { cols: 150, rows: 55 }, 'short viewer B cannot shrink the shared PTY');
+    assert.deepEqual(lastResize(launcherWs), { cols: 100, rows: 30 }, 'most recent viewer wins');
+    assert.deepEqual(lastPtySize(a), { cols: 100, rows: 30 }, 'A is told to mirror the smaller grid');
 
-    // B insists — still the max.
+    const noticesBefore = a.sent.filter((m: any) => m.type === 'pty_size').length;
     forwardToService(b, seqResize(2, 100, 30));
-    assert.deepEqual(lastResize(launcherWs), { cols: 150, rows: 55 }, 'repeated small resize still capped to max');
+    assert.equal(a.sent.filter((m: any) => m.type === 'pty_size').length, noticesBefore, 'unchanged size sends no notice');
 
-    // A detaches — PTY shrinks to the only remaining viewer (B).
-    detachAdmin(sessionId, a);
-    assert.deepEqual(lastResize(launcherWs), { cols: 100, rows: 30 }, 'closing the large pane shrinks PTY to remaining viewer');
+    // The viewer that owns the current size detaches — fall back to the next
+    // most recent viewer, not to nothing.
+    detachAdmin(sessionId, b);
+    assert.deepEqual(lastResize(launcherWs), { cols: 150, rows: 55 }, 'closing the current viewer hands the PTY to the previous one');
 
-    // Per-axis max: a wide-but-short viewer and a narrow-but-tall viewer combine.
     const c = fakeSocket();
     assert.ok(attachAdmin(sessionId, c));
-    forwardToService(b, seqResize(3, 200, 20)); // wide, short
-    forwardToService(c, seqResize(1, 80, 60));  // narrow, tall
-    assert.deepEqual(lastResize(launcherWs), { cols: 200, rows: 60 }, 'per-axis max across viewers');
-
-    detachAdmin(sessionId, b);
+    forwardToService(a, seqResize(3, 200, 20));
+    forwardToService(c, seqResize(1, 80, 60));
+    assert.deepEqual(lastResize(launcherWs), { cols: 80, rows: 60 }, 'latest request, not per-axis max');
     detachAdmin(sessionId, c);
+    assert.deepEqual(lastResize(launcherWs), { cols: 200, rows: 20 }, 'detach falls back to the remaining viewer');
+
+    detachAdmin(sessionId, a);
   } finally {
     db.delete(schema.agentSessions).where(eq(schema.agentSessions.id, sessionId)).run();
     unregisterLauncher(launcherId);
