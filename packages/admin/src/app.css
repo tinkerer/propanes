@@ -4801,6 +4801,8 @@ select:focus, textarea:focus {
   flex-shrink: 0;
 }
 .session-pr-badge {
+  -webkit-user-select: none;
+  user-select: none;
   display: inline-flex;
   align-items: center;
   font-size: 9px;
@@ -4825,9 +4827,10 @@ select:focus, textarea:focus {
 }
 
 /* Runtime tag (claude / codex) — shown on sidebar session items so operators
-   can tell at a glance which agent is driving the session. Colors mirror
-   RUNTIME_INFO in agent-constants.ts. */
+   can tell at a glance which agent is driving the session. */
 .session-runtime-badge {
+  -webkit-user-select: none;
+  user-select: none;
   display: inline-flex;
   align-items: center;
   font-size: 8px;
@@ -4845,9 +4848,9 @@ select:focus, textarea:focus {
   border: 1px solid color-mix(in srgb, #3b82f6 45%, transparent);
 }
 .session-runtime-badge.rt-codex {
-  background: color-mix(in srgb, #06b6d4 18%, transparent);
-  color: #06b6d4;
-  border: 1px solid color-mix(in srgb, #06b6d4 45%, transparent);
+  background: color-mix(in srgb, var(--pw-primary) 18%, transparent);
+  color: var(--pw-primary);
+  border: 1px solid color-mix(in srgb, var(--pw-primary) 45%, transparent);
 }
 
 /* Sidebar CoS badge + tree accent mirrors the sessions page treatment. */
@@ -7519,6 +7522,8 @@ kbd {
 }
 
 .feedback-title-link {
+  -webkit-user-select: none;
+  user-select: none;
   color: var(--pw-primary-text);
   font-size: 12px;
   text-decoration: none;
