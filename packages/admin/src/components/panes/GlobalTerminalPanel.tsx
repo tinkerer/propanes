@@ -77,7 +77,7 @@ import { renderTabContent } from './PaneContent.js';
 import { cosArtifacts } from '../../lib/cos-artifacts.js';
 import { AdminAssistChat } from '../ai-assist/AdminAssistChat.js';
 import { startTabDrag, type TabDragSource } from '../../lib/tab-drag.js';
-import { selectedAppId } from '../../lib/state.js';
+import { selectedAppId, isPlainEmbed } from '../../lib/state.js';
 import { showTabs, showHotkeyHints, popoutMode, type PopoutMode } from '../../lib/settings.js';
 import { ctrlShiftHeld } from '../../lib/shortcuts.js';
 import { copyText, copyWithTooltip } from '../../lib/clipboard.js';
@@ -551,6 +551,9 @@ export function GlobalTerminalPanel() {
         />
       );
     }
+    // Plain widget embeds render a page underneath; the embed CSS stretches
+    // this panel to the full iframe, so the empty-state chat would hide it.
+    if (isPlainEmbed) return null;
     return <AdminAssistChat />;
   }
 

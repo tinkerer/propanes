@@ -18,7 +18,7 @@ import { captureScreenshot, stopScreencastStream, type ScreenshotMethod } from '
 import { installShakeGesture } from './gesture-detector.js';
 import { SessionBridge } from './session.js';
 import { startPicker, type SelectedElementInfo } from './element-picker.js';
-import { OverlayPanelManager, type PanelType } from './overlay-panels.js';
+import { OverlayPanelManager, alphaFeaturesEnabled, type PanelType } from './overlay-panels.js';
 import { VoiceRecorder, type VoiceRecordingResult, type TimelineItem } from './voice-recorder.js';
 import {
   installWidgetConsoleBuffer,
@@ -1365,12 +1365,14 @@ export class ProPanesElement {
     // Workbench is a small icon, not a full-width row, so it sits next to the
     // others. Opening it routes through openWorkbench() to focus the existing
     // panel if one is already open.
-    type IconItem = { icon: string; label: string; onClick: () => void };
+    // Ops (CoS chat) is an alpha feature — only offered when the admin's
+    // "Alpha test new features" preference is on.
+    type IconItem = { icon: string; label: string; onClick: () => void; alpha?: boolean };
     const iconItems: IconItem[] = [
       { icon: '\u{1F4CB}', label: 'Feedback', onClick: () => this.overlayManager.openPanel('feedback') },
       { icon: '\u26A1', label: 'Sessions', onClick: () => this.overlayManager.openPanel('sessions') },
       { icon: '\u2B1A', label: 'ProPanes Overlay', onClick: () => this.overlayManager.openWorkbench() },
-      { icon: '\u2605', label: 'Ops', onClick: () => this.overlayManager.openPanel('cos') },
+      { icon: '\u2605', label: 'Ops', alpha: true, onClick: () => this.overlayManager.openPanel('cos') },
       { icon: '\u{1F4BB}', label: 'Terminal', onClick: () => {
           const opts: { launcherId?: string } = {};
           const stored = localStorage.getItem('pw-dispatch-target');
@@ -1381,7 +1383,9 @@ export class ProPanesElement {
     ];
     const iconRow = document.createElement('div');
     iconRow.className = 'pw-admin-more-row';
+    const showAlpha = alphaFeaturesEnabled();
     for (const item of iconItems) {
+      if (item.alpha && !showAlpha) continue;
       const btn = document.createElement('button');
       btn.className = 'pw-admin-option pw-admin-option-small';
       btn.innerHTML = `<span class="pw-admin-option-icon">${item.icon}</span>`;
