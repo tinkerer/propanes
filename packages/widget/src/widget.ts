@@ -106,6 +106,20 @@ function copyTextDeferred(textPromise: Promise<string>): Promise<void> {
   return fallback();
 }
 
+// Send-menu persistence. The Mode selector (submit/dispatch/yolo) and the
+// sticky Auto-dispatch checkbox are independent preferences with separate keys.
+const SEND_MODE_KEY = 'pw-dispatch-mode';
+const AUTO_DISPATCH_KEY = 'pw-auto-dispatch';
+type SendMode = 'submit' | 'dispatch' | 'yolo';
+
+function readSendMode(): SendMode {
+  try {
+    const v = localStorage.getItem(SEND_MODE_KEY);
+    if (v === 'submit' || v === 'dispatch' || v === 'yolo') return v;
+  } catch { /* ignore */ }
+  return 'dispatch';
+}
+
 // --- localStorage persistence for widget drafts ---
 
 const STORAGE_SCREENSHOTS_KEY = 'pw-widget-screenshots';
@@ -267,7 +281,10 @@ export class ProPanesElement {
   private countdownTimer: ReturnType<typeof setInterval> | null = null;
   private gestureCleanup: (() => void) | null = null;
   private gestureToastTimer: ReturnType<typeof setTimeout> | null = null;
-  private dispatchMode: 'off' | 'once' | 'auto' = 'off';
+  private dispatchMode: 'off' | 'auto' = 'off';
+  // One-shot override chosen from the send menu's Send button. It applies to
+  // the next submit only and never touches the persisted Auto-dispatch flag.
+  private dispatchOnce: boolean | null = null;
   private dispatchAgentOverride: string | null = null;
   private pendingPermissionProfile: 'interactive-yolo' | null = null;
   private cachedAgents: Array<Record<string, any>> = [];
@@ -439,8 +456,15 @@ export class ProPanesElement {
 
   private loadDispatchMode() {
     try {
-      const stored = localStorage.getItem('pw-dispatch-mode');
-      if (stored === 'auto') this.dispatchMode = 'auto';
+      if (localStorage.getItem(AUTO_DISPATCH_KEY) === '1') {
+        this.dispatchMode = 'auto';
+      } else if (localStorage.getItem(SEND_MODE_KEY) === 'auto') {
+        // Legacy: the auto flag used to share the send-mode key, so any
+        // Mode/Send interaction clobbered it. Migrate to the dedicated key.
+        this.dispatchMode = 'auto';
+        localStorage.setItem(AUTO_DISPATCH_KEY, '1');
+        localStorage.setItem(SEND_MODE_KEY, 'dispatch');
+      }
     } catch { /* ignore */ }
   }
 
@@ -509,13 +533,13 @@ export class ProPanesElement {
     } catch { /* ignore */ }
   }
 
-  private setDispatchMode(mode: 'off' | 'once' | 'auto') {
+  private setDispatchMode(mode: 'off' | 'auto') {
     this.dispatchMode = mode;
     try {
       if (mode === 'auto') {
-        localStorage.setItem('pw-dispatch-mode', 'auto');
+        localStorage.setItem(AUTO_DISPATCH_KEY, '1');
       } else {
-        localStorage.removeItem('pw-dispatch-mode');
+        localStorage.removeItem(AUTO_DISPATCH_KEY);
       }
     } catch { /* ignore */ }
 
@@ -607,7 +631,7 @@ export class ProPanesElement {
     const modeSel = document.createElement('select');
     modeSel.setAttribute('aria-label', 'Send mode');
     modeSel.className = 'pw-send-menu-target-select';
-    const savedMode = localStorage.getItem('pw-dispatch-mode') || 'dispatch';
+    const savedMode = readSendMode();
     modeSel.innerHTML = [
       '<option value="submit">Submit only</option>',
       '<option value="dispatch">Dispatch</option>',
@@ -617,7 +641,7 @@ export class ProPanesElement {
     modeSel.addEventListener('pointerdown', (e) => e.stopPropagation());
     modeSel.addEventListener('click', (e) => e.stopPropagation());
     modeSel.addEventListener('change', () => {
-      localStorage.setItem('pw-dispatch-mode', modeSel.value);
+      localStorage.setItem(SEND_MODE_KEY, modeSel.value);
       agentSel.options[0].textContent = modeSel.value === 'yolo' ? 'Auto' : 'Default';
       sendBtn.disabled = modeSel.value !== 'submit' && !agentsAvailable;
     });
@@ -762,12 +786,11 @@ export class ProPanesElement {
         const agent = selectedAgent || this.pickYoloAgent(this.cachedAgents);
         this.dispatchAgentOverride = agent ? agent.id : null;
         this.pendingPermissionProfile = 'interactive-yolo';
-        this.setDispatchMode('once');
       } else {
         this.dispatchAgentOverride = selectedAgentId;
         this.pendingPermissionProfile = null;
-        this.setDispatchMode(selectedMode === 'dispatch' ? 'once' : 'off');
       }
+      this.dispatchOnce = selectedMode !== 'submit';
       menu.remove();
       this.handleSubmit();
     });
@@ -3502,10 +3525,8 @@ export class ProPanesElement {
       return;
     }
 
-    const shouldDispatch = this.dispatchMode === 'auto' || this.dispatchMode === 'once';
-    if (this.dispatchMode === 'once') {
-      this.dispatchMode = 'off';
-    }
+    const shouldDispatch = this.dispatchOnce ?? this.dispatchMode === 'auto';
+    this.dispatchOnce = null;
 
     // The persisted "⚡ YOLO" mode must bind at submit time, not only in the
     // send menu's Send-button handler — otherwise an Enter / auto-dispatch
@@ -3514,7 +3535,7 @@ export class ProPanesElement {
     if (shouldDispatch && !this.pendingPermissionProfile) {
       let savedMode: string | null = null;
       try {
-        savedMode = localStorage.getItem('pw-dispatch-mode');
+        savedMode = localStorage.getItem(SEND_MODE_KEY);
       } catch {}
       if (savedMode === 'yolo') {
         this.pendingPermissionProfile = 'interactive-yolo';
