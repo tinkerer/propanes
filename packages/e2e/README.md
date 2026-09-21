@@ -10,6 +10,7 @@ Playwright cross-viewport E2E suite for the ProPanes admin + widget.
 - **Dispatch dialog** — opens via row action, closes on Escape, dispatch POST is intercepted
 - **Sessions page** — mounts without crashing on empty state
 - **Widget round-trip** — programmatic `POST /api/v1/feedback/programmatic` shows up in the admin list
+- **Widget auto-dispatch** — sticky Auto-dispatch makes Enter send `autoDispatch=true`, and a one-shot menu Send doesn't clear it (feedback POST is intercepted)
 - **MessageRenderer visual baselines** — Bash, Edit (diff), AskUserQuestion, long-output (collapsed/expanded)
 - **Mobile structural assertions** — viewport meta, no horizontal scroll, tap-target sizes
 
@@ -52,9 +53,11 @@ The orchestrator (`scripts/run-e2e.mjs`) does the following per invocation:
 
 **No mocking of the server, DB, or filesystem.** Per `CLAUDE.md` and the
 project test policy, integration tests hit real infra against an isolated
-SQLite file. The single intentional mock is the `POST /admin/dispatch`
-network route in `04-dispatch-dialog.spec.ts`, which prevents the dispatch
-test from spawning a real Claude Code session.
+SQLite file. The two intentional mocks are network routes that prevent a
+test from spawning a real Claude Code session: `POST /admin/dispatch` in
+`04-dispatch-dialog.spec.ts`, and the widget's `POST /api/v1/feedback` in
+`09-widget-auto-dispatch.spec.ts` (that spec only inspects the payload the
+widget sends).
 
 ## Visual regression
 
