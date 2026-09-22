@@ -908,6 +908,9 @@ body {
 
 .session-label {
   flex: 1;
+  /* Keep at least a readable slice of the title on screen: badges to the
+     right (runtime / PR tags) shrink and clip before the title does. */
+  min-width: 72px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4824,8 +4827,37 @@ select:focus, textarea:focus {
   background: color-mix(in srgb, var(--pw-primary) 32%, transparent);
   text-decoration: none;
 }
+.session-pr-badges.compact {
+  /* Sidebar rows: the badge strip yields to the title (see .session-label
+     min-width) instead of pushing it off the row. Badges that don't fit
+     wrap onto lines above the one-line box; end alignment on both axes
+     means the overflow spills past the start edges, so the trailing "+N"
+     chip always stays visible and only whole badges are shown — never a
+     clipped fragment. */
+  flex-shrink: 1;
+  min-width: 0;
+  max-height: 14px;
+  overflow: hidden;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-content: flex-end;
+}
+.session-pr-badges.compact.expanded {
+  /* User asked for the full set: let it wrap onto as many lines as needed. */
+  max-height: none;
+}
 .session-pr-badges.compact .session-pr-badge {
   padding: 0 4px;
+  font-size: 8px;
+}
+.session-pr-badge-more {
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.session-pr-badges.compact .session-pr-badge-more {
   font-size: 8px;
 }
 
