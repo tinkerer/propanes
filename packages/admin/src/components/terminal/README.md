@@ -32,6 +32,8 @@ Additionally handles:
 
 Mounts one Terminal per session inside a container ref. FitAddon handles PTY dimension sync; ResizeObserver + requestAnimationFrame throttle at 100ms intervals. Global `resizeOwners` map ensures only the focused terminal instance sends SIGWINCH (prevents thrashing when two AgentTerminals show the same session, e.g., main + autojump popout).
 
+**PTY size negotiation** (`safeFitAndResize` / `syncToPtySize`): sending a size is *local intent* — a tab switch, click, focus, pane resize, or typing — and only the resize owner in a focused, visible document sends. What the PTY actually has is decided by the server (most recent request among all viewers, see `packages/server/src/viewer-sizes.ts`) and echoed to every viewer as `pty_size`. A pane that receives a `pty_size` matching what it last sent paints 1:1; one that receives a different grid adopts it (xterm resized to the PTY grid, scaled down to fit) instead of rendering a grid the PTY does not have. A `pty_size` never triggers a resize of its own: two panes that both believe they are driving (two documents that both report `hasFocus()`, e.g. parent + iframe, or headless) would otherwise re-assert on every echo and fight forever. A just-sent size gets a 1.2s grace before the pane falls back to mirroring, so the bounce's rows-1 and slow remote hops don't flash the old grid. `history` cols/rows are ignored once a `pty_size` has arrived on the socket (history is captured before the onopen resize is processed). A server that never sends `pty_size` (pre-`viewer-sizes`) is never waited on.
+
 **Strict lazy mounting** (AgentTerminal.tsx:12–59):
 - At most 2 xterm instances initialize simultaneously (MOUNT_CONCURRENCY=2).
 - Rest queue in FIFO; each waits MOUNT_STAGGER_MS=150ms after the previous finishes.
@@ -169,6 +171,7 @@ Mounts one Terminal per session inside a container ref. FitAddon handles PTY dim
 2. **History truncation**: MAX_HISTORY_BYTES=40KB per terminal. Sessions with 500KB+ escape sequences render invisible without this cap.
 
 3. **Resize ownership**: Global resizeOwners Map prevents dueling SIGWINCH when two terminals show the same session. Most recently focused terminal wins via Symbol token.
+   Across documents (other windows, iframes) the server arbitrates and the losing pane mirrors the PTY grid — see "PTY size negotiation" above. Never re-send a size in response to `pty_size`.
 
 4. **Base64 image detection** (MessageRenderer.tsx:827–835): Regex extracts data:image/*/base64,... and https://*.{png|jpg|jpeg|gif|webp|svg|bmp} from result strings. Chat mode stashes result in message.toolInput.__chatExtras to suppress tool_result role.
 
