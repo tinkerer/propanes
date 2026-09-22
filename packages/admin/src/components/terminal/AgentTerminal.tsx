@@ -329,6 +329,17 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
     let historyTruncated = false;
     let lastSentSize: { cols: number; rows: number } | null = null;
     let sawHistoryData = false;
+    // Size negotiation (see syncToPtySize). pendingSent is the last size sent
+    // on this socket that the server has not echoed back as pty_size yet.
+    // ptySizeSeen: a pty_size arrived on this socket, so the cols/rows in a
+    // later history message are older than it and must not overwrite it.
+    // ptySizeSupported: this server speaks pty_size at all — an older server
+    // never confirms a resize, and must not be waited on.
+    let pendingSent: { cols: number; rows: number; at: number } | null = null;
+    let ptySizeSeen = false;
+    let ptySizeSupported = false;
+    let mirrorActive = false;
+    let graceTimer: ReturnType<typeof setTimeout> | null = null;
 
     function sendRawInput(data: string) {
       const ws = wsRef.current;
@@ -625,6 +636,8 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
 
       // New socket = the server has no size on record for it yet.
       lastSentSize = null;
+      pendingSent = null;
+      ptySizeSeen = false;
       lastServerMessageAt = Date.now();
 
       const token = localStorage.getItem('pw-admin-token');
@@ -700,9 +713,15 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
 
             case 'pty_size':
               // Another viewer (or our own request) resized the shared PTY.
+              // This is the server's truth about the grid: render to it. It
+              // must never trigger a resize of our own — two panes that both
+              // believe they are driving would otherwise re-assert their own
+              // size on every echo and fight forever (see syncToPtySize).
               if (typeof msg.cols === 'number' && typeof msg.rows === 'number' && msg.cols > 0 && msg.rows > 0) {
                 serverPtySize = { cols: msg.cols, rows: msg.rows };
-                safeFitAndResize();
+                ptySizeSeen = true;
+                ptySizeSupported = true;
+                syncToPtySize();
               }
               break;
 
@@ -715,7 +734,11 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
               if (msg.inputState) {
                 onInputStateChange?.(msg.inputState);
               }
-              if (typeof msg.cols === 'number' && typeof msg.rows === 'number' && msg.cols > 0 && msg.rows > 0) {
+              // History is captured when the socket opens, before the server
+              // processes the resize we sent at onopen — so once a pty_size
+              // has arrived on this socket, the history size is the older of
+              // the two and is ignored.
+              if (!ptySizeSeen && typeof msg.cols === 'number' && typeof msg.rows === 'number' && msg.cols > 0 && msg.rows > 0) {
                 serverPtySize = { cols: msg.cols, rows: msg.rows };
               }
               if (msg.data) {
@@ -941,6 +964,9 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       const filtered = data.replace(TERMINAL_RESPONSE_RE, '');
       if (!filtered) return;
       lastTerminalInput.value = Date.now();
+      // Typing into a pane that is mirroring another viewer's grid makes this
+      // pane the one being used: take the PTY size back.
+      if (mirrorActive && isDrivingPtySize()) safeFitAndResize();
       inputBuffer += filtered;
       flushInputBuffer();
     });
@@ -964,6 +990,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       const el = containerRef.current;
       if (!el || !serverPtySize) return false;
       const { cols, rows } = serverPtySize;
+      mirrorActive = true;
       if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows);
       const screen = term.element?.querySelector<HTMLElement>('.xterm-screen');
       if (!term.element || !screen || !screen.offsetWidth || !screen.offsetHeight) return true;
@@ -975,9 +1002,50 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
     }
 
     function clearMirrorScale() {
+      mirrorActive = false;
       if (!term.element) return;
       term.element.style.width = '';
       term.element.style.transform = '';
+    }
+
+    // Apply the server's truth about the PTY grid (serverPtySize) to this
+    // pane. Sending a size is local intent (safeFitAndResize: a tab switch,
+    // click, focus, pane resize); what the PTY actually has is decided by the
+    // server — the most recent request among all viewers — and echoed back as
+    // pty_size. If the echo matches what we last sent, the PTY is ours: paint
+    // 1:1. If it differs, another viewer's request won (or ours was clamped):
+    // adopt the PTY's grid, scaled to fit, instead of rendering a grid the
+    // PTY does not have — which paints the TUI as garbage. We only give a
+    // just-sent size a short grace period to be echoed before mirroring, so
+    // the bounce's rows-1 and a slow remote hop don't flash the old grid.
+    const PTY_SIZE_GRACE_MS = 1200;
+    function clearGrace() {
+      if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
+    }
+    function armGrace(delay: number) {
+      if (graceTimer) return;
+      graceTimer = setTimeout(() => { graceTimer = null; syncToPtySize(); }, Math.max(0, delay));
+    }
+    function syncToPtySize() {
+      if (!serverPtySize) return;
+      const el = containerRef.current;
+      if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return;
+      const { cols, rows } = serverPtySize;
+      if (pendingSent && pendingSent.cols === cols && pendingSent.rows === rows) {
+        // The server adopted our size.
+        pendingSent = null;
+        clearGrace();
+        clearMirrorScale();
+        if (term.cols !== cols || term.rows !== rows) fit.fit();
+        return;
+      }
+      if (pendingSent) {
+        const elapsed = performance.now() - pendingSent.at;
+        if (elapsed < PTY_SIZE_GRACE_MS) { armGrace(PTY_SIZE_GRACE_MS - elapsed); return; }
+        pendingSent = null;
+      }
+      clearGrace();
+      mirrorPtyGrid();
     }
 
     function safeFitAndResize(bounce = false) {
@@ -1033,6 +1101,14 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
         });
         ws.send(msg);
         lastSentSize = { cols, rows };
+        pendingSent = { cols, rows, at: performance.now() };
+        // A server that echoes pty_size will confirm (or overrule) this; if
+        // nothing comes back in time, fall back to the grid it last reported.
+        // An older server never echoes — don't wait on it.
+        if (ptySizeSupported && serverPtySize && (serverPtySize.cols !== cols || serverPtySize.rows !== rows)) {
+          clearGrace();
+          armGrace(PTY_SIZE_GRACE_MS);
+        }
       }
     }
 
@@ -1141,6 +1217,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       if (outputFlushRaf) cancelAnimationFrame(outputFlushRaf);
       if (resizeRaf) cancelAnimationFrame(resizeRaf);
       if (resizeTrailing) clearTimeout(resizeTrailing);
+      if (graceTimer) clearTimeout(graceTimer);
       scrollDispose.dispose();
       observer.disconnect();
       wsRef.current?.close();
