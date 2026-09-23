@@ -85,6 +85,10 @@ export const lastResumeError = signal<{ sessionId: string; message: string } | n
 
 export function focusSessionTerminal(sessionId: string) {
   requestAnimationFrame(() => {
+    // A sidebar row's click schedules this, and so does each click of a
+    // double-click. Don't pull focus out of the rename box that double-click
+    // just opened: its blur commits and closes it before anyone can type.
+    if (document.activeElement?.classList.contains('session-label-rename-input')) return;
     // Try to find the exact terminal container for this session first.
     // Each AgentTerminal renders a div with data-session-id, and xterm.js
     // creates its .xterm-helper-textarea inside it.

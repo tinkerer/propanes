@@ -316,7 +316,10 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
         <div
           class={`sidebar-session-item ${isTabbed ? 'tabbed' : ''} ${isInPanel ? 'in-panel' : ''} ${isVisible ? 'active' : ''}`}
           style={getSessionColor(s.id) ? { borderLeft: `3px solid ${getSessionColor(s.id)}` } : undefined}
-          onClick={() => {
+          onClick={(e) => {
+            // The second click of a double-click: the first already opened the
+            // session, and the label's dblclick handler takes over from here.
+            if (e.detail > 1) return;
             if (inputSt === 'waiting') {
               focusOrDockSession(s.id);
             } else {
