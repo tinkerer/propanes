@@ -1,4 +1,8 @@
+import { isMissingRouteResponse, jsonlDeltaQuery } from './jsonl-route.js';
 const BASE = '/api/v1';
+
+// Set once the server has shown it has no POST /jsonl route (older image).
+let jsonlPostUnsupported = false;
 
 function getToken(): string | null {
   return localStorage.getItem('pw-admin-token');
@@ -574,15 +578,31 @@ export const api = {
     // file, so a session with hundreds of subagent JSONLs produces a cursor
     // tens of kilobytes long. In a query string that overruns Node's header
     // cap and the poll comes back as HTTP 431.
-    const res = await authFetch(`/admin/agent-sessions/${id}/jsonl`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        cursor: opts.cursor || 'init',
-        ...(opts.fileFilter ? { file: opts.fileFilter } : {}),
-        ...(opts.tail && opts.tail > 0 ? { tail: opts.tail } : {}),
-      }),
-    });
+    //
+    // The admin bundle is published independently of the server image, so it
+    // can run against a server that predates the POST route. That server
+    // answers the POST with a bare router 404 — fall back to the GET form
+    // (same differential protocol, cursor in the query) and stick with it.
+    const cursor = opts.cursor || 'init';
+    let res: Response | null = null;
+    if (!jsonlPostUnsupported) {
+      res = await authFetch(`/admin/agent-sessions/${id}/jsonl`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cursor,
+          ...(opts.fileFilter ? { file: opts.fileFilter } : {}),
+          ...(opts.tail && opts.tail > 0 ? { tail: opts.tail } : {}),
+        }),
+      });
+      if (await isMissingRouteResponse(res)) {
+        jsonlPostUnsupported = true;
+        res = null;
+      }
+    }
+    if (!res) {
+      res = await authFetch(`/admin/agent-sessions/${id}/jsonl?${jsonlDeltaQuery(cursor, opts)}`);
+    }
     if (!res.ok) {
       let detail = `HTTP ${res.status}`;
       try {
