@@ -18350,3 +18350,52 @@ body.cos-channel-list-resizing {
 .cos-toolbar-btn:hover { background: var(--pw-bg-raised); color: var(--pw-text-primary); }
 .cos-toolbar-btn-active { color: var(--pw-text-primary); }
 .cos-toolbar-btn-active:hover { color: var(--pw-text-primary); }
+
+/* PR rows in the sidebar session menu (SessionPrMenu): "Review PR #N" + × */
+.status-dot-menu-row {
+  display: flex;
+  align-items: stretch;
+}
+.status-dot-menu .status-dot-menu-row > button:first-child {
+  flex: 1;
+}
+.status-dot-menu .status-dot-menu-row-remove {
+  width: auto;
+  flex: none;
+  padding: 6px 10px;
+  color: #94a3b8;
+}
+.status-dot-menu .status-dot-menu-row-remove:hover {
+  color: #f87171;
+}
+.status-dot-menu-input {
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px;
+}
+.status-dot-menu-input input {
+  flex: 1;
+  min-width: 190px;
+  padding: 3px 6px;
+  font-size: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 4px;
+}
+.status-dot-menu .status-dot-menu-input button {
+  width: auto;
+  padding: 3px 8px;
+  border: 1px solid #334155;
+  border-radius: 4px;
+}
+.status-dot-menu .status-dot-menu-input button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.status-dot-menu-error {
+  padding: 2px 12px 6px;
+  max-width: 260px;
+  font-size: 11px;
+  color: #f87171;
+}
