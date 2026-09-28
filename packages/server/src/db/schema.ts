@@ -269,6 +269,10 @@ export const agentSessions = sqliteTable('agent_sessions', {
   // JSON array of GitHub PR URLs detected in this session's output (see
   // pr-detect.ts). Powers the "PR #123" tag in the admin session lists/header.
   prUrls: text('pr_urls'),
+  // Manual corrections from the session menu (pr-overrides.ts), JSON arrays.
+  // Kept apart from pr_urls, which the session-service rewrites wholesale.
+  prUrlsAdded: text('pr_urls_added'),
+  prUrlsHidden: text('pr_urls_hidden'),
   // Phase 5 — the isolation mode this session actually ran in, and the id of
   // the ephemeral isolate (git-worktree path token) when isolation='per_session'.
   isolation: text('isolation').notNull().default('shared'),

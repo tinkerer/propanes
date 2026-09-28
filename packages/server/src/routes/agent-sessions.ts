@@ -13,6 +13,7 @@ import { getTmuxPanePid } from '../tmux-pty.js';
 import { storeUploads } from './uploads.js';
 import { listSessions, sendCommand } from '../sessions.js';
 import { getAdminUser, memberSessionScope, visibleToMember } from '../admin-auth.js';
+import { applyPrOverride, defaultRepoForSession, effectivePrUrls, normalizePrInput, parseUrlList } from '../pr-overrides.js';
 import {
   computeJsonlPath,
   computeJsonlDir,
@@ -324,6 +325,8 @@ const sessionSelectFields = {
   cosThreadId: schema.agentSessions.cosThreadId,
   title: schema.agentSessions.title,
   prUrls: schema.agentSessions.prUrls,
+  prUrlsAdded: schema.agentSessions.prUrlsAdded,
+  prUrlsHidden: schema.agentSessions.prUrlsHidden,
   createdAt: schema.agentSessions.createdAt,
   startedAt: schema.agentSessions.startedAt,
   completedAt: schema.agentSessions.completedAt,
@@ -449,11 +452,8 @@ async function enrichSessions(rows: SessionRow[]) {
       agentName: r.agentName || null,
       title: r.title || null,
       prUrls: (() => {
-        if (!r.prUrls) return null;
-        try {
-          const parsed = JSON.parse(r.prUrls);
-          return Array.isArray(parsed) && parsed.length ? parsed : null;
-        } catch { return null; }
+        const urls = effectivePrUrls(r.prUrls, r.prUrlsAdded, r.prUrlsHidden);
+        return urls.length ? urls : null;
       })(),
       appId: r.feedbackAppId || r.agentAppId || r.cosThreadAppId || null,
       cosThreadId: r.cosThreadId || null,
@@ -571,7 +571,47 @@ agentSessionRoutes.get('/:id', async (c) => {
     return c.json({ error: 'Not found' }, 404);
   }
 
-  return c.json(session);
+  const prUrls = effectivePrUrls(session.prUrls, session.prUrlsAdded, session.prUrlsHidden);
+  return c.json({ ...session, prUrls: prUrls.length ? JSON.stringify(prUrls) : null });
+});
+
+// Correct the session's PR badges by hand: `{ add }` takes a PR URL,
+// `owner/repo#123` or a bare number (resolved against the session's repo);
+// `{ remove }` takes a URL currently shown. See pr-overrides.ts.
+agentSessionRoutes.post('/:id/pr-urls', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => ({})) as { add?: unknown; remove?: unknown };
+  const session = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, id)).get();
+  if (!session || !visibleToMember(session, getAdminUser(c))) {
+    return c.json({ error: 'Not found' }, 404);
+  }
+  const detected = parseUrlList(session.prUrls);
+  const added = parseUrlList(session.prUrlsAdded);
+  const hidden = parseUrlList(session.prUrlsHidden);
+
+  let add: string | undefined;
+  if (typeof body.add === 'string' && body.add.trim()) {
+    const bareNumber = /^\s*(?:PR\s*)?#?\d+\s*$/i.test(body.add);
+    const repo = bareNumber ? await defaultRepoForSession([...added, ...detected], session.cwd) : null;
+    const url = normalizePrInput(body.add, repo);
+    if (!url) {
+      return c.json({ error: bareNumber
+        ? 'Could not tell which repo this PR number is in; paste the full PR URL'
+        : 'Expected a GitHub PR URL, owner/repo#123, or a PR number' }, 400);
+    }
+    add = url;
+  }
+  const remove = typeof body.remove === 'string' && body.remove ? body.remove : undefined;
+  if (!add && !remove) return c.json({ error: 'Nothing to change: pass add or remove' }, 400);
+
+  const next = applyPrOverride(detected, added, hidden, { add, remove });
+  const addedJson = next.added.length ? JSON.stringify(next.added) : null;
+  const hiddenJson = next.hidden.length ? JSON.stringify(next.hidden) : null;
+  db.update(schema.agentSessions)
+    .set({ prUrlsAdded: addedJson, prUrlsHidden: hiddenJson })
+    .where(eq(schema.agentSessions.id, id))
+    .run();
+  return c.json({ id, prUrls: effectivePrUrls(session.prUrls, addedJson, hiddenJson), added: add || null });
 });
 
 agentSessionRoutes.post('/:id/kill', async (c) => {

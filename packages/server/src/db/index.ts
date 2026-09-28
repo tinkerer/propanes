@@ -351,6 +351,9 @@ export function runMigrations() {
     `ALTER TABLE flatter_monitors ADD COLUMN last_explore_session_id TEXT`,
     // GitHub PR URLs detected in session output (JSON array) — "PR #123" tag.
     `ALTER TABLE agent_sessions ADD COLUMN pr_urls TEXT`,
+    // Manual PR badge adds/removals from the admin session menu.
+    `ALTER TABLE agent_sessions ADD COLUMN pr_urls_added TEXT`,
+    `ALTER TABLE agent_sessions ADD COLUMN pr_urls_hidden TEXT`,
   ];
 
   // NOTE: alterStatements are applied at the END of runMigrations(), after

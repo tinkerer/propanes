@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { currentRoute, navigate, selectedAppId, applications, addAppModalOpen, spotlightOpen, closeSpotlight, toggleSpotlight } from '../../lib/state.js';
 import { parsePrUrls, prNumberFromUrl } from '../PrBadges.js';
+import { SessionPrMenu } from '../sessions/SessionPrMenu.js';
 import { QuickDispatchPopup } from '../dispatch/QuickDispatchPopup.js';
 import { api } from '../../lib/api.js';
 import { idMenuOpen } from '../panes/LeafPane.js';
@@ -702,7 +703,7 @@ export function Layout() {
         const menuSid = sidebarItemMenu.value!.sessionId;
         const menuSess = allSessions.value.find((s: any) => s.id === menuSid);
         const menuPrUrls = menuSess ? parsePrUrls(menuSess.prUrls) : [];
-        const menuHeight = 176 + menuPrUrls.length * 26;
+        const menuHeight = 236 + menuPrUrls.length * 26;
         const flipUp = sidebarItemMenu.value!.y + menuHeight > window.innerHeight;
         const menuStyle = flipUp
           ? { left: `${sidebarItemMenu.value!.x}px`, bottom: `${window.innerHeight - sidebarItemMenu.value!.y - 20}px` }
@@ -718,22 +719,22 @@ export function Layout() {
               copyText(`${location.origin}${location.pathname}#/session/${menuSid}`);
               showActionToast('\u{1F517}', 'Link copied', 'var(--pw-accent, var(--pw-primary))');
             }}>Copy link</button>
-            {menuPrUrls.map((url) => (
-              <button
-                key={url}
-                onClick={(e) => {
-                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  sidebarItemMenu.value = null;
-                  reviewPrPopup.value = {
-                    appKey: menuSess?.appId || '__unlinked__',
-                    prNumber: prNumberFromUrl(url),
-                    prUrl: url,
-                    sessionRuntime: menuSess?.runtime || 'claude',
-                    anchor: { x: rect.right + 8, y: rect.top },
-                  };
-                }}
-              >Review PR #{prNumberFromUrl(url)}</button>
-            ))}
+            <SessionPrMenu
+              key={menuSid}
+              sessionId={menuSid}
+              prUrls={menuPrUrls}
+              onReview={(url, anchor) => {
+                sidebarItemMenu.value = null;
+                reviewPrPopup.value = {
+                  appKey: menuSess?.appId || '__unlinked__',
+                  prNumber: prNumberFromUrl(url),
+                  prUrl: url,
+                  sessionRuntime: menuSess?.runtime || 'claude',
+                  anchor,
+                };
+              }}
+              onDone={() => { sidebarItemMenu.value = null; }}
+            />
             <button onClick={() => { sidebarItemMenu.value = null; popOutTab(menuSid); }}>Open in panel</button>
             <button onClick={() => {
               sidebarItemMenu.value = null;

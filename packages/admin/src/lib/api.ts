@@ -555,6 +555,14 @@ export const api = {
       { method: 'POST' },
     ),
 
+  // Hand-correct a session's PR badges. `add` accepts a PR URL,
+  // owner/repo#123 or a bare number; `remove` a URL currently shown.
+  updateSessionPrUrls: (id: string, change: { add?: string; remove?: string }) =>
+    request<{ id: string; prUrls: string[]; added: string | null }>(`/admin/agent-sessions/${id}/pr-urls`, {
+      method: 'POST',
+      body: JSON.stringify(change),
+    }),
+
   archiveAgentSession: (id: string) =>
     request<{ id: string; archived: boolean }>(`/admin/agent-sessions/${id}/archive`, {
       method: 'POST',
