@@ -102,6 +102,11 @@ export function getEffectiveTheme(): 'light' | 'dark' {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
+/** Resolved light/dark, tracking both the preference and the OS setting when
+ *  the preference is `system`. Consumers that paint outside CSS (xterm) subscribe
+ *  to this instead of reading `theme` directly. */
+export const effectiveTheme = signal<'light' | 'dark'>(getEffectiveTheme());
+
 export function applyTheme() {
   const el = document.documentElement;
   if (theme.value === 'system') {
@@ -109,6 +114,7 @@ export function applyTheme() {
   } else {
     el.setAttribute('data-theme', theme.value);
   }
+  effectiveTheme.value = getEffectiveTheme();
 }
 
 export function setTheme(t: Theme) {

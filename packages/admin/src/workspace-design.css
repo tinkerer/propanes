@@ -1,8 +1,8 @@
 /* Shared workspace presentation. Keep pane sizing, mounting and terminal fonts intact. */
 .standalone-session-root { background: var(--pw-terminal-bg); color: var(--pw-terminal-foreground); }
 /* Embedded session frames can inherit a light admin preference. Their chrome
-   must still use a matched dark surface/foreground, like the terminal below. */
-.standalone-session-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; min-height: 42px; flex-shrink: 0; font-size: 12px; background: var(--pw-terminal-bg); color: var(--pw-terminal-foreground); border-bottom: 1px solid var(--pw-terminal-border); color-scheme: dark; }
+   must still use a matched surface/foreground, like the terminal below. */
+.standalone-session-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; min-height: 42px; flex-shrink: 0; font-size: 12px; background: var(--pw-terminal-bg); color: var(--pw-terminal-foreground); border-bottom: 1px solid var(--pw-terminal-border); color-scheme: light dark; }
 .standalone-session-toolbar .session-id-label,
 .standalone-session-toolbar .view-mode-select { background: var(--pw-terminal-hover); color: var(--pw-terminal-foreground); border: 1px solid var(--pw-terminal-border); border-radius: 5px; padding: 4px 7px; flex-shrink: 0; font-size: 12px; }
 .standalone-session-toolbar .session-feedback-link { color: var(--pw-terminal-foreground); flex: 0 1 auto; }
