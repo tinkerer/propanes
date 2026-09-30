@@ -19,6 +19,7 @@ import { newTranscriptCursor, scanTranscriptForPrUrls, type TranscriptScanCursor
 import { resolveSessionJsonlPath } from './jsonl-utils.js';
 import { backfillTranscriptPrUrls } from './pr-backfill.js';
 import { homedir } from 'node:os';
+import { sessionAgentEnv } from './session-agent-env.js';
 
 const PORT = parseInt(process.env.SESSION_SERVICE_PORT || '3002', 10);
 
@@ -536,8 +537,9 @@ function spawnSession(params: {
   resumeSessionId?: string;
   appendSystemPrompt?: string;
   suppressAuthCompanion?: boolean;
+  env?: Record<string, string>;
 }): void {
-  const { sessionId, cwd, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt, suppressAuthCompanion = false } = params;
+  const { sessionId, cwd, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt, suppressAuthCompanion = false, env } = params;
   // NFC-normalize: decomposed unicode (NFD accents from macOS clipboards, etc.)
   // crossing a wrap boundary crashes Claude Code's TUI with "Failed to find
   // wrapped line in text" (anthropic/claude-code#395, #678, #34380).
@@ -571,6 +573,7 @@ function spawnSession(params: {
       cwd,
       cols,
       rows: 40,
+      env,
     });
     ptyProcess = result.ptyProcess;
     tmuxSessionName = result.tmuxSessionName;
@@ -581,7 +584,7 @@ function spawnSession(params: {
       cols,
       rows: 40,
       cwd: safeDir(cwd),
-      env: { ...cleanedEnv, TERM: 'xterm-256color' },
+      env: { ...cleanedEnv, ...env, TERM: 'xterm-256color' },
     });
   }
 
@@ -1276,8 +1279,15 @@ app.post('/spawn', async (c) => {
     return c.json({ error: 'Prompt required for headless sessions' }, 400);
   }
 
+  let env: Record<string, string> = {};
   try {
-    spawnSession({ sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt });
+    env = await sessionAgentEnv(sessionId);
+  } catch (err) {
+    console.warn(`[session-service] Could not build agent env for ${sessionId}:`, err);
+  }
+
+  try {
+    spawnSession({ sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt, env });
     return c.json({ ok: true, sessionId });
   } catch (err) {
     const pending = pendingConnections.get(sessionId);
