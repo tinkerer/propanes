@@ -280,11 +280,11 @@ export function SettingsPage() {
           <div class="form-group">
             <label for="terminal-color">PTY background</label>
             <select id="terminal-color" value={terminalColor.value} onChange={e => { terminalColor.value = e.currentTarget.value as TerminalColor; }}>
-              <option value="dark-grey">Very dark grey (default)</option>
-              <option value="black">Black</option>
-              <option value="graphite">Graphite</option>
+              <option value="dark-grey">Very dark grey · light grey (default)</option>
+              <option value="black">Black · white</option>
+              <option value="graphite">Graphite · soft grey</option>
             </select>
-            <p class="settings-toggle-desc">Independent of light/dark mode. Updates open terminals without restarting sessions. Saved in this browser.</p>
+            <p class="settings-toggle-desc">Follows light/dark mode: the first shade applies in dark mode, the second in light mode. Updates open terminals without restarting sessions. Saved in this browser.</p>
           </div>
         </div>
 
@@ -293,11 +293,11 @@ export function SettingsPage() {
           <div class="form-group">
             <label for="structured-color">Structured background</label>
             <select id="structured-color" value={structuredColor.value} onChange={e => { structuredColor.value = e.currentTarget.value as StructuredColor; }}>
-              <option value="black">Black (default)</option>
-              <option value="charcoal">Charcoal</option>
+              <option value="black">Black · white (default)</option>
+              <option value="charcoal">Charcoal · light grey</option>
               <option value="workspace">Match workspace</option>
             </select>
-            <p class="settings-toggle-desc">Applies to structured session transcripts. CoS chat follows the workspace appearance; PTY colors remain independent.</p>
+            <p class="settings-toggle-desc">Applies to structured session transcripts and follows light/dark mode (first shade in dark mode, second in light mode). CoS chat follows the workspace appearance; the PTY shade is chosen above.</p>
           </div>
         </div>
 

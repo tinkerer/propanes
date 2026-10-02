@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { effect } from '@preact/signals';
-import { terminalColor } from '../../lib/settings.js';
+import { terminalColor, effectiveTheme } from '../../lib/settings.js';
 import { serverPath } from '../../lib/base-path.js';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -99,6 +99,46 @@ function truncateHistory(data: string): string {
 const MAX_TERMINAL_WRITE_BATCH_BYTES = 32_000;
 const SLOW_TERMINAL_WRITE_MS = 80;
 
+// ANSI palettes for the xterm renderer. The dark set mirrors the workspace's
+// yellow-accent branding (green/cyan map to yellow); the light set keeps the
+// same hue mapping at darker weights so colored output stays legible on a
+// light PTY background. background/foreground/black/cursor/selection are
+// filled in from CSS tokens at runtime.
+const DARK_ANSI_PALETTE = {
+  red: '#f87171',
+  green: '#facc15',
+  yellow: '#fbbf24',
+  blue: '#60a5fa',
+  magenta: '#fb923c',
+  cyan: '#facc15',
+  white: '#e2e8f0',
+  brightBlack: '#64748b',
+  brightRed: '#fca5a5',
+  brightGreen: '#fde047',
+  brightYellow: '#fde68a',
+  brightBlue: '#93c5fd',
+  brightMagenta: '#bae6fd',
+  brightCyan: '#38bdf8',
+  brightWhite: '#f8fafc',
+} as const;
+const LIGHT_ANSI_PALETTE = {
+  red: '#b91c1c',
+  green: '#a16207',
+  yellow: '#b45309',
+  blue: '#1d4ed8',
+  magenta: '#c2410c',
+  cyan: '#a16207',
+  white: '#171717',
+  brightBlack: '#737373',
+  brightRed: '#dc2626',
+  brightGreen: '#ca8a04',
+  brightYellow: '#d97706',
+  brightBlue: '#2563eb',
+  brightMagenta: '#0369a1',
+  brightCyan: '#0284c7',
+  brightWhite: '#000000',
+} as const;
+
 // Global resize ownership: only one terminal instance per session sends resize
 // commands to the server. When two AgentTerminals show the same session (e.g.
 // main pane + autojump popout), competing resizes with different dimensions
@@ -178,34 +218,25 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
         cursor: '#93c5fd',
         selectionBackground: '#334155',
         black: '#1e293b',
-        red: '#f87171',
-        green: '#facc15',
-        yellow: '#fbbf24',
-        blue: '#60a5fa',
-        magenta: '#fb923c',
-        cyan: '#facc15',
-        white: '#e2e8f0',
-        brightBlack: '#64748b',
-        brightRed: '#fca5a5',
-        brightGreen: '#fde047',
-        brightYellow: '#fde68a',
-        brightBlue: '#93c5fd',
-        brightMagenta: '#bae6fd',
-        brightCyan: '#38bdf8',
-        brightWhite: '#f8fafc',
+        ...DARK_ANSI_PALETTE,
       },
     });
 
     // Repaint the existing PTY; do not reconnect or discard its scrollback.
+    // Re-runs when the shade preset or the resolved light/dark theme changes
+    // (the --pw-pty-* tokens carry light values under a light workspace).
     const stopTerminalTheme = effect(() => {
       const preset = terminalColor.value;
+      const palette = effectiveTheme.value === 'light' ? LIGHT_ANSI_PALETTE : DARK_ANSI_PALETTE;
       const style = getComputedStyle(document.documentElement);
+      const background = style.getPropertyValue(`--pw-pty-${preset}`).trim();
       term.options.theme = {
         ...term.options.theme,
-        background: style.getPropertyValue(`--pw-pty-${preset}`).trim(),
+        ...palette,
+        background,
         foreground: style.getPropertyValue('--pw-terminal-foreground').trim(),
         cursor: style.getPropertyValue('--pw-terminal-foreground').trim(),
-        black: style.getPropertyValue(`--pw-pty-${preset}`).trim(),
+        black: background,
         selectionBackground: style.getPropertyValue('--pw-terminal-hover').trim(),
       };
     });

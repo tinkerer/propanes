@@ -1,16 +1,18 @@
-/* One workspace palette for CoS. No panel-local dark locks. */
+/* One workspace palette for CoS. No panel-local dark locks; transcripts and PTYs follow light/dark too. */
 :root {
   --pw-bg: var(--pw-bg-body);
   --pw-text: var(--pw-text-primary);
   --pw-secondary-text: var(--pw-text-secondary);
   --pw-input-bg: var(--pw-bg-surface);
   --pw-accent: var(--pw-primary);
-  --pw-transcript-bg: #000000;
-  --pw-transcript-surface: #171717;
-  --pw-transcript-raised: #292929;
-  --pw-transcript-text: #e5e5e5;
-  --pw-transcript-secondary: #aaaaaa;
-  --pw-transcript-border: #353535;
+  /* Light-theme reading surface; the dark blocks below restore the dark
+     transcript palette so the structured view follows the workspace theme. */
+  --pw-transcript-bg: #ffffff;
+  --pw-transcript-surface: #faf9f6;
+  --pw-transcript-raised: #f1f0ed;
+  --pw-transcript-text: #171717;
+  --pw-transcript-secondary: #555555;
+  --pw-transcript-border: #d4d4d4;
 }
 html[data-theme="dark"] {
   --pw-transcript-bg: #000000;
