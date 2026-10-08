@@ -344,7 +344,9 @@ function PaneHeader({
             </a>
           )}
           <RuntimeBadge runtime={sess?.runtime} permissionProfile={sess?.permissionProfile} />
-          <PrBadges prUrls={sess?.prUrls} />
+          {/* compact: 2 badges + "+N" chip, like the sessions list — a session
+              with a dozen PRs must not crowd the ticket title out of the header. */}
+          <PrBadges prUrls={sess?.prUrls} compact />
         </>
       )}
       <span style="flex:1" />
