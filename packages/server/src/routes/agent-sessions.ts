@@ -1046,6 +1046,9 @@ interface JsonlRequestParams {
 
 const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
   const id = c.req.param('id');
+  if (!id) {
+    return c.json({ error: 'Missing session id' }, 400);
+  }
   const fileFilter = params.fileFilter;
   const tailParam = params.tail;
   const tailN = tailParam ? Math.max(0, parseInt(tailParam, 10) || 0) : 0;

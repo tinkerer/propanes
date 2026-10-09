@@ -1,7 +1,7 @@
 # Stage 1: Build all packages
 FROM node:22-bookworm AS build
 
-RUN corepack enable && corepack prepare pnpm@9.14.2 --activate
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 WORKDIR /app
 
@@ -29,7 +29,7 @@ RUN pnpm run build
 # Stage 2: Production runtime
 FROM node:22-bookworm-slim
 
-RUN corepack enable && corepack prepare pnpm@9.14.2 --activate
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 WORKDIR /app
 
@@ -45,6 +45,7 @@ COPY packages/server/package.json packages/server/
 # Install production dependencies only
 # node-pty needs build tools, install them temporarily
 RUN apt-get update && \
+    apt-get upgrade -y && \
     apt-get install -y --no-install-recommends python3 make g++ && \
     pnpm install --frozen-lockfile --prod && \
     npm install -g @anthropic-ai/claude-code && \

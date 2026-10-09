@@ -11,7 +11,7 @@
 
 # ---- Stage 1: build the whole workspace -------------------------------------
 FROM node:22-bookworm AS build
-RUN corepack enable && corepack prepare pnpm@9.14.2 --activate
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 WORKDIR /app
 
 # Workspace config first for layer caching
@@ -35,7 +35,7 @@ FROM node:22-bookworm-slim
 # non-ASCII glyph in the agent TUIs as "_", so Claude Code's arrows/ellipses
 # show up as "--" in the browser terminal. C.UTF-8 is built into glibc.
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
-RUN corepack enable && corepack prepare pnpm@9.14.2 --activate
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 RUN groupadd --gid 10001 propanes \
  && useradd --uid 10001 --gid 10001 --home-dir /data/agent-home --shell /bin/bash propanes
 WORKDIR /app
@@ -52,6 +52,7 @@ COPY packages/server/package.json packages/server/
 # python3 stays: agent/dev tooling below (and the az CLI installer) needs it.
 # xz-utils: linear-cli's npm install script untars a .tar.xz release (slim has no xz).
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends python3 make g++ \
  && pnpm install --frozen-lockfile --prod \
  && apt-get purge -y make g++ \
@@ -70,6 +71,16 @@ RUN npm i -g \
       @schpet/linear-cli@2.2.0 \
       @playwright/mcp@latest \
       playwright@latest \
+ # @schpet/linear-cli vendors its own axios/form-data/minimatch/glob (via
+ # rimraf) and pins versions with known CVEs (axios SSRF/prototype-pollution,
+ # form-data CRLF injection, minimatch/brace-expansion ReDoS) regardless of
+ # which linear-cli release is installed — upstream hasn't bumped them.
+ # Force the patched versions into its own nested node_modules so the fix
+ # survives npm's dedup; linear-cli's CLI surface (axios GET/POST calls) is
+ # unaffected by these patch/minor bumps.
+ && ( cd "$(npm root -g)/@schpet/linear-cli" \
+      && npm install --no-save --no-package-lock \
+           axios@^1.20.0 form-data@^4.0.6 minimatch@^10.2.3 ) \
  && npx --yes playwright install --with-deps chromium \
  && ln -s "$(npm root -g)" /root/node_modules \
  && mkdir -p /root/.claude /root/.codex \
@@ -90,6 +101,7 @@ RUN rm /usr/local/bin/claude \
 # don't survive a pod restart, but the fetch tools to reinstall them always
 # will.
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends \
       curl wget git ca-certificates gnupg jq unzip zip less procps \
       openssh-client python3-venv python3-pip \
