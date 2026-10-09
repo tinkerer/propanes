@@ -7673,6 +7673,32 @@ kbd {
 .feedback-title-link:hover {
   text-decoration: underline;
 }
+/* Pane header: the collapsed badge strip (2 + "+N") never wraps or shrinks —
+   it is the title that gets ellipsized, never hidden entirely. Expanding the
+   chip lets the strip wrap onto extra header lines, like the sidebar. */
+.terminal-active-header .feedback-title-link {
+  flex: 0 1 auto;
+  margin-right: 8px;
+}
+.terminal-active-header .session-runtime-badge {
+  margin-right: 4px;
+}
+.terminal-active-header .session-pr-badges.compact {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  max-height: none;
+  justify-content: flex-start;
+  align-content: center;
+}
+.terminal-active-header .session-pr-badges.compact.expanded {
+  flex-shrink: 1;
+  flex-wrap: wrap;
+}
+.terminal-active-header .session-pr-badges.compact .session-pr-badge,
+.terminal-active-header .session-pr-badges.compact .session-pr-badge-more {
+  font-size: 9px;
+  padding: 1px 5px;
+}
 
 .open-terminal-btn {
   background: none;
