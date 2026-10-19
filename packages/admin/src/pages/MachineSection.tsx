@@ -29,7 +29,7 @@ const mFormLoading = signal(false);
 const mFormError = signal('');
 
 // Admin health state
-const adminHealthStatus = signal<Record<string, 'checking' | 'alive' | 'dead'>>({});
+const adminHealthStatus = signal<Record<string, 'checking' | 'alive' | 'gated' | 'dead'>>({});
 const adminActionLoading = signal<Record<string, boolean>>({});
 const machineHealthResults = signal<Record<string, SystemHealthResult>>({});
 const machineHealthLoading = signal<Record<string, boolean>>({});
@@ -166,7 +166,7 @@ export async function probeAdminUrls() {
   await Promise.all(withAdmin.map(async (m) => {
     try {
       const result = await api.checkMachineAdminHealth(m.id);
-      adminHealthStatus.value = { ...adminHealthStatus.value, [m.id]: result.alive ? 'alive' : 'dead' };
+      adminHealthStatus.value = { ...adminHealthStatus.value, [m.id]: result.alive ? 'alive' : result.gated ? 'gated' : 'dead' };
     } catch {
       adminHealthStatus.value = { ...adminHealthStatus.value, [m.id]: 'dead' };
     }
@@ -380,6 +380,15 @@ export function MachineCard({ m }: { m: any }) {
   const isHealthExpanded = expandedMachineHealth.value === m.id;
   const machineSessions = getSessionsForMachine(m.id);
   const runningCount = machineSessions.filter(s => s.status === 'running').length;
+  // ONLINE means a launcher is connected; without one, fall back to the admin probe.
+  const adminHealth = adminHealthStatus.value[m.id];
+  const statusBadge = m.status === 'online'
+    ? { label: 'ONLINE', color: 'var(--pw-success, #22c55e)', title: 'Launcher connected' }
+    : adminHealth === 'alive'
+      ? { label: 'REACHABLE', color: 'var(--pw-primary)', title: 'Admin responds, but no launcher is connected to this server' }
+      : adminHealth === 'gated'
+        ? { label: 'GATED', color: '#f59e0b', title: 'Host answers through an auth gateway; no launcher is connected to this server' }
+        : { label: 'OFFLINE', color: 'var(--pw-text-faint)', title: 'No launcher connected' };
 
   return (
     <div class="agent-card" key={m.id}>
@@ -389,9 +398,10 @@ export function MachineCard({ m }: { m: any }) {
             {m.name}
             <span
               class="agent-badge"
-              style={`background:${m.status === 'online' ? 'var(--pw-success, #22c55e)' : 'var(--pw-text-faint)'};color:#fff;margin-left:8px`}
+              style={`background:${statusBadge.color};color:#fff;margin-left:8px`}
+              title={statusBadge.title}
             >
-              {m.status === 'online' ? 'ONLINE' : 'OFFLINE'}
+              {statusBadge.label}
             </span>
             <span class="agent-badge" style="background:var(--pw-bg-hover);color:var(--pw-text-muted);margin-left:4px">
               {typeLabel}
@@ -428,8 +438,8 @@ export function MachineCard({ m }: { m: any }) {
         {m.adminUrl && (() => {
           const health = adminHealthStatus.value[m.id];
           const actionLoading = adminActionLoading.value[m.id];
-          const dotColor = health === 'alive' ? '#22c55e' : health === 'dead' ? '#ef4444' : 'var(--pw-text-faint)';
-          const dotTitle = health === 'alive' ? 'Admin is live' : health === 'dead' ? 'Admin is down' : 'Checking...';
+          const dotColor = health === 'alive' ? '#22c55e' : health === 'gated' ? '#f59e0b' : health === 'dead' ? '#ef4444' : 'var(--pw-text-faint)';
+          const dotTitle = health === 'alive' ? 'Admin is live' : health === 'gated' ? 'Behind an auth gateway; admin cannot be checked directly' : health === 'dead' ? 'Admin is down' : 'Checking...';
           const hasLauncher = cachedTargets.value.some(t => t.machineId === m.id && !t.isHarness);
           return (
             <div style="margin-top:6px;font-size:12px;display:flex;align-items:center;gap:6px">

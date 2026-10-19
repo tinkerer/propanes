@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { db, schema } from '../db/index.js';
 import { getLauncher, listLaunchers } from '../launcher-registry.js';
 import { getAdminUser } from '../admin-auth.js';
+import { probeAdminUrl } from '../machine-admin-probe.js';
 
 const app = new Hono();
 
@@ -157,13 +158,7 @@ app.get('/:id/admin-health', async (c) => {
   if (!row) return c.json({ error: 'Machine not found' }, 404);
   if (!row.adminUrl) return c.json({ alive: false, reason: 'no adminUrl configured' });
 
-  try {
-    const url = row.adminUrl.replace(/\/$/, '') + '/../api/v1/admin/applications';
-    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-    return c.json({ alive: res.ok, status: res.status });
-  } catch (err: any) {
-    return c.json({ alive: false, reason: err.message });
-  }
+  return c.json(await probeAdminUrl(row.adminUrl));
 });
 
 app.get('/:id/system-health', (c) => {
