@@ -10,6 +10,22 @@ import { autoFixEnabled, setAutoFixEnabled } from '../lib/autofix.js';
 import { panelPresets, savePreset, restorePreset, deletePreset } from '../lib/sessions.js';
 import { DeletedItemsPanel } from '../components/ui/DeletedItemsPanel.js';
 import { api } from '../lib/api.js';
+import { isEmbedded, embedRestorablePanels } from '../lib/state.js';
+
+/**
+ * Only meaningful inside a widget overlay iframe: asks the host widget to
+ * re-arrange every floating overlay panel (overlay-panels.ts 'pw-embed-arrange').
+ */
+function arrangeOverlayWindows(mode: 'cascade' | 'center') {
+  if (typeof window === 'undefined' || window.parent === window) return;
+  try { window.parent.postMessage({ type: 'pw-embed-arrange', mode }, '*'); } catch { /* ignore */ }
+}
+
+/** Reopen (or forget) the overlay windows that were open before the host page reloaded. */
+function restoreOverlayWindows(dismiss = false) {
+  if (typeof window === 'undefined' || window.parent === window) return;
+  try { window.parent.postMessage({ type: 'pw-embed-restore', dismiss }, '*'); } catch { /* ignore */ }
+}
 
 function formatKey(s: ReturnType<typeof getAllShortcuts>[0]): string {
   const parts: string[] = [];
@@ -300,6 +316,30 @@ export function SettingsPage() {
             <p class="settings-toggle-desc">Applies to structured session transcripts and follows light/dark mode (first shade in dark mode, second in light mode). CoS chat follows the workspace appearance; the PTY shade is chosen above.</p>
           </div>
         </div>
+
+        {isEmbedded.value && (
+          <div class="settings-section">
+            <h3>Overlay windows</h3>
+            <p class="settings-toggle-desc">Tidy up the floating ProPanes windows on this page. Cascade staggers them from the top-left in stacking order; Center stacks them in the middle of the viewport. Windows that no longer fit are shrunk to the viewport.</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+              <button class="btn btn-sm" onClick={() => arrangeOverlayWindows('cascade')}>Cascade windows</button>
+              <button class="btn btn-sm" onClick={() => arrangeOverlayWindows('center')}>Center windows</button>
+            </div>
+            {embedRestorablePanels.value.length > 0 && (
+              <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--pw-border, rgba(148,163,184,0.25))">
+                <div class="settings-toggle-label">Previous windows</div>
+                <p class="settings-toggle-desc">
+                  {embedRestorablePanels.value.length === 1 ? 'One window was' : `${embedRestorablePanels.value.length} windows were`} open before this page reloaded: {embedRestorablePanels.value.map((p) => p.title).join(', ')}.
+                </p>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                  <button class="btn btn-sm btn-primary" onClick={() => restoreOverlayWindows(false)}>Restore previous windows</button>
+                  <button class="btn btn-sm" onClick={() => restoreOverlayWindows(true)}>Dismiss</button>
+                </div>
+              </div>
+            )}
+            <p class="settings-toggle-desc" style="margin-top:10px">Tip: tap <strong>Ctrl+Shift</strong> three times quickly to enter move mode — any floating window can then be dragged from anywhere on its surface, even when its title bar is off-screen. Press Ctrl+Shift again (or Esc) to exit.</p>
+          </div>
+        )}
 
         <div class="settings-section">
           <h3>Experimental features</h3>

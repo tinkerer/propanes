@@ -195,7 +195,18 @@ function handleStickyShortcut(e: KeyboardEvent) {
     stickyModeActive.value = true;
     stickyPrevFocus = document.activeElement;
     (document.activeElement as HTMLElement)?.blur?.();
+    postMoveModeToHost(true);
   }
+}
+
+// When this SPA runs inside a widget overlay iframe, key events never reach
+// the host page, so the chord would only ever move *our* popouts. Relay the
+// transition to the host so the overlay panel we live in becomes draggable
+// too (overlay-panels.ts 'pw-embed-move-mode'); the host echoes its own exit
+// back so Ctrl+Shift pressed on either side leaves both modes together.
+function postMoveModeToHost(active: boolean) {
+  if (typeof window === 'undefined' || window.parent === window) return;
+  try { window.parent.postMessage({ type: 'pw-embed-move-mode', active }, '*'); } catch { /* ignore */ }
 }
 
 function handleStickyKeys(e: KeyboardEvent) {
@@ -229,7 +240,7 @@ function handleStickyKeyUp(e: KeyboardEvent) {
   }
 }
 
-function exitStickyMode() {
+function exitStickyMode(notifyHost = true) {
   stickyMode = false;
   stickyArmed = false;
   ctrlShiftHeld.value = false;
@@ -238,6 +249,16 @@ function exitStickyMode() {
     stickyPrevFocus.focus();
   }
   stickyPrevFocus = null;
+  if (notifyHost) postMoveModeToHost(false);
+}
+
+if (typeof window !== 'undefined' && window.parent !== window) {
+  window.addEventListener('message', (e: MessageEvent) => {
+    if (e.data?.type !== 'pw-embed-move-mode') return;
+    // Only the exit is mirrored: entering sticky mode here would also swallow
+    // every keystroke inside the iframe, which the host doesn't need.
+    if (e.data.active === false && stickyMode) exitStickyMode(false);
+  });
 }
 
 // Install global handler
