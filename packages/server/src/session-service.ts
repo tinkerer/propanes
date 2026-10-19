@@ -288,7 +288,16 @@ function buildAgentCommand(
     // `exec` is the only headless subcommand and it's one-shot. The stream
     // profiles fall back to `exec` too (codex doesn't yet expose a
     // bidirectional JSON protocol we can drive from here).
-    if (PIPE_PROFILES.has(permissionProfile)) args.push('exec');
+    if (PIPE_PROFILES.has(permissionProfile)) {
+      args.push('exec');
+    } else {
+      // The codex TUI runs tool calls in a shared, long-lived app-server
+      // daemon, so shell commands inherit the daemon's environment instead of
+      // this session's — PROPANES_TOKEN / PROPANES_API_URL (per-session) never
+      // reach them and the agent gets 401s. Keep the TUI in-process.
+      // `exec` already runs in-process and doesn't accept the flag.
+      args.push('--no-daemon');
+    }
     if (SKIP_PROFILES.has(permissionProfile)) {
       args.push('--dangerously-bypass-approvals-and-sandbox');
     }
