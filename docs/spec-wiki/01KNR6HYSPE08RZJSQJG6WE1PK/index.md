@@ -4,59 +4,67 @@
 **Project dir:** `/home/azureuser/propanes`
 **Server:** `http://localhost:3001` (admin at `/admin/`, widget embedded on the admin page itself)
 **Wiki dir:** `/home/azureuser/propanes/docs/spec-wiki/01KNR6HYSPE08RZJSQJG6WE1PK`
+**Last regeneration:** 2026-10-19 (previous: 2026-06-11, 2026-05-19, 2026-05-17)
 
-This wiki is the durable specification distilled from tickets, CoS thread inputs, and agent JSONL histories. It is the **bead → spec** companion to the live `Aggregate` view — tickets are the beads, this is the rolled string.
+This wiki is the durable specification distilled from tickets, CoS thread inputs, and agent JSONL histories. It is the **bead → spec** companion to the live ticket queue — tickets are the beads, this is the rolled string.
 
 ## What Propanes Admin is
 
 The Preact SPA dashboard at `packages/admin/` that drives the propanes operator workflow:
 
-- Triage incoming **feedback** (manual widget submissions, programmatic error reports, voice captures).
-- Run **agent sessions** (Claude Code / Codex, interactive TUI or headless stream-json) against a registered application's project directory, optionally on remote launcher machines.
-- Stay in dialog with a **Chief of Staff (CoS / "Ops")** agent that knows the queue and can dispatch on the operator's behalf.
-- Inspect live conversations as JSONL / structured / split views and intervene mid-turn.
+- Triage incoming **feedback** (manual widget submissions, programmatic error reports, voice captures, Slack/amirobot, Flatter lanes).
+- Run **agent sessions** (Claude Code / Codex, interactive TUI or headless stream-json) against a registered application's project directory, locally, on remote launcher machines, or in per-user AKS pods.
+- Follow each session through to a **merged PR**: PR URLs are detected from the transcript, shown as badges, and the dispatch contract tells the agent to keep working until CI is green and the PR is approved.
+- Inspect live conversations as PTY / structured / split views, type into the PTY, drag files and images into the session, and intervene mid-turn.
+- Recover from host restarts: orphaned sessions land in a **restore queue** and are resumed with a prompt that tells the agent to re-check state before redoing work.
+- Stay in dialog with a **Chief of Staff (CoS / "Ops")** agent that knows the queue and can dispatch on the operator's behalf (now an **alpha feature**, off by default).
 - Pop panes out into separate windows, dock companions, and drive everything from a phone-sized viewport when needed.
-- Brainstorm with the operator over **microphone input** (and, by extension, screen capture) when typing is the wrong shape.
-- Stay healthy on the host: notice when **disk is full, claude/codex isn't installed, or login is expired** — and recover gracefully.
+- Run **multi-user**: org-scoped admins, per-user isolated workspaces, path-prefixed mounts behind an SSO gate, and a `propanes` CLI with `propanes://` handler and SSH gateway for terminal access.
 
 ## Wiki pages
 
-- **[spec-backbone.md](spec-backbone.md)** — the durable product surface: invariants, primary surfaces, data flow rules, UI conventions. Read this first when picking up new work.
-- **[style-guide.md](style-guide.md)** — color tokens, opacity rules for floating overlays, portal/containing-block rules, palette, and a checklist for any new popup/modal/lightbox. Read this before touching anything that floats over other content.
-- **[infra-onboarding.md](infra-onboarding.md)** — infrastructure health checks (disk, CLI presence, login state, version drift) and the contributor onboarding path (fresh box → running propanes → PR back to upstream). Read this before touching the session-service lifecycle, before adding new spawn paths, or when a contributor asks how to start.
-- **[tickets.md](tickets.md)** — deduplicated catalogue of operator tickets grouped by surface, with status and ULIDs preserved.
+- **[spec-backbone.md](spec-backbone.md)** — the durable product surface: invariants, primary surfaces, data flow rules, UI conventions, and the **development contract** every dispatched agent must follow. Read this first when picking up new work.
+- **[style-guide.md](style-guide.md)** — color tokens, opacity rules for floating overlays, portal/containing-block rules, palette, and a checklist for any new popup/modal/lightbox. Read this before touching anything that floats over other content. The 2026-09-19 neutral-surface refresh and light-mode parity work extend it (see [[spec-backbone#215-theme-light-mode-and-pty-colors]]).
+- **[infra-onboarding.md](infra-onboarding.md)** — infrastructure health checks (disk, CLI presence, login state, version drift) and the contributor onboarding path (fresh box → running propanes → PR back to upstream). `scripts/setup.sh` (one-command bootstrap, 2026-09-03) and the first-run `GettingStartedPage` now implement the bootstrap half.
+- **[tickets.md](tickets.md)** — deduplicated catalogue of operator tickets grouped by theme and era, with status and ULIDs preserved.
 - **[operator-inputs.md](operator-inputs.md)** — recurring operator preferences, vocabulary, and recurring patterns of feedback (what the operator keeps asking for and why).
-- **[agent-jsonl-inputs.md](agent-jsonl-inputs.md)** — how dispatched agents actually get driven: prompt shapes, the trailing `<cos-reply>` dispatch hint (ex-`[AGENT NOTE]` preamble, removed 2026-06-11), `[TURN requestId=…]` envelopes, DOM-selection and image-attach payloads, common follow-up patterns.
+- **[agent-jsonl-inputs.md](agent-jsonl-inputs.md)** — how dispatched agents actually get driven: the current `DEFAULT_PROMPT_TEMPLATE`, the trailing dispatch contract, the restore-queue prompt, `[TURN requestId=…]` envelopes, attachment payloads, and the follow-up patterns seen in JSONL and Codex rollouts.
 
-## Snapshot of the queue (at wiki generation, 2026-05-19)
+## Snapshot of the queue (at wiki generation, 2026-10-19)
 
-- **Feedback rows for this app:** 373 total — 106 `dispatched` (96 manual + 2 error_report + 7 programmatic + 1 request), 231 `resolved` (200 manual + 10 programmatic + 21 request), 33 `new` (29 manual + 4 programmatic), 1 `reviewed`, 1 `archived`, 1 `deleted`. Manual is the dominant type.
-- **CoS threads:** 718 total. 53 are still **unsorted** (no `channel_id`) — these are the highest-signal recent operator threads (sample list in [[tickets#unsorted-threads]]).
-- **CoS messages:** 1,004 stored in `cos_messages` across all threads for this app.
-- **Agent sessions on this server:** 1,020 total — 985 `claude` (401 completed / 284 killed / 151 failed / 132 deleted / 16 running / 1 idle), 35 `codex` (6 completed / 19 killed / 5 failed / 5 running). The `sessions` channel auto-mirrors every session as a thread.
-- **CoS channels:** 13 active. See [[spec-backbone#23a-cos-channels-durable-structure]].
-- **Local JSONL session files:** 795 under `/home/azureuser/.claude/projects/-home-azureuser-propanes/` (592 MB); 38 codex rollouts under `~/.codex/sessions/2026/`.
-- **Host disk:** `/` is **103G / 123G (84 % used)** — eased back below the 89 % previous reading after cleanup; still inside the watchlist band per [[infra-onboarding#24-hard-stop-on-disk-pressure]].
+- **Feedback rows for this app:** 484 total — 306 `resolved` (275 manual + 10 programmatic + 21 request), 127 `dispatched`, 39 `new`, 10 `archived`, 1 `reviewed`, 1 `deleted`. 100 rows were created since the 2026-06-11 regeneration; 28 of those are throwaway repro/smoke rows (see [[tickets#noise-rows-to-ignore]]).
+- **Open items worth action:** of the 39 `new`, only 3 are real and recent (`01M22627X7` HTTP 431 structured view — since fixed by `1ec1f8c`; `01M3AW8254` / `01M3G370P7` PR-review requests for the workbench repo). The remaining `new` rows are April–May beads (brainstorm/mic, FAFO, Slack) that have aged out of the active themes. `dispatched` rows whose session is `killed` are usually done; the status just never got flipped.
+- **CoS threads:** 917 total — 628 auto-mirrored in `sessions`, 138 in `inbox`, 62 **unsorted** (none new since 2026-05-25), the rest spread over the theme channels. 167 threads were created since 2026-06-11, all of them either `inbox` tickets or `sessions` mirrors. **No new assistant replies** have been persisted to `cos_messages` since 2026-06-11 — the CoS chat was gated behind the alpha-features preference on 2026-09-20 and is effectively dormant.
+- **CoS messages:** 1,155 stored across all threads for this app (107 since 2026-06-11, all `user` role).
+- **Agent sessions on this server:** 1,739 total — 1,506 `claude` (437 completed / 581 killed / 279 failed / 153 deleted / 46 idle / 10 running), 233 `codex` (18 completed / 166 killed / 37 failed / 7 deleted / 5 running). 631 created since 2026-06-11; 192 of those are tied to this app (135 `headless-stream-yolo`, 42 `plain` terminals, 14 `interactive-require`, 1 `interactive-yolo`). 203 sessions carry detected `pr_urls`.
+- **Registered endpoints:** 9 (see [[spec-backbone#4-agents-and-permission-profiles]]); new since June: `Claude Interactive` (`01M21MQRNEBZ9QNR85D5Z52D6N`, `interactive-require`).
+- **Machines:** `workbench-shared-vm`, `workbench-staging2-vm`, `amirs-macbook-air`, `app.myworkbench.ai`.
+- **Local JSONL session files:** 19 under `/home/azureuser/.claude/projects/-home-azureuser-propanes/` (43 MB) — the JSONL purge recipe from [[infra-onboarding]] has run; 795 files / 592 MB were here in May. 265 codex rollouts under `~/.codex/sessions/` since 2026-06-11, 16 of them with `cwd=/home/azureuser/propanes`.
+- **Host disk:** `/` is **463G / 495G (94 % used)** on a larger disk than in May. Still inside the amber band per [[infra-onboarding#24-hard-stop-on-disk-pressure]]; the DB file alone is 582 MB.
+- **Upstream repo:** `git@github.com:tinkerer/propanes.git`, 36 PRs merged (#1 on 2026-06-21 → #36 "Add MIT license" on 2026-10-17). **No GitHub Actions workflows exist in the repo and `master` is not branch-protected**, so "CI" for this app is the local `pnpm lint` / `pnpm build` / `pnpm test` trio.
 
 ## How to regenerate this wiki
 
 ```bash
-# From the admin UI: open Spec Wiki page, click "Update Spec".
-# Or, equivalently, POST a programmatic feedback row with tag spec-wiki and dispatch.
+# From the admin UI: open the Spec Wiki page for this app, click "Update Spec".
+# Or, equivalently, POST a programmatic feedback row tagged spec-wiki and dispatch it.
 ```
 
-The dispatch helper lives at `packages/admin/src/lib/spec-update.ts::launchSpecUpdate`. It prefers a YOLO profile (`interactive-yolo` → `headless-yolo` → `headless-stream-yolo`) and falls back to manual feedback-create + dispatch when the server's `/spec/update` route isn't usable.
+The dispatch helper lives at `packages/admin/src/lib/spec-update.ts::launchSpecUpdate`. It calls `api.updateSpec` first and falls back to creating a `programmatic` feedback row + dispatch with `buildFallbackInstructions`. It prefers a YOLO profile (`interactive-yolo` → `headless-yolo` → `headless-stream-yolo`). This regeneration ran as session `01M590XNV0WD23…` on `interactive-yolo` from feedback `01M590XNTY4N4P50MEA6T83ABW`.
 
 ## Active themes (at this regeneration)
 
-These are the **currently-moving** directions the operator pushed in the last week and that anchor most of the open tickets. See [[spec-backbone]] for the durable definitions and [[tickets#by-theme]] for the active beads.
+The June–October 2026 era shifted the product from "CoS chat + panes" toward **sessions-as-PR-pipeline, multi-user hosting, and resilience**. See [[spec-backbone]] for the durable definitions and [[tickets#era-2-2026-06-11--2026-10-19]] for the beads.
 
-1. **Infrastructure & onboarding** — auto-detect when `claude` / `codex` needs login, install, or update; refuse new sessions when disk is critically full; give a contributor a single bootstrap path to running propanes + opening a PR back to `tinkerer/propanes`. Anchor ticket `01KRWHGWN0` ("our session manaer needs to monitor for situations like when we need to login to claude…"). See [[infra-onboarding]] for the whole spec.
-2. **Session ↔ thread unification** — "All of our sessions should appear as threads in the CoS pane. Unite our seemingly separate abstractions." Implemented as the `sessions` channel that auto-mirrors every `agent_sessions` row. New 2026-05-18 direction `01KRYPA6XY` extends this: **every composer submission must produce both a feedback row and an agent session** — a "standalone CoS thread" with no linked ticket and no replies is the bug shape. Open follow-ups: clicking a session-thread navigates to the session view (`01KRVWS4V3VFM7` / `01KRWK14649ZVCRYE91PHAJW8W`); a terminal-session thread tap should render the terminal in-chat (`01KRZ7WMZ8`); the Sessions page itself becomes a channel.
-3. **Channels actually working** — channels are durable, per-app, browsable; tapping a channel reloads the chat to that channel's view; channel list toggleable; threads correctly sort into channels. Inbox is the default route for new widget submissions. Recent direction: the channel-drawer hamburger should sit inline with the tools/search controls, not on the title bar (`01KRWC6EAE0CMY`); the **channels ↔ DM split** inside the list should be a moveable pane handle like every other split (`01KRZ84ASD`); "All threads" view must always show agent replies under each thread block (`01KRYPA6XY`).
-4. **CoS message lifecycle audit** — `draft` → `queued` → `sending` → `sent` / `resolved` / `archived` must be unambiguous. "Still shows a sending spinner, pretty sure it was sent" → audit `queued`, `sending`, `draft` states end-to-end. Companion direction `01KRWH7TGZ`: when a session **bails out / silently dies** the operator should be able to point at it and say "investigate and do what it was supposed to do" — the CoS Ops agent then re-reads the parent's input, fans out a fresh implementation session, and reports back. See [[operator-inputs#install--login-vocabulary]] *bail-out / silent crash*.
-5. **Brainstorm mode = mic input front and center** — the brainstorm pane explicitly captures microphone audio and (planned) screen content. The mic-bridge popup is the secure-context workaround; brainstorm UI must surface mic-select, screen-capture, and verbosity controls.
-6. **Spec wiki collapsibility + mobile** — the wiki must render well on the spec page including a mobile collapsible TOC; "view spec" link must navigate; spec content must reflect *live* state, not snapshots that age into lies.
-7. **Style-guide enforcement** — image lightbox transparency regression caught (2026-05-17); confirms [[style-guide#opacity-rule]] and [[style-guide#lightboxes--full-viewport-modals-sm-lightbox]] need to be the canonical pre-merge checklist for any new floating element.
-8. **Overlay-mode CoS pane** — threads should default-load as overlay over the main CoS chat, not as a split panel that hides the chat. Recurring regression on this server. The new sub-direction `01KRYRFKHQ` ("drawer pull is floating but the internal overlay companion isn't visible") is a z-index regression in the popout path: `CosPopoutTreeView` portals the overlay at hardcoded `z-index: 1000` but the popout's panel z-index (`getPanelZIndex = 950 + order*2`) can climb above it. Anchor all overlay-drawer z-indices to `getPanelZIndex(panel) + 2`, the same pattern the in-pane `ChiefOfStaffBubble` already uses.
-9. **Machine display in pickers (new)** — `01KRWHAT4S` "we should show the name for local to avoid confusion": the local launcher's machine row in dispatch / launcher / harness pickers must show a human-readable name (e.g. "local — propanes-vm") rather than `local` / an opaque UUID alongside named remote machines.
+1. **Session → PR pipeline** — every dispatched session is expected to end in a reviewed, merged PR. PR URLs are detected from the transcript (`ae75035`), shown as collapsible badges in the sidebar, pane header, and Cmd-K search; badges can be added/removed by hand (`154e57f`); a "Review PR" quick-dispatch spawns a cross-runtime reviewer (`cd7c9b0`). The dispatch hint now carries the full **development contract** (run CI-equivalent checks locally, open a PR, monitor CI/reviews until approved — `f744578`, `d8c29cf`, `fadf72c`). Anchor tickets `01KXFK5MBC`, `01KXGPQ3CP`, `01M33RM8BJ`, `01M4CZ28P8`.
+2. **Restart / restore resilience** — sessions orphaned by a `propanes.service` restart are marked `failed / orphaned_restart`, surfaced on a **Restore Queue** page, and resumed with `DEFAULT_RESTORE_PROMPT` (`806ae9b`, PR #29). Pairs with the stale-waiting-indicator fix (`067eb53`), dead-socket detection (`da0b6c1`), and "keep a pane typable when its PTY is not live yet" (`e846799`). Anchor tickets `01M2EV3Q9J`, `01M33KPXDG`, `01KT7RGPPJ`.
+3. **PTY correctness in shared/multi-viewer panes** — the longest-running bug family this era: flicker on reload (`775f8d2`), laggy resize (`d84e661`), size negotiation across viewers (`ef21b11`, `13d30b3`, `efeb115`), cursor jump in smaller viewers (`eb19ca5`), overlay redraw after idle (`754435c`), cursor blink during TUI output (`03a4859`), input-bar focus steal (`e144100`, PR #35), OSC 52 copy (`4676fc0`). Spec answer in [[spec-backbone#24a-pty-sizing-and-focus-rules]].
+4. **Structured view parity** — default view for CoS thread companions and interactive threads (`9a96ada`), markdown fixes (`6db7829`, `8f2af76`), hide Thinking by default (`e4901cb`), survive `/clear` and compaction (`c5504fb`, `5c5ec0e`), HTTP 431 on long sessions fixed by POST + GET fallback (`1ec1f8c`, `e7d8430`), light-mode parity (`a053973`, PR #22). Anchor tickets `01KWNTJEDQ`, `01KXGXYPKV`, `01KZC77Q11`, `01M2P8CW8J`, `01M3T444MA`.
+5. **Multi-user hosting** — multi-user login + org scoping (`865d82c`, `2f888d0`), per-user isolated workspaces and self-service AKS pods (`409e64d`, `0551cf1`), per-session isolates & metering (`53993ba`), `PROPANES_BASE_PATH` + path-prefixed admin/widget (`8a4e6d6`, `f667eea`, `af5bb9f`), IP allowlist to drop the SSO gate (`281ac43`), env-admin seeding so FK-guarded writes survive (`fd571c9`), NFS run mode for pods (`4db7f9c`, `88ec365`). Anchor tickets `01KX2E97BF` (phase prompts on NFS), `01KXGY222N`, `01KX9N2C1M`.
+6. **Attachments everywhere** — composer file uploads with copy-path (`90c50e5`), drag-and-drop onto PTY and structured panes (`2845e05`), paste images into session panes + remote-launcher file transfer (`44ce21a`, `e0815fa`), `/tmp` symlinks so dispatch paths always exist (`734034a`, `e5b2e62`). Anchor tickets `01KV681WZN`, `01KXESFWZ9`, `01M21FRY2Y`.
+7. **Flatter upstream sync** — a monitor → plan → implement → review → verify lane system for pulling features from upstream repos such as `meawoppl/agent-portal` (`b260a5f`, `711907c`, `0169397`, `2538451`). One run, three plans, one monitor exist in the DB. Anchor tickets `01KX1SZ2PV`, `01KX41EZDE`, `01KX6F82VE/VG/VH`, `01KX7KZ60Q`.
+8. **CLI + terminal access** — `propanes` CLI with `propanes://` handler, SSH gateway, kubectl-exec bridge, Workbench SSO device-flow login, browser-assisted login, auto-tunnel (`148fac1`, `0654b6f`, `ccb1855`, `9aeed13`, `7325832`, `ee0f670`).
+9. **Alpha gating and quieter defaults** — Ops chat and Review approvals sit behind `pw-alpha-features` (`da4cff2`, `292cf35`); widget Auto-dispatch is sticky (`4cbce07`); Thinking hidden by default; Quick Dispatch panel resizable (`da6545a`) and anchored to the `[+]` button; sidebar app filters default on (`d5b0282`).
+10. **Security hygiene** — container CVE sweeps (`857881a`, `4c709e8`, `4c5cc6c`, `d3752eb`), Node 22 pin (`2c3fabc`), scrubbing internal hostnames from comments/history (`01KX2KX51N`, `01M12GRQQS`, `01M1N12TX9` — the `amca` orphan commit is deferred; see [[project_propanes_amca_orphan_commit]]).
+
+Themes carried forward from the previous era that remain valid but are **no longer actively moving**: session ↔ thread unification, channels, CoS message lifecycle audit, brainstorm/mic, Tauri desktop, Slack/amirobot, FAFO swarm. Their spec text stays in [[spec-backbone]]; their open beads are listed under [[tickets#era-1-2026-04-09--2026-06-10]].

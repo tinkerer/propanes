@@ -2,6 +2,8 @@
 
 The durable surface. Read this when you need to remember **what the system is**, not what last changed.
 
+Last regenerated 2026-10-19. Sections 2.12–2.19 and §6 (development contract) were added for the June–October 2026 era; earlier sections were kept and corrected where the system moved on.
+
 ## 1. System map
 
 ```
@@ -29,7 +31,7 @@ The durable surface. Read this when you need to remember **what the system is**,
                           screenshot
 ```
 
-Four packages: `widget` (embeddable JS overlay), `server` (Hono API + SQLite), `admin` (Preact SPA dashboard), `shared` (types/schemas). A `tauri-*` add-on packages the admin + widget as a desktop tray.
+Nine workspace packages now: `widget` (embeddable JS overlay), `server` (Hono API + SQLite + session-service + launcher-daemon), `admin` (Preact SPA dashboard), `shared` (types/schemas), `cli` (`propanes` command, `propanes://` handler, SSH/kubectl terminal bridge), `desktop` (Tauri tray), `e2e` (Playwright suite), `harness` (Docker test stacks), `slack-bot` (amirobot). The server also hosts per-user AKS pods (`charts/`, `docker-launcher-entrypoint.sh`) and can run from an NFS checkout — see §2.14.
 
 ## 2. Primary surfaces (the things that must keep working)
 
@@ -50,6 +52,12 @@ Four packages: `widget` (embeddable JS overlay), `server` (Hono API + SQLite), `
 - Yolo/headless sessions exit when their turn ends; instead of resume-by-hand the operator can enqueue **follow-ups** on a parent (`/api/v1/admin/agent-sessions/SESSION_ID/followup`) that dispatch on terminal status (handled by `dispatchPendingFollowups` in `routes/admin/session-followups.ts`).
 - Auto-restart of closed interactive-YOLO sessions to keep generating tickets has been requested (`01KQCZQJJ0` / `01KQCZPCV5`) but is not yet implemented.
 - A session's `tmuxId` for an interactive session is `pw-<sessionId>` — the copy-id action should include the `pw-` prefix so the id can be found in tmux (`01KRRYNKV3`).
+- **Waiting-for-input is a first-class state** (`01KVYP3GMY`, `01KW0CEC6G`, 2026-06-25): sessions whose PTY is blocked on a prompt (permission prompt, Claude's first-run "trust this folder" prompt, AskUserQuestion) are pinned in a separate list above the sidebar (`75fe58d`, `bf9115d`). Detection tolerates Ink's collapsed spaces and is gated to startup for the trust prompt (`d822751`, [[project_ink_strips_spaces]]). The indicator must clear when the prompt is answered — stale "waiting" was ticket `01M33KPXDG` (PR #15, `067eb53`). `inputState` flaps on every keystroke, so waiting-triggered effects go through `focus-guard.ts` ([[project_input_state_keystroke_flap]]).
+- **Resume promotes headless to interactive** (`01KYK9E700`, `cba4211`): a user-facing Resume on a `headless-*` session spawns `interactive-yolo` with a "continue" message, never another one-shot headless run. The restore-queue path (§2.13) keeps the parent's profile.
+- **Agent sessions get API credentials** (`da9a094`, `8f4014c`, PR #21, PR #32): every spawned session, local or launcher, receives `PROPANES_TOKEN` (owner-scoped bearer) and `PROPANES_API_URL`. Codex TUI runs with `--no-daemon` so the env reaches the agent. Smoke-test bead: `01KXMNWGFX` ("token-env smoke test — reply DONE and exit").
+- **Runtime badge**: every session row, card, and terminal header shows which runtime (claude / codex) runs it (`0c21673`, `4fee65a`, `cd7c9b0`; ticket `01KXGPQ3CP`).
+- **Titles**: the dispatch prompt no longer repeats an auto-derived title above the feedback text (`c7b6e63`, ticket `01KVREVZYN`); the session top bar shows the ticket title with a link back to the feedback (`9709a46`, ticket `01KVRA1J1A`), and the title stays visible ahead of badges with a minimum truncated width (`8336199`, ticket `01M33RM8BJ`). Double-click on a sidebar label renames (`0956f0d`, PR #19).
+- **Monorepo sub-apps** (`393d6da`, PR #2): an app may declare `subApps[]` (`name`, `dir`, `subdomain`); feedback carries `sub_app`, and `resolveSubApp` in `dispatch.ts` runs the agent in `<projectDir>/<dir>`. No Propanes Admin feedback uses it yet (`sub_app` is NULL on all 484 rows) — it exists for the Workbench monorepo.
 - **Bail-out recovery dispatch** (`01KRWH7TGZ`, 2026-05-18): when a parent session matches the bail-out heuristic (`status=completed`, `exitCode=0`, `outputBytes<5000`, `completedAt − startedAt < 2s`) — or the operator manually says "this session died, do what it was supposed to" — the CoS Ops agent re-reads the parent's `output_log` + first user prompt + originating `feedback_items` row, summarizes what the parent was supposed to do, and fans out a fresh implementation session with the same prompt envelope. The recovery session must link back to the dead parent via `agent_sessions.parent_session_id`. This is a CoS-side action; do not auto-fire from the server reconciliation path (operator gesture only).
 - **Machine display name** (`01KRWHAT4S`, 2026-05-18): dispatch / launcher / harness / target pickers must show a human-readable name for the local launcher (e.g. `local — propanes-vm` or the hostname) when listing alongside named remote machines. Showing a bare `local` next to named remotes is ambiguous to the operator; resolve from `os.hostname()` and the machines table's display column.
 
@@ -153,6 +161,20 @@ Channels are the primary organizing axis inside CoS, per-app. They are durable i
 - Floating overlays (menus, dropdowns, popovers, popups inside `.cos-popout`) **must** use opaque background, hardcoded `#1e293b`, not `var(--pw-bg-surface)` ([[feedback_floating_overlay_opaque]]). Full-viewport modals/lightboxes use `#0b1220` and **must** be portaled to `document.body` via `createPortal` — local rendering inside the component tree gets clipped by ancestor `transform`/`filter`/`backdrop-filter`. See [[style-guide]] for the full rule set and palette.
 - Companion types are defined in `CompanionType` union (`packages/admin/src/lib/sessions.ts`): `jsonl:` / `feedback:` / `iframe:` / `terminal:` / `isolate:` / `url:`. Adding a new type needs updates in 6 places — see CLAUDE.md "Companion Tabs."
 
+### 2.4a PTY sizing and focus rules
+
+The shared-PTY bug family (June–October 2026) produced these rules. They are the spec; the commits are the evidence.
+
+- **One PTY, many viewers; the PTY sizes to the largest viewer per axis** (`efeb115`, `13d30b3` for launchers; [[project_pty_largest_viewer]]). Panes never fight over the grid — each viewer mirrors the server's size instead of pushing its own (`ef21b11`, PR #17). Smaller viewers must not move the cursor (`eb19ca5`).
+- **Stream profiles use `STREAM_PROFILE_PTY_COLS`** from `shared`; tmux caps windows at 10 000 cols and fills wider clients with `·` ([[project_tmux_stream_pty_width]]).
+- **Reload must not flicker or scroll**: history replay RIS-replaces the screen and resize bounces are gated on a truncated snapshot at unchanged size (`775f8d2`, `d84e661`; [[project_pty_reload_flicker]]). Hidden tabs drain output so returning to a tab doesn't replay (`566c37e`). Overlay viewers that attach after an idle animation get the complete screen restored (`754435c`, PR #11).
+- **Cursor**: no blinking during TUI output (`03a4859`, PR #34).
+- **Focus**: the PTY takes focus on activation only when no other input is focused (`0aade8b`); the structured-view input bar must never steal focus from the PTY when it auto-focuses (`e144100`, PR #35, ticket `01M52T831A`). Per-leaf popups (status-dot menu) render only on the owning leaf (`758ac38`; [[project_multi_pane_shared_signal_popups]]).
+- **Typability**: a pane is typable even before its PTY is live (`e846799`); a dead terminal socket is noticed and reconnected instead of waiting for a reload (`da0b6c1`, ticket `01M2EV3Q9J`); un-acked input is **not** replayed on WS reconnect (`15e5730`).
+- **Copy**: selection + Cmd-C works via tmux `set-clipboard on` + OSC 52 handler + clipboard-wipe guard (`4676fc0`, ticket `01KXEHJE7J`; [[project_pty_clipboard_osc52]]).
+- **Locale**: tmux sessions force a UTF-8 locale so TUI glyphs render (`da0e71e`).
+- **Split companions**: selecting a session from the list must not auto-split an extra "Conversation" structured pane — the split view is already the host (`7f0ffa6`, ticket `01KYRNPRC7`). The Attach action on the standalone feedback page opens the session in a split (`955c234`, PR #33). The split's structured half must track the same session as the PTY half (`645f648`, ticket `01KVB70BXE`; [[project_codex_jsonl_resolution]] — resolve codex rollouts by `startedAt`, never newest-by-cwd).
+
 ### 2.5 JSONL / structured / split view
 - The session view renders the live conversation in three modes: **Terminal** (raw), **Structured** (parsed bubbles), **Split** (side-by-side). Toggle: `SessionViewToggle.tsx`.
 - Default mode for live sessions should be Structured ("we're defaulting to struct vs term, that option should only be there for [certain] sessions" — operator tickets) — but **Show full message** should also be on by default (`01KQN83K0P`).
@@ -161,12 +183,20 @@ Channels are the primary organizing axis inside CoS, per-app. They are durable i
 - The structured view must be usable in a small footprint (mobile) and should collapse densely (`01KQ___` — "our jsonl view needs to collapse down more").
 - A mobile structured view needs an inline composer + stop button so the operator can talk to the live session (`01KRSH1917`).
 - Structured view rendering is the same fundamental component as the CoS bubble — minor style differences (bubble vs irc/slack) — and unifying them is an explicit direction (`01KR4CKB6Z`).
+- **CoS thread companions and interactive threads default to structured view**, with a dropdown to switch to the PTY next to the session-view button (`9a96ada`, ticket `01KWNTJEDQ`). The toggle is still shown for every session; the operator's earlier "only for certain sessions" wish stands as a preference, not an invariant.
+- **Thinking messages are hidden by default** in the conversation filter — "it doesn't add much since there are no traces" (`e4901cb`, ticket `01KXFJNBQT`).
+- **Markdown fidelity**: `cat -n` line-number prefixes are stripped before rendering tool output (`6db7829`, ticket `01KXGXYPKV`); user bubbles keep their newlines (`8f2af76`, ticket `01KY5TW8X5`); markdown URLs render in-pane (`0006cad`). A companion iframe pointing at an `.md` file should render the markdown, and the pane resizer must keep tracking the mouse over the iframe (`0006cad`, ticket `01M2G953K1`).
+- **Live tail survives `/clear` and compaction** (`c5504fb`, `5c5ec0e`; tickets `01KZC77Q11`, `01KZ6WMJX3`). Transcript views must not spin forever on plain terminal sessions (`328e88d`) and remote launcher transcripts stream the same way as local ones (`cd9e930`, `274bac2`).
+- **Transport**: the JSONL companion fetches **differential** updates with a per-file byte-offset cursor + ETag (`beff883`, ticket `01KTVRBY9K` — "insane amount of bandwidth"). Long sessions exceed header limits on GET, so the client POSTs the cursor set and falls back to GET when the server lacks the POST route (`1ec1f8c`, `e7d8430`, PR #18; tickets `01M22627X7`, `01M2P8CW8J` — "HTTP 431… we shouldn't show an error like this"). Missing-JSONL differential polls answer `200 pending`, not 404/400 (`4599ad6`, ticket `01KYJNPAMN`). Polls pause while `navigator.onLine` is false (`666c385`).
+- **Mobile**: images attached to a session must render in the mobile structured view (`01KTT5JBW1`); both killed and active sessions need a complete structured view on mobile (`01KWG904XG`, `9417e0e`).
 
 ### 2.6 Mobile admin
 - The admin SPA is mobile-responsive. Common regressions: CoS lane not opening on mobile (`01KR___`), composer scrolling off-bottom (`01KRA5W61X`), horizontal scroll on CoS chat (`01KQ3HDYMB`), widget ends up in bottom-left corner when brainstorm mode is on, dragging window behind a popped-out CoS (`01KQ3HF8PH`).
 - Mobile CoS should show the Stop on bottom-right because the operator can always submit from anywhere (`01KQ1FM7Z1`).
 - The Tauri tray app uses `tauri-nspanel` to render the feedback widget as a spotlight popup on macOS; rdev provides global hotkey + Esc override (`docs/tauri-nspanel-research.md`, `docs/native-plan.md`, commits `420caf1` / `39a05ff`).
-- Auth: when sessions fail to sync because the operator's session expired, the app should redirect to sign-in automatically rather than requiring a refresh (`01KRT4SNGT`).
+- Auth: when sessions fail to sync because the operator's session expired, the app should redirect to sign-in automatically rather than requiring a refresh (`01KRT4SNGT`). Member-role users must **not** be auto-logged-out (`464f3fb`, ticket `01KXGY222N`), and admin auth sessions are long-lived (`e95a74c`). A valid-but-forbidden token is 403, never 401 ([[project_401_logout_convention]]).
+- Mobile session view: the session-id popup menu carries Resolve / Kill (`5325700`, ticket `01KVT9X6J0`); the top bar shows the ticket title + feedback link (`9709a46`); the mobile fallback renders the structured view (`9417e0e`).
+- Document title shows the location host for environment disambiguation — `ProPanes <user> <host>` (`38abc93`, `19e8691`; tickets `01KVBJVW4V`, `01KY5T8BJR`).
 
 ### 2.7 Brainstorm mode + microphone input
 
@@ -208,7 +238,12 @@ Brainstorm mode is **microphone-first** — typing is a fallback, not the defaul
 - `pickYoloAgent` in `widget.ts` must agree with the admin button — both prefer interactive-yolo. The class of bug "mobile widget launches yolo dispatches that are not skipping permissions" recurs (4 dupes in `groupKey=mobile widget is launching yolo dispatches…`).
 - The screenshot capture is **html-to-image** in the page; it misses canvas, cross-origin iframes, transforms, and arbitrary CSS. **Only** use it when persisting evidence into a feedback row; never as ground truth for verifying UI work ([[feedback_use_playwright_screenshots]], CLAUDE.md "Screenshots / Visual Testing").
 - The widget's element-picker must support selecting elements *inside* the CoS pane (`01KQ___` "using the CoS DOM selector should not exclude the CoS pane").
-- DOM elements selected by the picker should render inline in the textarea (clickable chip), not as the literal `[Element 1]` text (`01KQSZXB5B`). The `[Element 1]` `[Image 1]` placeholder text in submitted feedback is **the bead** — preserve it when reading tickets.
+- DOM elements selected by the picker should render inline in the textarea (clickable chip), not as the literal `[Element 1]` text (`01KQSZXB5B`). The `[Element 1]` `[Image 1]` placeholder text in submitted feedback is **the bead** — preserve it when reading tickets. Since mid-2026 the dispatch prompt expands those placeholders into literal selectors and `/tmp/<ULID>.png` paths (see [[agent-jsonl-inputs#shape-a--do-feedback-item]]).
+- **Widget identity**: the real embed is `/widget/propanes.js` with `data-app-key`; the server resolves the key to an app id so the agent list shows app-scoped endpoints (`fbfbec8`, ticket `01KY0GS27D`) and widget feedback on the admin page files into Propanes Admin, not an arbitrary app (`2b2ef47`, PR #7). Key lookup never happens unauthenticated (`2a0fb66`).
+- **Agent picker**: the widget must always offer the full agent list including YOLO (`3165b65`, `72fc26a`, `0220232`; tickets `01KX7MGNEG`, `01KX2EANAT` "being dispatched to Codex instead", `01KY0GS27D`). The agent-settings link deep-links to `#/agents`.
+- **Send menu**: "Open session" option loads the dispatched session in an app-scoped sessions view with a loading state (`cf0fc0b`, `74d161f`, `116d512`; tickets `01KY5W34TR`, `01KZW68WNQ`). Auto-dispatch stays sticky when sending from the menu (`4cbce07`, PR #13, with e2e coverage). Persisted YOLO mode is honored on plain submits (`b2af82a`).
+- **Submit reliability**: duplicate submits are blocked with an in-flight spinner (`eddb403`); the typed prompt survives until the server confirms the row (`ccc9b4c`); description/instructions caps are 100k and zod details surface in the widget error (`c9fee39`, ticket `01KYJMFZ6J` "Validation failed"). Path prefixes are preserved when deriving API/admin URLs (`cc65bd4`, PR #1).
+- The widget Settings button and the Ops entry are gated behind the alpha preference (`292cf35`, PR #12).
 
 ### 2.9 Spec wiki
 - The page at `/admin/#/app/APP_ID/spec` (`packages/admin/src/pages/SpecWikiPage.tsx`) loads markdown from `<projectDir>/docs/spec-wiki/<appId>/` via `api.getSpec(appId, file)`.
@@ -219,6 +254,7 @@ Brainstorm mode is **microphone-first** — typing is a fallback, not the defaul
 - **Spec content must reflect current truth.** Statements like "the Aggregate button is being repurposed" are wrong if the rename has happened — the spec should say "Aggregate has been renamed to Update Spec" with the past tense (`01KRVESWPQXFTA`). Wiki regenerators should rewrite past-future-tense fragments into present-tense statements of the system as it stands.
 - **Mobile readability**: the spec page must be **collapsible** so the sections fit on a phone (`01KRVEN9ZZ5H8Q`, `01KRVENA03Q23F`). Implementation: each H2 section is a `<details>` element collapsed by default on viewports < 768px, with the TOC pinned at top.
 - **Scroll behavior**: new messages arriving in the CoS chat embedded above the spec page must not scroll the spec to the top (`01KRTA5ZK5WB63`). The chat and the spec body scroll independently.
+- **Regeneration is a PR**, not a direct write to `master`: the Update Spec session now runs under the development contract (§6), so each regeneration lands as a reviewed PR on `docs/spec-wiki-<date>`.
 
 ### 2.10 Slack / amirobot
 - An `amirobot` Slack bot can drop tickets into the queue and ask status questions ("how many sessions are we running now," "status of the workbench app admin console"). Slack-originated sessions should launch as headless-YOLO and be linkable back to the propanes session (`01KQ___` "Slack: When we launch a session via slack can we link to the session in propanes").
@@ -238,6 +274,78 @@ Onboarding is a sub-spec of the same surface: a contributor with a fresh box sho
 
 The work list (what's missing today vs the existing primitives) is itemized in [[infra-onboarding#5-open-work-the-spec-deltas]].
 
+### 2.12 Session → PR pipeline
+
+The June–October 2026 direction: a dispatched session is not done when it edits files — it is done when its PR is merged.
+
+- **Detection**: PR URLs are detected from the session transcript (JSONL), not only the PTY (`ae75035`, PR #4), and stored in `agent_sessions.pr_urls`; cursor-forward skips never fabricate URLs and stored fabrications were scrubbed (`800257e`). 203 sessions carry PR URLs at this snapshot.
+- **Display**: a PR badge shows in the sidebar session row, the sessions page card, the pane/terminal header, and in Cmd-K search (`2a72f6d`, `abbe16e`, PR #5). Badges **collapse** behind the title in the pane header the same way as in the sessions list, so the title stays clickable to open the feedback ticket (`7d68020`, PR #24, ticket `01M4CZ28P8`). Badges live on the thread divider, right side, so they don't shift on hover (`a458502`, ticket `01KY3BD6CD`). Session menu lets the operator add / remove / hide badges by hand (`154e57f`, PR #20; `pr_urls_added`, `pr_urls_hidden`).
+- **Review**: the session menu has "Review PR", which opens a quick-dispatch composer pre-filled with `review PR <n>` on a YOLO profile, defaulting to the **other** runtime (claude reviews codex work and vice-versa) with the agent dropdown still editable (`cd7c9b0`, ticket `01KXGPQ3CP`). The operator also files `review PR <n> as <account> and approve if all looks good` beads for the workbench repo (`01KX6QCK0D`, `01KYRMVSSV`, `01KZRCAVST`, `01M3AW8254`, `01M3G370P7`, `01M15TZNGC`).
+- **Contract**: the dispatch hint appended to every prompt (`COS_REPLY_DISPATCH_HINT` in `dispatch.ts`) tells the agent to run CI-equivalent checks locally, open a PR, and keep monitoring CI, conflicts, and review requests until approval (`d8c29cf`, `f744578`, `fadf72c`, PR #23). Full text in §6.
+- **Approvals**: `cos_dispatch_approvals` + the Approval Queue page exist for channel-policy `requireApproval`, gated behind alpha features (`da4cff2`, PR #10).
+
+### 2.13 Restart / restore workflow
+
+`propanes.service` restarts used to SIGKILL every detached tmux session underneath it (fixed by `KillMode=process`, PR #27). The recovery surface is durable:
+
+- `cleanupOrphanedSessions()` marks rows whose process tree is gone as `status='failed', failure_reason='orphaned_restart'`. A row confirmed alive on a later check is self-healed back to `running` (`unmarkFalseOrphan` in `restore-queue.ts`).
+- The **Restore Queue** page (`RestoreQueuePage.tsx`, `806ae9b`, PR #29) lists orphaned conversations (collapsing historical rows of the same `claude_session_id`), lets the operator resume one or all, and disables per-item actions while a bulk restore runs (`741e805`). `restore_dismissed_at` hides items the operator chose not to restore.
+- Resume uses `resumeAgentSession()` with `DEFAULT_RESTORE_PROMPT`: *"This conversation was interrupted by a propanes service restart, not by you finishing or giving up. Before doing anything else, check the current state of your task… If the task is already fully complete, say so briefly and stop… If it is partially done, resume precisely from the interruption point… If it was never started, proceed normally."* The queue tells a genuine recovery apart from a resumed session that immediately hit a usage/billing wall.
+- A session whose tmux is still alive but whose PTY reattach is racing is **not** an orphan (`session-recovery.ts`, `tryRecoverSession()`); it is recovered by reattach, never queued. Session-service restarts are `systemd`-managed ([[reference_session_service_restart]]).
+- Operator beads behind this: `01KT7RGPPJ` ("i came back after an evening and my sessions all seemed to be ended"), `01M2EV3Q9J` ("after reload I have to refresh to type"), `01M3MV86GW` (all WebSockets failing — a cert expiry, see [[reference_wildcard_cert_renewal]]), the 2026-10-12 ~18:45 UTC unplanned restart that interrupted session `01M4RRBY07…` mid-task (JSONL `7fae0026-…`).
+- The admin SPA detects a **stale bundle** after a deploy and shows a reload banner (`ddbe7db`).
+
+### 2.14 Multi-user hosting, tenancy, and path-prefixed mounts
+
+Propanes Admin runs as a shared service and as per-user pods:
+
+- **Users and orgs**: multi-user login (`865d82c`), org-scoped admins where only org-less admins see everything (`2f888d0`), `owner_user_id` / `org_id` stamped on feedback and sessions so members can see widget feedback (`82dd29a`, `57e7cbb`). The seeded `env-admin` user row keeps admin-route writes valid under tenancy FKs (`fd571c9`, verify beads `01KX46DP7C`, thread `01KX46KBHP`). Users page errors (`01KWGHE88A` "Failed to load users (500)") are the regression shape.
+- **Per-user isolated workspaces** — own org, apps, NFS paths (`409e64d`); **self-service per-user AKS pod provisioning** (`0551cf1`, `d1c1d6d` chart) with `DB_PATH` set on provisioned pods (`1bfc300`); **per-session isolates & metering** (`53993ba`, `agent_sessions.isolation` / `isolate_id`, `session_usage`). All 1,739 local sessions are `isolation='shared'`; isolates are a pod feature.
+- **NFS run mode**: pods opt in via `/data/propanes-run-from-nfs` and run server, session-service, and launcher from the NFS checkout with a fast-exit fallback (`4db7f9c`, `88ec365`, `274bac2`); see CLAUDE.md "Per-user pods: running from NFS" and [[reference_maksym_stage]].
+- **Path-prefixed mounts**: `PROPANES_BASE_PATH` makes every shell work under a prefix (`8a4e6d6`); the admin SPA (`f667eea`, `ab418b3`, `af5bb9f`), widget (`cc65bd4`), and CLI (`006a3ce`) preserve the prefix; the manifest loads credentialed behind an SSO gate (`8d35be9`); an env-driven IP allowlist lets a prefix mount drop the SSO gate (`281ac43`); direct local agent API requests are allowed (`0d545d1`, PR #26).
+- **Launcher auth**: launcher pods seed `~/.claude/settings.json` from `propanes-agent-auth` as defaults, not policy (`cb12abc`, `a3786b6`, PR #3), run with writable credentials (`6694c1d`), and support in-session `claude update` via a user-local native-install shim (`ee0aaf5`).
+- **Bootstrap**: `pnpm setup` / `scripts/setup.sh` is the one-command bootstrap from a bare machine; `pnpm doctor` checks it; migrations run in session-service so first boot works on a fresh DB (`6a524b0`, `d580bdb`, `f2a11db`, `63438ee`). The first-run `GettingStartedPage` ships a hot-reloading starter and guided prompts (`474934f`).
+- **Hostnames are not spec**: internal hostnames must not appear in code comments or git history (`eac6eb9`, tickets `01KX2KX51N`, `01M12GRQQS`, `01KX72VDVP`). Use "the staging VM", "the shared VM", or a `<host>` placeholder in docs.
+
+### 2.15 Theme: light mode and PTY colors
+
+- 2026-09-19 refresh: neutral surfaces with restrained brand accents (`c291052`), light sidebar and session contrast fixed (`7186f3b`), conversation themes unified across structured view, CoS, and JSONL (`414baac`). The flame palette rule in `AGENTS.md` / `DESIGN_SPEC.md` still applies — category differentiation by shade, label, or icon, never by hue outside black/grey/blue/red/orange/yellow.
+- **PTY and structured view follow the app's light/dark mode** (`a053973`, PR #22, ticket `01M3T444MA`), with independent PTY color preferences the operator can override (`7186f3b`).
+- Dispatch composer textarea has sufficient contrast in dark theme (`470d7f9`).
+- Text selection is disabled on pane tabs, feedback title links, and session tags (`18b3108`, `b9b88ac`, PRs #8/#9).
+- The activity ring must read as progress, not as broken; white sidebar spinners are gone (`8ef339f`, PR #14).
+- Favicon is the propane-tank icon from the desktop build, re-centered from `.VolumeIcon.icns` (`1288b94`, ticket `01KV6CGPY4`); the tray icon is a plain white circle (`b6cf069`).
+
+### 2.16 Attachments and file transfer
+
+- **Composer uploads**: files dragged into any composer are persisted via `uploads` and exposed as `/api/v1/uploads/<id>` with a copy-path action; the dispatch prompt lists them under `Attached files (read from these local paths if you are on the server host)` (`90c50e5`, ticket `01KV681WZN`).
+- **Session panes accept drops**: images and files can be dragged onto the PTY or the structured view; images are pasted into the PTY the way Claude natively supports, other files land in `/tmp` and their path is typed into the command line, and a warning is shown before uploading very large files (`2845e05`, `44ce21a`, ticket `01KXESFWZ9`).
+- **Paths must exist where the agent runs**: composer-attached images are symlinked into `/tmp` so prompt paths resolve (`734034a`, `bbc6d4f`), remote attachment copies align with the healed prompt paths (`e5b2e62`), and feedback screenshots/attachments are shipped to remote launchers before launch (`c6eeab8`, `e0815fa`). Tickets `01M21FRY2Y` ("tmp directory files that do not exist") and `01M21N9YPS` ("testing if we can see this attached screenshot") are the regression tests.
+- Widget screenshot capture remains html-to-image and remains lossy — see §2.8.
+
+### 2.17 Flatter upstream sync
+
+Flatter is the feature-import workflow the operator specified in ticket `01KX1SZ2PV`: *monitor upstream projects, rank new commits/features as critical / nice-to-have / skip, present a dashboard the operator can annotate, scope and re-rank against our repo, then do the work in lanes.*
+
+- Tables: `flatter_monitors`, `flatter_runs`, `flatter_items`, `flatter_plans`, `flatter_reports`. Page: `FlatterPage.tsx` at `#/app/<appId>/flatter`. Commits: monitor dashboard (`b260a5f`), plan run flow + plan document (`711907c`, `0b9bc0b`), accept/re-open + ask-the-planner composer (`7e54a17`), non-git sources + assist composer (`2538451`), input reliability + parser classification (`0169397`), outbox failures surfaced (`607f695`).
+- **Lanes** dispatch as ordinary feedback items titled `[Flatter/Plan]`, `[Flatter/PR]`, `[Flatter/Review]`, `[Flatter/Verify]` (`01KX41EZDE`, `01KX6F82VE`, `01KX6F82VG`, `01KX6F82VH`) whose description is the plan body — so the same session/PR pipeline applies.
+- Direction still open (`01KX7KZ60Q`): a "setup assist" composer to describe *how* Flatter should pull features, plus computer-use/Playwright to examine features in another web app and emulate them. The first upstream was `meawoppl/agent-portal`, which the structured view was originally based on (`01KTTEQB2Z`, `01KZC77Q11`).
+
+### 2.18 `propanes` CLI and terminal access
+
+- `packages/cli`: `propanes login` (Workbench SSO device flow `ccb1855`, browser-assisted `--web` for SSO-gated hosts `9aeed13`), `propanes feedback` (`ee0f670`), `propanes sessions` / `attach` with auto-tunnel over the SSH gateway (`7325832`), `propanes://` protocol handler (`148fac1`, macOS install fix `9722e38`), edge-SSO redirects surfaced clearly (`cf07012`), Workbench session preserved across app-token logins (`dfcd3c2`).
+- Terminal bridge: SSH gateway, plus a kubectl-exec mode for K8s pods that needs no sshd (`0654b6f`). The pod image carries dev/agent tooling, `linear-cli`, `xz-utils`, `feh` (`38fed57`, `bcbf1e4`, `d8e0fd0`, `0a29836`; ticket `01KYB5RCRV` — the build failed until `xz` was present).
+
+### 2.19 Alpha gating and defaults
+
+- `pw-alpha-features` (localStorage, `settings.ts`) gates: Ops / Chief-of-Staff chat, Review approvals / Approval Queue, the widget's Ops entry, Flatter page entry points (`da4cff2`, `292cf35`; PRs #10/#12). Default **off**. Consequence: the CoS surfaces in §2.3 are dormant on fresh installs and no new `cos_messages` have been written since 2026-06-11.
+- Quick Dispatch panel: anchored to the `[+]` button (`643c98c`), resizable (`da6545a`, PR #6), remembers the last-used agent globally and keeps agent settings sticky between runs — same for the widget (`a7fb101`, ticket `01KVBX4Y0E`). It must survive duplicated sessions panes (`125ba95`) and never fail with `Agent endpoint has mode "webhook" but no URL configured` (`3f035d5`, ticket `01KTVQS9YD`). Operator smoke beads `01KX467AZX`, `01KX401GE1` ("quick dispatch buttons stopped working").
+- Sidebar: app filters and "Group by application" default to checked (`d5b0282`); CoS sidebar groups split by app (`b4139c1`, ticket `01KV68F499` "all of our sessions end up under the CoS Inbox and show up as workbench sessions").
+- Service root `/` redirects to `/admin` (`4dff9da`, ticket `01KVSBTQFC`).
+- Resolve is optimistic and bounded; session pushes must not resurrect an optimistic kill/resolve (`8988909`, `e47f5f3`; ticket `01KYR5HW1B` "hitting resolve but it is not resolving").
+- CoS overlay drawers start just below the thin toolbar so the X / hamburger stay visible (`05c48c0`, ticket `01KYR5PN18`).
+- "Close other tabs" must work (`01KXS2ZC6T`).
+
 ## 3. Data flow rules
 
 - **All UI state that survives refresh** belongs in localStorage (composer drafts, QDP-panel entries `01KRQKBNAJ`, filter pills, dispatch type + agent selection `commit 50bf6d3`).
@@ -248,6 +356,10 @@ The work list (what's missing today vs the existing primitives) is itemized in [
 - **Never** use `window.prompt` / `alert` / `confirm` — use modals or the `TerminalPicker` spotlight (`packages/admin/src/components/TerminalPicker.tsx`).
 - **CoS-only dispatch rule** applies to *Ops chat*; dispatched implementation agents (dispatch-shaped prompt; ex-`[AGENT NOTE]` preamble, removed 2026-06-11) act directly ([[feedback_dispatch_only]]).
 - **Don't curl-POST `<cos-reply>`** — stream output is auto-persisted ([[feedback_no_curl_post_replies]]).
+- **JSONL transport is differential** (byte-offset cursor + ETag, POST with GET fallback). Never fetch a whole transcript on a poll.
+- **Attachment paths are healed server-side**: anything the prompt references under `/tmp` must exist on the host where the agent runs (local symlink or launcher transfer) before spawn.
+- **Secrets and hostnames** never go into code comments, docs, or commit messages. `PROPANES_TOKEN` is injected into the session env, never pasted into prompts.
+- **Status transitions are optimistic in the UI and reconciled by the server**; a server push must not undo an optimistic kill/resolve.
 
 ## 4. Agents and permission profiles
 
@@ -261,11 +373,14 @@ Registered endpoints (app-scoped or global) seen in this instance:
 | `01KNRG6Z14…` | yolo | interactive | `interactive-yolo` |
 | `01KPS040Y7…` | codex-yolo | interactive | `interactive-yolo` |
 | `01KPS040Y9…` | codex | interactive | `interactive-require` |
+| `01M21MQRNE…` | Claude Interactive | interactive | `interactive-require` (added 2026-09-08) |
 
 Selecting which endpoint to use:
 - **YOLO button → `pickYoloAgent`** prefers interactive-yolo, then headless-yolo, then headless-stream-yolo.
 - **Picker default** is the app's default endpoint, falling back to global default.
 - **Headless-stream-require** is the only profile that combines stream-json + permission gating (approval prompts come back as JSON events). Claude only; codex exec has no approval back-channel yet.
+- **Observed usage since June 2026** for this app: 135 `headless-stream-yolo`, 42 `plain` (operator-opened terminals named `propanes-admin-XXXXXX` / `build-admin-XXXXXX`), 14 `interactive-require`, 1 `interactive-yolo`. The YOLO quick-dispatch default is `headless-stream-yolo` in practice; the seeded `yolo` / `codex-yolo` endpoints remain `interactive-yolo`.
+- Codex TUI sessions run with `--no-daemon` so the per-session env (`PROPANES_TOKEN`) reaches the agent (PR #32).
 
 ## 5. Persistent invariants (do not regress)
 
@@ -285,12 +400,44 @@ Selecting which endpoint to use:
 - Brainstorm starts on a deliberate gesture (mic icon click), not by toggling a checkbox.
 - A spawn must refuse cleanly when the host can't support it: disk ≥ 95 % full → HTTP 503 with remediation actions; `claude`/`codex` binary missing → 503 with an install card. See [[infra-onboarding#24-hard-stop-on-disk-pressure]].
 - Detected login-required state spawns a sibling `interactive-require` companion session; the parent pauses until login completes. Generalize cross-runtime; do not silently fail the parent.
+- A session is **done when its PR is merged**, not when the diff exists. PR URLs come from the transcript; badges collapse behind the title; Review PR dispatches to the other runtime.
+- A service restart never silently loses work: orphaned rows become `failed / orphaned_restart`, appear in the Restore Queue, and resume with `DEFAULT_RESTORE_PROMPT`.
+- One PTY, many viewers: the PTY sizes to the largest viewer per axis, reload never flickers, input is never replayed, and nothing steals focus from the PTY.
+- Structured view is the default for thread companions, hides Thinking, survives `/clear` and compaction, and never surfaces transport errors (431/404) to the operator.
+- Every spawned session has `PROPANES_TOKEN` + `PROPANES_API_URL`.
+- Every path the prompt references exists on the host where the agent runs.
+- Light mode is honored everywhere, including PTY and structured view.
+- Hostnames and secrets never enter source, comments, docs, or history.
+- Alpha features are off by default; nothing on the default path depends on the CoS chat being enabled.
 
-## 6. Cross-references
+## 6. Development contract (what every dispatched agent must do)
+
+This is the literal contract appended to every dispatch prompt (`COS_REPLY_DISPATCH_HINT`, `packages/server/src/dispatch.ts`, PR #23), restated as a checklist. It applies to Update Spec runs too.
+
+1. **Implement directly.** A dispatch-shaped prompt means you are the implementation agent, not the CoS ([[feedback_dispatch_only]]). Don't ask whether to proceed; build it ([[feedback_implement_dont_ask]]).
+2. **Before committing**, inspect repository instructions (`CLAUDE.md`, `AGENTS.md`, `DESIGN_SPEC.md`) and CI configuration. This repo has **no `.github/workflows`** and `master` is **not branch-protected** (checked 2026-10-19), so the CI-equivalent checks are the local ones:
+   ```bash
+   pnpm lint      # turbo lint (depends on ^build)
+   pnpm build     # turbo build — server: tsc; admin: vite build; launcher: esbuild
+   pnpm test      # node --test in packages/server and packages/admin
+   pnpm test:e2e  # Playwright suite in packages/e2e (needs a running server)
+   ```
+   Run the ones relevant to the change; fix failures before pushing. If a check cannot run locally, say which and why — never claim it passed.
+3. **Verify UI with Playwright**, not the widget's capture (`pw goto` + `pw screenshot`, [[feedback_use_playwright_screenshots]]).
+4. **Commit on a branch and open a PR** against `tinkerer/propanes` `master` with `gh pr create`. Commit messages end with the Claude co-author trailer; PR bodies end with the Claude Code attribution line. Never force-push ([[project_workbench_pr_autofix_bot]] for the workbench repo's bot behavior).
+5. **Monitor the PR** for CI results, merge conflicts, reviewer comments, and change requests; fix and re-push; re-check after every push. With no CI here, the gate is reviewer approval or the operator saying "merge it" (seen in JSONL `eac99d3c-…`, PR #35). Opening a PR does not complete the task.
+6. **Report honestly**: if blocked on CI that doesn't exist or on a pending review, say so with the PR URL rather than claiming completion.
+7. **Reply through `<cos-reply>…</cos-reply>`** with a 1–4 sentence summary (changed files/commits, what was verified, follow-ups). Only wrapped text reaches the Inbox thread; never curl-POST it ([[feedback_no_curl_post_replies]]).
+8. **Respect the repo rules**: flame palette only; no `window.prompt/alert/confirm`; strict lazy tab mounting; `commitTree()` for layout mutations; opaque floating overlays; no hostnames in comments or history.
+
+## 7. Cross-references
 
 - `CLAUDE.md` (project root) — the operator manual: API examples, agent mouse/keyboard API, session lifecycle, permission profiles.
 - `docs/native-plan.md` / `docs/tauri-nspanel-research.md` — Tauri tray design.
 - `docs/performance-profiling.md` — how to profile the admin.
+- `docs/session-service-boot-race.md`, `docs/terminal-access.md`, `docs/onboarding-review.md`, `docs/design-review.md` — era-2 design notes that back §2.13, §2.18, §2.14, §2.15.
+- `scripts/setup.sh`, `scripts/seed-local.mjs` — bootstrap and seed.
+- `packages/server/src/restore-queue.ts`, `packages/server/src/dispatch.ts` (`DEFAULT_PROMPT_TEMPLATE`, `COS_REPLY_DISPATCH_HINT`, `resolveSubApp`), `packages/admin/src/lib/settings.ts` (`alphaFeaturesEnabled`).
 - `packages/admin/CLAUDE.md` / sub-package CLAUDE.md files — per-dir notes.
 - `[[tickets]]` — full deduped catalogue.
 - `[[operator-inputs]]` — operator vocabulary and preferences.

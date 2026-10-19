@@ -2,6 +2,8 @@
 
 Distilled from CoS thread inputs, ticket descriptions, and JSONL session preambles. This is *how the operator talks about the system* — keep it consistent.
 
+Last regenerated 2026-10-19. The June–October 2026 inputs are almost entirely **widget tickets dispatched straight to a YOLO session** plus **in-session follow-ups** ("commit and push", "merge it", "pull master, rebuild admin"); the CoS chat itself went quiet after it moved behind the alpha gate on 2026-09-20.
+
 ## Vocabulary (use these terms, in this sense)
 
 | Term | Meaning |
@@ -20,7 +22,22 @@ Distilled from CoS thread inputs, ticket descriptions, and JSONL session preambl
 | **mic bridge** | A `window.open` popup that hosts a secure-context `getUserMedia()` capture and `postMessage`s audio back to the widget. Workaround for non-HTTPS dev / cross-origin iframe contexts. See [[project_mic_bridge_popup]]. |
 | **FAFO** | The multi-agent swarm orchestrator. Fan-out / Aggregate / Filter / Optimize. Has its own setup assistant and per-app swarm page. |
 | **the widget** | `prompt-widget.js`, the embeddable JS feedback overlay. Embedded on the admin page itself for dogfooding. |
-| **[Element N] / [Image N] / [Image 1]** | Placeholders in ticket bodies for attached DOM selections / pasted images. These are **part of the ticket data**, not noise to strip. |
+| **[Element N] / [Image N] / [Image 1]** | Placeholders in ticket bodies for attached DOM selections / pasted images. These are **part of the ticket data**, not noise to strip. In the dispatch prompt they are expanded to literal selectors and `/tmp/<ULID>.png` paths. |
+| **PR badge / PR tag** | The detected-PR chip on a session (sidebar, card, pane header, Cmd-K). "Badges" collapse behind the title; the operator wants the title visible and clickable first. |
+| **"review PR <n> [as <account>] and approve if all looks good"** | A reviewer dispatch, usually against the workbench repo. Expects the agent to read the PR, run checks, leave a review, and approve only when clean. Spawned from the session menu's "Review PR" (other runtime by default) or filed as a bead. |
+| **waiting for input** | A session blocked on a prompt (permission, trust-folder, AskUserQuestion). Pinned at the top of the sidebar; the indicator must clear when answered. "Claims it is waiting but it is not" = stale indicator bug. |
+| **restore / restore queue** | Sessions orphaned by a `propanes.service` restart. "My sessions all seemed to be ended" / "I have to refresh to type" are its symptoms. Resume uses `DEFAULT_RESTORE_PROMPT`. |
+| **struct view / structure view** | The structured (parsed JSONL) view. Default for thread companions; the PTY is in a dropdown next to it. |
+| **"the pty looks messed up"** | Any of: wrong size vs the div, flicker on reload, cursor jump from a smaller viewer, overlay not redrawn. Go to [[spec-backbone#24a-pty-sizing-and-focus-rules]] before investigating. |
+| **Flatter** | The upstream-feature-sync workflow (monitor → plan → PR → review → verify lanes). "Pull in features from agent-portal" is a Flatter run. |
+| **agent-portal** | `meawoppl/agent-portal`, the project the structured view was originally based on; the operator's reference implementation for conversation rendering and for "see all apps and sessions per machine". |
+| **alpha features** | `pw-alpha-features` preference. Ops chat, Review approvals, Flatter entry points, widget Ops entry are behind it. Off by default. |
+| **"pull master and rebuild" / "pull master, rebuild admin"** | Deploy the current `master` on the VM the operator is looking at: `git pull --ff-only`, `pnpm build` in the affected package, restart the relevant service (`propanes-sessions.service`) or just rebuild admin dist (served statically). |
+| **"the pod" / per-user pod / "<user> URL"** | A per-user AKS deployment (`propanes.<host>/<user>`) with its own `/data` volume; can run from the NFS checkout via the marker file. "Running from NFS" = hot-deploy mode. |
+| **path prefix / prefix mount** | The admin and widget served under a sub-path behind an SSO gate or reverse proxy. Every URL derivation must preserve it. |
+| **`/tmp` files that don't exist** | An attachment-path bug: the prompt names `/tmp/<ULID>…` but the agent's host lacks the file (symlink missing or launcher transfer skipped). |
+| **"Open Session"** | The widget send-menu option that dispatches *and* opens the resulting session in an app-scoped sessions view, with a loading state while the session comes up. |
+| **"as if we clicked on the Overlays"** | Load the sessions overlay the widget settings expose; the operator's mental model for where an opened session should appear on an embedded host. |
 
 ## Install / login vocabulary
 
@@ -60,8 +77,29 @@ These came up repeatedly in the operator's prompts; they are the operating manua
 ### "Rename scope = admin UI + hash routes only"
 - "Rename X throughout propanes" doesn't include API or DB or widget contracts ([[feedback_rename_scope]]).
 
+### "Finish the PR, don't just push" (new, 2026-09 → 10)
+- The dispatch contract now says: run the CI-equivalent checks locally, open a PR, keep monitoring CI / conflicts / review comments, and only report done when approval is obtained (PRs #21, #23). The operator reinforces this in-session with "did we commit and push to master?", "merge it", "update PR 1108, make the changes requested by the reviewer to get an approval".
+- When CI does not exist (this repo), say so and name the local checks that ran instead. Don't claim a green pipeline.
+
+### "Verify on the machine the operator is looking at"
+- Follow-ups like "pull master, rebuild admin", "do i need to restart the server for this to take effect or will it work now?", "now handle the remote launcher case too" mean the fix is judged on the staging VM / pod in the ticket URL, not on the dev checkout. State which host you verified on.
+
+### "Don't paste hostnames or secrets into the repo"
+- Four separate beads asked to scrub internal hostnames and a leaked name from comments and git history (`01KX2KX51N`, `01KX72VDVP`, `01M12GRQQS`, `01M1N12TX9`). Use placeholders in docs; never commit bearer tokens (the operator pastes them in tickets by accident — see `01M3MV86GW`; redact when quoting).
+
 ### "Implementation agents act; CoS chat dispatches"
 - A dispatch-shaped prompt (feedback template + trailing `<cos-reply>` hint) overrides the dispatch-only rule for implementation agents ([[feedback_dispatch_only]]); the old `[AGENT NOTE]` preamble was removed 2026-06-11.
+
+## Era-2 input shapes (what actually arrived, June–October 2026)
+
+| Shape | Share | Example |
+|---|---|---|
+| Widget ticket with DOM selection + optional screenshot, dispatched to YOLO | ~55 % | `[Element 1] [Element 2] when i start typing in the pty terminal view it immediately jump to the structured view input› [Image 1]` |
+| Bare imperative, no attachment | ~20 % | `pull master and rebuild`, `review PR 815`, `remove reference to … from CLAUDE.md` |
+| Pasted console/stack trace with a one-line question | ~8 % | `what's with all the console errors: console-buffer.ts:102 GET …/jsonl?cursor=init 404` |
+| Long-form direction with external links / NFS plan paths | ~5 % | `01KX1SZ2PV` (Flatter spec), `01KX2E97BF` (phase prompts on NFS) |
+| Agent-generated verification rows | ~28 % of rows, 0 % of signal | `test: resolve latency run 2 (safe to delete)` |
+| In-session follow-ups (JSONL / rollouts, not tickets) | — | `commit and push`, `merge it`, `fix the defect`, `completely remove these refs from our git history please`, `ok fetch and reset hard plz`, `can the SHA be found publicly` |
 
 ## Feedback patterns to expect
 
@@ -100,6 +138,21 @@ These are signals that **a known invariant has regressed** — go check the rele
 - "Drawer pull is floating but the overlay isn't visible" → popout z-index regression; anchor drawer z to `getPanelZIndex(panel)+2` (`01KRYRFKHQ`).
 - "Local" shown alone in the machine picker → use the human-readable display name for the local launcher (`01KRWHAT4S`).
 - "Our session here died, investigate and do what it was supposed to" → bail-out recovery dispatch; CoS Ops re-reads parent and fans out a fresh child session (`01KRWH7TGZ`).
+- "My sessions all ended overnight" / "have to refresh to type" / "all sessions can't connect" → service restart orphaning (Restore Queue, §2.13), dead socket detection, or an expired origin cert ([[reference_wildcard_cert_renewal]]). Check `systemctl status`, `failure_reason='orphaned_restart'`, and `curl -vI https://<host>` before touching code.
+- "Claims it's waiting for input but it isn't" → stale waiting indicator; see `focus-guard.ts` and the trust-prompt gating ([[project_input_state_keystroke_flap]], [[project_ink_strips_spaces]]).
+- "The PTY is messed up / flickers / wrong size / cursor jumps" → shared-PTY sizing rules in [[spec-backbone#24a-pty-sizing-and-focus-rules]]; bisect against `775f8d2`, `d84e661`, `ef21b11`, `eb19ca5` before anything else.
+- "Typing in the PTY jumps to the structured input" → input-bar auto-focus steal (`e144100`); any new auto-focus must check `document.activeElement` first.
+- "Structured view shows HTTP 431 / 404 / spins forever" → transport, not rendering: differential POST + GET fallback, `200 pending` for missing files, plain-terminal short-circuit.
+- "Structured view lost after /clear or compaction" → transcript follow logic (`c5504fb`, `5c5ec0e`); verify with a live `/clear`.
+- "Wrong session's struct view next to the PTY" → codex rollout resolution by `startedAt` ([[project_codex_jsonl_resolution]]).
+- "Can't copy from the PTY" → OSC 52 chain ([[project_pty_clipboard_osc52]]).
+- "Attached file / screenshot path doesn't exist" → `/tmp` symlink + launcher transfer (§2.16).
+- "YOLO went to Codex" / "widget doesn't show all agents" / "got a permission-asking agent" → `pickYoloAgent`, widget key → app-id resolution, alpha gating of the picker.
+- "Quick dispatch buttons stopped working" → FK on `owner_user_id` (env-admin seed), duplicated panes killing the popup, or a webhook-mode endpoint without URL.
+- "Badges hide the title" / "badges move on hover" → collapse behind the title; pin to the divider.
+- "Light mode looks wrong in the terminal / struct view" → PTY + structured view must follow app theme with independent PTY color prefs.
+- "I don't see any apps or sessions after login" → user re-hydration on bootstrap (`cef82be`) or member auto-logout (`464f3fb`).
+- "Build/deploy of the container fails" → image deps (`xz-utils`, `feh`, Node 22 pin) and CVE sweeps; see PRs #25/#27/#28/#30/#31.
 
 ## Persistent operator preferences
 
@@ -110,7 +163,15 @@ These are signals that **a known invariant has regressed** — go check the rele
 - **Lazy tab rendering is non-negotiable.** Multiple mounted `AgentTerminal` instances freeze Chrome.
 - **Show full message by default.** Don't make the operator click "expand" for every assistant reply.
 - **Structured view is default for live sessions.** Terminal is the escape hatch, not the default.
-- **Commit and push frequently.** The operator often dispatches a session whose entire job is "commit and push" (e.g., `01KQRKHFAX`, `01KR4QT3GF`, `01KQXAM8BD`).
+- **Commit and push frequently.** The operator often dispatches a session whose entire job is "commit and push" (e.g., `01KQRKHFAX`, `01KR4QT3GF`, `01KQXAM8BD`). Since September 2026 the expected unit is a **PR that gets merged**, not a push to master.
+- **Thinking hidden by default.** "It doesn't add much since there are no traces."
+- **No surprise splits.** Selecting a session must not open an extra Conversation pane; the existing split is the host.
+- **Title before badges.** In every header and list row the (truncated) title stays visible and clickable; PR/runtime badges collapse.
+- **Host in the window title.** `ProPanes <user> <host>` so multiple environments are distinguishable in the tab strip.
+- **Light mode parity.** When the app is light, the PTY and structured view are light too.
+- **Sticky composer settings.** Agent / mode / auto-dispatch choices persist between runs in both the quick-dispatch composer and the widget.
+- **Waiting-for-input first.** Blocked sessions are pinned at the top of the sidebar; the operator triages those before anything else.
+- **Other-runtime review.** Claude reviews Codex PRs and vice versa by default.
 
 ## Operator's local environment
 
@@ -118,6 +179,8 @@ These are signals that **a known invariant has regressed** — go check the rele
 - The operator's MacBook Air can connect via remote launcher; certain bugs (struct/jsonl view failing on remote `01KR4R56D6`) are specific to that path.
 - An `azstaging2` parallel staging VM exists for testing — see [[reference_azstaging2]] (ssh, tmux, tunnel ports).
 - A shared Playwright browser daemon on the VM is used for UI verification — see [[reference_vnc_browser]].
+- Since July 2026 the operator mostly drives propanes from a staging host behind SSO (ticket URLs are `https://<staging-host>/admin…`) and from per-user pods; ticket `source_url` tells you which. `PROPANES_API_URL` in a dispatched session points at the right API for that host.
+- The operator also uses propanes to drive work in sibling checkouts (`../workbench`, `~/dashboard`, `~/cost-tracking`) — beads about those are filed on this app when the widget is open on the admin page. Check the `cwd` of the linked session before assuming the work belongs in `propanes`.
 
 ## Tone
 
