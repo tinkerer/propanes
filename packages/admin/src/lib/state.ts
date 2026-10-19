@@ -315,6 +315,13 @@ window.addEventListener('pw-navigate-view', ((e: CustomEvent) => {
 }) as EventListener);
 
 // Embed postMessage bridge
+/** Overlay windows the host widget could bring back after a reload
+ *  (overlay-panels.ts `restorablePanels`); drives Settings → Overlay windows. */
+export const embedRestorablePanels = signal<{ type: string; title: string }[]>([]);
+function readRestorable(v: unknown): { type: string; title: string }[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter((p) => p && typeof p.type === 'string').map((p) => ({ type: String(p.type), title: typeof p.title === 'string' ? p.title : String(p.type) }));
+}
 // Browser-local preferences the host widget mirrors (see overlay-panels.ts
 // 'pw-embed-prefs'). Sent on init and whenever the preference changes so the
 // widget's admin menu tracks the toggle without a reload.
@@ -335,6 +342,7 @@ if (isEmbedded.value) {
       if (e.data.appId) {
         selectedAppId.value = e.data.appId;
       }
+      if ('restorablePanels' in e.data) embedRestorablePanels.value = readRestorable(e.data.restorablePanels);
       if (e.source) postPrefsTo(e.source as Window, e.origin || '*');
       // Hand our token back when the host didn't supply one. LoginPage only
       // posts pw-embed-auth after an *interactive* login, so a remembered
@@ -351,6 +359,8 @@ if (isEmbedded.value) {
       if (e.data.route) {
         navigate(e.data.route);
       }
+    } else if (e.data?.type === 'pw-embed-overlay-state') {
+      embedRestorablePanels.value = readRestorable(e.data.restorablePanels);
     }
   });
 

@@ -155,6 +155,47 @@ export const OVERLAY_CSS = `
   display: block;
 }
 
+/* Move mode (Ctrl+Shift ×3): whole panel is a drag surface, amber outline
+   matches the admin SPA's popout .move-mode treatment. */
+.pw-overlay-panel.pw-move-mode {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.4), 0 12px 40px rgba(0, 0, 0, 0.5);
+  cursor: move;
+}
+.pw-overlay-panel.pw-move-mode .pw-overlay-header {
+  cursor: move;
+}
+.pw-overlay-panel.pw-move-mode .pw-overlay-iframe-mask {
+  display: block;
+  cursor: move;
+  background: rgba(245, 158, 11, 0.08);
+  touch-action: none;
+}
+.pw-move-mode-hint {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #1e293b;
+  border: 1px solid #f59e0b;
+  color: #fbbf24;
+  font: 500 11px/1.4 system-ui, -apple-system, sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pw-overlay-panel.pw-move-mode .pw-move-mode-hint {
+  display: block;
+}
+.pw-overlay-panel.pw-move-mode.pw-minimized .pw-move-mode-hint {
+  display: none;
+}
+
 /* Resize handles */
 .pw-resize {
   position: absolute;

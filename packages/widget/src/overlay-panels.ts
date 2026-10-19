@@ -1,4 +1,11 @@
 import { OVERLAY_CSS } from './overlay-styles.js';
+import { cascadeLayout, centerLayout, clampRectToViewport, type PanelRect } from './panel-layout.js';
+
+export type ArrangeMode = 'cascade' | 'center';
+
+/** Ctrl/Cmd+Shift tapped this many times within SHIFT_TAP_WINDOW_MS enters move mode. */
+const MOVE_MODE_TAPS = 3;
+const SHIFT_TAP_WINDOW_MS = 800;
 
 export type PanelType = 'feedback' | 'detail' | 'sessions' | 'files' | 'settings' | 'terminal' | 'workbench' | 'cos';
 
@@ -27,6 +34,11 @@ const PANEL_CONFIGS: Record<PanelType, PanelConfig> = {
 interface PanelState {
   id: string;
   type: PanelType;
+  /** Open options + latest hash route, so the panel can be re-created after a reload. */
+  appId: string;
+  param?: string;
+  launcherId?: string;
+  route: string;
   el: HTMLElement;
   iframe: HTMLIFrameElement;
   iframeScale: HTMLElement;
@@ -55,6 +67,31 @@ const MIN_SCALE = 0.4;
 const MAX_SCALE = 2.5;
 
 const PERSIST_KEY = 'pw-workbench-layout';
+/** Every open overlay panel (type, route, rect) — rewritten on each change so a
+ *  reload can offer to bring the previous windows back (Settings → Overlay windows). */
+const OPEN_PANELS_KEY = 'pw-overlay-open-panels';
+
+export interface PersistedPanel {
+  type: PanelType;
+  appId: string;
+  param?: string;
+  launcherId?: string;
+  route: string;
+  title: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+  minimized: boolean;
+  dockedEdge: DockedEdge;
+}
+
+/** What the embedded Settings page needs to render the restore offer. */
+export interface RestorablePanelSummary {
+  type: PanelType;
+  title: string;
+}
 export const ALPHA_FEATURES_KEY = 'pw-alpha-features';
 
 export function alphaFeaturesEnabled(): boolean {
@@ -89,6 +126,24 @@ export class OverlayPanelManager {
   private workbenchId: string | null = null;
   public onWaitingChange: ((sessionId: string, state: string, waitingCount: number) => void) | null = null;
 
+  // --- Move mode (Ctrl+Shift ×3) ---
+  // Mirrors the admin SPA's sticky "triple-shift" mode: once active, the whole
+  // panel (iframe body included) becomes a drag surface so a panel whose header
+  // has slipped off the top of the viewport can still be pulled back. Exit with
+  // Ctrl+Shift (after releasing the modifiers), Escape or Enter.
+  // Panels that were open when the previous page instance unloaded. Captured
+  // once at construction (before anything here rewrites OPEN_PANELS_KEY) and
+  // offered to the user via the embedded Settings page rather than reopened
+  // automatically — a reload is often meant to clear the deck.
+  private restorable: PersistedPanel[] = [];
+
+  private moveMode = false;
+  private moveModeArmed = false;
+  private shiftTaps: number[] = [];
+  private keyDownHandler: (e: KeyboardEvent) => void;
+  private keyUpHandler: (e: KeyboardEvent) => void;
+  private blurHandler: () => void;
+
   constructor(shadow: ShadowRoot, endpoint: string, appId: string) {
     this.shadow = shadow;
     this.appId = appId;
@@ -104,8 +159,145 @@ export class OverlayPanelManager {
     url.hash = '';
     this.adminBaseUrl = `${(url.origin + url.pathname).replace(/\/$/, '')}/admin/`;
 
+    this.restorable = this.loadOpenPanels();
+
     this.messageHandler = (e: MessageEvent) => this.handlePostMessage(e);
     window.addEventListener('message', this.messageHandler);
+
+    // Capture on `window` so we run before the host page's own document-level
+    // handlers (the admin SPA's shortcuts.ts calls stopImmediatePropagation on
+    // the activating Shift press). We never stop propagation ourselves, so a
+    // host that has its own triple-shift mode enters/exits in lockstep.
+    this.keyDownHandler = (e: KeyboardEvent) => this.handleMoveModeKeyDown(e);
+    this.keyUpHandler = (e: KeyboardEvent) => this.handleMoveModeKeyUp(e);
+    this.blurHandler = () => { this.shiftTaps.length = 0; };
+    window.addEventListener('keydown', this.keyDownHandler, true);
+    window.addEventListener('keyup', this.keyUpHandler, true);
+    window.addEventListener('blur', this.blurHandler);
+  }
+
+  private floatingPanels(): PanelState[] {
+    const list: PanelState[] = [];
+    for (const [, state] of this.panels) {
+      if (state.dockedEdge || state.drawerCollapsed) continue;
+      list.push(state);
+    }
+    return list;
+  }
+
+  private handleMoveModeKeyDown(e: KeyboardEvent) {
+    if (this.moveMode) {
+      if (e.key === 'Escape' || e.key === 'Enter') {
+        this.exitMoveMode();
+        return;
+      }
+      if (e.key === 'Shift' && !e.repeat && (e.ctrlKey || e.metaKey) && this.moveModeArmed) {
+        this.exitMoveMode();
+      }
+      return;
+    }
+    if (e.key !== 'Shift' || e.repeat) return;
+    if (!(e.ctrlKey || e.metaKey)) {
+      this.shiftTaps.length = 0;
+      return;
+    }
+    const now = Date.now();
+    this.shiftTaps.push(now);
+    while (this.shiftTaps.length > 0 && now - this.shiftTaps[0] > SHIFT_TAP_WINDOW_MS) this.shiftTaps.shift();
+    if (this.shiftTaps.length >= MOVE_MODE_TAPS) {
+      this.shiftTaps.length = 0;
+      // Nothing to move — don't flip into a mode with no visible effect.
+      if (this.floatingPanels().length === 0) return;
+      this.enterMoveMode(false);
+    }
+  }
+
+  private handleMoveModeKeyUp(e: KeyboardEvent) {
+    if (!this.moveMode || this.moveModeArmed) return;
+    // Arm the exit chord only once every modifier has been released after
+    // activation, otherwise the third tap's own key-up would exit at once.
+    if (!e.ctrlKey && !e.metaKey && !e.shiftKey) this.moveModeArmed = true;
+  }
+
+  /**
+   * @param armed true when the chord was completed elsewhere (e.g. inside an
+   * embedded admin iframe) so our key-up never sees the modifiers release.
+   */
+  enterMoveMode(armed: boolean) {
+    if (this.moveMode) return;
+    this.moveMode = true;
+    this.moveModeArmed = armed;
+    this.shiftTaps.length = 0;
+    for (const [, state] of this.panels) state.el.classList.add('pw-move-mode');
+    this.broadcastMoveMode(true);
+  }
+
+  exitMoveMode() {
+    if (!this.moveMode) return;
+    this.moveMode = false;
+    this.moveModeArmed = false;
+    for (const [, state] of this.panels) state.el.classList.remove('pw-move-mode');
+    this.broadcastMoveMode(false);
+  }
+
+  get isMoveMode(): boolean {
+    return this.moveMode;
+  }
+
+  private broadcastMoveMode(active: boolean) {
+    for (const [, state] of this.panels) {
+      try {
+        state.iframe.contentWindow?.postMessage({ type: 'pw-embed-move-mode', active }, '*');
+      } catch { /* ignore */ }
+    }
+  }
+
+  private rectOf(state: PanelState): PanelRect {
+    return { x: state.x, y: state.y, width: state.width, height: state.height };
+  }
+
+  private applyRect(state: PanelState, rect: PanelRect) {
+    state.x = rect.x;
+    state.y = rect.y;
+    state.width = rect.width;
+    state.height = rect.height;
+    state.el.style.left = `${rect.x}px`;
+    state.el.style.top = `${rect.y}px`;
+    if (!state.minimized) {
+      state.el.style.width = `${rect.width}px`;
+      state.el.style.height = `${rect.height}px`;
+    }
+  }
+
+  /** Pull a floating panel back so its header is reachable. */
+  private clampToViewport(state: PanelState) {
+    if (state.dockedEdge || state.drawerCollapsed) return;
+    const vp = { width: window.innerWidth, height: window.innerHeight };
+    const clamped = clampRectToViewport(this.rectOf(state), vp);
+    if (clamped.x !== state.x || clamped.y !== state.y) this.applyRect(state, clamped);
+  }
+
+  /**
+   * Re-lay out every floating panel: `cascade` staggers them diagonally from
+   * the top-left in z-order (front-most last), `center` stacks them all in the
+   * middle of the viewport. Docked / drawer-collapsed panels are left alone —
+   * their position is already deterministic and visible.
+   */
+  arrangePanels(mode: ArrangeMode) {
+    const panels = this.floatingPanels().sort((a, b) => a.zIndex - b.zIndex);
+    if (panels.length === 0) return;
+    const vp = { width: window.innerWidth, height: window.innerHeight };
+    const rects = panels.map((p) => this.rectOf(p));
+    const laidOut = mode === 'cascade' ? cascadeLayout(rects, vp) : centerLayout(rects, vp);
+    panels.forEach((state, i) => {
+      if (state.minimized) {
+        state.minimized = false;
+        state.el.classList.remove('pw-minimized');
+      }
+      this.applyRect(state, laidOut[i]);
+      if (state.type === 'workbench') this.persistLayout(state);
+    });
+    this.persistOpenPanels();
   }
 
   private injectStyles() {
@@ -116,15 +308,17 @@ export class OverlayPanelManager {
     this.styleInjected = true;
   }
 
-  openPanel(type: PanelType, opts?: { param?: string; appId?: string; launcherId?: string }): string {
+  openPanel(type: PanelType, opts?: { param?: string; appId?: string; launcherId?: string; route?: string; rect?: Partial<PanelRect> & { scale?: number } }): string {
     this.injectStyles();
 
     const id = `pw-panel-${++panelCounter}`;
     const config = PANEL_CONFIGS[type];
     const appId = opts?.appId || this.appId;
-    const hashRoute = config.path(appId, opts?.param);
+    const hashRoute = opts?.route || config.path(appId, opts?.param);
     const embedMode = config.embedMode || 'true';
-    const autoTerminal = type === 'terminal' ? '&autoTerminal=1' : '';
+    // A restored terminal panel carries the route of the session it was
+    // already showing — autoTerminal=1 would spawn a second one on top.
+    const autoTerminal = type === 'terminal' && !opts?.route ? '&autoTerminal=1' : '';
     const launcherParam = opts?.launcherId ? `&launcherId=${encodeURIComponent(opts.launcherId)}` : '';
     const iframeUrl = `${this.adminBaseUrl}?embed=${embedMode}&appId=${encodeURIComponent(appId)}${autoTerminal}${launcherParam}#${hashRoute}`;
     console.log('[pw] openPanel', type, 'url:', iframeUrl, 'appId:', appId);
@@ -151,13 +345,28 @@ export class OverlayPanelManager {
       }
     }
 
+    if (opts?.rect) {
+      if (typeof opts.rect.x === 'number') x = opts.rect.x;
+      if (typeof opts.rect.y === 'number') y = opts.rect.y;
+      if (typeof opts.rect.width === 'number') width = opts.rect.width;
+      if (typeof opts.rect.height === 'number') height = opts.rect.height;
+      if (typeof opts.rect.scale === 'number') scale = clampScale(opts.rect.scale);
+    }
+
+    if (!dockedEdge) {
+      // A persisted or computed rect may be off-screen (smaller window than
+      // last time, negative y from an old drag) — keep the header grabbable.
+      ({ x, y } = clampRectToViewport({ x, y, width, height }, { width: window.innerWidth, height: window.innerHeight }));
+    }
+
     const panel = this.createPanelDOM(id, config, iframeUrl, x, y, width, height, type === 'workbench');
     const iframe = panel.querySelector('.pw-overlay-iframe') as HTMLIFrameElement;
     const iframeScale = panel.querySelector('.pw-overlay-iframe-scale') as HTMLElement;
 
-    const state: PanelState = { id, type, el: panel, iframe, iframeScale, x, y, width, height, scale, minimized: false, zIndex: ++nextZ, dockedEdge, drawerCollapsed };
+    const state: PanelState = { id, type, appId, param: opts?.param, launcherId: opts?.launcherId, route: hashRoute, el: panel, iframe, iframeScale, x, y, width, height, scale, minimized: false, zIndex: ++nextZ, dockedEdge, drawerCollapsed };
     applyScale(state);
     panel.style.zIndex = String(state.zIndex);
+    if (this.moveMode) panel.classList.add('pw-move-mode');
     this.panels.set(id, state);
 
     this.shadow.appendChild(panel);
@@ -174,7 +383,96 @@ export class OverlayPanelManager {
       this.workbenchId = id;
     }
 
+    this.persistOpenPanels();
     return id;
+  }
+
+  // --- Reload restore ---
+
+  private initPayload(token: string | null) {
+    return {
+      type: 'pw-embed-init',
+      token,
+      appId: this.appId,
+      restorablePanels: this.restorableSummaries(),
+    };
+  }
+
+  restorableSummaries(): RestorablePanelSummary[] {
+    return this.restorable.map((p) => ({ type: p.type, title: p.title }));
+  }
+
+  /** Re-open every panel from the previous page instance, then drop the offer. */
+  restorePreviousPanels() {
+    const list = this.restorable;
+    this.restorable = [];
+    for (const p of list) {
+      if (!PANEL_CONFIGS[p.type]) continue;
+      if (p.type === 'workbench') {
+        this.openWorkbench();
+        continue;
+      }
+      const id = this.openPanel(p.type, {
+        appId: p.appId,
+        param: p.param,
+        launcherId: p.launcherId,
+        route: p.route,
+        rect: { x: p.x, y: p.y, width: p.width, height: p.height, scale: p.scale },
+      });
+      const state = this.panels.get(id);
+      if (!state) continue;
+      if (p.dockedEdge) this.dockToEdge(id, p.dockedEdge);
+      if (p.minimized) this.minimizePanel(id);
+    }
+    this.broadcastRestorable();
+  }
+
+  /** Forget the previous page's windows without reopening them. */
+  dismissRestorable() {
+    this.restorable = [];
+    this.broadcastRestorable();
+  }
+
+  private broadcastRestorable() {
+    const restorablePanels = this.restorableSummaries();
+    for (const [, state] of this.panels) {
+      try {
+        state.iframe.contentWindow?.postMessage({ type: 'pw-embed-overlay-state', restorablePanels }, '*');
+      } catch { /* ignore */ }
+    }
+  }
+
+  private persistOpenPanels() {
+    const list: PersistedPanel[] = [];
+    for (const [, state] of this.panels) {
+      list.push({
+        type: state.type,
+        appId: state.appId,
+        param: state.param,
+        launcherId: state.launcherId,
+        route: state.route,
+        // The header text mirrors the iframe's document.title ("ProPanes
+        // <host>"), which says nothing about the window — name it by kind.
+        title: PANEL_CONFIGS[state.type].title,
+        x: state.x, y: state.y, width: state.width, height: state.height,
+        scale: state.scale,
+        minimized: state.minimized,
+        dockedEdge: state.dockedEdge,
+      });
+    }
+    try {
+      localStorage.setItem(OPEN_PANELS_KEY, JSON.stringify(list));
+    } catch { /* ignore */ }
+  }
+
+  private loadOpenPanels(): PersistedPanel[] {
+    try {
+      const raw = localStorage.getItem(OPEN_PANELS_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((p) => p && typeof p.type === 'string' && PANEL_CONFIGS[p.type as PanelType]);
+    } catch { return []; }
   }
 
   /**
@@ -192,7 +490,11 @@ export class OverlayPanelManager {
     const hashRoute = config.path(appId, opts?.param);
     const embedMode = config.embedMode || 'true';
     state.iframe.src = `${this.adminBaseUrl}?embed=${embedMode}&appId=${encodeURIComponent(appId)}#${hashRoute}`;
+    state.route = hashRoute;
+    state.appId = appId;
+    state.param = opts?.param;
     this.bringToFront(id);
+    this.persistOpenPanels();
     return true;
   }
 
@@ -266,6 +568,7 @@ export class OverlayPanelManager {
     }
     state.el.remove();
     this.panels.delete(id);
+    this.persistOpenPanels();
   }
 
   closeAll() {
@@ -281,6 +584,7 @@ export class OverlayPanelManager {
       state.el.style.width = `${state.width}px`;
       state.el.style.height = `${state.height}px`;
     }
+    this.persistOpenPanels();
   }
 
   bringToFront(id: string) {
@@ -297,11 +601,7 @@ export class OverlayPanelManager {
   private sendInitToIframe(iframe: HTMLIFrameElement) {
     const token = sessionStorage.getItem('pw-admin-token-overlay');
     const sendInit = () => {
-      iframe.contentWindow?.postMessage({
-        type: 'pw-embed-init',
-        token,
-        appId: this.appId,
-      }, '*');
+      iframe.contentWindow?.postMessage(this.initPayload(token), '*');
     };
     iframe.addEventListener('load', sendInit);
   }
@@ -315,11 +615,7 @@ export class OverlayPanelManager {
         sessionStorage.setItem('pw-admin-token-overlay', data.token);
         // Forward token to all iframes
         for (const [, state] of this.panels) {
-          state.iframe.contentWindow?.postMessage({
-            type: 'pw-embed-init',
-            token: data.token,
-            appId: this.appId,
-          }, '*');
+          state.iframe.contentWindow?.postMessage(this.initPayload(data.token), '*');
         }
       }
     } else if (data.type === 'pw-embed-navigate') {
@@ -339,8 +635,10 @@ export class OverlayPanelManager {
           if (titleEl && data.title) {
             titleEl.textContent = data.title;
           }
+          if (typeof data.route === 'string' && data.route) state.route = data.route;
         }
       }
+      this.persistOpenPanels();
     } else if (data.type === 'pw-embed-waiting') {
       // Session waiting for input notification
       if (this.onWaitingChange) {
@@ -349,6 +647,18 @@ export class OverlayPanelManager {
     } else if (data.type === 'pw-embed-gesture') {
       // Two-finger pan / pinch-zoom from inside the iframe
       this.handleGesture(e, data);
+    } else if (data.type === 'pw-embed-move-mode') {
+      // Chord completed (or exited) inside an embedded admin iframe — key
+      // events there never reach the host document, so the iframe relays it.
+      if (data.active === true) this.enterMoveMode(true);
+      else if (data.active === false) this.exitMoveMode();
+    } else if (data.type === 'pw-embed-arrange') {
+      // "Cascade / center windows" buttons on the embedded Settings page.
+      if (data.mode === 'cascade' || data.mode === 'center') this.arrangePanels(data.mode);
+    } else if (data.type === 'pw-embed-restore') {
+      // "Restore previous windows" / "Dismiss" on the embedded Settings page.
+      if (data.dismiss) this.dismissRestorable();
+      else this.restorePreviousPanels();
     } else if (data.type === 'pw-embed-prefs') {
       // Browser-local admin preferences mirrored into the host origin so the
       // widget's admin menu can honor them on cross-origin host pages too.
@@ -392,7 +702,9 @@ export class OverlayPanelManager {
       }
     } else if (data.phase === 'end') {
       target.el.classList.remove('pw-gesturing');
+      this.clampToViewport(target);
       if (target.type === 'workbench') this.persistLayout(target);
+      this.persistOpenPanels();
     }
   }
 
@@ -494,9 +806,18 @@ export class OverlayPanelManager {
 
     iframeScale.appendChild(iframe);
 
-    // Transparent mask to capture mouse events during drag/resize over iframe
+    // Transparent mask to capture mouse events during drag/resize over iframe.
+    // In move mode it stays up permanently and doubles as the drag surface.
     const mask = document.createElement('div');
     mask.className = 'pw-overlay-iframe-mask';
+    const moveHint = document.createElement('div');
+    moveHint.className = 'pw-move-mode-hint';
+    moveHint.textContent = 'Move mode \u2014 drag anywhere \u00B7 Ctrl+Shift or Esc to exit';
+    mask.appendChild(moveHint);
+    mask.addEventListener('pointerdown', (e) => {
+      if (!this.moveMode) return;
+      this.startDrag(id, e);
+    });
 
     iframeWrap.append(iframeScale, mask);
 
@@ -546,6 +867,7 @@ export class OverlayPanelManager {
     }
 
     if (state.type === 'workbench') this.persistLayout(state);
+    this.persistOpenPanels();
   }
 
   private applyDockedPosition(state: PanelState) {
@@ -686,9 +1008,13 @@ export class OverlayPanelManager {
         if (edge) {
           this.dockToEdge(id, edge);
         } else {
+          this.clampToViewport(state);
           this.persistLayout(state);
         }
+      } else {
+        this.clampToViewport(state);
       }
+      this.persistOpenPanels();
 
       try { target.releasePointerCapture(pointerId); } catch { /* ignore */ }
       target.removeEventListener('pointermove', onMove);
@@ -747,6 +1073,7 @@ export class OverlayPanelManager {
       if (ev.pointerId !== pointerId) return;
       state.el.classList.remove('pw-resizing');
       if (state.type === 'workbench') this.persistLayout(state);
+      this.persistOpenPanels();
       try { target.releasePointerCapture(pointerId); } catch { /* ignore */ }
       target.removeEventListener('pointermove', onMove);
       target.removeEventListener('pointerup', onUp);
@@ -760,6 +1087,10 @@ export class OverlayPanelManager {
 
   destroy() {
     window.removeEventListener('message', this.messageHandler);
+    window.removeEventListener('keydown', this.keyDownHandler, true);
+    window.removeEventListener('keyup', this.keyUpHandler, true);
+    window.removeEventListener('blur', this.blurHandler);
+    this.moveMode = false;
     this.closeAll();
   }
 }

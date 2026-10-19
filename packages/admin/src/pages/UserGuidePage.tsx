@@ -272,6 +272,7 @@ export function UserGuidePage() {
             <li><strong>Panel presets</strong> &mdash; Save your tab/panel layout in Preferences and restore it later.</li>
             <li><strong>Split pane</strong> &mdash; View two sessions side by side by right-clicking a tab and choosing "Split pane".</li>
             <li><strong>Ctrl+Shift hold</strong> &mdash; Hold Ctrl+Shift to reveal quick actions (Kill, Resolve, Close) on the active session tab.</li>
+            <li><strong>Ctrl+Shift &times;3</strong> &mdash; Tap Ctrl+Shift three times to enter move mode: floating panels (and widget overlay windows on pages with the widget) can be dragged from anywhere on their surface. Press Ctrl+Shift again or Esc to exit. The embedded Settings page also offers Cascade / Center to re-arrange overlay windows.</li>
             <li><strong>Multi-digit tabs</strong> &mdash; Press Ctrl+Shift+1 then 2 within 500ms to jump to tab 12.</li>
             <li><strong>Theme toggle</strong> &mdash; Press Ctrl+Shift+T to toggle between light and dark themes.</li>
             <li><strong>Contextual hints</strong> &mdash; Enable/disable hint toasts in Preferences. Reset dismissed hints to see them again.</li>
