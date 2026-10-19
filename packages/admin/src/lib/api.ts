@@ -868,7 +868,7 @@ export const api = {
     request<{ ok: boolean; id: string }>(`/admin/machines/${id}`, { method: 'DELETE' }),
 
   checkMachineAdminHealth: (id: string) =>
-    request<{ alive: boolean; status?: number; reason?: string }>(`/admin/machines/${id}/admin-health`),
+    request<{ alive: boolean; gated?: boolean; status?: number; reason?: string }>(`/admin/machines/${id}/admin-health`),
 
   startMachineAdmin: (id: string) =>
     request<{ ok: boolean; sessionId: string }>(`/admin/machines/${id}/admin-start`, { method: 'POST' }),
