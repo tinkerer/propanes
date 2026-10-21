@@ -20,6 +20,7 @@ import { resolveSessionJsonlPath } from './jsonl-utils.js';
 import { backfillTranscriptPrUrls } from './pr-backfill.js';
 import { homedir } from 'node:os';
 import { sessionAgentEnv } from './session-agent-env.js';
+import { resolveCodexCommand } from './codex-bin.js';
 
 const PORT = parseInt(process.env.SESSION_SERVICE_PORT || '3002', 10);
 
@@ -282,7 +283,7 @@ function buildAgentCommand(
   appendSystemPrompt?: string,
 ): { command: string; args: string[] } {
   if (runtime === 'codex') {
-    const command = process.env.CODEX_BIN || 'codex';
+    const command = resolveCodexCommand();
     const args: string[] = [];
     // Codex has no interactive/headless/stream separation the way claude does —
     // `exec` is the only headless subcommand and it's one-shot. The stream
