@@ -409,7 +409,7 @@ export function MachineCard({ m }: { m: any }) {
           </div>
           <div style="display:flex;gap:6px;align-items:center">
             {(() => {
-              const target = cachedTargets.value.find(t => t.machineId === m.id && !t.isHarness);
+              const target = cachedTargets.value.find(t => t.machineId === m.id && !t.isHarness && t.online);
               return target ? (
                 <button class="btn btn-sm" onClick={() => spawnTerminal(selectedAppId.value, target.launcherId)} title={`Open terminal on ${m.name}`}>Terminal</button>
               ) : null;
