@@ -29,6 +29,7 @@ import { feedbackEvents } from './events.js';
 import { getSession } from './sessions.js';
 import { inputSessionRemote, sendKeysSessionRemote } from './session-service-client.js';
 import { extractArtifactPaths, exportSessionFiles, resolveCodexResumeId } from './jsonl-utils.js';
+import { findContinuationJsonlsCached } from './jsonl-continuations.js';
 import { launchSpriteSession } from './sprite-sessions.js';
 import { createWorktreeIsolate, type Isolate } from './isolates.js';
 import { beginUsage } from './metering.js';
@@ -1737,7 +1738,7 @@ async function doTransfer(transfer: TransferState, targetCwd?: string): Promise<
     }
   } else {
     // Source is local — use shared export utility
-    const pkg = exportSessionFiles(projectDir, claudeSessionId);
+    const pkg = exportSessionFiles(projectDir, claudeSessionId, findContinuationJsonlsCached);
     jsonlFiles = pkg.jsonlFiles;
     artifactFiles = pkg.artifactFiles;
   }
