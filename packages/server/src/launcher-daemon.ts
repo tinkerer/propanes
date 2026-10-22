@@ -51,6 +51,7 @@ import {
   type JsonlUnit,
 } from './jsonl-utils.js';
 import { newTranscriptCursor, scanTranscriptForPrUrls, type TranscriptScanCursor } from './pr-transcript-scan.js';
+import { resolveCodexCommand } from './codex-bin.js';
 
 const SERVER_WS_URL = process.env.SERVER_WS_URL || 'ws://localhost:3001/ws/launcher';
 const LAUNCHER_ID = process.env.LAUNCHER_ID || `launcher-${os.hostname()}`;
@@ -197,7 +198,7 @@ function buildAgentCommand(
   resumeSessionId?: string,
 ): { command: string; args: string[] } {
   if (runtime === 'codex') {
-    const command = process.env.CODEX_BIN || 'codex';
+    const command = resolveCodexCommand();
     const args: string[] = [];
     if (PIPE_PROFILES.has(permissionProfile)) {
       args.push('exec');
