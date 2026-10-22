@@ -52,6 +52,7 @@ import {
 } from './jsonl-utils.js';
 import { newTranscriptCursor, scanTranscriptForPrUrls, type TranscriptScanCursor } from './pr-transcript-scan.js';
 import { resolveCodexCommand } from './codex-bin.js';
+import { createEdgeSession, resolveEdgeConfig } from './workbench-edge.js';
 
 const SERVER_WS_URL = process.env.SERVER_WS_URL || 'ws://localhost:3001/ws/launcher';
 const LAUNCHER_ID = process.env.LAUNCHER_ID || `launcher-${os.hostname()}`;
@@ -60,6 +61,8 @@ const LAUNCHER_AUTH_TOKEN = process.env.LAUNCHER_AUTH_TOKEN || '';
 const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || '5', 10);
 const MACHINE_ID = process.env.MACHINE_ID || undefined;
 const LAUNCHER_VERSION = (globalThis as any).__LAUNCHER_VERSION__ || '0.1.0';
+const edgeConfig = resolveEdgeConfig(SERVER_WS_URL);
+const edgeSession = edgeConfig ? createEdgeSession(edgeConfig) : null;
 
 const MAX_OUTPUT_LOG = 500 * 1024;
 // How often a running agent's transcript is re-read for PR URLs.
@@ -1168,11 +1171,31 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
   }
 }
 
-function connect(): void {
+function scheduleReconnect(): void {
+  console.log(`[launcher] Disconnected, reconnecting in ${reconnectDelay}ms...`);
+  reconnectTimer = setTimeout(() => {
+    reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
+    void connect();
+  }, reconnectDelay);
+}
+
+async function connect(): Promise<void> {
   if (shuttingDown) return;
 
-  console.log(`[launcher] Connecting to ${SERVER_WS_URL}...`);
-  ws = new WebSocket(SERVER_WS_URL);
+  let headers: Record<string, string> | undefined;
+  if (edgeSession) {
+    try {
+      headers = { Cookie: await edgeSession.cookie() };
+    } catch (err: any) {
+      console.error(`[launcher] ${err.message}`);
+      scheduleReconnect();
+      return;
+    }
+    if (shuttingDown) return;
+  }
+
+  console.log(`[launcher] Connecting to ${SERVER_WS_URL}${edgeSession ? ` via Workbench edge (${edgeConfig!.host})` : ''}...`);
+  ws = new WebSocket(SERVER_WS_URL, { headers });
 
   ws.on('open', () => {
     reconnectDelay = 1000;
@@ -1220,16 +1243,13 @@ function connect(): void {
     ws = null;
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (shuttingDown) return;
-
-    console.log(`[launcher] Disconnected, reconnecting in ${reconnectDelay}ms...`);
-    reconnectTimer = setTimeout(() => {
-      reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
-      connect();
-    }, reconnectDelay);
+    scheduleReconnect();
   });
 
   ws.on('error', (err) => {
     console.error(`[launcher] WebSocket error:`, err.message);
+    // The edge bounces an expired/revoked wb_session to its login page.
+    if (edgeSession && /Unexpected server response: (302|401|403)/.test(err.message)) edgeSession.invalidate();
   });
 }
 
@@ -1255,5 +1275,5 @@ function shutdown(): void {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-connect();
+void connect();
 console.log(`[launcher] Daemon started: id=${LAUNCHER_ID}, name=${LAUNCHER_NAME}`);
