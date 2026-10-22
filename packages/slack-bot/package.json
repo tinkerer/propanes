@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "node --env-file=.env -r tsx/cjs src/index.ts",
     "start": "node dist/index.js",
-    "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --external:@slack/bolt --external:node-fetch"
+    "build": "esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --external:@slack/bolt --external:node-fetch",
+    "test": "node --import tsx --test test/*.test.ts",
+    "types:check": "tsc --noEmit --target es2022 --module commonjs --moduleResolution node --esModuleInterop --skipLibCheck src/index.ts src/mentions.ts src/propanes.ts"
   },
   "dependencies": {
     "@slack/bolt": "^3.22.0",
