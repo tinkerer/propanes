@@ -351,6 +351,12 @@ curl -s 'http://localhost:3001/api/v1/launchers' | python3 -m json.tool
 
 Launchers connect via WebSocket, spawn PTY sessions, stream output with seq-numbered packets, heartbeat every 30s.
 
+**Servers behind the Workbench SSO edge** (`*.myworkbench.ai`) 302 the launcher's WS upgrade to a login page. Give the launcher a `wbcli_` token and it mints a `wb_session` cookie per connect (`src/workbench-edge.ts`): either set `WORKBENCH_CLI_TOKEN` (optional `WORKBENCH_EDGE`, `WORKBENCH_HOST`), or run `propanes login --workbench --server https://<host>` on that machine first and the launcher picks the token up from `~/.config/propanes/config.json`.
+
+```bash
+SERVER_WS_URL=wss://propanes-vm.myworkbench.ai/ws/launcher LAUNCHER_ID=$(hostname -s) npm run start:launcher
+```
+
 ### Session transfer
 Sessions can be transferred between launchers via `transferSession()` in `packages/server/src/dispatch.ts`. Exports JSONL files (main + continuations + subagents) and artifact files, imports on target machine.
 
