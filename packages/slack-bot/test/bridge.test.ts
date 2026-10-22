@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { SlackBridge } from '../src/bridge';
 import { SlackFileAccessError } from '../src/attachments';
 import { StateRepo } from '../src/state';
-import { fixture, line, mention, sessionUrl, threadReply, agents, APP, PUBLIC } from './helpers';
+import { fixture, line, mention, sessionUrl, stamped, threadReply, agents, APP, PUBLIC } from './helpers';
 
 test('help and status reply in the thread and never dispatch work', async () => {
   const f = fixture();
@@ -524,4 +524,46 @@ test('`stop` keeps the conversation and a later reply resumes it with the pinned
   assert.ok(f.world.calls.includes('resume:S1:inherit:continue please'), f.world.calls.join('|'));
   assert.ok(f.world.calls.includes('resume-profile:S1:interactive-yolo'));
   assert.ok(f.slack.texts().some((t) => /▶️ Resuming .*stopped earlier on request/.test(t)), f.slack.texts().join('|'));
+});
+
+test('transcript lines written before the session started are never posted (another session\'s transcript)', async () => {
+  const f = fixture();
+  f.clock.now = Date.parse('2026-10-22T20:38:59Z');
+  // First poll answers with a neighbour's rollout from hours earlier; the real one appears next poll.
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(stamped(line.assistant('I will describe the OLD image'), '2026-10-22T18:47:10Z'), stamped(line.toolUse('exec', { cmd: 'view_image' }, 'old-1'), '2026-10-22T18:47:11Z')); },
+    () => { f.world.session('S1').lines.push(stamped(line.assistant('Connecting to the Mac now.'), '2026-10-22T20:39:05Z')); },
+    () => undefined,
+  );
+  await f.bridge.handleEvent(mention('[verbose] build the app on the mac'));
+  await f.bridge.drain();
+  const texts = f.slack.texts();
+  assert.ok(!texts.some((t) => /OLD image|view_image/.test(t)), texts.join('|'));
+  assert.ok(texts.some((t) => /Connecting to the Mac now/.test(t)), texts.join('|'));
+});
+
+test('a resumed session does not re-post the conversation the thread already saw', async () => {
+  const f = fixture();
+  f.clock.now = Date.parse('2026-10-22T10:00:00Z');
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(stamped(line.assistant('First answer.'), '2026-10-22T10:00:05Z')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined,
+    () => { f.world.session('S1').status = 'completed'; },
+  );
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  assert.equal(f.slack.texts().filter((t) => /First answer/.test(t)).length, 1);
+
+  f.clock.now = Date.parse('2026-10-22T12:00:00Z');
+  f.steps.push(
+    // The continuation serves the whole transcript again (same file), then appends the new turn.
+    () => { f.world.latest().lines.push(...f.world.session('S1').lines, stamped(line.assistant('Second answer.'), '2026-10-22T12:00:07Z')); f.world.latest().inputState = 'idle'; },
+    () => undefined,
+    () => { f.world.latest().status = 'completed'; },
+  );
+  await f.bridge.handleEvent(threadReply('go on'));
+  await f.bridge.drain();
+  const texts = f.slack.texts();
+  assert.equal(texts.filter((t) => /First answer/.test(t)).length, 1, texts.join('|'));
+  assert.equal(texts.filter((t) => /Second answer/.test(t)).length, 1, texts.join('|'));
 });

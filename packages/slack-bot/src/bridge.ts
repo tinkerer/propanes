@@ -80,6 +80,13 @@ const MAX_CONSECUTIVE_POLL_FAILURES = 30;
 const IDLE_POLLS_TO_FINISH = 2;
 /** A turn with no assistant text at all still finishes after this many idle polls. */
 const IDLE_POLLS_NO_TEXT = 15;
+/** Nothing stamped earlier than this before a dispatch can belong to the new
+ * session (its transcript may not exist yet and the server may answer with a
+ * neighbour's); the slack covers clock skew with remote launchers. */
+const FRESH_SESSION_GRACE_MS = 60_000;
+/** A continuation appends to the transcript the thread already followed; only
+ * what is written after the resume request is news. */
+const RESUME_GRACE_MS = 10_000;
 
 export function slackInstructions(mode: OutputMode): string {
   const lines = [
@@ -320,7 +327,7 @@ export class SlackBridge {
       sessionId, feedbackId: feedback.id, runtime, agentEndpointId: endpoint.id, agentName: endpoint.name || endpoint.id,
       mode, images,
       history: [{ sessionId, runtime, agentName: endpoint.name || endpoint.id, createdAt: nowIso }],
-      delivery: freshCheckpoint(this.now()), watching: true, createdAt: nowIso, updatedAt: nowIso,
+      delivery: freshCheckpoint(this.now(), this.now() - FRESH_SESSION_GRACE_MS), watching: true, createdAt: nowIso, updatedAt: nowIso,
     };
     this.d.state.putThread(record);
     if (ev.user) this.d.state.setRuntimePref(ev.teamId, ev.user, runtime);
@@ -434,7 +441,7 @@ export class SlackBridge {
       record.runtime = nextRuntime;
       record.agentName = agentName;
       record.history.push({ sessionId, runtime: nextRuntime, agentName, createdAt: new Date(this.now()).toISOString() });
-      record.delivery = freshCheckpoint(this.now());
+      record.delivery = freshCheckpoint(this.now(), this.now() - RESUME_GRACE_MS);
       record.watching = true;
       record.paused = undefined;
       this.followers.delete(record.key);
@@ -579,7 +586,10 @@ export class SlackBridge {
       // The thread moved to a continuation while we were polling; start over on it.
       if (record.sessionId !== sessionId) continue;
 
-      const events = follower.ingest(delta).filter((e) => !record.delivery.delivered.includes(e.key));
+      const since = record.delivery.since ?? 0;
+      const events = follower.ingest(delta)
+        .filter((e) => !record.delivery.delivered.includes(e.key))
+        .filter((e) => !(since && e.msg.timestamp > 0 && e.msg.timestamp < since));
       if (events.length) {
         await this.deliverEvents(record, follower, events);
         record.delivery.lastActivityAt = this.now();

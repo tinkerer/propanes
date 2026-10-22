@@ -19,6 +19,8 @@ export interface FakeSession extends SessionInfo { lines: string[]; }
 
 let uuidCounter = 0;
 const uuid = () => `u-${++uuidCounter}`;
+/** Re-stamp a fixture line (keys above default to 2026-10-22T00:00:00Z). */
+export const stamped = (jsonLine: string, iso: string) => jsonLine.replace('"timestamp":"2026-10-22T00:00:00Z"', `"timestamp":"${iso}"`);
 export const line = {
   assistant: (text: string) => JSON.stringify({ type: 'assistant', uuid: uuid(), timestamp: '2026-10-22T00:00:00Z', message: { role: 'assistant', content: [{ type: 'text', text }] } }),
   toolUse: (name: string, input: Record<string, unknown>, id: string) => JSON.stringify({ type: 'assistant', uuid: uuid(), timestamp: '2026-10-22T00:00:00Z', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } }),

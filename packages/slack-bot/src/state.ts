@@ -24,6 +24,10 @@ export interface DeliveryCheckpoint {
   uploadedImages: string[];
   scopeWarned: boolean;
   lastActivityAt: number;
+  /** Transcript events stamped before this epoch-ms are never posted: a fresh
+   * session's first poll may still resolve to another session's transcript,
+   * and a resumed session continues the transcript the thread already saw. */
+  since?: number;
 }
 
 export interface SessionLink { sessionId: string; runtime: Runtime; agentName: string; createdAt: string; }
@@ -65,10 +69,11 @@ export function emptyState(): BotState {
   return { version: 1, threads: {}, runtimePrefs: {}, seenEvents: [] };
 }
 
-export function freshCheckpoint(now = Date.now()): DeliveryCheckpoint {
+export function freshCheckpoint(now = Date.now(), since?: number): DeliveryCheckpoint {
   return {
     cursor: 'init', delivered: [], turnOpen: true, turnTexts: [], lastStatus: null, lastInputState: null,
     idlePolls: 0, waitingNotified: false, uploadedImages: [], scopeWarned: false, lastActivityAt: now,
+    ...(since !== undefined ? { since } : {}),
   };
 }
 
