@@ -1,5 +1,5 @@
 [Unit]
-Description=Amir Slack mention listener (Socket Mode)
+Description=Amir Slack session bridge (Socket Mode)
 After=network-online.target propanes.service
 Wants=network-online.target
 
@@ -12,6 +12,10 @@ EnvironmentFile=/home/azureuser/propanes/packages/slack-bot/.env
 ExecStart=/usr/bin/node /home/azureuser/propanes/packages/slack-bot/dist/index.js
 Restart=on-failure
 RestartSec=10
+# Thread/session mappings, agent preferences and delivery checkpoints live in
+# /var/lib/amirobot (exported to the process as STATE_DIRECTORY); the home
+# checkout stays read-only.
+StateDirectory=amirobot
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

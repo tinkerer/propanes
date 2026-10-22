@@ -1,20 +1,136 @@
 /** Authenticated API access; keep credentials out of URLs, errors and logs. */
+import type { AgentEndpointInfo } from './agents';
+import type { Runtime } from './options';
+
+export class PropanesApiError extends Error {
+  constructor(public readonly path: string, public readonly status: number, detail?: string) {
+    super(`Propanes ${path} → ${status}${detail ? `: ${detail}` : ''}`);
+    this.name = 'PropanesApiError';
+  }
+}
+
+function sanitizeDetail(body: string): string | undefined {
+  // Only a JSON `error` field is surfaced (the admin UI shows the same text);
+  // raw bodies, stack traces and headers never reach Slack or the journal.
+  try {
+    const parsed = JSON.parse(body);
+    const err = parsed && typeof parsed === 'object' ? (parsed as { error?: unknown }).error : undefined;
+    if (typeof err === 'string' && err.trim()) return err.replace(/\s+/g, ' ').slice(0, 300);
+  } catch { /* not JSON */ }
+  return undefined;
+}
+
 export function createPropanesFetch(
   baseUrl: string,
   token: string | undefined,
   request: typeof fetch = fetch,
 ) {
   if (!token?.trim()) throw new Error('Configure PROPANES_TOKEN for the Slack listener.');
-  return async (path: string, opts?: RequestInit): Promise<any> => {
+  const base = baseUrl.replace(/\/$/, '');
+  const raw = async (path: string, opts?: RequestInit): Promise<Response> => {
     const headers = new Headers(opts?.headers);
-    headers.set('Content-Type', 'application/json');
+    if (!headers.has('Content-Type') && opts?.body) headers.set('Content-Type', 'application/json');
     headers.set('Authorization', `Bearer ${token.trim()}`);
-    const response = await request(`${baseUrl}${path}`, {
+    const response = await request(`${base}${path}`, {
       ...opts,
       headers,
       signal: opts?.signal ?? AbortSignal.timeout(30_000),
     });
-    if (!response.ok) throw new Error(`Propanes ${path} → ${response.status}`);
-    return response.json();
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new PropanesApiError(path, response.status, sanitizeDetail(body));
+    }
+    return response;
+  };
+  const json = async (path: string, opts?: RequestInit): Promise<any> => (await raw(path, opts)).json();
+  return Object.assign(json, { raw });
+}
+
+export type PropanesFetch = ReturnType<typeof createPropanesFetch>;
+
+export interface SessionInfo {
+  id: string;
+  status: string;
+  inputState?: string | null;
+  runtime?: string | null;
+  permissionProfile?: string | null;
+  feedbackId?: string | null;
+  claudeSessionId?: string | null;
+  title?: string | null;
+}
+
+export interface JsonlDelta {
+  cursor: string;
+  reset: boolean;
+  order: string[];
+  files: { key: string; lines: string }[];
+  pending?: boolean;
+}
+
+export const TERMINAL_STATUSES = new Set(['completed', 'failed', 'killed', 'cancelled', 'deleted']);
+export function isLive(status: string | null | undefined): boolean {
+  return status === 'running' || status === 'pending' || status === 'dispatching';
+}
+
+/** The same backend operations the admin structured view uses. */
+export interface PropanesClient {
+  me(): Promise<{ user: { id: string; username: string; role: string } }>;
+  listAgents(appId: string): Promise<AgentEndpointInfo[]>;
+  createFeedback(input: { title: string; description: string; appId: string; tags?: string[] }): Promise<{ id: string }>;
+  /** POST /api/v1/admin/dispatch — what the admin dispatch popup calls. */
+  dispatch(input: { feedbackId: string; agentEndpointId: string; instructions: string; permissionProfile: string }): Promise<{ sessionId: string }>;
+  getSession(id: string): Promise<SessionInfo>;
+  /** Session rows for a feedback item, newest first, with live inputState. */
+  listSessions(feedbackId: string): Promise<SessionInfo[]>;
+  /** POST /:id/send-keys — SessionInputBar.sendTerminalText for a running session. */
+  sendKeys(id: string, keys: string): Promise<{ ok: boolean; error?: string }>;
+  /** POST /:id/resume — SessionInputBar.submitPrompt for a stopped session. */
+  resume(id: string, input: { additionalPrompt: string; runtime?: Runtime; permissionProfile?: string }): Promise<{ sessionId: string }>;
+  kill(id: string): Promise<void>;
+  /** POST /:id/jsonl — the structured view's differential transcript poll. */
+  jsonlDelta(id: string, cursor: string, tail: number): Promise<JsonlDelta>;
+  /** GET an image the transcript elided (jsonl-image URL from the server). */
+  fetchImage(path: string): Promise<{ bytes: Buffer; mime: string }>;
+}
+
+export function createPropanesClient(api: PropanesFetch): PropanesClient {
+  const post = (path: string, body: unknown) => api(path, { method: 'POST', body: JSON.stringify(body) });
+  return {
+    me: () => api('/api/v1/auth/me'),
+    listAgents: (appId) => api(`/api/v1/admin/agents?appId=${encodeURIComponent(appId)}`),
+    createFeedback: (input) => post('/api/v1/feedback', { type: 'manual', ...input }),
+    dispatch: async (input) => {
+      const result = await post('/api/v1/admin/dispatch', input);
+      const sessionId = result?.sessionId ?? result?.id;
+      if (!sessionId) throw new Error(result?.error || result?.reason || 'dispatch did not return a session id');
+      return { sessionId };
+    },
+    getSession: (id) => api(`/api/v1/admin/agent-sessions/${encodeURIComponent(id)}`),
+    listSessions: (feedbackId) => api(`/api/v1/admin/agent-sessions?feedbackId=${encodeURIComponent(feedbackId)}`),
+    sendKeys: async (id, keys) => {
+      try {
+        const r = await post(`/api/v1/admin/agent-sessions/${encodeURIComponent(id)}/send-keys`, { keys, enter: true });
+        return { ok: !!r?.ok, error: r?.error };
+      } catch (err) {
+        return { ok: false, error: err instanceof PropanesApiError ? err.message : 'send-keys failed' };
+      }
+    },
+    resume: async (id, input) => {
+      const r = await api(`/api/v1/admin/agent-sessions/${encodeURIComponent(id)}/resume`, {
+        method: 'POST',
+        headers: { 'x-propanes-resume-source': 'slack.thread-reply' },
+        body: JSON.stringify(input),
+      });
+      const sessionId = r?.sessionId ?? r?.id;
+      if (!sessionId) throw new Error('resume did not return a session id');
+      return { sessionId };
+    },
+    kill: async (id) => { await post(`/api/v1/admin/agent-sessions/${encodeURIComponent(id)}/kill`, {}); },
+    jsonlDelta: (id, cursor, tail) => post(`/api/v1/admin/agent-sessions/${encodeURIComponent(id)}/jsonl`, { cursor, tail }),
+    fetchImage: async (path) => {
+      const res = await api.raw(path, { method: 'GET' });
+      const mime = res.headers.get('content-type') || 'application/octet-stream';
+      return { bytes: Buffer.from(await res.arrayBuffer()), mime };
+    },
   };
 }
