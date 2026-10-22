@@ -1,4 +1,6 @@
-import { App } from '@slack/bolt';
+import { App, LogLevel } from '@slack/bolt';
+import { handleMention } from './mentions';
+import { createPropanesFetch } from './propanes';
 
 const PROPANES_URL = process.env.PROPANES_URL ?? 'http://localhost:3001';
 // Public-facing URL used in Slack messages. Defaults to PROPANES_URL but can
@@ -16,7 +18,7 @@ const app = new App({
   token: process.env.SLACK_BOT_TOKEN!,
   appToken: process.env.SLACK_APP_TOKEN!,
   socketMode: true,
-  logLevel: 'warn',
+  logLevel: LogLevel.WARN,
 });
 
 // Instructions appended to every dispatch so the implementation agent replies
@@ -32,14 +34,7 @@ Before you do any tool calls, print exactly two short lines to stdout so the Sla
 Then proceed with the work. These two lines show the operator you received the request and roughly how long this will take. Keep each line on a single line.
 [/SLACK ACK PROTOCOL]`;
 
-async function propanesFetch(path: string, opts?: RequestInit) {
-  const res = await fetch(`${PROPANES_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  });
-  if (!res.ok) throw new Error(`Propanes ${path} → ${res.status}`);
-  return res.json() as Promise<any>;
-}
+const propanesFetch = createPropanesFetch(PROPANES_URL, process.env.PROPANES_TOKEN);
 
 async function submitFeedback(title: string, description: string) {
   return propanesFetch('/api/v1/feedback', {
@@ -344,12 +339,8 @@ async function handleIncoming(
 }
 
 // Handle @mentions
-app.event('app_mention', async ({ event, client }) => {
-  const text = ((event as any).text ?? '').replace(/<@[A-Z0-9]+>/g, '').trim();
-  const threadTs = (event as any).thread_ts ?? event.ts;
-  const channel = (event as any).channel;
-  if (!text) return;
-  handleIncoming(client, threadTs, channel, threadTs, text).catch(console.error);
+app.event('app_mention', async ({ event, client, logger }) => {
+  await handleMention(event, client, handleIncoming, (message) => logger.warn(message));
 });
 
 // Handle DMs. DMs are flat — key in-flight state by channel so follow-up
@@ -369,6 +360,9 @@ app.message(async ({ message, client }) => {
 });
 
 (async () => {
+  // Fail before receiving mentions if the API credential or agent setup is invalid.
+  await propanesFetch('/api/v1/auth/me');
+  await resolveAgentEndpointId();
   await app.start();
   console.log('amirobot connected via Socket Mode');
 })();

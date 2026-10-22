@@ -1,0 +1,22 @@
+[Unit]
+Description=Amir Slack mention listener (Socket Mode)
+After=network-online.target propanes.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=azureuser
+Group=azureuser
+WorkingDirectory=/home/azureuser/propanes/packages/slack-bot
+EnvironmentFile=/home/azureuser/propanes/packages/slack-bot/.env
+ExecStart=/usr/bin/node /home/azureuser/propanes/packages/slack-bot/dist/index.js
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target
