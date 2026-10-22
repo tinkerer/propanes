@@ -185,12 +185,21 @@ function findRolloutByCwd(codexRoot: string, cwd: string, startedAt?: string | n
   return candidates[0].path;
 }
 
+/** Clock slack between the session row's startedAt and codex's session_meta timestamp. */
+const ROLLOUT_START_TOLERANCE_MS = 15_000;
+
 function findRolloutsByCwd(codexRoot: string, cwd: string, startedAt?: string | null): { path: string; mtime: number }[] {
   // Search recent days around/after startedAt for rollouts whose session_meta.cwd
   // matches. Live Codex threads can rotate to a new rollout after /clear or
   // compaction, so callers may choose newest instead of closest-to-start.
   const startTs = startedAt ? Date.parse(startedAt) : Date.now();
   const startDate = isNaN(startTs) ? new Date() : new Date(startTs);
+  // A rollout recorded before this session started cannot be its own: codex
+  // writes session_meta a second or two after launch, and in that window the
+  // closest-in-time match used to be an older session in the same cwd, so the
+  // structured view (and anything following it) showed that session's
+  // transcript. Better to answer "no transcript yet" than someone else's.
+  const earliest = startedAt && !isNaN(startTs) ? startTs - ROLLOUT_START_TOLERANCE_MS : -Infinity;
   const candidates: { path: string; mtime: number }[] = [];
   const seenDays = new Set<string>();
 
@@ -218,6 +227,7 @@ function findRolloutsByCwd(codexRoot: string, cwd: string, startedAt?: string | 
         if (fileCwd !== cwd) continue;
         const ts = Date.parse(obj?.payload?.timestamp || obj?.timestamp || '');
         const mtime = isNaN(ts) ? statSync(filePath).mtimeMs : ts;
+        if (mtime < earliest) continue;
         candidates.push({ path: filePath, mtime });
       } catch { /* skip unreadable */ }
     }
