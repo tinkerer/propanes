@@ -114,9 +114,9 @@ text are never uploaded. Rules:
 - an inaccessible artifact (404, remote launcher offline) posts a note naming
   the read, not raw output;
 - quiet mode still uploads images while intermediate text stays suppressed;
-- uploads use `files.uploadV2`, which needs the `files:write` bot scope. The
-  installed app currently lacks it (see "Slack app configuration"); until it is
-  added the bot posts one explanation per thread and skips images.
+- uploads use `files.uploadV2`, which needs the `files:write` bot scope. If
+  the installed app ever lacks it, the bot posts one explanation per thread
+  and skips images instead of failing.
 
 ### Reliability
 
@@ -145,8 +145,8 @@ Socket Mode on; event subscriptions: `app_mention`, `message.channels`,
 `message.groups`, `message.im`, `message.mpim` (thread replies without a
 mention arrive as `message` events). Bot token scopes: `app_mentions:read`,
 `chat:write`, `reactions:write`, `channels:history`, `groups:history`,
-`im:history`, `mpim:history`, and `files:write` for image uploads. The
-currently installed token has everything except `files:write`; adding a scope
+`im:history`, `mpim:history`, and `files:write` for image uploads (all
+installed on the deployed workspace as of 2026-10-22). Adding a scope later
 requires reinstalling/reauthorizing the app in Slack, which only a workspace
 admin can do. Invite the bot to the channels where it should answer; channel
 membership decides who can launch work.
