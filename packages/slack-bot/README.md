@@ -66,10 +66,9 @@ changed.
    AskUserQuestion) is announced once in the thread with the pending tool; a
    reply answers it through the same send-keys path (`y`, `1`, free text).
 4. Bot messages, message edits/deletes and other subtypes are ignored; a
-   message with attachments (subtype `file_share`) is still a human request
-   and its text is delivered. Attachments themselves are not forwarded yet —
-   the thread gets a note saying so. Slack retries and duplicate deliveries
-   are dropped by `event_id` (persisted).
+   message with attachments (subtype `file_share`) is a human request and is
+   delivered with its attachments (see "Attachments from Slack"). Slack
+   retries and duplicate deliveries are dropped by `event_id` (persisted).
    Replies in threads the bot does not know about are ignored. DMs work without
    a mention; a flat DM is one conversation.
 5. Output is read only from the structured transcript
@@ -121,6 +120,29 @@ text are never uploaded. Rules:
   the installed app ever lacks it, the bot posts one explanation per thread
   and skips images instead of failing.
 
+### Attachments from Slack
+
+Files attached to a mention or a thread reply are passed to the session the
+same way the admin composer passes dropped files, so the agent sees them
+exactly as it would from the UI:
+
+- Each file is downloaded from Slack with the bot token (`files:read` scope).
+  PNG/JPEG/GIF/WebP count as screenshots; everything else is a file. Limit
+  20 MB per file; Slack posts, snippets, external and deleted files are
+  skipped with a note. Nothing is ever invented for a file that could not be
+  fetched — the thread is told which ones were skipped and why.
+- New request: screenshots are attached to the feedback item (`POST
+  /api/v1/feedback` multipart), so the dispatcher renders them into the
+  prompt and ships them to remote launchers; other files go through `POST
+  /api/v1/uploads` and are listed under "Attached files (read from these local
+  paths…)" with a download URL, exactly as the dispatch popup words it.
+- Reply in a thread: screenshots go through `POST /api/v1/screenshots` and
+  files through `POST /api/v1/uploads` for that session, and the paths/URLs are
+  appended to the text — one line for a live session (send-keys), a block for
+  a resume. An attachment with no text sends "See the attached file(s)."
+- Missing `files:read`: the text is still delivered and the thread is told
+  once that attachments cannot be read until the scope is added.
+
 ### Reliability
 
 - State file (`$STATE_DIRECTORY/amirobot-state.json`, dev: `packages/slack-bot/state/`)
@@ -148,8 +170,9 @@ Socket Mode on; event subscriptions: `app_mention`, `message.channels`,
 `message.groups`, `message.im`, `message.mpim` (thread replies without a
 mention arrive as `message` events). Bot token scopes: `app_mentions:read`,
 `chat:write`, `reactions:write`, `channels:history`, `groups:history`,
-`im:history`, `mpim:history`, and `files:write` for image uploads (all
-installed on the deployed workspace as of 2026-10-22). Adding a scope later
+`im:history`, `mpim:history`, `files:write` for image uploads and
+`files:read` to download attachments people share with the bot (all but
+`files:read` installed on the deployed workspace as of 2026-10-22). Adding a scope later
 requires reinstalling/reauthorizing the app in Slack, which only a workspace
 admin can do. Invite the bot to the channels where it should answer; channel
 membership decides who can launch work.
@@ -161,7 +184,8 @@ never in the unit, repository or logs. Configure `PROPANES_URL` for the local
 API, `PROPANES_PUBLIC_URL` for operator-visible session links, `PROPANES_APP_ID`
 for the application, and `PROPANES_TOKEN` (an authorized ProPanes bearer token;
 track its expiry). Optional: `AGENT_ENDPOINT_ID`, `POLL_MS`, `IDLE_POLL_MS`,
-`IDLE_STOP_MS`, `AMIROBOT_STATE_FILE`. The listener verifies API authentication
+`IDLE_STOP_MS`, `AMIROBOT_STATE_FILE`. The bot token also downloads Slack
+attachments. The listener verifies API authentication
 and lists which runtimes resolve before opening its socket.
 
 ```bash

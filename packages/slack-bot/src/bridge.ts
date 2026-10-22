@@ -6,7 +6,8 @@
  * has stopped — and never a blanket kill-and-resume. Output is read from the
  * structured transcript poll, rendered per the thread's mode, and delivered
  * by a per-thread watcher that checkpoints its cursor after every post. */
-import { AgentUnavailableError, configuredDefaultRuntime, endpointRuntime, resolveAgentEndpoint, runtimeLabel, type AgentEndpointInfo } from './agents';
+import { AgentUnavailableError, configuredDefaultRuntime, resolveAgentEndpoint, runtimeLabel, type AgentEndpointInfo } from './agents';
+import { attachmentBlock, classifyAttachment, displayName, SlackFileAccessError, type DownloadedFile, type ForwardedAttachment, type SlackFileDownloader, type SlackFileInfo } from './attachments';
 import { extractFinalCosReply } from './cos-reply';
 import { coalesce, escapeMrkdwn, renderEvent, summarizeToolInput, toMrkdwn } from './format';
 import { extractImageRefs, filenameFor, IMAGE_MAX_BYTES, IMAGE_MIMES, type ImageRef } from './images';
@@ -14,18 +15,9 @@ import { isStopKeyword, parseCommand, type OutputMode, type ParsedCommand, type 
 import { isLive, PropanesApiError, TERMINAL_STATUSES, type JsonlDelta, type PropanesClient, type SessionInfo } from './propanes';
 import { slackErrorCode, type SlackPoster } from './slack';
 import { freshCheckpoint, threadKey, type StateRepo, type ThreadRecord } from './state';
-import { TranscriptFollower } from './transcript';
 
-/** The subset of Slack's file object the bridge looks at. */
-export interface SlackFileInfo {
-  id: string;
-  name?: string;
-  title?: string;
-  mimetype?: string;
-  size?: number;
-  url_private_download?: string;
-  url_private?: string;
-}
+export type { SlackFileInfo } from './attachments';
+import { TranscriptFollower } from './transcript';
 
 export interface IncomingSlackMessage {
   /** Slack's event_id when available; retries re-deliver the same id. */
@@ -63,9 +55,17 @@ export interface BridgeConfig {
   transcriptTail: number;
 }
 
+/** Attachments downloaded from Slack for one request. */
+export interface StagedAttachments {
+  images: DownloadedFile[];
+  files: DownloadedFile[];
+}
+
 export interface BridgeDeps {
   propanes: PropanesClient;
   slack: SlackPoster;
+  /** Reads Slack files with the bot token; absent = attachments are not forwarded. */
+  files?: SlackFileDownloader;
   state: StateRepo;
   config: BridgeConfig;
   log: (message: string) => void;
@@ -150,11 +150,7 @@ export class SlackBridge {
       const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined;
       const attachments = ev.files?.length ?? 0;
       const reply = (text: string) => this.d.slack.postMessage({ channel: ev.channel, thread_ts: threadTs ?? undefined, text });
-      if (!cmd.error && cmd.command === 'prompt' && !cmd.text && !hasOptions) {
-        // An attachment-only message must not vanish silently.
-        if (attachments) await reply(attachmentsNotForwardedNote(attachments));
-        return;
-      }
+      if (!cmd.error && cmd.command === 'prompt' && !cmd.text && !hasOptions && !attachments) return;
 
       if (cmd.error) {
         await reply(`⚠️ ${cmd.error}`);
@@ -163,8 +159,11 @@ export class SlackBridge {
       await this.react(ev);
       if (cmd.command === 'help') { await reply(helpText()); return; }
       if (cmd.command === 'status') { await reply(await this.statusText(record)); return; }
-      await this.handlePrompt(ev, key, threadTs, cmd, reply);
-      if (attachments) await reply(attachmentsNotForwardedNote(attachments));
+      const staged = attachments ? await this.downloadAttachments(ev, record, reply) : { images: [], files: [] };
+      // An attachment-only message is a request to look at the attachment.
+      if (!cmd.text && (staged.images.length || staged.files.length)) cmd.text = 'See the attached file(s).';
+      if (!cmd.text && !hasOptions) return; // nothing usable arrived (every attachment was rejected)
+      await this.handlePrompt(ev, key, threadTs, cmd, reply, staged);
     });
   }
 
@@ -195,22 +194,88 @@ export class SlackBridge {
     }
   }
 
-  private async handlePrompt(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<void> {
+  private async handlePrompt(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>, staged: StagedAttachments): Promise<void> {
     const record = this.d.state.getThread(key);
     const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined;
     try {
       if (isStopKeyword(cmd.text) && !hasOptions) return await this.stopSession(record, reply);
-      if (!record) return await this.startSession(ev, key, threadTs, cmd, reply);
-      return await this.continueThread(ev, record, cmd, reply);
+      if (!record) return await this.startSession(ev, key, threadTs, cmd, reply, staged);
+      return await this.continueThread(ev, record, cmd, reply, staged);
     } catch (err) {
       this.d.log(`Request handling failed: ${err instanceof Error ? err.name : 'error'}`);
       await reply(`⚠️ Something went wrong: ${escapeMrkdwn(safeMessage(err))}`);
     }
   }
 
+  // ---------------------------------------------------------------- attachments
+
+  /** Download the message's attachments from Slack. Every rejected or failed
+   * file is reported in the thread; nothing is ever invented for them. */
+  private async downloadAttachments(ev: IncomingSlackMessage, record: ThreadRecord | undefined, reply: (t: string) => Promise<unknown>): Promise<StagedAttachments> {
+    const staged: StagedAttachments = { images: [], files: [] };
+    const files = ev.files ?? [];
+    if (!this.d.files) {
+      await reply(attachmentsNotForwardedNote(files.length));
+      return staged;
+    }
+    const notes: string[] = [];
+    let scopeMissing = false;
+    for (const file of files) {
+      const name = escapeMrkdwn(displayName(file));
+      const cls = classifyAttachment(file);
+      if (cls.kind === 'skip') {
+        notes.push(`skipped ${name}: ${cls.reason}`);
+        continue;
+      }
+      try {
+        const downloaded = await this.d.files.download(file);
+        (cls.kind === 'image' ? staged.images : staged.files).push(downloaded);
+      } catch (err) {
+        if (err instanceof SlackFileAccessError && err.code === 'missing_scope') {
+          scopeMissing = true;
+        } else {
+          notes.push(`could not download ${name}: ${escapeMrkdwn(safeMessage(err))}`);
+        }
+      }
+    }
+    if (scopeMissing) {
+      if (!record?.filesReadWarned) {
+        await reply('⚠️ I cannot read Slack attachments: the app needs the `files:read` scope (add it and reinstall the app, see packages/slack-bot/README.md). Your text is still delivered; attachments are skipped until then.');
+        if (record) { record.filesReadWarned = true; this.d.state.putThread(record); }
+      }
+    }
+    if (notes.length) await reply(`📎 ${notes.join('; ')}`);
+    return staged;
+  }
+
+  /** Stage downloaded files for a session through the routes the admin
+   * composer uses, returning what the prompt may reference. */
+  private async stageForSession(record: ThreadRecord | undefined, staged: StagedAttachments, reply: (t: string) => Promise<unknown>): Promise<ForwardedAttachment[]> {
+    const out: ForwardedAttachment[] = [];
+    const base = this.d.config.publicUrl.replace(/\/$/, '');
+    const sessionId = record?.sessionId;
+    if (staged.images.length) {
+      try {
+        const up = await this.d.propanes.uploadScreenshots(sessionId, staged.images, this.d.config.appId);
+        up.screenshots.forEach((s, i) => out.push({ kind: 'image', name: staged.images[i]?.name ?? s.filename, path: s.path, url: `${base}/api/v1/screenshots/${s.id}` }));
+      } catch (err) {
+        await reply(`📎 ⚠️ Could not stage ${staged.images.length} image${staged.images.length === 1 ? '' : 's'} for the session: ${escapeMrkdwn(safeMessage(err))}`);
+      }
+    }
+    if (staged.files.length) {
+      try {
+        const up = await this.d.propanes.uploadFiles(sessionId, staged.files, this.d.config.appId);
+        up.files.forEach((f) => out.push({ kind: 'file', name: f.originalName || f.filename, path: f.path, url: `${base}/api/v1/uploads/${f.id}` }));
+      } catch (err) {
+        await reply(`📎 ⚠️ Could not stage ${staged.files.length} file${staged.files.length === 1 ? '' : 's'} for the session: ${escapeMrkdwn(safeMessage(err))}`);
+      }
+    }
+    return out;
+  }
+
   // ---------------------------------------------------------------- commands
 
-  private async startSession(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<void> {
+  private async startSession(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>, staged: StagedAttachments): Promise<void> {
     if (!cmd.text) {
       await reply('Tell me what to do, e.g. `@amirobot review PR 2013`. Send `[help]` for options.');
       return;
@@ -231,16 +296,21 @@ export class SlackBridge {
     }
     const mode: OutputMode = cmd.mode ?? 'default';
     const images = !!cmd.images;
+    // Images become feedback screenshots (rendered into the prompt and shipped
+    // to remote launchers by the dispatcher); other files go through uploads.
     const feedback = await this.d.propanes.createFeedback({
       title: `Slack: ${cmd.text.slice(0, 80)}`,
       description: cmd.text,
       appId,
       tags: ['slack', 'amirobot'],
+      screenshots: staged.images,
     });
+    const forwarded = await this.stageForSession(undefined, { images: [], files: staged.files }, reply);
+    const extra = forwarded.length ? `\n\n${attachmentBlock(forwarded, false)}` : '';
     const { sessionId } = await this.d.propanes.dispatch({
       feedbackId: feedback.id,
       agentEndpointId: endpoint.id,
-      instructions: slackInstructions(mode),
+      instructions: slackInstructions(mode) + extra,
       permissionProfile: PERMISSION_PROFILE,
     });
     const nowIso = new Date(this.now()).toISOString();
@@ -253,21 +323,22 @@ export class SlackBridge {
     };
     this.d.state.putThread(record);
     if (ev.user) this.d.state.setRuntimePref(ev.teamId, ev.user, runtime);
-    await reply(this.initialReply(record));
+    await reply(this.initialReply(record, staged.images.length + forwarded.length));
     this.watch(key);
   }
 
-  private initialReply(record: ThreadRecord): string {
+  private initialReply(record: ThreadRecord, attached = 0): string {
     const lines = [
       `🚀 Session started: ${this.link(record.sessionId)}`,
       `*agent* ${runtimeLabel(record.runtime)} (${escapeMrkdwn(record.agentName)}) · *output* ${record.mode} · *images* ${record.images ? 'on' : 'off'}`,
     ];
+    if (attached) lines.push(`📎 ${attached} attachment${attached === 1 ? '' : 's'} passed to the session.`);
     if (record.mode === 'quiet') lines.push('_Quiet mode: I will post only the final answer here when the session finishes._');
     lines.push('Reply in this thread to continue the conversation · `stop` cancels · `[status]` · `[help]`');
     return lines.join('\n');
   }
 
-  private async continueThread(ev: IncomingSlackMessage, record: ThreadRecord, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<void> {
+  private async continueThread(ev: IncomingSlackMessage, record: ThreadRecord, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>, staged: StagedAttachments): Promise<void> {
     let changed = false;
     if (cmd.mode && cmd.mode !== record.mode) { record.mode = cmd.mode; changed = true; }
     if (cmd.images !== undefined && cmd.images !== record.images) { record.images = cmd.images; changed = true; }
@@ -283,12 +354,15 @@ export class SlackBridge {
       }
       return;
     }
-    if (switching) return this.switchRuntime(ev, record, cmd.runtime!, cmd.text, reply);
+    const forwarded = (staged.images.length || staged.files.length) ? await this.stageForSession(record, staged, reply) : [];
+    const oneLineText = forwarded.length ? `${cmd.text} ${attachmentBlock(forwarded, true)}` : cmd.text;
+    const multiLineText = forwarded.length ? `${cmd.text}\n\n${attachmentBlock(forwarded, false)}` : cmd.text;
+    if (switching) return this.switchRuntime(ev, record, cmd.runtime!, multiLineText, reply);
 
     let session = await this.currentSession(record);
     if (isLive(session.status)) {
       // Same operation as the structured view's input bar: keys straight to the live process.
-      const result = await this.d.propanes.sendKeys(record.sessionId, promptForSendKeys(cmd.text, record.mode));
+      const result = await this.d.propanes.sendKeys(record.sessionId, promptForSendKeys(oneLineText, record.mode));
       if (result.ok) {
         this.openTurn(record);
         this.d.state.putThread(record);
@@ -303,7 +377,7 @@ export class SlackBridge {
         return;
       }
     }
-    await this.resumeInto(record, cmd.text, undefined, reply, `Session ${this.link(record.sessionId)} had ${session.status === 'completed' ? 'finished' : `ended (${session.status})`}`);
+    await this.resumeInto(record, multiLineText, undefined, reply, `Session ${this.link(record.sessionId)} had ${session.status === 'completed' ? 'finished' : `ended (${session.status})`}`);
   }
 
   /** Explicit runtime change inside a thread: the thread keeps its history and
@@ -623,7 +697,7 @@ export class SlackBridge {
 }
 
 export function attachmentsNotForwardedNote(count: number): string {
-  return `📎 ${count} attachment${count === 1 ? '' : 's'} not forwarded: Slack attachments are not passed to the session yet. Your text was delivered; share a link or paste the content for now.`;
+  return `📎 ${count} attachment${count === 1 ? '' : 's'} not forwarded: this listener has no Slack file access configured. Your text is still delivered.`;
 }
 
 const QUIET_SUFFIX = ' (Reply via Slack: finish with your answer inside <cos-reply></cos-reply>.)';

@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { App, LogLevel } from '@slack/bolt';
+import { downloaderFromToken } from './attachments';
 import { SlackBridge, type IncomingSlackMessage } from './bridge';
 import { configuredDefaultRuntime, resolveAgentEndpoint, runtimeLabel } from './agents';
 import { createPropanesClient, createPropanesFetch } from './propanes';
@@ -38,6 +39,7 @@ const log = (message: string) => console.warn(`[amirobot] ${message}`);
 const bridge = new SlackBridge({
   propanes,
   slack: new PacedPoster(posterFromClient(app.client as any)),
+  files: downloaderFromToken(process.env.SLACK_BOT_TOKEN!),
   state,
   config: {
     appId: APP_ID,
