@@ -47,6 +47,9 @@ export interface ThreadRecord {
   watching: boolean;
   /** The thread was already told the bot cannot read Slack files (missing scope). */
   filesReadWarned?: boolean;
+  /** The current session was stopped on purpose (idle timeout or `stop`) and
+   * the next reply resumes it; cleared once a continuation starts. */
+  paused?: { at: string; reason: 'idle' | 'stop'; sessionId: string };
   createdAt: string;
   updatedAt: string;
 }

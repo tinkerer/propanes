@@ -439,3 +439,89 @@ test('without a configured downloader attachments are announced as not forwarded
   assert.ok(f.world.calls.includes('send-keys:S1:here'));
   assert.ok(!f.world.calls.some((c) => c.includes('edited text')));
 });
+
+test('a session idle for IDLE_STOP_MS is stopped and the thread is told how to resume it', async () => {
+  const f = fixture({ config: { idleStopMs: 3_600_000 } });
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(line.assistant('Done for now.')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined, // second idle poll finishes the turn
+    () => { f.clock.now += 3_600_001; }, // nothing happened for over an hour
+    () => undefined,
+  );
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('kill:S1'), f.world.calls.join('|'));
+  assert.equal(f.world.session('S1').status, 'killed');
+  const pause = f.slack.texts().find((t) => t.startsWith('💤 Paused'))!;
+  assert.ok(pause.includes(sessionUrl('S1')) && /after 1 h without activity/.test(pause) && /Reply in this thread to resume/.test(pause), pause);
+  const repo = new StateRepo(f.store);
+  const rec = repo.getThread('T1:C1:100.000')!;
+  assert.equal(rec.watching, false);
+  assert.deepEqual({ reason: rec.paused?.reason, sessionId: rec.paused?.sessionId }, { reason: 'idle', sessionId: 'S1' });
+
+  await f.bridge.handleEvent(threadReply('[status]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /paused after 1 h idle — reply to resume/);
+
+  // The next reply resumes the same conversation natively, keeping the TTY profile.
+  await f.bridge.handleEvent(threadReply('pick it back up'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('resume:S1:inherit:pick it back up'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('resume-profile:S1:interactive-yolo'), f.world.calls.join('|'));
+  const resumed = f.slack.texts().find((t) => t.startsWith('▶️ Resuming'))!;
+  assert.ok(resumed.includes(sessionUrl('S1')) && resumed.includes(sessionUrl('S2')) && /conversation restored/.test(resumed), resumed);
+  const after = new StateRepo(f.store).getThread('T1:C1:100.000')!;
+  assert.equal(after.sessionId, 'S2');
+  assert.equal(after.paused, undefined);
+  assert.deepEqual(after.history.map((h) => h.sessionId), ['S1', 'S2']);
+});
+
+test('a turn still in progress is never paused, however long it runs', async () => {
+  const f = fixture({ config: { idleStopMs: 60_000 } });
+  f.steps.push(
+    () => { f.clock.now += 61_000; },
+    () => { f.clock.now += 61_000; f.world.session('S1').lines.push(line.toolUse('Bash', { command: 'pnpm test' }, 't1')); },
+    () => { f.clock.now += 61_000; },
+  );
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  assert.ok(!f.world.calls.some((c) => c.startsWith('kill')), f.world.calls.join('|'));
+  assert.ok(!f.slack.texts().some((t) => t.startsWith('💤')), f.slack.texts().join('|'));
+  assert.equal(f.world.session('S1').status, 'completed');
+});
+
+test('an idle session that cannot be stopped is reported and merely unwatched', async () => {
+  const f = fixture({ config: { idleStopMs: 60_000 } });
+  f.world.propanes.kill = async (id) => { f.world.calls.push(`kill:${id}`); throw new Error('Propanes kill → 503'); };
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(line.assistant('Done for now.')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined,
+    () => { f.clock.now += 61_000; },
+    () => undefined,
+  );
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('kill:S1'));
+  assert.ok(f.slack.texts().some((t) => /could not be stopped/.test(t) && /stopped following it/.test(t)), f.slack.texts().join('|'));
+  const rec = new StateRepo(f.store).getThread('T1:C1:100.000')!;
+  assert.equal(rec.watching, false);
+  assert.equal(rec.paused, undefined);
+});
+
+test('`stop` keeps the conversation and a later reply resumes it with the pinned profile', async () => {
+  const f = fixture();
+  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('stop'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('kill:S1'));
+  assert.match(f.slack.texts().find((t) => t.startsWith('🛑'))!, /conversation is kept/);
+  await f.bridge.handleEvent(threadReply('[status]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /stopped on request — reply to resume/);
+  await f.bridge.handleEvent(threadReply('continue please'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('resume:S1:inherit:continue please'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('resume-profile:S1:interactive-yolo'));
+  assert.ok(f.slack.texts().some((t) => /▶️ Resuming .*stopped earlier on request/.test(t)), f.slack.texts().join('|'));
+});

@@ -92,6 +92,7 @@ export class World {
       const parent = this.sessions.get(id)!;
       if (parent.status === 'running') throw new Error('Session is still active');
       this.calls.push(`resume:${id}:${input.runtime ?? 'inherit'}:${input.additionalPrompt}`);
+      this.calls.push(`resume-profile:${id}:${input.permissionProfile ?? 'inherit'}`);
       return { sessionId: this.newSession(parent.feedbackId!, input.runtime ?? parent.runtime!, id).id };
     },
     kill: async (id) => { this.calls.push(`kill:${id}`); this.sessions.get(id)!.status = 'killed'; },
