@@ -53,6 +53,7 @@ import {
 import { newTranscriptCursor, scanTranscriptForPrUrls, type TranscriptScanCursor } from './pr-transcript-scan.js';
 import { buildCodexArgs, resolveCodexCommand } from './codex-bin.js';
 import { createEdgeSession, resolveEdgeConfig } from './workbench-edge.js';
+import { mapMessagePaths, parsePathMap } from './launcher-paths.js';
 
 const SERVER_WS_URL = process.env.SERVER_WS_URL || 'ws://localhost:3001/ws/launcher';
 const LAUNCHER_ID = process.env.LAUNCHER_ID || `launcher-${os.hostname()}`;
@@ -61,6 +62,7 @@ const LAUNCHER_AUTH_TOKEN = process.env.LAUNCHER_AUTH_TOKEN || '';
 const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || '5', 10);
 const MACHINE_ID = process.env.MACHINE_ID || undefined;
 const LAUNCHER_VERSION = (globalThis as any).__LAUNCHER_VERSION__ || '0.1.0';
+const PATH_MAP = parsePathMap(process.env.LAUNCHER_PATH_MAP);
 const edgeConfig = resolveEdgeConfig(SERVER_WS_URL);
 const edgeSession = edgeConfig ? createEdgeSession(edgeConfig) : null;
 
@@ -1230,7 +1232,7 @@ async function connect(): Promise<void> {
 
   ws.on('message', (raw) => {
     try {
-      const msg = JSON.parse(raw.toString()) as ServerToLauncherMessage;
+      const msg = mapMessagePaths(JSON.parse(raw.toString()), PATH_MAP) as ServerToLauncherMessage;
       handleServerMessage(msg);
     } catch {}
   });
@@ -1272,4 +1274,4 @@ process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
 void connect();
-console.log(`[launcher] Daemon started: id=${LAUNCHER_ID}, name=${LAUNCHER_NAME}`);
+console.log(`[launcher] Daemon started: id=${LAUNCHER_ID}, name=${LAUNCHER_NAME}${PATH_MAP.length ? `, path map: ${PATH_MAP.map(([f, t]) => `${f} -> ${t}`).join(', ')}` : ''}`);
