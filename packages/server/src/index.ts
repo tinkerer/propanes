@@ -35,7 +35,7 @@ import { registerAutoDispatch } from './auto-dispatch.js';
 import { rearmPendingDispatchesOnStartup } from './voice/deferred-dispatch.js';
 import { updateFeedbackOnSessionEnd, fixStaleDispatchStatuses } from './feedback-status.js';
 import { cleanupSyncBranch } from './dispatch.js';
-import { detectAndStoreJsonlContinuations } from './jsonl-utils.js';
+import { detectAndStoreJsonlContinuations } from './jsonl-continuations.js';
 import { registerAdminClient, unregisterAdminClient } from './admin-push.js';
 import { startAdminWatcher } from './admin-watcher.js';
 import { dispatchPendingFollowups } from './routes/admin/session-followups.js';

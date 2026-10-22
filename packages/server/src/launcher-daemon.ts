@@ -608,7 +608,7 @@ function handleReadSessionJsonl(msg: ReadSessionJsonl): void {
 
     let units: JsonlUnit[];
     if (msg.fileFilter && !isCodex) {
-      const target = listJsonlFiles(jsonlPath, false).find((file) => file.id === msg.fileFilter);
+      const target = listJsonlFiles(jsonlPath).find((file) => file.id === msg.fileFilter);
       if (!target || !existsSync(target.filePath)) {
         sendToServer(pending());
         return;
@@ -619,7 +619,7 @@ function handleReadSessionJsonl(msg: ReadSessionJsonl): void {
         : target.filePath;
       units = [{ key, path: target.filePath }];
     } else {
-      units = collectJsonlUnits(jsonlPath, isCodex, false);
+      units = collectJsonlUnits(jsonlPath, isCodex);
     }
 
     const offsets = decodeJsonlCursor(msg.cursor);

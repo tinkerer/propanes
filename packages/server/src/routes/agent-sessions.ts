@@ -27,7 +27,6 @@ import {
   computeJsonlPath,
   computeJsonlDir,
   resolveSessionJsonlPath,
-  findContinuationJsonlsCached,
   readJsonlWithSubagents,
   filterJsonlLines,
   extractArtifactPaths,
@@ -38,6 +37,7 @@ import {
   readJsonlFileDelta,
   type JsonlUnit,
 } from '../jsonl-utils.js';
+import { findContinuationJsonlsCached } from '../jsonl-continuations.js';
 
 // Resolve the JSONL path, falling back to session cwd when the app's projectDir doesn't match.
 // Fafo runs use a temp directory as cwd, so the JSONL file lives under that path, not the app's projectDir.
@@ -994,7 +994,7 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
   const files = existsSync(jsonlPath)
     ? (isCodex
         ? [{ id: `main:${resolvedSessionId || basename(jsonlPath, '.jsonl')}`, claudeSessionId: resolvedSessionId || basename(jsonlPath, '.jsonl'), type: 'main' as const, label: `Codex: ${basename(jsonlPath)}`, filePath: jsonlPath, order: 0, parentSessionId: undefined, agentId: undefined }]
-        : listJsonlFiles(jsonlPath))
+        : listJsonlFiles(jsonlPath, findContinuationJsonlsCached))
     : [];
   return c.json({
     claudeSessionId: resolvedSessionId,
@@ -1221,7 +1221,7 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
   // Resolve the ordered list of physical files in merge order.
   let units: JsonlUnit[];
   if (fileFilter && !isCodex) {
-    const allFiles = listJsonlFiles(jsonlPath);
+    const allFiles = listJsonlFiles(jsonlPath, findContinuationJsonlsCached);
     const target = allFiles.find(f => f.id === fileFilter);
     if (!target) {
       if (isDifferential) return pendingDelta();
@@ -1239,7 +1239,7 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
     units = [{ key, path: target.filePath }];
   } else {
     // Merged view (codex always has just the one rollout file).
-    units = collectJsonlUnits(jsonlPath, isCodex);
+    units = collectJsonlUnits(jsonlPath, isCodex, findContinuationJsonlsCached);
   }
 
   // Differential mode: ship only bytes appended past the cursor's per-file
@@ -1555,7 +1555,7 @@ agentSessionRoutes.get('/:id/export-context', async (c) => {
   const effectiveProjectDir = computeJsonlPath(row.appProjectDir || process.cwd(), claudeSessionId) === jsonlPath
     ? (row.appProjectDir || process.cwd())
     : (row.session.cwd || row.appProjectDir || process.cwd());
-  const pkg = exportSessionFiles(effectiveProjectDir, claudeSessionId);
+  const pkg = exportSessionFiles(effectiveProjectDir, claudeSessionId, findContinuationJsonlsCached);
   const sanitized = effectiveProjectDir.replaceAll('/', '-').replaceAll('.', '-');
 
   return c.json({
