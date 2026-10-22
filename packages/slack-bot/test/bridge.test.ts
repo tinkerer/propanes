@@ -342,3 +342,25 @@ test('the bridge is constructed with the public URL from config', () => {
   assert.equal((f.bridge as SlackBridge).sessionUrl('X'), `${PUBLIC}/admin/#/session/X`);
   assert.equal(APP, 'app-1');
 });
+
+test('a reply with an attachment (subtype file_share) still delivers its text', async () => {
+  const f = fixture();
+  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('here is the screenshot', { subtype: 'file_share', files: [{ id: 'F1', name: 'shot.png', mimetype: 'image/png', size: 10 }] }));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('send-keys:S1:here is the screenshot'), f.world.calls.join('|'));
+  assert.match(f.slack.texts().find((t) => t.startsWith('📎'))!, /1 attachment not forwarded/);
+  assert.equal(f.slack.reactions.length, 2);
+});
+
+test('an attachment-only message is acknowledged instead of vanishing; other subtypes stay ignored', async () => {
+  const f = fixture();
+  f.steps.push(() => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('', { subtype: 'file_share', files: [{ id: 'F1', name: 'a.txt' }, { id: 'F2', name: 'b.txt' }] }));
+  await f.bridge.handleEvent(threadReply('edited text', { subtype: 'message_changed' }));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().find((t) => t.startsWith('📎'))!, /2 attachments not forwarded/);
+  assert.ok(!f.world.calls.some((c) => c.includes('edited text')));
+});

@@ -65,8 +65,11 @@ changed.
    There is no blanket kill-and-resume. A `waiting` session (permission prompt,
    AskUserQuestion) is announced once in the thread with the pending tool; a
    reply answers it through the same send-keys path (`y`, `1`, free text).
-4. Bot messages, message edits/deletes and other subtypes are ignored. Slack
-   retries and duplicate deliveries are dropped by `event_id` (persisted).
+4. Bot messages, message edits/deletes and other subtypes are ignored; a
+   message with attachments (subtype `file_share`) is still a human request
+   and its text is delivered. Attachments themselves are not forwarded yet —
+   the thread gets a note saying so. Slack retries and duplicate deliveries
+   are dropped by `event_id` (persisted).
    Replies in threads the bot does not know about are ignored. DMs work without
    a mention; a flat DM is one conversation.
 5. Output is read only from the structured transcript
