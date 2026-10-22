@@ -16,6 +16,17 @@ import { slackErrorCode, type SlackPoster } from './slack';
 import { freshCheckpoint, threadKey, type StateRepo, type ThreadRecord } from './state';
 import { TranscriptFollower } from './transcript';
 
+/** The subset of Slack's file object the bridge looks at. */
+export interface SlackFileInfo {
+  id: string;
+  name?: string;
+  title?: string;
+  mimetype?: string;
+  size?: number;
+  url_private_download?: string;
+  url_private?: string;
+}
+
 export interface IncomingSlackMessage {
   /** Slack's event_id when available; retries re-deliver the same id. */
   eventId?: string;
@@ -29,7 +40,13 @@ export interface IncomingSlackMessage {
   threadTs?: string;
   text: string;
   mentionsBot: boolean;
+  /** Attachments on the message (Slack delivers these with subtype `file_share`). */
+  files?: SlackFileInfo[];
 }
+
+/** Message subtypes that still carry a human request. Everything else (edits,
+ * deletions, joins, bot posts…) is noise. */
+const HUMAN_SUBTYPES = new Set(['file_share', 'thread_broadcast']);
 
 export interface BridgeConfig {
   appId: string;
@@ -117,7 +134,7 @@ export class SlackBridge {
   // ---------------------------------------------------------------- inbound
 
   async handleEvent(ev: IncomingSlackMessage): Promise<void> {
-    if (ev.botId || ev.subtype) return; // bot echoes, edits, deletions, joins…
+    if (ev.botId || (ev.subtype && !HUMAN_SUBTYPES.has(ev.subtype))) return; // bot echoes, edits, deletions, joins…
     if (!this.d.state.markEvent(ev.eventId ?? `${ev.channel}:${ev.ts}`)) return; // retry / duplicate delivery
     const isDm = ev.channelType === 'im';
     const threadTs = ev.threadTs ?? (isDm ? null : ev.ts);
@@ -131,9 +148,14 @@ export class SlackBridge {
 
       const cmd = parseCommand(ev.text, this.d.config.botUserId);
       const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined;
-      if (!cmd.error && cmd.command === 'prompt' && !cmd.text && !hasOptions) return;
-
+      const attachments = ev.files?.length ?? 0;
       const reply = (text: string) => this.d.slack.postMessage({ channel: ev.channel, thread_ts: threadTs ?? undefined, text });
+      if (!cmd.error && cmd.command === 'prompt' && !cmd.text && !hasOptions) {
+        // An attachment-only message must not vanish silently.
+        if (attachments) await reply(attachmentsNotForwardedNote(attachments));
+        return;
+      }
+
       if (cmd.error) {
         await reply(`⚠️ ${cmd.error}`);
         return;
@@ -142,6 +164,7 @@ export class SlackBridge {
       if (cmd.command === 'help') { await reply(helpText()); return; }
       if (cmd.command === 'status') { await reply(await this.statusText(record)); return; }
       await this.handlePrompt(ev, key, threadTs, cmd, reply);
+      if (attachments) await reply(attachmentsNotForwardedNote(attachments));
     });
   }
 
@@ -597,6 +620,10 @@ export class SlackBridge {
     }
     record.delivery.turnTexts = [];
   }
+}
+
+export function attachmentsNotForwardedNote(count: number): string {
+  return `📎 ${count} attachment${count === 1 ? '' : 's'} not forwarded: Slack attachments are not passed to the session yet. Your text was delivered; share a link or paste the content for now.`;
 }
 
 const QUIET_SUFFIX = ' (Reply via Slack: finish with your answer inside <cos-reply></cos-reply>.)';
