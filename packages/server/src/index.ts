@@ -1,7 +1,7 @@
 import { serve } from '@hono/node-server';
 import type { Server } from 'node:http';
 import { WebSocketServer } from 'ws';
-import { and, eq, isNotNull, inArray } from 'drizzle-orm';
+import { and, eq, isNotNull, inArray, ne } from 'drizzle-orm';
 import { app } from './app.js';
 import { runMigrations, db, schema } from './db/index.js';
 import { reconcileUsage } from './metering.js';
@@ -236,6 +236,9 @@ function ensureLocalMachine(): string {
 }
 
 const localMachineId = ensureLocalMachine();
+// No launcher is connected yet at boot; a crash or restart skips
+// unregisterLauncher, so a remote machine's persisted 'online' would go stale.
+db.update(schema.machines).set({ status: 'offline' }).where(ne(schema.machines.type, 'local')).run();
 
 // Start FAFO auto-advance poller (checks every 15s for completed generations)
 startFAFOPoller(15_000);

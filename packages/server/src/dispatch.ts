@@ -1009,6 +1009,11 @@ export async function dispatchTerminalSession(params: {
   const profile: PermissionProfile = params.permissionProfile || 'plain';
 
   const launcher = params.launcherId ? getLauncher(params.launcherId) : undefined;
+  // A named launcher that isn't connected must not silently fall back to a
+  // shell on this server — the user asked for a terminal on another machine.
+  if (params.launcherId && launcher?.ws?.readyState !== 1) {
+    throw new Error(`Launcher ${params.launcherId} is not connected`);
+  }
 
   // Default the title to "<app-slug>-XXXXXX" so sidebar tabs read like
   // "propanes-admin-FT94P6" instead of a bare ULID. Caller-supplied title
