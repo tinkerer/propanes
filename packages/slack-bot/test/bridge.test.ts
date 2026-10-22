@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SlackBridge } from '../src/bridge';
+import { SlackFileAccessError } from '../src/attachments';
 import { StateRepo } from '../src/state';
 import { fixture, line, mention, sessionUrl, threadReply, agents, APP, PUBLIC } from './helpers';
 
@@ -343,24 +344,98 @@ test('the bridge is constructed with the public URL from config', () => {
   assert.equal(APP, 'app-1');
 });
 
-test('a reply with an attachment (subtype file_share) still delivers its text', async () => {
+const png = { name: 'shot.png', mime: 'image/png', bytes: Buffer.from('89504e470d0a1a0a', 'hex') };
+const log = { name: 'build.log', mime: 'text/plain', bytes: Buffer.from('error: boom') };
+const fileInfo = (id: string, name: string, mimetype: string, size = 100) => ({ id, name, mimetype, size, url_private_download: `https://files.slack.test/${id}` });
+
+test('attachments on a new request become feedback screenshots and uploaded files the prompt names', async () => {
   const f = fixture();
-  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined);
-  await f.bridge.handleEvent(mention('start'));
-  await f.bridge.handleEvent(threadReply('here is the screenshot', { subtype: 'file_share', files: [{ id: 'F1', name: 'shot.png', mimetype: 'image/png', size: 10 }] }));
+  f.world.slackFiles.set('F1', png);
+  f.world.slackFiles.set('F2', log);
+  await f.bridge.handleEvent(mention('why does this fail?', { subtype: 'file_share', files: [fileInfo('F1', 'shot.png', 'image/png'), fileInfo('F2', 'build.log', 'text/plain')] }));
   await f.bridge.drain();
-  assert.ok(f.world.calls.includes('send-keys:S1:here is the screenshot'), f.world.calls.join('|'));
-  assert.match(f.slack.texts().find((t) => t.startsWith('📎'))!, /1 attachment not forwarded/);
-  assert.equal(f.slack.reactions.length, 2);
+  assert.ok(f.world.calls.includes('feedback:Slack: why does this fail?:screenshots=shot.png'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('upload-files:none:build.log'));
+  const instructions = f.world.calls.find((c) => c.startsWith('instructions:'))!;
+  assert.match(instructions, /Attached files \(read from these local paths if you are on the server host\):\n- \/tmp\/up-build\.log \(download: https:\/\/propanes\.example\.test\/api\/v1\/uploads\/UP1\)/);
+  assert.match(f.slack.texts()[0], /📎 2 attachments passed to the session/);
 });
 
-test('an attachment-only message is acknowledged instead of vanishing; other subtypes stay ignored', async () => {
+test('attachments in a running thread are staged for that session and referenced in the send-keys text', async () => {
   const f = fixture();
+  f.world.slackFiles.set('F1', png);
+  f.world.slackFiles.set('F2', log);
+  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('compare with this', { subtype: 'file_share', files: [fileInfo('F1', 'shot.png', 'image/png'), fileInfo('F2', 'build.log', 'text/plain')] }));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('upload-screenshots:S1:shot.png'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('upload-files:S1:build.log'));
+  const sent = f.world.calls.find((c) => c.startsWith('send-keys:S1:compare'))!;
+  assert.equal(sent, 'send-keys:S1:compare with this Attached screenshots: /tmp/sc-shot.png (GET https://propanes.example.test/api/v1/screenshots/SC1) · Attached files: /tmp/up-build.log (download: https://propanes.example.test/api/v1/uploads/UP1)');
+});
+
+test('attachments for a finished session ride along on the explicit resume prompt', async () => {
+  const f = fixture();
+  f.world.slackFiles.set('F2', log);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  await f.bridge.handleEvent(threadReply('see log', { subtype: 'file_share', files: [fileInfo('F2', 'build.log', 'text/plain')] }));
+  await f.bridge.drain();
+  const resume = f.world.calls.find((c) => c.startsWith('resume:S1:'))!;
+  assert.match(resume, /^resume:S1:inherit:see log\n\nAttached files \(read from these local paths if you are on the server host\):\n- \/tmp\/up-build\.log \(download: /);
+});
+
+test('an attachment-only message asks the session to look at the file', async () => {
+  const f = fixture();
+  f.world.slackFiles.set('F1', png);
+  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('', { subtype: 'file_share', files: [fileInfo('F1', 'shot.png', 'image/png')] }));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.some((c) => c.startsWith('send-keys:S1:See the attached file(s). Attached screenshots: /tmp/sc-shot.png')), f.world.calls.join('|'));
+});
+
+test('a missing files:read scope is explained once per thread and the text still goes through', async () => {
+  const f = fixture();
+  f.world.slackFiles.set('F1', new SlackFileAccessError('missing_scope', 'sign-in page'));
+  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('first', { subtype: 'file_share', files: [fileInfo('F1', 'shot.png', 'image/png')] }));
+  await f.bridge.handleEvent(threadReply('second', { subtype: 'file_share', files: [fileInfo('F1', 'shot.png', 'image/png')] }));
+  await f.bridge.drain();
+  assert.equal(f.slack.texts().filter((t) => t.includes('files:read')).length, 1);
+  assert.ok(f.world.calls.includes('send-keys:S1:first') && f.world.calls.includes('send-keys:S1:second'), f.world.calls.join('|'));
+  assert.ok(!f.world.calls.some((c) => c.startsWith('upload')), 'nothing staged, no path invented');
+});
+
+test('oversized, undownloadable and failed attachments are reported, never fabricated', async () => {
+  const f = fixture();
+  f.world.slackFiles.set('F3', new SlackFileAccessError('http_error', 'download failed (500)'));
+  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('look', { subtype: 'file_share', files: [
+    fileInfo('F1', 'huge.zip', 'application/zip', 50 * 1024 * 1024),
+    { id: 'F2', name: 'post', mimetype: 'application/vnd.slack-docs' },
+    fileInfo('F3', 'flaky.txt', 'text/plain'),
+  ] }));
+  await f.bridge.drain();
+  const note = f.slack.texts().find((t) => t.startsWith('📎'))!;
+  assert.match(note, /skipped huge\.zip: 50\.0 MB exceeds the 20 MB limit/);
+  assert.match(note, /skipped post: not downloadable/);
+  assert.match(note, /could not download flaky\.txt: download failed \(500\)/);
+  assert.ok(f.world.calls.includes('send-keys:S1:look'));
+  assert.ok(!f.world.calls.some((c) => c.startsWith('upload')));
+});
+
+test('without a configured downloader attachments are announced as not forwarded; other subtypes stay ignored', async () => {
+  const f = fixture({ noDownloader: true });
   f.steps.push(() => undefined, () => undefined, () => undefined);
   await f.bridge.handleEvent(mention('start'));
-  await f.bridge.handleEvent(threadReply('', { subtype: 'file_share', files: [{ id: 'F1', name: 'a.txt' }, { id: 'F2', name: 'b.txt' }] }));
+  await f.bridge.handleEvent(threadReply('here', { subtype: 'file_share', files: [fileInfo('F1', 'a.txt', 'text/plain')] }));
   await f.bridge.handleEvent(threadReply('edited text', { subtype: 'message_changed' }));
   await f.bridge.drain();
-  assert.match(f.slack.texts().find((t) => t.startsWith('📎'))!, /2 attachments not forwarded/);
+  assert.match(f.slack.texts().find((t) => t.startsWith('📎'))!, /1 attachment not forwarded/);
+  assert.ok(f.world.calls.includes('send-keys:S1:here'));
   assert.ok(!f.world.calls.some((c) => c.includes('edited text')));
 });

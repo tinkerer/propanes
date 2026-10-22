@@ -1,5 +1,6 @@
 /** Authenticated API access; keep credentials out of URLs, errors and logs. */
 import type { AgentEndpointInfo } from './agents';
+import type { DownloadedFile } from './attachments';
 import type { Runtime } from './options';
 
 export class PropanesApiError extends Error {
@@ -29,7 +30,8 @@ export function createPropanesFetch(
   const base = baseUrl.replace(/\/$/, '');
   const raw = async (path: string, opts?: RequestInit): Promise<Response> => {
     const headers = new Headers(opts?.headers);
-    if (!headers.has('Content-Type') && opts?.body) headers.set('Content-Type', 'application/json');
+    // Multipart bodies set their own boundary; only JSON strings get the header.
+    if (!headers.has('Content-Type') && typeof opts?.body === 'string') headers.set('Content-Type', 'application/json');
     headers.set('Authorization', `Bearer ${token.trim()}`);
     const response = await request(`${base}${path}`, {
       ...opts,
@@ -76,7 +78,13 @@ export function isLive(status: string | null | undefined): boolean {
 export interface PropanesClient {
   me(): Promise<{ user: { id: string; username: string; role: string } }>;
   listAgents(appId: string): Promise<AgentEndpointInfo[]>;
-  createFeedback(input: { title: string; description: string; appId: string; tags?: string[] }): Promise<{ id: string }>;
+  /** POST /api/v1/feedback — JSON, or multipart with `screenshots` when images are attached
+   * (the same shape the admin composer submits; screenshots render into the prompt). */
+  createFeedback(input: { title: string; description: string; appId: string; tags?: string[]; screenshots?: DownloadedFile[] }): Promise<{ id: string }>;
+  /** POST /api/v1/screenshots — InterruptBar's image attachments for a running session. */
+  uploadScreenshots(sessionId: string | undefined, images: DownloadedFile[], appId: string): Promise<{ screenshots: { id: string; filename: string; path: string }[] }>;
+  /** POST /api/v1/uploads — the composer's non-image file attachments. */
+  uploadFiles(sessionId: string | undefined, files: DownloadedFile[], appId: string): Promise<{ files: { id: string; filename: string; originalName: string; path: string }[] }>;
   /** POST /api/v1/admin/dispatch — what the admin dispatch popup calls. */
   dispatch(input: { feedbackId: string; agentEndpointId: string; instructions: string; permissionProfile: string }): Promise<{ sessionId: string }>;
   getSession(id: string): Promise<SessionInfo>;
@@ -93,12 +101,34 @@ export interface PropanesClient {
   fetchImage(path: string): Promise<{ bytes: Buffer; mime: string }>;
 }
 
+// Buffer is typed over ArrayBufferLike; Blob wants a plain ArrayBuffer view.
+const toBlob = (f: DownloadedFile) => new Blob([f.bytes as unknown as Uint8Array<ArrayBuffer>], { type: f.mime });
+
 export function createPropanesClient(api: PropanesFetch): PropanesClient {
   const post = (path: string, body: unknown) => api(path, { method: 'POST', body: JSON.stringify(body) });
   return {
     me: () => api('/api/v1/auth/me'),
     listAgents: (appId) => api(`/api/v1/admin/agents?appId=${encodeURIComponent(appId)}`),
-    createFeedback: (input) => post('/api/v1/feedback', { type: 'manual', ...input }),
+    createFeedback: (input) => {
+      const { screenshots, ...fields } = input;
+      if (!screenshots?.length) return post('/api/v1/feedback', { type: 'manual', ...fields });
+      const fd = new FormData();
+      fd.append('feedback', JSON.stringify({ type: 'manual', ...fields }));
+      for (const f of screenshots) fd.append('screenshots', toBlob(f), f.name);
+      return api('/api/v1/feedback', { method: 'POST', body: fd });
+    },
+    uploadScreenshots: (sessionId, images, appId) => {
+      const fd = new FormData();
+      for (const f of images) fd.append('screenshots', toBlob(f), f.name);
+      fd.append('meta', JSON.stringify({ sessionId, appId, sourceUrl: 'slack' }));
+      return api('/api/v1/screenshots', { method: 'POST', body: fd });
+    },
+    uploadFiles: (sessionId, files, appId) => {
+      const fd = new FormData();
+      for (const f of files) fd.append('files', toBlob(f), f.name);
+      fd.append('meta', JSON.stringify({ sessionId, appId, sourceUrl: 'slack' }));
+      return api('/api/v1/uploads', { method: 'POST', body: fd });
+    },
     dispatch: async (input) => {
       const result = await post('/api/v1/admin/dispatch', input);
       const sessionId = result?.sessionId ?? result?.id;
