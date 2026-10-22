@@ -51,7 +51,7 @@ import {
   type JsonlUnit,
 } from './jsonl-utils.js';
 import { newTranscriptCursor, scanTranscriptForPrUrls, type TranscriptScanCursor } from './pr-transcript-scan.js';
-import { resolveCodexCommand } from './codex-bin.js';
+import { buildCodexArgs, resolveCodexCommand } from './codex-bin.js';
 
 const SERVER_WS_URL = process.env.SERVER_WS_URL || 'ws://localhost:3001/ws/launcher';
 const LAUNCHER_ID = process.env.LAUNCHER_ID || `launcher-${os.hostname()}`;
@@ -199,21 +199,17 @@ function buildAgentCommand(
 ): { command: string; args: string[] } {
   if (runtime === 'codex') {
     const command = resolveCodexCommand();
-    const args: string[] = [];
-    if (PIPE_PROFILES.has(permissionProfile)) {
-      args.push('exec');
-    } else {
-      // The codex TUI runs tool calls in a shared, long-lived app-server
-      // daemon, so shell commands inherit the daemon's environment instead of
-      // this session's — PROPANES_TOKEN / PROPANES_API_URL (per-session) never
-      // reach them and the agent gets 401s. Keep the TUI in-process.
-      // `exec` already runs in-process and doesn't accept the flag.
-      args.push('--no-daemon');
-    }
-    if (SKIP_PROFILES.has(permissionProfile)) {
-      args.push('--dangerously-bypass-approvals-and-sandbox');
-    }
-    if (prompt) args.push(prompt);
+    // Codex has no interactive/headless/stream separation the way claude does —
+    // `exec` is the only headless subcommand and it's one-shot. The stream
+    // profiles fall back to `exec` too (codex doesn't yet expose a
+    // bidirectional JSON protocol we can drive from here). A resumeSessionId
+    // (the rollout UUID) continues the thread natively via `codex resume`.
+    const args = buildCodexArgs({
+      pipe: PIPE_PROFILES.has(permissionProfile),
+      skip: SKIP_PROFILES.has(permissionProfile),
+      prompt,
+      resumeSessionId,
+    });
     return { command, args };
   }
 
