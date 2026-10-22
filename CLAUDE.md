@@ -354,8 +354,11 @@ Launchers connect via WebSocket, spawn PTY sessions, stream output with seq-numb
 **Servers behind the Workbench SSO edge** (`*.myworkbench.ai`) 302 the launcher's WS upgrade to a login page. Give the launcher a `wbcli_` token and it mints a `wb_session` cookie per connect (`src/workbench-edge.ts`): either set `WORKBENCH_CLI_TOKEN` (optional `WORKBENCH_EDGE`, `WORKBENCH_HOST`), or run `propanes login --workbench --server https://<host>` on that machine first and the launcher picks the token up from `~/.config/propanes/config.json`.
 
 ```bash
-SERVER_WS_URL=wss://propanes-vm.myworkbench.ai/ws/launcher LAUNCHER_ID=$(hostname -s) npm run start:launcher
+SERVER_WS_URL=wss://propanes-vm.myworkbench.ai/ws/launcher LAUNCHER_ID=$(hostname -s) MACHINE_ID=<machine id on that server> \
+  LAUNCHER_PATH_MAP=/home/azureuser/propanes=$HOME/work/github.com/propanes-vm node dist/launcher-bundle.mjs
 ```
+
+Set `MACHINE_ID` to the machine row on *that* server, or the machine card there stays offline and won't target the launcher. `LAUNCHER_PATH_MAP` (`serverPrefix=localPrefix,…`) rewrites the server's project paths for a machine with a different layout. Point it at a dedicated worktree, not your working checkout: dispatch syncs code with `git checkout FETCH_HEAD --force` in that directory.
 
 ### Session transfer
 Sessions can be transferred between launchers via `transferSession()` in `packages/server/src/dispatch.ts`. Exports JSONL files (main + continuations + subagents) and artifact files, imports on target machine.
