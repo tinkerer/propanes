@@ -526,8 +526,8 @@ pnpm --filter @propanes/server dev:launcher      # Launcher daemon
 pnpm --filter @propanes/server db:generate
 pnpm --filter @propanes/server db:migrate
 
-# Slack bot (Socket Mode, eyes acknowledgement and threaded replies)
-# Setup and supervised VM deployment: packages/slack-bot/README.md
+# Slack bot (Socket Mode): a Slack thread drives a ProPanes session
+# Commands, output modes and supervised VM deployment: packages/slack-bot/README.md
 pnpm --filter @propanes/slack-bot dev
 
 # Harness (Docker Compose)
