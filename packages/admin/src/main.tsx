@@ -6,6 +6,7 @@ import { App } from './components/shell/App.js';
 import './lib/settings.js';
 import { installConsoleBuffer, installNetworkCollector } from './lib/console-buffer.js';
 import { installBrowserFreezeInstrumentation } from './lib/perf.js';
+import { installMarkdownCodeCopy } from './lib/md-code-copy.js';
 import { initUpdateCheck } from './lib/update-check.js';
 import { UpdateBanner } from './components/ui/UpdateBanner.js';
 import { isEmbedded, isCompanion } from './lib/state.js';
@@ -23,6 +24,8 @@ declare global {
 installConsoleBuffer();
 installNetworkCollector();
 installBrowserFreezeInstrumentation();
+// Must run before the first marked.parse() anywhere in the app.
+installMarkdownCodeCopy();
 
 // Stale-bundle detection: only in top-level tabs — embedded/companion iframes
 // reload with their host, and a banner inside them is just noise.
