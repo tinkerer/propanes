@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isStopKeyword, parseCommand, stripMentions } from '../src/options';
+import { decodeSlackText, isStopKeyword, parseCommand, stripMentions } from '../src/options';
 
 test('plain request has no options and keeps the text', () => {
   assert.deepEqual(parseCommand('<@UBOT> review PR 2013'), { command: 'prompt', text: 'review PR 2013' });
@@ -40,4 +40,11 @@ test('only the bot mention is stripped when its id is known', () => {
 test('stop keywords', () => {
   for (const t of ['stop', 'Stop.', ' cancel ', 'KILL!', 'halt']) assert.equal(isStopKeyword(t), true, t);
   for (const t of ['stop the build', 'please stop', '']) assert.equal(isStopKeyword(t), false, t);
+});
+
+test('Slack link and entity markup is decoded before the text reaches the agent', () => {
+  assert.equal(decodeSlackText('<mailto:zack@example.test|zack@example.test> could not log in to <https://app.example.test/login|the app> &amp; <https://x.test> in <#C1|ops> <!here>'),
+    'zack@example.test could not log in to the app (https://app.example.test/login) & https://x.test in #ops @here');
+  assert.equal(parseCommand('<@UBOT> [claude] check <https://a.test/b|a.test/b>', 'UBOT').text, 'check a.test/b (https://a.test/b)');
+  assert.equal(decodeSlackText('1 &lt; 2 <@UALICE>'), '1 < 2 <@UALICE>');
 });

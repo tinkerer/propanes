@@ -23,9 +23,24 @@ export function stripMentions(text: string, botUserId?: string): string {
   return text.replace(re, ' ').replace(/[ \t]+/g, ' ').trim();
 }
 
+/** Turn Slack's message markup into plain text for the agent: `<url|label>` →
+ * `label (url)`, `<mailto:a|a>` → `a`, `<#C1|chan>` → `#chan`, `<!here>` →
+ * `@here`, and HTML entities unescaped. Mentions of people are left alone so
+ * `stripMentions` can still find the bot's. */
+export function decodeSlackText(text: string): string {
+  return text
+    .replace(/<(mailto|tel):([^|>]+)(?:\|([^>]*))?>/g, (_m, _s, addr, label) => label || addr)
+    .replace(/<(https?:\/\/[^|>]+)\|([^>]*)>/g, (_m, url, label) => (label && label !== url ? `${label} (${url})` : url))
+    .replace(/<(https?:\/\/[^|>]+)>/g, '$1')
+    .replace(/<#[A-Z0-9]+\|([^>]*)>/g, '#$1')
+    .replace(/<!(here|channel|everyone)(?:\|[^>]*)?>/g, '@$1')
+    .replace(/<!subteam\^[A-Z0-9]+\|([^>]*)>/g, '$1')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
 /** Parse every leading `[...]` group, case-insensitively, comma separated. */
 export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
-  let text = stripMentions(raw ?? '', botUserId);
+  let text = decodeSlackText(stripMentions(raw ?? '', botUserId));
   const tokens: string[] = [];
   const bracket = /^\[([^\]]*)\]\s*/;
   let m: RegExpExecArray | null;
