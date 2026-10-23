@@ -54,13 +54,14 @@ for (const runtime of ['claude', 'codex'] as const) {
   });
 }
 
-test('[terminal] from a sessionless thread gets its own input routing and leaves listings in the source', async () => {
+test('[terminal] from a sessionless thread keeps input routing and listings in the source', async () => {
   const f = fixture();
   await f.bridge.handleEvent(mention('[help]'));
   await f.bridge.handleEvent(threadReply('[terminal]'));
   const terminal = new StateRepo(f.store).threads()[0];
   assert.equal(terminal.kind, 'terminal');
-  assert.notEqual(terminal.threadTs, '100.000');
+  assert.equal(terminal.threadTs, '100.000');
+  assert.ok(f.slack.posts.every(p => p.thread_ts === '100.000'));
   await f.bridge.handleEvent(threadReply('pwd', { threadTs: terminal.threadTs! }));
   assert.ok(f.world.calls.includes('send-keys:S1:pwd'));
   const from = f.slack.posts.length;
@@ -68,14 +69,16 @@ test('[terminal] from a sessionless thread gets its own input routing and leaves
   assert.ok(f.slack.posts.slice(from).every(p => p.thread_ts === '100.000'));
 });
 
-test('a failed Slack root never creates an agent or terminal', async () => {
+test('a failed Slack root prevents agent branching but does not block terminal links', async () => {
   const f = fixture();
   await f.bridge.handleEvent(mention('[help]'));
   const post = f.slack.postMessage.bind(f.slack);
   f.slack.postMessage = async args => args.thread_ts ? post(args) : { ok: false, ts: '' };
   await f.bridge.handleEvent(threadReply('[session] do work'));
-  await f.bridge.handleEvent(threadReply('[terminal]'));
   assert.equal(f.world.sessions.size, 0);
+  await f.bridge.handleEvent(threadReply('[terminal]'));
+  assert.equal(f.world.sessions.size, 1);
+  assert.match(f.slack.texts().at(-1)!, /Terminal started:/);
   assert.ok(f.slack.texts().some(t => /no session was started/.test(t)));
 });
 
