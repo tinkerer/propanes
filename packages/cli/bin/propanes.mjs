@@ -7,7 +7,7 @@
 //
 //   propanes login [--server URL] [--username U] [--password P | --token JWT]
 //   propanes login --web [--server URL]     (browser login; works behind SSO)
-//   propanes login --workbench [--server URL] (Workbench SSO device flow)
+//   propanes login --portal [URL] [--server URL] (SSO auth-portal device flow)
 //   propanes attach <sessionId> [--server URL]
 //   propanes sessions [--server URL]
 //   propanes feedback <feedbackId> | -l | --session <sessionId>
@@ -158,10 +158,10 @@ function isEdgeRedirect(res) {
   return res.status >= 300 && res.status < 400;
 }
 
-// fetch that (a) attaches a stored Workbench edge session cookie so requests
-// pass the SSO proxy, (b) transparently refreshes that cookie via the stored
-// Workbench CLI token when it has expired, and (c) fails loudly (rather than
-// parsing an HTML login page as JSON) when the host is still edge-gated.
+// fetch that (a) attaches the stored auth-portal session cookie so requests
+// pass the SSO gateway, (b) transparently refreshes that cookie via the stored
+// portal token when it has expired, and (c) fails loudly (rather than
+// parsing an HTML login page as JSON) when the host is still gated.
 async function apiFetch(url, opts = {}) {
   let origin;
   try {
@@ -171,7 +171,7 @@ async function apiFetch(url, opts = {}) {
   }
   const withCookie = (extra) => {
     const headers = { ...(opts.headers || {}) };
-    const cookie = edgeCookieHeader(loadConfig(), origin);
+    const cookie = portalCookieHeader(loadConfig(), origin);
     const merged = [opts.headers?.Cookie, cookie, extra]
       .filter(Boolean)
       .join("; ");
@@ -185,10 +185,10 @@ async function apiFetch(url, opts = {}) {
     redirect: "manual",
   });
 
-  // Edge session missing/expired — if we hold a Workbench CLI token, mint a
-  // fresh wb_session and retry once before giving up.
-  if (isEdgeRedirect(res) && origin && hasWorkbench(loadConfig(), origin)) {
-    const fresh = await refreshWbSession(origin).catch(() => null);
+  // Portal session missing/expired — if we hold a portal token, mint a fresh
+  // session cookie and retry once before giving up.
+  if (isEdgeRedirect(res) && origin && hasPortal(loadConfig(), origin)) {
+    const fresh = await refreshPortalSession(origin).catch(() => null);
     if (fresh) {
       res = await fetch(url, {
         ...opts,
@@ -202,10 +202,10 @@ async function apiFetch(url, opts = {}) {
     const loc = res.headers.get("location") || "(unknown)";
     die(`The server redirected this request to: ${loc}
 
-That usually means the host is behind a browser SSO proxy (edge auth) that
-blocks non-browser clients before they reach Propanes. Options:
-  - connect through Workbench SSO (recommended for *.myworkbench.ai):
-      propanes login --workbench --server ${origin || "<host>"}
+That usually means the host is behind a browser SSO gateway (an auth portal)
+that blocks non-browser clients before they reach Propanes. Options:
+  - sign in through the server's auth portal:
+      propanes login --portal https://<portal-host> --server ${origin || "<host>"}
   - or tunnel through the SSH gateway:
       propanes login --web --server <host> --gateway <gateway-host>`);
   }
@@ -304,98 +304,112 @@ function openBrowser(url) {
   }
 }
 
-// ---------- Workbench SSO (edge) ---------------------------------------------
-// Hosts under *.myworkbench.ai are fronted by the Workbench SSO edge, which
-// 302s any non-browser request. These helpers drive the Workbench CLI
-// device-authorization flow (workbenchai/workbench#811): a browser-approved
-// login yields a long-lived `wbcli_` token, which we exchange per host for the
-// short-lived `wb_session` cookie the edge accepts — the same cookie a signed-in
-// browser carries. Stored per propanes server under `.workbench` / `.wbSession`.
+// ---------- SSO auth portal ---------------------------------------------------
+// Some servers sit behind a login gateway (an "auth portal") that 302s every
+// non-browser request. The portal's CLI device-authorization flow yields a
+// long-lived portal token, which we exchange per server host for the
+// short-lived session cookie the gateway accepts — the same cookie a signed-in
+// browser carries. Which portal and which cookie are deployment specifics:
+// they are stored per propanes server under `.portal` / `.portalSession` and
+// never hard-coded. The launcher daemon reads the same `.portal` entry.
+//
+// Portal URL resolution: `--portal <url>` / `--portal-url`, PROPANES_PORTAL_URL,
+// then the stored login for that server.
 
-const DEFAULT_WB_EDGE = "https://app.myworkbench.ai";
-
-function workbenchFor(cfg, server) {
-  return cfg.servers?.[server]?.workbench || null;
+function portalFor(cfg, server) {
+  return cfg.servers?.[server]?.portal || null;
 }
 
-function hasWorkbench(cfg, server) {
-  return !!workbenchFor(cfg, server)?.token;
+function hasPortal(cfg, server) {
+  return !!portalFor(cfg, server)?.token;
 }
 
-// Returns "wb_session=…" if a fresh cached edge session exists, else null.
-function edgeCookieHeader(cfg, server) {
-  const s = cfg.servers?.[server]?.wbSession;
+// Returns the cached session cookie header if it is still fresh, else null.
+function portalCookieHeader(cfg, server) {
+  const s = cfg.servers?.[server]?.portalSession;
   if (!s?.cookie) return null;
   if (s.expiresAt && new Date(s.expiresAt).getTime() < Date.now()) return null;
   return s.cookie;
 }
 
-// Exchange the stored wbcli_ token for a fresh wb_session cookie for `server`'s
-// host and cache it. Returns the cookie string or null.
-async function refreshWbSession(server) {
+// Pick the session cookie(s) out of the sso callback's Set-Cookie headers: the
+// configured cookie name when known, otherwise everything the callback set
+// (the first cookie is then taken as the session for its lifetime).
+function sessionCookiesFrom(setCookies, cookieName) {
+  const parts = [];
+  let maxAge = null;
+  let sawSession = false;
+  for (const raw of setCookies) {
+    const pair = (raw || "").split(";")[0];
+    if (!pair.includes("=")) continue;
+    parts.push(pair);
+    const isSession = cookieName ? pair.startsWith(`${cookieName}=`) : parts.length === 1;
+    if (isSession) {
+      sawSession = true;
+      const ma = raw.match(/max-age=(\d+)/i);
+      if (ma) maxAge = Number(ma[1]);
+    }
+  }
+  if (!parts.length || !sawSession) return null;
+  return { cookie: parts.join("; "), maxAge };
+}
+
+// Exchange the stored portal token for a fresh session cookie for `server`'s
+// host and cache it. Returns the cookie header string or null.
+async function refreshPortalSession(server) {
   const cfg = loadConfig();
-  const wb = workbenchFor(cfg, server);
-  if (!wb?.token) return null;
-  const host = wb.host || new URL(server).host;
-  const res = await fetch(`${wb.edge}/auth/cli/session`, {
+  const portal = portalFor(cfg, server);
+  if (!portal?.token || !portal.url) return null;
+  const host = portal.host || new URL(server).host;
+  const res = await fetch(`${portal.url}/auth/cli/session`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      authorization: `Bearer ${wb.token}`,
+      authorization: `Bearer ${portal.token}`,
     },
     body: JSON.stringify({ host }),
   });
   if (res.status === 401)
     die(
-      `Workbench session rejected — re-run: propanes login --workbench --server ${server}`,
+      `Auth portal rejected the stored token — re-run: propanes login --portal ${portal.url} --server ${server}`,
     );
   if (!res.ok) return null;
   const { sso_url } = await res.json().catch(() => ({}));
   if (!sso_url) return null;
-  // GET the /sso/callback URL; the edge gateway answers with Set-Cookie
-  // wb_session and a redirect — we want only the cookie, so don't follow it.
+  // GET the sso callback URL; the gateway answers with Set-Cookie and a
+  // redirect — we want only the cookie, so don't follow it.
   const cb = await fetch(sso_url, { redirect: "manual" });
   const cookies =
     typeof cb.headers.getSetCookie === "function"
       ? cb.headers.getSetCookie()
       : [cb.headers.get("set-cookie") || ""];
-  let cookie = null;
-  let maxAge = null;
-  for (const raw of cookies) {
-    const m = raw && raw.match(/wb_session=([^;]+)/);
-    if (m) {
-      cookie = `wb_session=${m[1]}`;
-      const ma = raw.match(/max-age=(\d+)/i);
-      if (ma) maxAge = Number(ma[1]);
-      break;
-    }
-  }
-  if (!cookie) return null;
-  // Default to 6 days if the cookie didn't advertise its own lifetime (the
-  // edge issues 7-day sessions); we refresh proactively before it lapses.
-  const ttlMs = (maxAge || 6 * 24 * 3600) * 1000;
+  const picked = sessionCookiesFrom(cookies, portal.cookie);
+  if (!picked) return null;
+  // Default to 6 days if the cookie didn't advertise its own lifetime; we
+  // refresh proactively before it lapses.
+  const ttlMs = (picked.maxAge || 6 * 24 * 3600) * 1000;
   const next = loadConfig();
   next.servers[server] = next.servers[server] || {};
-  next.servers[server].wbSession = {
-    cookie,
+  next.servers[server].portalSession = {
+    cookie: picked.cookie,
     expiresAt: new Date(Date.now() + ttlMs).toISOString(),
   };
   saveConfig(next);
-  return cookie;
+  return picked.cookie;
 }
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function pollWorkbenchToken(edge, deviceCode, intervalSec) {
+async function pollPortalToken(portalUrl, deviceCode, intervalSec) {
   const deadline = Date.now() + 15 * 60 * 1000;
   let interval = Math.max(2, intervalSec || 5);
   while (Date.now() < deadline) {
     await sleep(interval * 1000);
     let r, j;
     try {
-      r = await fetch(`${edge}/auth/cli/token`, {
+      r = await fetch(`${portalUrl}/auth/cli/token`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ device_code: deviceCode }),
@@ -412,32 +426,41 @@ async function pollWorkbenchToken(edge, deviceCode, intervalSec) {
     }
     if (j.error === "access_denied") die("Authorization was denied in the browser.");
     if (j.error === "expired_token")
-      die("The request expired before approval. Run login --workbench again.");
+      die("The request expired before approval. Run login --portal again.");
     // Transient (5xx / server_error / anything unexpected): a single blip —
     // e.g. a control-plane replica cycling — must not abort the whole login.
     if (r.status >= 500 || j.error === "server_error") continue;
-    die(`Workbench authorization failed: ${j.error || `HTTP ${r.status}`}`);
+    die(`Auth portal authorization failed: ${j.error || `HTTP ${r.status}`}`);
   }
   die("Timed out waiting for browser approval (15 min).");
 }
 
-// propanes login --workbench [--server URL] [--edge https://app.myworkbench.ai]
-async function cmdLoginWorkbench(flags) {
+// propanes login --portal [URL] [--server URL] [--portal-host HOST] [--portal-cookie NAME]
+async function cmdLoginPortal(flags) {
   const cfg = loadConfig();
   const server = resolveServer(flags, cfg);
-  const edge = normalizeServer(
-    flags.edge || process.env.PROPANES_WORKBENCH_EDGE || DEFAULT_WB_EDGE,
-  );
-  const host = new URL(server).host;
+  const stored = portalFor(cfg, server);
+  const rawPortal =
+    (flags.portal && flags.portal !== true ? flags.portal : null) ||
+    flags["portal-url"] ||
+    process.env.PROPANES_PORTAL_URL ||
+    stored?.url;
+  if (!rawPortal)
+    die(
+      `Which auth portal? propanes login --portal https://<portal-host> --server ${server}\n(or set PROPANES_PORTAL_URL)`,
+    );
+  const portalUrl = normalizeServer(rawPortal);
+  const host = flags["portal-host"] || process.env.PROPANES_PORTAL_HOST || stored?.host || new URL(server).host;
+  const cookie = flags["portal-cookie"] || process.env.PROPANES_PORTAL_COOKIE || stored?.cookie || undefined;
 
-  const start = await fetch(`${edge}/auth/cli/start`, {
+  const start = await fetch(`${portalUrl}/auth/cli/start`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ client_name: "propanes-cli" }),
   });
   if (!start.ok)
     die(
-      `Couldn't start Workbench sign-in (HTTP ${start.status}). Is ${edge} the Workbench login host?`,
+      `Couldn't start the portal sign-in (HTTP ${start.status}). Is ${portalUrl} the auth portal's login host?`,
     );
   const grant = await start.json();
   console.log(`\nTo authorize this CLI, open:\n  ${grant.verification_uri}`);
@@ -445,25 +468,21 @@ async function cmdLoginWorkbench(flags) {
   openBrowser(grant.verification_uri_complete || grant.verification_uri);
   console.log("Waiting for you to approve in the browser…");
 
-  const token = await pollWorkbenchToken(
-    edge,
-    grant.device_code,
-    grant.interval,
-  );
+  const token = await pollPortalToken(portalUrl, grant.device_code, grant.interval);
   const next = loadConfig();
   next.servers[server] = next.servers[server] || {};
-  next.servers[server].workbench = { edge, token, host };
+  next.servers[server].portal = { url: portalUrl, token, host, ...(cookie ? { cookie } : {}) };
   next.defaultServer = next.defaultServer || server;
   saveConfig(next);
 
-  const cookie = await refreshWbSession(server);
-  if (!cookie)
+  const session = await refreshPortalSession(server);
+  if (!session)
     die(
-      `Signed in to Workbench, but couldn't obtain an edge session for ${host}. ` +
-        `Your account may not have access to that workspace.`,
+      `Signed in to the auth portal, but couldn't obtain a session for ${host}. ` +
+        `Your account may not have access to that host.`,
     );
   console.log(
-    `\nWorkbench SSO connected for ${host}. Propanes commands now pass the edge automatically.`,
+    `\nAuth portal connected for ${host}. Propanes commands now pass the gateway automatically, and a launcher on this machine picks the login up from the same config.`,
   );
   const tok = tokenFor(next, server);
   if (!tok)
@@ -498,7 +517,7 @@ function cmdLoginWeb(flags) {
     const claims = decodeJwt(token);
     cfg.servers = cfg.servers || {};
     cfg.servers[server] = {
-      ...cfg.servers[server], // preserve workbench / wbSession
+      ...cfg.servers[server], // preserve the portal login and session
       token,
       username: claims.username || null,
       expiresAt: claims.exp ? new Date(claims.exp * 1000).toISOString() : null,
@@ -523,7 +542,8 @@ function cmdLoginWeb(flags) {
 }
 
 async function cmdLogin(flags) {
-  if (flags.workbench) return cmdLoginWorkbench(flags);
+  if (flags.portal || flags["portal-url"]) return cmdLoginPortal(flags);
+  if (flags.workbench) die("--workbench was renamed: propanes login --portal https://<portal-host> --server <server>");
   if (flags.web) return cmdLoginWeb(flags);
 
   const cfg = loadConfig();
@@ -776,9 +796,9 @@ function cmdAttach(flags, sessionId) {
   }
 
   function connect() {
-    // Attach the Workbench edge session cookie (if any) so the WS upgrade
-    // passes the SSO proxy; the app-level auth is still the ?token= query.
-    const cookie = edgeCookieHeader(loadConfig(), server);
+    // Attach the auth-portal session cookie (if any) so the WS upgrade passes
+    // the SSO gateway; the app-level auth is still the ?token= query.
+    const cookie = portalCookieHeader(loadConfig(), server);
     const wsOpts = cookie ? { headers: { Cookie: cookie } } : undefined;
     ws = new WebSocket(`${wsBase}/ws/agent-session?sessionId=${encodeURIComponent(sessionId)}&token=${encodeURIComponent(token)}`, wsOpts);
 
@@ -843,14 +863,14 @@ function cmdAttach(flags, sessionId) {
       // close handler drives the retry
     });
 
-    // An edge-SSO proxy answers the WS upgrade with a 3xx redirect. If we hold
-    // a Workbench token, refresh the edge session and reconnect once; otherwise
-    // surface it clearly instead of reconnect-looping forever.
+    // An SSO gateway answers the WS upgrade with a 3xx redirect. If we hold a
+    // portal token, refresh the session and reconnect once; otherwise surface
+    // it clearly instead of reconnect-looping forever.
     ws.on('unexpected-response', (_req, res) => {
       if (res.statusCode >= 300 && res.statusCode < 400) {
-        if (hasWorkbench(loadConfig(), server) && !edgeRetried) {
+        if (hasPortal(loadConfig(), server) && !edgeRetried) {
           edgeRetried = true;
-          refreshWbSession(server)
+          refreshPortalSession(server)
             .then((fresh) => {
               if (fresh) { try { ws.terminate(); } catch {} connect(); }
               else edgeBlockedExit(res);
@@ -867,8 +887,8 @@ function cmdAttach(flags, sessionId) {
 
   function edgeBlockedExit(res) {
     cleanupAndExit(1, `WebSocket upgrade was redirected (HTTP ${res.statusCode} → ${res.headers.location || '?'}).
-The host is behind a browser SSO proxy. Connect through Workbench SSO:
-  propanes login --workbench --server ${server}
+The host is behind a browser SSO gateway. Sign in through its auth portal:
+  propanes login --portal https://<portal-host> --server ${server}
 or tunnel through the SSH gateway (propanes login --web --gateway <host>).`);
   }
 
@@ -967,9 +987,11 @@ function usage() {
 
 Usage:
   propanes login [--server URL] [--username U] [--password P | --token JWT]
-  propanes login --workbench [--server URL] [--edge URL]
-                                           Sign in through Workbench SSO so
-                                           requests pass the *.myworkbench.ai edge
+  propanes login --portal [URL] [--server URL] [--portal-host HOST] [--portal-cookie NAME]
+                                           Sign in through the server's SSO auth
+                                           portal (device flow) so requests pass
+                                           its gateway; URL may come from
+                                           PROPANES_PORTAL_URL
   propanes login --web [--server URL] [--gateway HOST[:PORT]]
                                            Log in via the browser (works when
                                            the API is behind a browser-SSO proxy);
