@@ -28,8 +28,13 @@ export const line = {
 export class World {
   sessions = new Map<string, FakeSession>();
   calls: string[] = [];
+  agentAppIds: string[] = [];
+  dispatchInputs: Parameters<PropanesClient['dispatch']>[0][] = [];
+  feedbackInputs: Parameters<PropanesClient['createFeedback']>[0][] = [];
   images = new Map<string, { bytes: Buffer; mime: string }>();
   agents = agents.slice();
+  apps = [{ id: APP, name: 'Propanes Admin' }, { id: 'app-2', name: 'Storefront' }];
+  infra = [{ id: 'mac-1', name: 'Amir MacBook', hostname: 'amir-macbook.local', online: true }];
   private n = 0;
 
   newSession(feedbackId: string, runtime: string, parent?: string): FakeSession {
@@ -44,9 +49,16 @@ export class World {
 
   propanes: PropanesClient = {
     me: async () => ({ user: { id: 'env-admin', username: 'admin', role: 'admin' } }),
-    listAgents: async () => this.agents,
-    createFeedback: async (input) => { this.calls.push(`feedback:${input.title}`); return { id: `F${this.n + 1}` }; },
+    listApplications: async () => this.apps,
+    listInfra: async () => this.infra,
+    createTerminal: async (input) => {
+      this.calls.push(`terminal:${JSON.stringify(input)}`);
+      return { sessionId: this.newSession('', 'plain').id };
+    },
+    listAgents: async (appId) => { this.agentAppIds.push(appId); return this.agents; },
+    createFeedback: async (input) => { this.feedbackInputs.push(input); this.calls.push(`feedback:${input.title}`); return { id: `F${this.n + 1}` }; },
     dispatch: async (input) => {
+      this.dispatchInputs.push(input);
       const agent = this.agents.find((a) => a.id === input.agentEndpointId)!;
       this.calls.push(`dispatch:${input.agentEndpointId}:${input.permissionProfile}`);
       this.calls.push(`instructions:${input.instructions}`);

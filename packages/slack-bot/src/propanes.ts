@@ -48,6 +48,9 @@ export function createPropanesFetch(
 
 export type PropanesFetch = ReturnType<typeof createPropanesFetch>;
 
+export interface ApplicationInfo { id: string; name: string; }
+export interface InfraInfo { id: string; name: string; hostname?: string; online: boolean; }
+
 export interface SessionInfo {
   id: string;
   status: string;
@@ -75,10 +78,13 @@ export function isLive(status: string | null | undefined): boolean {
 /** The same backend operations the admin structured view uses. */
 export interface PropanesClient {
   me(): Promise<{ user: { id: string; username: string; role: string } }>;
+  listApplications(): Promise<ApplicationInfo[]>;
+  listInfra(): Promise<InfraInfo[]>;
+  createTerminal(input: { appId?: string; launcherId?: string; cwd?: string; permissionProfile: 'plain' }): Promise<{ sessionId: string }>;
   listAgents(appId: string): Promise<AgentEndpointInfo[]>;
   createFeedback(input: { title: string; description: string; appId: string; tags?: string[] }): Promise<{ id: string }>;
   /** POST /api/v1/admin/dispatch — what the admin dispatch popup calls. */
-  dispatch(input: { feedbackId: string; agentEndpointId: string; instructions: string; permissionProfile: string }): Promise<{ sessionId: string }>;
+  dispatch(input: { feedbackId: string; agentEndpointId: string; instructions: string; permissionProfile: string; launcherId?: string }): Promise<{ sessionId: string }>;
   getSession(id: string): Promise<SessionInfo>;
   /** Session rows for a feedback item, newest first, with live inputState. */
   listSessions(feedbackId: string): Promise<SessionInfo[]>;
@@ -97,6 +103,13 @@ export function createPropanesClient(api: PropanesFetch): PropanesClient {
   const post = (path: string, body: unknown) => api(path, { method: 'POST', body: JSON.stringify(body) });
   return {
     me: () => api('/api/v1/auth/me'),
+    listApplications: () => api('/api/v1/admin/applications'),
+    listInfra: async () => (await api('/api/v1/admin/launchers')).launchers,
+    createTerminal: async (input) => {
+      const result = await post('/api/v1/admin/terminal', input);
+      if (!result?.sessionId) throw new Error('terminal did not return a session id');
+      return { sessionId: result.sessionId };
+    },
     listAgents: (appId) => api(`/api/v1/admin/agents?appId=${encodeURIComponent(appId)}`),
     createFeedback: (input) => post('/api/v1/feedback', { type: 'manual', ...input }),
     dispatch: async (input) => {

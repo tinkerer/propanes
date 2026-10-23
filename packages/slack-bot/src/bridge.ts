@@ -14,6 +14,7 @@ import { isStopKeyword, parseCommand, type OutputMode, type ParsedCommand, type 
 import { isLive, PropanesApiError, TERMINAL_STATUSES, type JsonlDelta, type PropanesClient, type SessionInfo } from './propanes';
 import { slackErrorCode, type SlackPoster } from './slack';
 import { freshCheckpoint, threadKey, type StateRepo, type ThreadRecord } from './state';
+import { resolveTarget, TargetResolutionError } from './targets';
 import { TranscriptFollower } from './transcript';
 
 export interface IncomingSlackMessage {
@@ -130,7 +131,7 @@ export class SlackBridge {
       if (!isDm && !ev.mentionsBot && !record) return; // ordinary chatter in an unrelated thread
 
       const cmd = parseCommand(ev.text, this.d.config.botUserId);
-      const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined;
+      const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined || cmd.app !== undefined || cmd.infra !== undefined || cmd.terminal !== undefined;
       if (!cmd.error && cmd.command === 'prompt' && !cmd.text && !hasOptions) return;
 
       const reply = (text: string) => this.d.slack.postMessage({ channel: ev.channel, thread_ts: threadTs ?? undefined, text });
@@ -174,13 +175,27 @@ export class SlackBridge {
 
   private async handlePrompt(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<void> {
     const record = this.d.state.getThread(key);
-    const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined;
+    const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined || cmd.app !== undefined || cmd.infra !== undefined || cmd.terminal !== undefined;
     try {
       if (isStopKeyword(cmd.text) && !hasOptions) return await this.stopSession(record, reply);
+      if (cmd.terminal) return await this.startTerminal(ev, key, threadTs, cmd, reply);
+      if (record && (cmd.app || cmd.infra)) {
+        await reply('This thread already has a session. Start a new Slack thread to choose a different app or infra, or use `[terminal]` to open a separate terminal.');
+        return;
+      }
       if (!record) return await this.startSession(ev, key, threadTs, cmd, reply);
+      if (record.kind === 'terminal') {
+        if (hasOptions || !cmd.text) { await reply(`Use ${this.link(record.sessionId)} to access this terminal, or reply with shell input.`); return; }
+        const session = await this.currentSession(record);
+        if (!isLive(session.status)) { await reply(`Terminal ${this.link(record.sessionId)} has ended. Send \`[terminal]\` to open another.`); return; }
+        const result = await this.d.propanes.sendKeys(record.sessionId, cmd.text.replace(/\r?\n/g, ' ⏎ '));
+        if (!result.ok) await reply(`⚠️ Could not send terminal input: ${escapeMrkdwn(result.error || 'send-keys failed')}`);
+        return;
+      }
       return await this.continueThread(ev, record, cmd, reply);
     } catch (err) {
       this.d.log(`Request handling failed: ${err instanceof Error ? err.name : 'error'}`);
+      if (err instanceof TargetResolutionError) { await reply(`⚠️ ${escapeMrkdwn(err.message)}`); return; }
       await reply(`⚠️ Something went wrong: ${escapeMrkdwn(safeMessage(err))}`);
     }
   }
@@ -192,7 +207,7 @@ export class SlackBridge {
       await reply('Tell me what to do, e.g. `@amirobot review PR 2013`. Send `[help]` for options.');
       return;
     }
-    const { appId } = this.d.config;
+    const { appId, launcherId, label } = await this.resolveTargets(cmd);
     const agents = await this.d.propanes.listAgents(appId);
     const remembered = ev.user ? this.d.state.getRuntimePref(ev.teamId, ev.user) : undefined;
     const runtime: Runtime = cmd.runtime ?? remembered ?? configuredDefaultRuntime(agents, appId);
@@ -219,12 +234,13 @@ export class SlackBridge {
       agentEndpointId: endpoint.id,
       instructions: slackInstructions(mode),
       permissionProfile: PERMISSION_PROFILE,
+      ...(launcherId ? { launcherId } : {}),
     });
     const nowIso = new Date(this.now()).toISOString();
     const record: ThreadRecord = {
       key, teamId: ev.teamId, channel: ev.channel, threadTs,
       sessionId, feedbackId: feedback.id, runtime, agentEndpointId: endpoint.id, agentName: endpoint.name || endpoint.id,
-      mode, images,
+      mode, images, appId, targetLabel: label,
       history: [{ sessionId, runtime, agentName: endpoint.name || endpoint.id, createdAt: nowIso }],
       delivery: freshCheckpoint(this.now()), watching: true, createdAt: nowIso, updatedAt: nowIso,
     };
@@ -234,9 +250,38 @@ export class SlackBridge {
     this.watch(key);
   }
 
+  private async resolveTargets(cmd: ParsedCommand): Promise<{ appId: string; launcherId?: string; label: string }> {
+    const app = cmd.app ? resolveTarget('app', cmd.app, await this.d.propanes.listApplications()) : undefined;
+    const infra = cmd.infra ? resolveTarget('infra', cmd.infra, await this.d.propanes.listInfra()) : undefined;
+    if (infra && !infra.online) throw new TargetResolutionError(`Infra "${infra.name}" is offline. Reconnect it before retrying.`);
+    return { appId: app?.id ?? this.d.config.appId, launcherId: infra?.id, label: [app?.name, infra?.name].filter(Boolean).join(' · ') };
+  }
+
+  private async startTerminal(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<void> {
+    const { appId, launcherId, label } = await this.resolveTargets(cmd);
+    const { sessionId } = await this.d.propanes.createTerminal({
+      permissionProfile: 'plain',
+      ...(cmd.app ? { appId } : {}),
+      ...(launcherId ? { launcherId, ...(!cmd.app ? { cwd: '~' } : {}) } : {}),
+    });
+    // A terminal requested alongside an agent is a separate link; keep the agent conversation intact.
+    const previous = this.d.state.getThread(key);
+    if (!previous || previous.kind === 'terminal') {
+      const nowIso = new Date(this.now()).toISOString();
+      this.d.state.putThread({
+        key, teamId: ev.teamId, channel: ev.channel, threadTs, kind: 'terminal', appId, targetLabel: label,
+        sessionId, feedbackId: '', runtime: 'claude', agentEndpointId: '', agentName: 'Terminal',
+        mode: 'default', images: false, history: [], delivery: freshCheckpoint(this.now()),
+        watching: false, createdAt: nowIso, updatedAt: nowIso,
+      });
+    }
+    await reply(`Terminal started: ${this.link(sessionId)}${label ? ` · ${escapeMrkdwn(label)}` : ''}. ${previous && previous.kind !== 'terminal' ? 'Replies in this thread continue to reach the agent.' : 'Reply here to send shell input · `stop` closes it · `[status]`.'}`);
+  }
+
   private initialReply(record: ThreadRecord): string {
     const lines = [
       `🚀 Session started: ${this.link(record.sessionId)}`,
+      ...(record.targetLabel ? [`*target* ${escapeMrkdwn(record.targetLabel)}`] : []),
       `*agent* ${runtimeLabel(record.runtime)} (${escapeMrkdwn(record.agentName)}) · *output* ${record.mode} · *images* ${record.images ? 'on' : 'off'}`,
     ];
     if (record.mode === 'quiet') lines.push('_Quiet mode: I will post only the final answer here when the session finishes._');
@@ -287,9 +332,9 @@ export class SlackBridge {
    * the previous session's link; the new runtime starts as a continuation
    * (child session) of the current one, carrying the thread's task context. */
   private async switchRuntime(ev: IncomingSlackMessage, record: ThreadRecord, runtime: Runtime, text: string, reply: (t: string) => Promise<unknown>): Promise<void> {
-    const agents = await this.d.propanes.listAgents(this.d.config.appId);
+    const agents = await this.d.propanes.listAgents(record.appId ?? this.d.config.appId);
     try {
-      resolveAgentEndpoint(agents, runtime, this.d.config.appId);
+      resolveAgentEndpoint(agents, runtime, record.appId ?? this.d.config.appId);
     } catch (err) {
       if (err instanceof AgentUnavailableError) {
         await reply(`⚠️ ${escapeMrkdwn(err.message)}. Staying on ${runtimeLabel(record.runtime)}; your message was not sent.`);
@@ -349,7 +394,7 @@ export class SlackBridge {
     record.delivery.turnOpen = false;
     record.delivery.turnTexts = [];
     this.d.state.putThread(record);
-    await reply(`🛑 Stopped session ${this.link(record.sessionId)}. Reply here to resume it with a new message.`);
+    await reply(`🛑 Stopped session ${this.link(record.sessionId)}. ${record.kind === 'terminal' ? 'Send `[terminal]` to open another.' : 'Reply here to resume it with a new message.'}`);
   }
 
   async statusText(record: ThreadRecord | undefined): Promise<string> {
@@ -361,7 +406,9 @@ export class SlackBridge {
       : session.inputState === 'waiting' ? 'running — waiting for your input'
       : session.inputState === 'idle' ? 'running — idle (turn finished)'
       : `${session.status} — working`;
+    if (record.kind === 'terminal') return `*terminal* ${this.link(record.sessionId)} · *state* ${escapeMrkdwn(state)}${record.targetLabel ? ` · ${escapeMrkdwn(record.targetLabel)}` : ''}`;
     const lines = [
+      ...(record.targetLabel ? [`*target* ${escapeMrkdwn(record.targetLabel)}`] : []),
       `*session* ${this.link(record.sessionId)} · *agent* ${runtimeLabel(record.runtime)} (${escapeMrkdwn(record.agentName)})`,
       `*output* ${record.mode} · *images* ${record.images ? 'on' : 'off'} · *state* ${escapeMrkdwn(state)}`,
     ];
@@ -373,7 +420,7 @@ export class SlackBridge {
 
   private async currentSession(record: ThreadRecord): Promise<SessionInfo> {
     let rows: SessionInfo[] = [];
-    try { rows = await this.d.propanes.listSessions(record.feedbackId); } catch { /* fall back to the single row */ }
+    try { if (record.feedbackId) rows = await this.d.propanes.listSessions(record.feedbackId); } catch { /* fall back to the single row */ }
     return rows.find((r) => r.id === record.sessionId) ?? await this.d.propanes.getSession(record.sessionId);
   }
 
@@ -622,6 +669,11 @@ export function helpText(): string {
     '• `@amirobot [claude] …` / `[codex] …` — pick the agent; inside a thread this continues the task on the other agent',
     '• `@amirobot [help]` — this message · `[status]` — the thread\'s session, agent, state and link',
     '• reply `stop` (or `cancel`) — stop the thread\'s running session; a later reply resumes it',
+    '',
+    '*Targets and terminals*',
+    '• `[app:name]` / `[infra:name]` — choose an app or infra by name, partial name, typo or exact ID; ambiguous matches ask you to resend with an exact selector',
+    '• `[terminal]` / `[infra:macbook terminal]` — open a shell and return its session link; optionally add `[app:name]` for app context',
+    '• Choose app/infra when starting a new thread; replies keep that target. A terminal requested in an agent thread opens separately.',
     '',
     '*Output modes* (remembered per thread)',
     '• default — all assistant text (progress and answer); no tool calls or tool output',

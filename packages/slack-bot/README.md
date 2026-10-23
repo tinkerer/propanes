@@ -14,15 +14,48 @@ process.
 | `@amirobot review PR 2013` | New session with the remembered agent (the ProPanes default the first time) |
 | `@amirobot [claude] review PR 2013` | Explicitly use Claude |
 | `@amirobot [codex] review PR 2013` | Explicitly use Codex |
+| `@amirobot [app:propanes infra:macbook] fix the bug` | Resolve the app and infra before dispatching |
+| `@amirobot [terminal]` | Open a plain shell and reply with its public session link |
+| `@amirobot [infra:macbook terminal]` | Open a shell on the matching infra and reply with its session link |
 | `@amirobot [help]` | Threaded help: commands, defaults, output modes, examples. Never creates a session |
 | `@amirobot [status]` | The thread's session link, agent, state (working / waiting / idle / completed…) and history. Never creates, interrupts or resumes anything |
 | reply `stop` (also `cancel`, `halt`, `kill`) | Kills the thread's running session (preserved from the previous bot). A later reply resumes it |
 
 Leading bracket options are case-insensitive, comma separated and may be split
 across groups: `[claude, verbose, images]` ≡ `[Claude] [VERBOSE] [images]`.
+Spaces can also separate options, as in `[infra:macbook terminal]`; app and infra
+selectors can contain multiword names (`[app:Propanes Admin]`).
 Unknown options, `[claude, codex]`, `[verbose, quiet]` and `[help]`/`[status]`
 combined with anything else get a threaded explanation and nothing is created or
 changed.
+
+### App / infra selection and terminals
+
+Use `[app:name]` and `[infra:name]` on a new request. The bot reads the
+applications and launchers visible to its bearer token from the authenticated
+admin APIs. Matching tries exact IDs, case/punctuation-insensitive names and
+hostnames, partial names, then conservative typo matching (including words in
+multiword names). A unique match is required. Ambiguity replies list exact
+`[app:ID]` / `[infra:ID]` choices; mention the bot again with the original request
+and a choice. Unknown or offline targets produce an explanation. These failures
+create no feedback or session and never fall back to another infra.
+
+Omitting selectors retains the configured app and backend infra defaults. An
+explicit app selects both the feedback's app and its agent endpoints; explicit
+infra is passed as `launcherId` to dispatch. The initial reply and `[status]`
+show selected names. The app is persisted for later runtime switches; continuations
+inherit the backend session's infra. To change an agent thread's target, start
+a new Slack thread.
+
+`[terminal]` opens a plain shell without feedback, agent dispatch or transcript
+polling. It accepts optional app/infra selectors, including
+`[app:Propanes Admin infra:macbook terminal]`, but no prompt or agent/output
+options. An app supplies its project directory for local terminals; remote launchers use
+the machine's configured default directory (home when unset). The response links the session in the admin UI.
+In a new terminal thread, replies send shell input, `stop` closes the shell and
+`[status]` reports its state; an ended shell requires a new `[terminal]` request.
+A terminal requested in an existing agent thread opens separately and leaves
+that thread's agent conversation intact.
 
 ### Agent selection
 
@@ -186,7 +219,8 @@ transport and startup checks, not a full reply. For acceptance, send a harmless
 `@amirobot [help]` (no session) and then `@amirobot say hello and finish` in the
 intended channel: expect 👀, a session link, the agent's text in the thread, and
 `[status]` reporting the session. Synthetic tests cover option parsing, agent
-selection and persistence, help/status, the initial link, send-keys vs resume,
+selection and persistence, app/infra matching and ambiguity, terminal creation
+and routing, help/status, the initial link, send-keys vs resume,
 runtime switches, default/verbose/quiet delivery, final-tag parsing and
 fallbacks, image resolution/upload/scope errors, duplicates, concurrency and
 restart recovery without sending Slack messages or launching agents.

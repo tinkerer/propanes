@@ -342,3 +342,97 @@ test('the bridge is constructed with the public URL from config', () => {
   assert.equal((f.bridge as SlackBridge).sessionUrl('X'), `${PUBLIC}/admin/#/session/X`);
   assert.equal(APP, 'app-1');
 });
+
+test('approximate app and infra names route feedback and dispatch to resolved IDs', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[app:storfront infra:macbok] fix it'));
+  await f.bridge.drain();
+  assert.deepEqual(f.world.agentAppIds, ['app-2']);
+  assert.equal(f.world.feedbackInputs[0].appId, 'app-2');
+  assert.equal(f.world.dispatchInputs[0].launcherId, 'mac-1');
+  assert.match(f.slack.texts()[0], /Storefront.*Amir MacBook/);
+  const rec = new StateRepo(f.store).getThread('T1:C1:100.000')!;
+  assert.equal(rec.appId, 'app-2');
+  await f.bridge.handleEvent(threadReply('[codex] try again'));
+  await f.bridge.drain();
+  assert.equal(f.world.agentAppIds.at(-1), 'app-2');
+});
+
+test('ambiguous or unknown app and infra selectors create no feedback or session', async () => {
+  for (const [input, pattern] of [
+    ['[app:store] fix', /Ambiguous app.*app-2.*app-3/],
+    ['[infra:mac] fix', /Ambiguous infra.*mac-1.*mac-2/],
+    ['[app:missing] fix', /No app matches/],
+    ['[infra:missing terminal]', /No infra matches/],
+  ] as const) {
+    const f = fixture();
+    f.world.apps.push({ id: 'app-3', name: 'Storefront Dev' });
+    f.world.infra.push({ id: 'mac-2', name: 'Mac Mini', hostname: 'mini.local', online: true });
+    await f.bridge.handleEvent(mention(input));
+    await f.bridge.drain();
+    assert.match(f.slack.texts()[0], pattern);
+    assert.deepEqual(f.world.calls, []);
+  }
+});
+
+test('offline infra is explained without dispatching or silently using local infra', async () => {
+  const f = fixture();
+  f.world.infra[0].online = false;
+  await f.bridge.handleEvent(mention('[infra:macbook terminal]'));
+  assert.deepEqual(f.world.calls, []);
+  assert.match(f.slack.texts()[0], /offline/);
+});
+
+test('[terminal] and [infra:macbook terminal] return plain shell session links', async () => {
+  for (const input of ['[terminal]', '[infra:macbook terminal]', '[app:storefront infra:macbook terminal]']) {
+    const f = fixture();
+    await f.bridge.handleEvent(mention(input));
+    await f.bridge.drain();
+    assert.equal(f.world.sessions.size, 1);
+    assert.match(f.slack.texts()[0], /Terminal started/);
+    assert.ok(f.slack.texts()[0].includes(sessionUrl('S1')));
+    const data = JSON.parse(f.world.calls[0].slice('terminal:'.length));
+    assert.equal(data.permissionProfile, 'plain');
+    assert.equal(data.launcherId, input.includes('infra:') ? 'mac-1' : undefined);
+    assert.equal(data.appId, input.includes('app:') ? 'app-2' : undefined);
+    if (input === '[infra:macbook terminal]') assert.equal(data.cwd, '~');
+    assert.equal(f.world.calls.length, 1);
+    const record = new StateRepo(f.store).getThread('T1:C1:100.000')!;
+    assert.equal(record.kind, 'terminal');
+    assert.equal(record.watching, false);
+    await f.bridge.handleEvent(threadReply('[status]'));
+    assert.match(f.slack.texts().at(-1)!, /\*terminal\*.*S1.*running/);
+    await f.bridge.handleEvent(threadReply('pwd'));
+    assert.ok(f.world.calls.includes('send-keys:S1:pwd'));
+    await f.bridge.handleEvent(threadReply('stop'));
+    assert.ok(f.world.calls.includes('kill:S1'));
+    await f.bridge.handleEvent(threadReply('pwd'));
+    assert.match(f.slack.texts().at(-1)!, /has ended/);
+    assert.ok(!f.world.calls.some(c => c.startsWith('resume:')));
+  }
+});
+
+test('a separate terminal preserves an existing agent thread and rejects target changes', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  await f.bridge.handleEvent(threadReply('[infra:macbook terminal]'));
+  assert.match(f.slack.texts().at(-1)!, /Replies in this thread continue to reach the agent/);
+  assert.equal(new StateRepo(f.store).getThread('T1:C1:100.000')!.sessionId, 'S1');
+  const before = f.world.calls.length;
+  await f.bridge.handleEvent(threadReply('[app:storefront] change target'));
+  assert.equal(f.world.calls.length, before);
+  assert.match(f.slack.texts().at(-1)!, /Start a new Slack thread/);
+});
+
+test('terminal creation failures and duplicate deliveries do not create extra sessions', async () => {
+  const f = fixture();
+  const event = mention('[terminal]');
+  await Promise.all([f.bridge.handleEvent(event), f.bridge.handleEvent(event)]);
+  assert.equal(f.world.sessions.size, 1);
+  const failed = fixture();
+  failed.world.propanes.createTerminal = async () => { throw new Error('launcher unavailable'); };
+  await failed.bridge.handleEvent(mention('[terminal]'));
+  assert.match(failed.slack.texts()[0], /launcher unavailable/);
+  assert.equal(new StateRepo(failed.store).threads().length, 0);
+});

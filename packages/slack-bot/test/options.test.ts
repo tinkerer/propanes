@@ -41,3 +41,21 @@ test('stop keywords', () => {
   for (const t of ['stop', 'Stop.', ' cancel ', 'KILL!', 'halt']) assert.equal(isStopKeyword(t), true, t);
   for (const t of ['stop the build', 'please stop', '']) assert.equal(isStopKeyword(t), false, t);
 });
+
+test('terminal and target selectors accept whitespace, commas and separate groups', () => {
+  assert.deepEqual(parseCommand('[terminal]'), { command: 'prompt', terminal: true, text: '' });
+  assert.deepEqual(parseCommand('[infra:macbook terminal]'), { command: 'prompt', infra: 'macbook', terminal: true, text: '' });
+  assert.deepEqual(parseCommand('[APP:Propanes Admin] [Infra:MacBook, codex] fix it'), {
+    command: 'prompt', app: 'Propanes Admin', infra: 'MacBook', runtime: 'codex', text: 'fix it',
+  });
+  assert.deepEqual(parseCommand('[terminal app:Propanes Admin infra:MacBook]'), {
+    command: 'prompt', app: 'Propanes Admin', infra: 'MacBook', terminal: true, text: '',
+  });
+});
+
+test('empty, duplicate and conflicting target/terminal options cannot dispatch', () => {
+  for (const input of ['[app:]', '[infra:]', '[app:a app:b]', '[infra:a] [infra:b]', '[help app:foo]', '[status infra:foo]', '[terminal codex]', '[terminal quiet]', '[terminal images]', '[terminal] run ls']) {
+    assert.ok(parseCommand(input).error, input);
+  }
+  assert.equal(parseCommand('[HELP]').error, undefined);
+});

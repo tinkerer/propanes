@@ -5,6 +5,9 @@ export type OutputMode = 'default' | 'verbose' | 'quiet';
 export interface ParsedCommand {
   command: 'help' | 'status' | 'prompt';
   runtime?: Runtime;
+  app?: string;
+  infra?: string;
+  terminal?: boolean;
   mode?: OutputMode;
   images?: boolean;
   /** The request text with mentions and bracket options removed. */
@@ -13,7 +16,7 @@ export interface ParsedCommand {
   error?: string;
 }
 
-export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'help', 'status'] as const;
+export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'terminal', 'help', 'status'] as const;
 
 const MENTION_RE = /<@[A-Z0-9]+(?:\|[^>]*)?>/g;
 
@@ -23,32 +26,44 @@ export function stripMentions(text: string, botUserId?: string): string {
   return text.replace(re, ' ').replace(/[ \t]+/g, ' ').trim();
 }
 
-/** Parse every leading `[...]` group, case-insensitively, comma separated. */
+/** Parse every leading `[...]` group, case-insensitively; flags may be separated by commas or spaces. */
 export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   let text = stripMentions(raw ?? '', botUserId);
   const tokens: string[] = [];
   const bracket = /^\[([^\]]*)\]\s*/;
   let m: RegExpExecArray | null;
   while ((m = bracket.exec(text)) !== null) {
-    for (const part of m[1].split(',')) {
-      const t = part.trim().toLowerCase();
+    for (const part of m[1].split(/,|\s+(?=(?:app:|infra:|claude\b|codex\b|verbose\b|quiet\b|default\b|images\b|terminal\b|help\b|status\b))/i)) {
+      const t = part.trim();
       if (t) tokens.push(t);
     }
     text = text.slice(m[0].length);
   }
   text = text.trim();
 
-  const unknown = tokens.filter((t) => !(KNOWN_OPTIONS as readonly string[]).includes(t));
+  const selectors: { app?: string; infra?: string } = {};
+  const flags: string[] = [];
+  for (const token of tokens) {
+    const match = /^(app|infra):\s*(.*)$/i.exec(token);
+    if (!match) { flags.push(token.toLowerCase()); continue; }
+    const key = match[1].toLowerCase() as 'app' | 'infra';
+    if (!match[2] || selectors[key] !== undefined) {
+      return { command: 'prompt', text, error: `Choose one non-empty ${key} selector, e.g. \`[${key}:name]\`.` };
+    }
+    selectors[key] = match[2];
+  }
+  const unknown = flags.filter((t) => !(KNOWN_OPTIONS as readonly string[]).includes(t));
   if (unknown.length) {
     return {
       command: 'prompt', text,
       error: `Unknown option${unknown.length > 1 ? 's' : ''}: ${unknown.map((u) => `\`${u}\``).join(', ')}. Known options: ${KNOWN_OPTIONS.map((o) => `\`${o}\``).join(', ')}. Send \`[help]\` for details.`,
     };
   }
-  const has = (t: string) => tokens.includes(t);
+  const has = (t: string) => flags.includes(t);
   if (has('help') || has('status')) {
     const cmd = has('help') ? 'help' : 'status';
-    const others = tokens.filter((t) => t !== cmd);
+    const others = flags.filter((t) => t !== cmd);
+    if (selectors.app !== undefined || selectors.infra !== undefined) others.push('target selector');
     if (others.length || (has('help') && has('status'))) {
       return { command: cmd, text, error: `\`[${cmd}]\` cannot be combined with other options (got \`[${tokens.join(', ')}]\`).` };
     }
@@ -61,7 +76,11 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   if (modes.length > 1) {
     return { command: 'prompt', text, error: `Choose one output mode: ${modes.map((x) => `\`[${x}]\``).join(' or ')} are mutually exclusive.` };
   }
-  const out: ParsedCommand = { command: 'prompt', text };
+  if (has('terminal') && (has('claude') || has('codex') || has('images') || modes.length || text)) {
+    return { command: 'prompt', text, error: 'Use `[terminal]` with optional `app:` / `infra:` selectors and no prompt or agent/output options.' };
+  }
+  const out: ParsedCommand = { command: 'prompt', text, ...selectors };
+  if (has('terminal')) out.terminal = true;
   if (has('claude')) out.runtime = 'claude';
   if (has('codex')) out.runtime = 'codex';
   if (modes.length === 1) out.mode = modes[0];
