@@ -1032,46 +1032,6 @@ body {
   min-width: 0;
 }
 
-.sidebar-item-menu-btn {
-  display: none;
-  background: none;
-  border: none;
-  color: var(--pw-sidebar-muted);
-  cursor: pointer;
-  font-size: 10px;
-  padding: 0 2px;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.sidebar-session-item:hover .sidebar-item-menu-btn {
-  display: inline;
-}
-
-.sidebar-item-menu-btn:hover {
-  color: var(--pw-sidebar-text-bright);
-}
-
-.session-delete-btn {
-  display: none;
-  background: none;
-  border: none;
-  color: var(--pw-sidebar-muted);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 0 2px;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.sidebar-session-item:hover .session-delete-btn {
-  display: inline;
-}
-
-.session-delete-btn:hover {
-  color: #f87171;
-}
-
 .sidebar-tab-badge {
   min-width: 16px;
   height: 16px;
@@ -3448,6 +3408,12 @@ select:focus, textarea:focus {
 }
 
 .status-dot-menu button:hover {
+  background: #334155;
+}
+
+.status-dot-menu-divider {
+  height: 1px;
+  margin: 4px 0;
   background: #334155;
 }
 

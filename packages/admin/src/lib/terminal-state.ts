@@ -62,7 +62,6 @@ export function toggleSessionsDrawer() {
 }
 
 export const sidebarStatusMenu = signal<{ sessionId: string; x: number; y: number } | null>(null);
-export const sidebarItemMenu = signal<{ sessionId: string; x: number; y: number } | null>(null);
 
 export function toggleShowResolved() {
   showResolvedSessions.value = !showResolvedSessions.value;

@@ -8,7 +8,7 @@ import { api } from '../../lib/api.js';
 import { idMenuOpen } from '../panes/LeafPane.js';
 import { PopoutPanel, popoutIdMenuOpen, popoutWindowMenuOpen } from '../panes/PopoutPanel.js';
 import { PaneTree } from '../panes/PaneTree.js';
-import { layoutTree, focusedLeafId, splitLeaf, mergeLeaf, getAllLeaves, setFocusedLeaf, findLeaf, findLeafWithTab, SESSIONS_LEAF_ID } from '../../lib/pane-tree.js';
+import { layoutTree, focusedLeafId, splitLeaf, mergeLeaf, getAllLeaves, setFocusedLeaf, findLeaf, SESSIONS_LEAF_ID } from '../../lib/pane-tree.js';
 import { PerfOverlay } from '../ui/PerfOverlay.js';
 import { copyText } from '../../lib/clipboard.js';
 import { FileViewerOverlay } from '../files/FileViewerPanel.js';
@@ -63,13 +63,11 @@ import {
   rightPaneTabs,
   rightPaneActiveId,
   leftPaneTabs,
-  enableSplit,
   disableSplit,
   focusedPanelId,
   goToPreviousTab,
   autoJumpCountdown,
   cancelAutoJump,
-  popOutTab,
   getSessionColor,
   setSessionColor,
   SESSION_COLOR_PRESETS,
@@ -78,7 +76,6 @@ import {
   activePanelId,
   termPickerOpen,
   sidebarStatusMenu,
-  sidebarItemMenu,
   popInPickerSessionId,
   cycleWaitingSession,
   bringAllPanelsToFront,
@@ -137,13 +134,6 @@ export function Layout() {
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, [sidebarStatusMenu.value]);
-
-  useEffect(() => {
-    if (!sidebarItemMenu.value) return;
-    const close = () => { sidebarItemMenu.value = null; };
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [sidebarItemMenu.value]);
 
   function getActivePanelSession(): string | null {
     // Check focused tree leaf first
@@ -675,14 +665,24 @@ export function Layout() {
       <NotificationCenter />
       <SshSetupDialog />
       {sidebarStatusMenu.value && (() => {
+        // The one per-session menu in the sidebar (status dot). Session
+        // actions first, then link / PR / color housekeeping. No "open in"
+        // or split entries: a tab is popped out, split or opened elsewhere
+        // from its pane header.
         const menuSid = sidebarStatusMenu.value!.sessionId;
         const menuSess = allSessions.value.find((s: any) => s.id === menuSid);
         const menuExited = exitedSessions.value.has(menuSid);
         const isRunning = menuSess?.status === 'running';
+        const menuPrUrls = menuSess ? parsePrUrls(menuSess.prUrls) : [];
+        const menuHeight = 200 + menuPrUrls.length * 26;
+        const flipUp = sidebarStatusMenu.value!.y + menuHeight > window.innerHeight;
+        const menuStyle = flipUp
+          ? { left: `${sidebarStatusMenu.value!.x}px`, bottom: `${window.innerHeight - sidebarStatusMenu.value!.y - 20}px` }
+          : { left: `${sidebarStatusMenu.value!.x}px`, top: `${sidebarStatusMenu.value!.y}px` };
         return (
           <div
             class="status-dot-menu"
-            style={{ left: `${sidebarStatusMenu.value!.x}px`, top: `${sidebarStatusMenu.value!.y}px` }}
+            style={menuStyle}
             onClick={(e) => e.stopPropagation()}
           >
             {isRunning && !menuExited && (
@@ -696,26 +696,9 @@ export function Layout() {
             )}
             <button onClick={() => { closeTab(menuSid); sidebarStatusMenu.value = null; }}>Close tab {showHotkeyHints.value && <kbd>⌃⇧W</kbd>}</button>
             <button onClick={() => { sidebarStatusMenu.value = null; deleteSession(menuSid); }}>Archive</button>
-          </div>
-        );
-      })()}
-      {sidebarItemMenu.value && (() => {
-        const menuSid = sidebarItemMenu.value!.sessionId;
-        const menuSess = allSessions.value.find((s: any) => s.id === menuSid);
-        const menuPrUrls = menuSess ? parsePrUrls(menuSess.prUrls) : [];
-        const menuHeight = 236 + menuPrUrls.length * 26;
-        const flipUp = sidebarItemMenu.value!.y + menuHeight > window.innerHeight;
-        const menuStyle = flipUp
-          ? { left: `${sidebarItemMenu.value!.x}px`, bottom: `${window.innerHeight - sidebarItemMenu.value!.y - 20}px` }
-          : { left: `${sidebarItemMenu.value!.x}px`, top: `${sidebarItemMenu.value!.y}px` };
-        return (
-          <div
-            class="status-dot-menu"
-            style={menuStyle}
-            onClick={(e) => e.stopPropagation()}
-          >
+            <div class="status-dot-menu-divider" />
             <button onClick={() => {
-              sidebarItemMenu.value = null;
+              sidebarStatusMenu.value = null;
               copyText(`${location.origin}${location.pathname}#/session/${menuSid}`);
               showActionToast('\u{1F517}', 'Link copied', 'var(--pw-accent, var(--pw-primary))');
             }}>Copy link</button>
@@ -724,7 +707,7 @@ export function Layout() {
               sessionId={menuSid}
               prUrls={menuPrUrls}
               onReview={(url, anchor) => {
-                sidebarItemMenu.value = null;
+                sidebarStatusMenu.value = null;
                 reviewPrPopup.value = {
                   appKey: menuSess?.appId || '__unlinked__',
                   prNumber: prNumberFromUrl(url),
@@ -733,26 +716,8 @@ export function Layout() {
                   anchor,
                 };
               }}
-              onDone={() => { sidebarItemMenu.value = null; }}
+              onDone={() => { sidebarStatusMenu.value = null; }}
             />
-            <button onClick={() => { sidebarItemMenu.value = null; popOutTab(menuSid); }}>Open in panel</button>
-            <button onClick={() => {
-              sidebarItemMenu.value = null;
-              window.open(`${location.pathname}#/session/${menuSid}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no');
-            }}>Open in window</button>
-            <button onClick={() => {
-              sidebarItemMenu.value = null;
-              window.open(`${location.pathname}#/session/${menuSid}`, '_blank');
-            }}>Open in tab</button>
-            <button onClick={() => {
-              sidebarItemMenu.value = null;
-              const leaf = findLeafWithTab(menuSid);
-              if (leaf) {
-                splitLeaf(leaf.id, 'horizontal', 'second', [], 0.5);
-              } else {
-                enableSplit(menuSid);
-              }
-            }}>Split pane</button>
             <div style="display:flex;gap:4px;padding:4px 8px;align-items:center">
               {SESSION_COLOR_PRESETS.map((c) => (
                 <span
