@@ -44,6 +44,10 @@ export interface ThreadRecord {
   threadTs: string | null;
   sessionId: string;
   feedbackId: string;
+  /** ProPanes application the thread's sessions run in (records from before
+   * app selection fall back to the configured default). */
+  appId?: string;
+  appName?: string;
   runtime: Runtime;
   agentEndpointId: string;
   agentName: string;

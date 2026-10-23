@@ -3,6 +3,7 @@ import { App, LogLevel } from '@slack/bolt';
 import { downloaderFromToken } from './attachments';
 import { SlackBridge, type IncomingSlackMessage } from './bridge';
 import { configuredDefaultRuntime, resolveAgentEndpoint, runtimeLabel } from './agents';
+import { defaultApp } from './apps';
 import { createPropanesClient, createPropanesFetch } from './propanes';
 import { PacedPoster, posterFromClient } from './slack';
 import { FileStateStore, StateRepo } from './state';
@@ -14,6 +15,9 @@ const PROPANES_URL = process.env.PROPANES_URL ?? 'http://localhost:3001';
 // PROPANES_PUBLIC_URL=https://propanes.example.com).
 const PROPANES_PUBLIC_URL = process.env.PROPANES_PUBLIC_URL ?? PROPANES_URL;
 const APP_ID = process.env.PROPANES_APP_ID ?? '01KNR6HYSPE08RZJSQJG6WE1PK';
+// Default application for new requests, by name or id (`[app:<name>]`
+// overrides per thread); falls back to PROPANES_APP_ID when it does not resolve.
+const DEFAULT_APP = process.env.PROPANES_DEFAULT_APP || undefined;
 // Optional override. When unset, the bot resolves a skip-permissions agent
 // endpoint for the requested runtime from the ProPanes agents API.
 const AGENT_ENDPOINT_ID_OVERRIDE = process.env.AGENT_ENDPOINT_ID || undefined;
@@ -45,6 +49,7 @@ const bridge = new SlackBridge({
   state,
   config: {
     appId: APP_ID,
+    defaultApp: DEFAULT_APP,
     publicUrl: PROPANES_PUBLIC_URL,
     agentEndpointOverride: AGENT_ENDPOINT_ID_OVERRIDE,
     pollMs: POLL_MS,
@@ -110,11 +115,15 @@ app.message(async ({ message, body }) => {
 (async () => {
   // Fail before receiving mentions if the API credential is invalid.
   await propanes.me();
-  const agents = await propanes.listAgents(APP_ID);
-  const defaultRuntime = configuredDefaultRuntime(agents, APP_ID);
+  const apps = await propanes.listApplications();
+  const defApp = defaultApp(apps, DEFAULT_APP, APP_ID);
+  const unmatched = DEFAULT_APP && defApp.id === APP_ID && defApp.name.toLowerCase() !== DEFAULT_APP.toLowerCase();
+  console.log(`[amirobot] default application: ${defApp.name} (${defApp.id})${unmatched ? ` — PROPANES_DEFAULT_APP=${DEFAULT_APP} did not match, using PROPANES_APP_ID` : ''}; ${apps.length} registered`);
+  const agents = await propanes.listAgents(defApp.id);
+  const defaultRuntime = configuredDefaultRuntime(agents, defApp.id);
   for (const runtime of ['claude', 'codex'] as const) {
     try {
-      const ep = resolveAgentEndpoint(agents, runtime, APP_ID, runtime === defaultRuntime ? AGENT_ENDPOINT_ID_OVERRIDE : undefined);
+      const ep = resolveAgentEndpoint(agents, runtime, defApp.id, runtime === defaultRuntime ? AGENT_ENDPOINT_ID_OVERRIDE : undefined);
       console.log(`[amirobot] ${runtimeLabel(runtime)} → ${ep.name || ep.id} (${ep.permissionProfile})${runtime === defaultRuntime ? ' [default]' : ''}`);
     } catch (err) {
       log(`${runtimeLabel(runtime)} is not available: ${err instanceof Error ? err.message : 'error'}`);

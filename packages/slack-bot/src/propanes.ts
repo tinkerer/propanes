@@ -1,5 +1,6 @@
 /** Authenticated API access; keep credentials out of URLs, errors and logs. */
 import type { AgentEndpointInfo } from './agents';
+import type { AppInfo } from './apps';
 import type { DownloadedFile } from './attachments';
 import type { Runtime } from './options';
 
@@ -78,6 +79,8 @@ export function isLive(status: string | null | undefined): boolean {
 export interface PropanesClient {
   me(): Promise<{ user: { id: string; username: string; role: string } }>;
   listAgents(appId: string): Promise<AgentEndpointInfo[]>;
+  /** GET /api/v1/admin/applications — the registered projects a session can run in. */
+  listApplications(): Promise<AppInfo[]>;
   /** POST /api/v1/feedback — JSON, or multipart with `screenshots` when images are attached
    * (the same shape the admin composer submits; screenshots render into the prompt). */
   createFeedback(input: { title: string; description: string; appId: string; tags?: string[]; screenshots?: DownloadedFile[] }): Promise<{ id: string }>;
@@ -109,6 +112,10 @@ export function createPropanesClient(api: PropanesFetch): PropanesClient {
   return {
     me: () => api('/api/v1/auth/me'),
     listAgents: (appId) => api(`/api/v1/admin/agents?appId=${encodeURIComponent(appId)}`),
+    listApplications: async () => {
+      const rows = await api('/api/v1/admin/applications');
+      return (Array.isArray(rows) ? rows : rows?.applications ?? []).map((a: any) => ({ id: a.id, name: a.name ?? a.id, projectDir: a.projectDir ?? null, description: a.description ?? null }));
+    },
     createFeedback: (input) => {
       const { screenshots, ...fields } = input;
       if (!screenshots?.length) return post('/api/v1/feedback', { type: 'manual', ...fields });

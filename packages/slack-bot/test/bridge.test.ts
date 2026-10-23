@@ -608,3 +608,60 @@ test('an outside prompt reopens the turn so quiet mode delivers its final answer
   assert.ok(i1 >= 0 && i2 > i1 && i3 > i2, texts.join('|'));
   assert.ok(texts[i2].includes('User asked outside Slack'), texts[i2]);
 });
+
+test('[app:<name>] runs the request in that application; the reply and status name it', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[claude, app:storefront] add a dark theme toggle'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('feedback-app:app-sc'), f.world.calls.join('|'));
+  assert.match(f.slack.texts()[0], /\*app\* Storefront/);
+  await f.bridge.handleEvent(threadReply('[status]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /\*app\* Storefront/);
+});
+
+test('an ambiguous or unknown application gets a clarifying list and nothing is started', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[app:rep] fix the chart'));
+  await f.bridge.drain();
+  let t = f.slack.texts().at(-1)!;
+  assert.match(t, /matches 2 applications/);
+  assert.ok(t.includes('*Reports*') && t.includes('*Reports Staging*'), t);
+  await f.bridge.handleEvent(mention('[app:nope] fix the chart', { ts: '101.000' }));
+  await f.bridge.drain();
+  t = f.slack.texts().at(-1)!;
+  assert.match(t, /No application matches `app:nope`/);
+  assert.ok(t.includes('*Atlas*'), t);
+  assert.equal(f.world.sessions.size, 0);
+  assert.ok(!f.world.calls.some((c) => c.startsWith('feedback') || c.startsWith('dispatch')), f.world.calls.join('|'));
+});
+
+test('[list-apps] lists the applications with the default marked; the default comes from config by name', async () => {
+  const f = fixture({ config: { defaultApp: 'atlas' } });
+  await f.bridge.handleEvent(mention('[list-apps]'));
+  await f.bridge.drain();
+  const t = f.slack.texts().at(-1)!;
+  assert.match(t, /\*Applications\* \(5\)/);
+  assert.match(t, /\*Atlas\*.*_\(default\)_/);
+  assert.equal(f.world.sessions.size, 0);
+  await f.bridge.handleEvent(mention('review the login flow', { ts: '102.000' }));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('feedback-app:app-atlas'), f.world.calls.join('|'));
+  assert.match(f.slack.texts().find((x) => x.includes('Session started'))!, /\*app\* Atlas/);
+  await f.bridge.handleEvent(mention('[help]', { ts: '103.000' }));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /default: \*Atlas\*[\s\S]*\[list-apps\]/);
+});
+
+test('an application cannot change inside a thread; the message is held back', async () => {
+  const f = fixture();
+  f.steps.push(() => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('[app:atlas] start'));
+  await f.bridge.handleEvent(threadReply('[app:storefront] now do it there'));
+  await f.bridge.handleEvent(threadReply('[app:atlas] same app is fine'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().find((x) => x.includes('cannot change mid-thread'))!, /runs in \*Atlas\*[\s\S]*not sent/);
+  assert.ok(!f.world.calls.some((c) => c.includes('now do it there')), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('send-keys:S1:same app is fine'), f.world.calls.join('|'));
+  assert.equal(f.world.sessions.size, 1);
+});

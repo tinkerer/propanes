@@ -3,17 +3,21 @@ export type Runtime = 'claude' | 'codex';
 export type OutputMode = 'default' | 'verbose' | 'quiet';
 
 export interface ParsedCommand {
-  command: 'help' | 'status' | 'prompt';
+  command: 'help' | 'status' | 'list-apps' | 'prompt';
   runtime?: Runtime;
   mode?: OutputMode;
   images?: boolean;
+  /** `[app:<name>]` — the ProPanes application (project) to run in, as typed (lower-cased). */
+  app?: string;
   /** The request text with mentions and bracket options removed. */
   text: string;
   /** Set when the options are unknown or conflict; nothing must be dispatched. */
   error?: string;
 }
 
-export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'help', 'status'] as const;
+export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'help', 'status', 'list-apps', 'app:<name>'] as const;
+const STANDALONE = ['help', 'status', 'list-apps'] as const;
+const APP_TOKEN = /^app\s*[:=]\s*(.*)$/;
 
 const MENTION_RE = /<@[A-Z0-9]+(?:\|[^>]*)?>/g;
 
@@ -41,7 +45,7 @@ export function decodeSlackText(text: string): string {
 /** Parse every leading `[...]` group, case-insensitively, comma separated. */
 export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   let text = decodeSlackText(stripMentions(raw ?? '', botUserId));
-  const tokens: string[] = [];
+  let tokens: string[] = [];
   const bracket = /^\[([^\]]*)\]\s*/;
   let m: RegExpExecArray | null;
   while ((m = bracket.exec(text)) !== null) {
@@ -53,6 +57,20 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   }
   text = text.trim();
 
+  const appValues: string[] = [];
+  const plain: string[] = [];
+  for (const t of tokens) {
+    const m = APP_TOKEN.exec(t);
+    if (m) appValues.push(m[1].trim());
+    else plain.push(t === 'apps' ? 'list-apps' : t);
+  }
+  if (appValues.some((v) => !v)) {
+    return { command: 'prompt', text, error: '`[app:]` needs an application name, e.g. `[app:atlas]`. Send `[list-apps]` to see them.' };
+  }
+  if (appValues.length > 1) {
+    return { command: 'prompt', text, error: `Choose one application: ${appValues.map((v) => `\`[app:${v}]\``).join(' or ')}, not both.` };
+  }
+  tokens = plain;
   const unknown = tokens.filter((t) => !(KNOWN_OPTIONS as readonly string[]).includes(t));
   if (unknown.length) {
     return {
@@ -61,13 +79,14 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
     };
   }
   const has = (t: string) => tokens.includes(t);
-  if (has('help') || has('status')) {
-    const cmd = has('help') ? 'help' : 'status';
-    const others = tokens.filter((t) => t !== cmd);
-    if (others.length || (has('help') && has('status'))) {
-      return { command: cmd, text, error: `\`[${cmd}]\` cannot be combined with other options (got \`[${tokens.join(', ')}]\`).` };
+  const standalone = STANDALONE.find(has);
+  if (standalone) {
+    const others = tokens.filter((t) => t !== standalone);
+    if (others.length || appValues.length) {
+      const all = [...tokens, ...appValues.map((v) => `app:${v}`)];
+      return { command: standalone, text, error: `\`[${standalone}]\` cannot be combined with other options (got \`[${all.join(', ')}]\`).` };
     }
-    return { command: cmd, text };
+    return { command: standalone, text };
   }
   if (has('claude') && has('codex')) {
     return { command: 'prompt', text, error: 'Choose one agent: `[claude]` or `[codex]`, not both.' };
@@ -81,6 +100,7 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   if (has('codex')) out.runtime = 'codex';
   if (modes.length === 1) out.mode = modes[0];
   if (has('images')) out.images = true;
+  if (appValues.length === 1) out.app = appValues[0];
   return out;
 }
 

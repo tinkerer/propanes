@@ -14,6 +14,8 @@ process.
 | `@amirobot review PR 2013` | New session with the remembered agent (the ProPanes default the first time) |
 | `@amirobot [claude] review PR 2013` | Explicitly use Claude |
 | `@amirobot [codex] review PR 2013` | Explicitly use Codex |
+| `@amirobot [app:storefront] add a toggle` | Run in that ProPanes application (project); combinable: `[claude, app:storefront]`. See "Applications" |
+| `@amirobot [list-apps]` | The registered applications with their `[app:…]` option and the default. Never creates a session |
 | `@amirobot [help]` | Threaded help: commands, defaults, output modes, examples. Never creates a session |
 | `@amirobot [status]` | The thread's session link, agent, state (working / waiting / idle / completed…) and history. Never creates, interrupts or resumes anything |
 | reply `stop` (also `cancel`, `halt`, `kill`) | Kills the thread's running session (preserved from the previous bot). A later reply resumes it |
@@ -23,6 +25,29 @@ across groups: `[claude, verbose, images]` ≡ `[Claude] [VERBOSE] [images]`.
 Unknown options, `[claude, codex]`, `[verbose, quiet]` and `[help]`/`[status]`
 combined with anything else get a threaded explanation and nothing is created or
 changed.
+
+### Applications
+
+Every session runs in one ProPanes application (its project directory). A new
+request uses the default application — `PROPANES_DEFAULT_APP` by name or id,
+falling back to `PROPANES_APP_ID` — unless it carries
+`[app:<name>]` (`app=` works too; spaces are allowed, e.g.
+`[app:reports staging]`). Resolution against `GET /api/v1/admin/applications`:
+
+- an exact match on the name, id or project-directory name wins
+  (`[app:reports]` → *Reports*, not *Reports Staging*);
+- otherwise a single partial match is accepted (`[app:store]` → *Storefront*);
+- several partial matches get a clarifying list of the candidates and nothing is
+  started; no match gets the full list. `[list-apps]` (or `[apps]`) prints the
+  same list with the default marked.
+
+The application is fixed per thread (the session's working directory cannot
+move): `[app:…]` in a later reply naming another app is refused and that message
+is not sent. The first reply and `[status]` show `*app* <name>`; feedback items
+and uploads are created under the thread's app, and agents are resolved for it
+(`GET /admin/agents?appId=` includes global endpoints such as `yolo` /
+`codex-yolo`). Threads created before app selection existed fall back to
+`PROPANES_APP_ID`.
 
 ### Agent selection
 
@@ -204,8 +229,9 @@ membership decides who can launch work.
 
 Keep credentials only in the ignored `packages/slack-bot/.env` (mode `0600`),
 never in the unit, repository or logs. Configure `PROPANES_URL` for the local
-API, `PROPANES_PUBLIC_URL` for operator-visible session links, `PROPANES_APP_ID`
-for the application, and `PROPANES_TOKEN` (an authorized ProPanes bearer token;
+API, `PROPANES_PUBLIC_URL` for operator-visible session links,
+`PROPANES_DEFAULT_APP` for the default application by name (`PROPANES_APP_ID` is
+the id fallback), and `PROPANES_TOKEN` (an authorized ProPanes bearer token;
 track its expiry). Optional: `AGENT_ENDPOINT_ID`, `POLL_MS`, `IDLE_POLL_MS`,
 `IDLE_STOP_MS`, `AMIROBOT_STATE_FILE`. The bot token also downloads Slack
 attachments. The listener verifies API authentication
