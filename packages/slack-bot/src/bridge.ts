@@ -14,6 +14,7 @@ import { extractImageRefs, filenameFor, IMAGE_MAX_BYTES, IMAGE_MIMES, type Image
 import { isStopKeyword, parseCommand, type OutputMode, type ParsedCommand, type Runtime } from './options';
 import { isLive, PropanesApiError, TERMINAL_STATUSES, type JsonlDelta, type PropanesClient, type SessionInfo } from './propanes';
 import { slackErrorCode, type SlackPoster } from './slack';
+import { isOutsideInput, rememberSentPrompt, renderOutsideInput } from './outside-input';
 import { freshCheckpoint, threadKey, type StateRepo, type ThreadRecord } from './state';
 
 export type { SlackFileInfo } from './attachments';
@@ -329,6 +330,7 @@ export class SlackBridge {
       history: [{ sessionId, runtime, agentName: endpoint.name || endpoint.id, createdAt: nowIso }],
       delivery: freshCheckpoint(this.now(), this.now() - FRESH_SESSION_GRACE_MS), watching: true, createdAt: nowIso, updatedAt: nowIso,
     };
+    record.delivery.sentPrompts = rememberSentPrompt(undefined, cmd.text);
     this.d.state.putThread(record);
     if (ev.user) this.d.state.setRuntimePref(ev.teamId, ev.user, runtime);
     await reply(this.initialReply(record, staged.images.length + forwarded.length));
@@ -370,9 +372,11 @@ export class SlackBridge {
     let session = await this.currentSession(record);
     if (isLive(session.status)) {
       // Same operation as the structured view's input bar: keys straight to the live process.
-      const result = await this.d.propanes.sendKeys(record.sessionId, promptForSendKeys(oneLineText, record.mode));
+      const keys = promptForSendKeys(oneLineText, record.mode);
+      const result = await this.d.propanes.sendKeys(record.sessionId, keys);
       if (result.ok) {
         this.openTurn(record);
+        record.delivery.sentPrompts = rememberSentPrompt(record.delivery.sentPrompts, keys);
         this.d.state.putThread(record);
         this.watch(record.key);
         return;
@@ -442,6 +446,7 @@ export class SlackBridge {
       record.agentName = agentName;
       record.history.push({ sessionId, runtime: nextRuntime, agentName, createdAt: new Date(this.now()).toISOString() });
       record.delivery = freshCheckpoint(this.now(), this.now() - RESUME_GRACE_MS);
+      record.delivery.sentPrompts = rememberSentPrompt(undefined, text);
       record.watching = true;
       record.paused = undefined;
       this.followers.delete(record.key);
@@ -665,6 +670,13 @@ export class SlackBridge {
     };
     for (const { msg } of events) {
       if (msg.role === 'assistant' && !msg.subagentId && msg.content.trim()) record.delivery.turnTexts.push(msg.content);
+      if (msg.role === 'user_input' && !msg.subagentId && isOutsideInput(msg.content, record.delivery.sentPrompts)) {
+        // Typed in the admin PTY / structured view: say so in every mode, so
+        // the replies that follow are attributable, and treat it as a new turn
+        // (quiet mode then delivers its final answer like any Slack-sent turn).
+        pieces.push(renderOutsideInput(msg.content));
+        if (!record.delivery.turnOpen) this.openTurn(record);
+      }
       const rendered = renderEvent(msg, record.mode);
       if (rendered) pieces.push(rendered);
       if (record.images) {
@@ -783,6 +795,7 @@ export function helpText(): string {
     '• `@amirobot [help]` — this message · `[status]` — the thread\'s session, agent, state and link',
     '• reply `stop` (or `cancel`) — stop the thread\'s running session; a later reply resumes it',
     '• sessions idle for an hour are paused (agent stopped, conversation kept); any reply resumes them with their full context',
+    '• prompts typed in the ProPanes terminal or structured view are echoed here as `👤 User asked outside Slack`, so the replies that follow are attributable',
     '',
     '*Output modes* (remembered per thread)',
     '• default — all assistant text (progress and answer); no tool calls or tool output',

@@ -90,7 +90,7 @@ export function renderEvent(msg: ParsedMessage, mode: OutputMode): string | null
       return text ? sub + toMrkdwn(text) : null;
     }
     case 'user_input':
-      return null; // the human's own prompt (or a harness-injected one)
+      return null; // Slack-sent prompts are already in the thread; outside ones are announced by the bridge (outside-input.ts)
     case 'tool_use': {
       if (mode !== 'verbose') return null;
       const summary = summarizeToolInput(msg.toolName, msg.toolInput);
