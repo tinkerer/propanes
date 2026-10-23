@@ -45,6 +45,8 @@ export interface ThreadRecord {
   history: SessionLink[];
   delivery: DeliveryCheckpoint;
   watching: boolean;
+  /** The thread was already told the bot cannot read Slack files (missing scope). */
+  filesReadWarned?: boolean;
   createdAt: string;
   updatedAt: string;
 }

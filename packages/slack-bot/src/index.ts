@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { App, LogLevel } from '@slack/bolt';
+import { downloaderFromToken } from './attachments';
 import { SlackBridge, type IncomingSlackMessage } from './bridge';
 import { configuredDefaultRuntime, resolveAgentEndpoint, runtimeLabel } from './agents';
 import { createPropanesClient, createPropanesFetch } from './propanes';
@@ -38,6 +39,7 @@ const log = (message: string) => console.warn(`[amirobot] ${message}`);
 const bridge = new SlackBridge({
   propanes,
   slack: new PacedPoster(posterFromClient(app.client as any)),
+  files: downloaderFromToken(process.env.SLACK_BOT_TOKEN!),
   state,
   config: {
     appId: APP_ID,
@@ -73,14 +75,17 @@ app.event('app_mention', async ({ event, body }) => {
     threadTs: e.thread_ts,
     text: e.text ?? '',
     mentionsBot: true,
+    files: Array.isArray(e.files) ? e.files : undefined,
   });
 });
 
 // Thread replies (no mention needed) and DMs. Top-level channel messages
 // without a mention are ignored; mentions arrive via app_mention above.
+// A message with attachments arrives as subtype `file_share` and still
+// carries the human's text, so it is forwarded like any other reply.
 app.message(async ({ message, body }) => {
   const m = message as any;
-  if (m.bot_id || m.subtype) return;
+  if (m.bot_id || (m.subtype && m.subtype !== 'file_share' && m.subtype !== 'thread_broadcast')) return;
   const text: string = m.text ?? '';
   if (botUserId && text.includes(`<@${botUserId}>`)) return;
   const channelType = m.channel_type as IncomingSlackMessage['channelType'];
@@ -91,10 +96,12 @@ app.message(async ({ message, body }) => {
     channel: m.channel,
     channelType,
     user: m.user,
+    subtype: m.subtype,
     ts: m.ts,
     threadTs: m.thread_ts,
     text,
     mentionsBot: false,
+    files: Array.isArray(m.files) ? m.files : undefined,
   });
 });
 
