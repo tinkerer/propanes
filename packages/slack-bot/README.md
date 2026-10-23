@@ -69,6 +69,17 @@ changed.
    There is no blanket kill-and-resume. A `waiting` session (permission prompt,
    AskUserQuestion) is announced once in the thread with the pending tool; a
    reply answers it through the same send-keys path (`y`, `1`, free text).
+   **Prompts typed outside Slack** — in the admin terminal, the structured
+   view's input bar or a follow-up queue — appear in the transcript as user
+   turns the bot never sent. They are echoed into the thread in every output
+   mode as `👤 User asked outside Slack:` followed by the quoted prompt, so the
+   replies that follow are attributable, and they open a turn like a Slack
+   reply would (quiet mode delivers the final `<cos-reply>` for them too).
+   The bot remembers the prompts it sent per session (`sentPrompts` in the
+   delivery checkpoint) and matches transcript user turns against them, verbatim
+   or embedded in the server's dispatch/resume wrapper; harness-written user
+   envelopes (`<system-reminder>`, slash-command output, codex
+   `<environment_context>`, "Request interrupted") are never announced.
 4. Bot messages, message edits/deletes and other subtypes are ignored; a
    message with attachments (subtype `file_share`) is a human request and is
    delivered with its attachments (see "Attachments from Slack"). Slack

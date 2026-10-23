@@ -28,6 +28,10 @@ export interface DeliveryCheckpoint {
    * session's first poll may still resolve to another session's transcript,
    * and a resumed session continues the transcript the thread already saw. */
   since?: number;
+  /** Prompts this listener sent to the session (Slack text, send-keys text,
+   * resume prompts), newest last. A transcript user turn matching none of
+   * them was typed outside Slack and is announced in the thread. */
+  sentPrompts?: string[];
 }
 
 export interface SessionLink { sessionId: string; runtime: Runtime; agentName: string; createdAt: string; }

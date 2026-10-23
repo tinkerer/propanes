@@ -567,3 +567,44 @@ test('a resumed session does not re-post the conversation the thread already saw
   assert.equal(texts.filter((t) => /First answer/.test(t)).length, 1, texts.join('|'));
   assert.equal(texts.filter((t) => /Second answer/.test(t)).length, 1, texts.join('|'));
 });
+
+test('a prompt typed in the ProPanes UI is echoed as "User asked outside Slack"; Slack-sent and harness prompts are not', async () => {
+  const f = fixture();
+  f.steps.push(
+    // The server's dispatch prompt wraps the Slack text; the TTY echoes a send-keys reply as one line.
+    () => { f.world.session('S1').lines.push(line.user('# Feedback: start\n\nreview the PR\nand the tests\n\n[SLACK THREAD]\n…'), line.assistant('On it.')); },
+    () => undefined,
+    () => { f.world.session('S1').lines.push(line.user('also check\nthe docs'), line.user('<system-reminder>\nhook output\n</system-reminder>')); },
+    () => { f.world.session('S1').lines.push(line.user('fix the lint errors too'), line.assistant('Fixing lint.')); },
+    () => undefined,
+    () => undefined,
+  );
+  await f.bridge.handleEvent(mention('review the PR\nand the tests'));
+  await f.bridge.handleEvent(threadReply('also check\nthe docs'));
+  await f.bridge.drain();
+  const texts = f.slack.texts();
+  const notices = texts.filter((t) => t.includes('User asked outside Slack'));
+  assert.deepEqual(notices, ['👤 _User asked outside Slack:_\n> fix the lint errors too\n\nFixing lint.'], texts.join('|'));
+  assert.ok(!texts.some((t) => /hook output|review the PR/.test(t) && t.includes('outside')), texts.join('|'));
+});
+
+test('an outside prompt reopens the turn so quiet mode delivers its final answer', async () => {
+  const f = fixture();
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(line.assistant('<cos-reply>First done.</cos-reply>')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined,
+    () => undefined,
+    () => { f.world.session('S1').lines.push(line.user('now the second thing'), line.assistant('<cos-reply>Second done.</cos-reply>')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined,
+    () => undefined,
+    () => { f.world.session('S1').status = 'completed'; },
+  );
+  await f.bridge.handleEvent(mention('[quiet] start'));
+  await f.bridge.drain();
+  const texts = f.slack.texts();
+  const i1 = texts.findIndex((t) => /First done/.test(t));
+  const i2 = texts.findIndex((t) => /now the second thing/.test(t));
+  const i3 = texts.findIndex((t) => /Second done/.test(t));
+  assert.ok(i1 >= 0 && i2 > i1 && i3 > i2, texts.join('|'));
+  assert.ok(texts[i2].includes('User asked outside Slack'), texts[i2]);
+});
