@@ -79,6 +79,10 @@ export class World {
 
   propanes: PropanesClient = {
     me: async () => ({ user: { id: 'env-admin', username: 'admin', role: 'admin' } }),
+    createTerminal: async (input) => {
+      this.calls.push(`terminal:${JSON.stringify(input)}`);
+      return { sessionId: this.newSession('', 'plain').id };
+    },
     listAgents: async () => this.agents,
     listApplications: async () => this.apps,
     listDispatchTargets: async () => this.infra,

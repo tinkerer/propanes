@@ -18,12 +18,16 @@ process.
 | `@amirobot [list-apps]` | The registered applications with their `[app:…]` option and the default. Never creates a session |
 | `@amirobot [infra:laptop] build it` | Run the session on that connected machine/launcher instead of this server; combinable: `[codex, app:propanes, infra:laptop]`. See "Connected infrastructure" |
 | `@amirobot [list-infra]` | Connected infrastructure (this server, machines, harnesses, sprites) with state, load and the `[infra:…]` option. Never creates a session |
+| `@amirobot [terminal]` | Open a plain shell and reply with its session link |
+| `@amirobot [infra:macbook terminal]` | Open a shell on that machine and reply with its session link |
 | `@amirobot [help]` | Threaded help: commands, defaults, output modes, examples. Never creates a session |
 | `@amirobot [status]` | The thread's session link, agent, state (working / waiting / idle / completed…) and history. Never creates, interrupts or resumes anything |
 | reply `stop` (also `cancel`, `halt`, `kill`) | Kills the thread's running session (preserved from the previous bot). A later reply resumes it |
 
 Leading bracket options are case-insensitive, comma separated and may be split
 across groups: `[claude, verbose, images]` ≡ `[Claude] [VERBOSE] [images]`.
+Spaces can separate options too: `[infra:macbook terminal]`. Multiword app and
+infra names remain supported (`[app:Admin Console]`).
 Unknown options, `[claude, codex]`, `[verbose, quiet]` and `[help]`/`[status]`
 combined with anything else get a threaded explanation and nothing is created or
 changed.
@@ -39,9 +43,12 @@ falling back to `PROPANES_APP_ID` — unless it carries
 - an exact match on the name, id or project-directory name wins
   (`[app:reports]` → *Reports*, not *Reports Staging*);
 - otherwise a single partial match is accepted (`[app:store]` → *Storefront*);
-- several partial matches get a clarifying list of the candidates and nothing is
+- if no partial matches exist, small typos (including swapped adjacent letters)
+  are accepted against names and individual words;
+- several matches get a clarifying list of the candidates and nothing is
   started; no match gets the full list. `[list-apps]` (or `[apps]`) prints the
-  same list with the default marked.
+  same list with the default marked. Ambiguous replies include exact `[app:ID]`
+  selectors; mention the bot again with the original request and a choice.
 
 The application is fixed per thread (the session's working directory cannot
 move): `[app:…]` in a later reply naming another app is refused and that message
@@ -60,7 +67,8 @@ sprites, machines marked online without a launcher, plus the server host
 (`[infra:local]`, also `server` / `here` or its machine name). Resolution
 matches the target name, machine name, hostname or launcher id: an exact match
 wins, a single partial match is accepted (`[infra:laptop]` →
-*dev-laptop*), several partial matches get a clarifying list, and an
+*dev-laptop*), then conservative typo matching is attempted. Several matches
+get a clarifying list with exact `[infra:ID]` selectors to retry, and an
 **offline** target is refused — the server would otherwise fall back to running
 the session locally without saying so. `[list-infra]` (or `[infra]`,
 `[machines]`) prints the list with state and `active/max` sessions.
@@ -72,6 +80,25 @@ working directory, so `[app:…]` and `[infra:…]` compose. The first reply and
 per thread: continuations resume with the parent session's launcher
 server-side, and `[infra:…]` naming another target in a later reply is refused
 without sending the message.
+
+### Terminals
+
+`[terminal]` creates a plain shell through `POST /api/v1/admin/terminal` and
+returns its public session link, without feedback, agent dispatch or transcript
+polling. Add optional app/infra selectors, including `[infra:macbook terminal]`
+or `[app:propanes infra:laptop terminal]`. The same target resolution and
+ambiguity/offline explanations apply. Plain terminals support local/remote
+machines; harness and sprite targets receive an explanation instead of
+opening a shell on the wrong host. Prompt text, attachments and agent/output
+options cannot be combined with `[terminal]`.
+
+An app supplies its project directory for local terminals; remote launchers
+use the machine's configured default directory (home when unset). In a new
+terminal thread, replies send shell input, `stop` closes the shell and
+`[status]` reports its state. An ended shell requires another `[terminal]`
+request. A terminal requested in an existing agent thread opens separately,
+leaving that thread's agent conversation intact. Terminal mappings survive
+listener restarts without starting a transcript watcher.
 
 ### Agent selection
 

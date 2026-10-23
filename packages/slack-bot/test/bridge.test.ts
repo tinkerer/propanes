@@ -712,3 +712,112 @@ test('[list-infra] lists targets without starting anything; infra cannot change 
   assert.ok(!f.world.calls.some((c) => c.includes('now there')), f.world.calls.join('|'));
   assert.ok(f.world.calls.includes('send-keys:S1:same place is fine'), f.world.calls.join('|'));
 });
+
+test('[terminal] and [infra:macbook terminal] return plain shell session links', async () => {
+  for (const input of ['[terminal]', '[infra:macbook terminal]', '[app:storefront infra:macbook terminal]']) {
+    const f = fixture();
+    f.world.infra.targets.push({ launcherId: 'mac-1', name: 'Amir MacBook', online: true });
+    await f.bridge.handleEvent(mention(input));
+    await f.bridge.drain();
+    assert.equal(f.world.sessions.size, 1);
+    assert.match(f.slack.texts()[0], /Terminal started/);
+    assert.ok(f.slack.texts()[0].includes(sessionUrl('S1')));
+    const data = JSON.parse(f.world.calls[0].slice('terminal:'.length));
+    assert.equal(data.permissionProfile, 'plain');
+    assert.equal(data.launcherId, input.includes('infra:') ? 'mac-1' : undefined);
+    assert.equal(data.appId, input.includes('app:') ? 'app-sc' : undefined);
+    assert.equal(f.world.calls.length, 1);
+    const record = new StateRepo(f.store).getThread('T1:C1:100.000')!;
+    assert.equal(record.kind, 'terminal');
+    assert.equal(record.watching, false);
+    await f.bridge.handleEvent(threadReply('[status]'));
+    assert.match(f.slack.texts().at(-1)!, /\*terminal\*.*S1.*running/);
+    await f.bridge.handleEvent(threadReply('pwd'));
+    assert.ok(f.world.calls.includes('send-keys:S1:pwd'));
+    await f.bridge.handleEvent(threadReply('stop'));
+    assert.ok(f.world.calls.includes('kill:S1'));
+    await f.bridge.handleEvent(threadReply('pwd'));
+    assert.match(f.slack.texts().at(-1)!, /has ended/);
+    assert.ok(!f.world.calls.some(c => c.startsWith('resume:')));
+  }
+});
+
+test('terminal creation failures and duplicate deliveries do not create extra sessions', async () => {
+  const f = fixture();
+  const event = mention('[terminal]');
+  await Promise.all([f.bridge.handleEvent(event), f.bridge.handleEvent(event)]);
+  assert.equal(f.world.sessions.size, 1);
+  const failed = fixture();
+  failed.world.propanes.createTerminal = async () => { throw new Error('launcher unavailable'); };
+  await failed.bridge.handleEvent(mention('[terminal]'));
+  assert.match(failed.slack.texts()[0], /launcher unavailable/);
+  assert.equal(new StateRepo(failed.store).threads().length, 0);
+});
+
+
+test('approximate app and infra queries compose and display resolved targets', async () => {
+  const f = fixture();
+  f.world.infra.targets.push({ launcherId: 'mac-1', name: 'Amir MacBook', online: true });
+  await f.bridge.handleEvent(mention('[app:storfront infra:macbok] fix it'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('feedback-app:app-sc'));
+  assert.ok(f.world.calls.includes('dispatch-infra:mac-1'));
+  assert.match(f.slack.texts()[0], /Storefront.*Amir MacBook/);
+});
+
+test('terminal target failures never create sessions; duplicate names list exact choices', async () => {
+  for (const [input, pattern] of [
+    ['[app:rep terminal]', /matches 2 applications[\s\S]*app:app-rep/],
+    ['[infra:gpu terminal]', /matches 2 targets[\s\S]*infra:gpu-1/],
+    ['[infra:build terminal]', /offline/],
+    ['[app:missing terminal]', /No application matches/],
+    ['[infra:missing terminal]', /No infrastructure matches/],
+  ] as const) {
+    const f = fixture();
+    await f.bridge.handleEvent(mention(input));
+    await f.bridge.drain();
+    assert.match(f.slack.texts()[0], pattern);
+    assert.deepEqual(f.world.calls, []);
+  }
+});
+
+test('a separate terminal leaves agent thread context intact', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  await f.bridge.handleEvent(threadReply('[infra:laptop terminal]'));
+  assert.match(f.slack.texts().at(-1)!, /Replies in this thread continue to reach the agent/);
+  assert.equal(new StateRepo(f.store).getThread('T1:C1:100.000')!.sessionId, 'S1');
+});
+
+test('terminal requests reject attachments and unsupported harness/sprite targets', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[terminal]', { files: [{ id: 'file-1', name: 'file.txt' }] }));
+  assert.match(f.slack.texts()[0], /cannot include attachments/);
+  f.world.infra.targets.push({ launcherId: 'h-1', name: 'harness', online: true, isHarness: true });
+  await f.bridge.handleEvent(mention('[infra:harness terminal]'));
+  assert.match(f.slack.texts().at(-1)!, /support local or remote machines/);
+  assert.deepEqual(f.world.calls, []);
+});
+
+test('an ambiguous terminal request can be retried with an exact infra ID', async () => {
+  const f = fixture();
+  f.world.infra.targets.push({ launcherId: 'mac-1', name: 'MacBook', online: true }, { launcherId: 'mac-2', name: 'MacBook', online: true });
+  await f.bridge.handleEvent(mention('[infra:macbook terminal]'));
+  assert.equal(f.world.sessions.size, 0);
+  assert.match(f.slack.texts()[0], /infra:mac-1\][\s\S]*infra:mac-2\]/);
+  await f.bridge.handleEvent(mention('[infra:mac-2 terminal]', { threadTs: '100.000' }));
+  assert.equal(f.world.sessions.size, 1);
+  assert.match(f.world.calls[0], /"launcherId":"mac-2"/);
+});
+
+test('terminal mappings recover without transcript watchers', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[terminal]'));
+  const restarted = fixture({ store: f.store });
+  restarted.world.sessions = f.world.sessions;
+  assert.equal(restarted.bridge.recover(), 0);
+  await restarted.bridge.handleEvent(threadReply('pwd'));
+  assert.ok(restarted.world.calls.includes('send-keys:S1:pwd'));
+  assert.ok(!restarted.world.calls.some(c => c.startsWith('resume:')));
+});

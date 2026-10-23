@@ -71,3 +71,21 @@ test('[infra:<name>] selects a target and [list-infra] is standalone', () => {
   assert.match(parseCommand('[infra:a, infra:b] go').error!, /Choose one infrastructure target/);
   assert.match(parseCommand('[infra:] go').error!, /needs a name/);
 });
+
+
+test('terminal selectors accept whitespace, commas and separate groups', () => {
+  assert.deepEqual(parseCommand('[terminal]'), { command: 'prompt', terminal: true, text: '' });
+  assert.deepEqual(parseCommand('[infra:macbook terminal]'), { command: 'prompt', infra: 'macbook', terminal: true, text: '' });
+  assert.deepEqual(parseCommand('[terminal app:Propanes Admin infra:MacBook]'), {
+    command: 'prompt', app: 'propanes admin', infra: 'macbook', terminal: true, text: '',
+  });
+  assert.deepEqual(parseCommand('[APP=Propanes Admin] [Infra=MacBook, codex] fix it'), {
+    command: 'prompt', app: 'propanes admin', infra: 'macbook', runtime: 'codex', text: 'fix it',
+  });
+});
+
+test('terminal rejects agent/output options, prompt text and standalone commands', () => {
+  for (const input of ['[terminal codex]', '[terminal quiet]', '[terminal images]', '[terminal] run ls', '[terminal help]', '[terminal list-infra]']) {
+    assert.ok(parseCommand(input).error, input);
+  }
+});

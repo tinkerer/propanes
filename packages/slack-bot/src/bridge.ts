@@ -161,7 +161,7 @@ export class SlackBridge {
       if (!isDm && !ev.mentionsBot && !record) return; // ordinary chatter in an unrelated thread
 
       const cmd = parseCommand(ev.text, this.d.config.botUserId);
-      const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined || cmd.app !== undefined || cmd.infra !== undefined;
+      const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined || cmd.app !== undefined || cmd.infra !== undefined || cmd.terminal !== undefined;
       const attachments = ev.files?.length ?? 0;
       const reply = (text: string) => this.d.slack.postMessage({ channel: ev.channel, thread_ts: threadTs ?? undefined, text });
       if (!cmd.error && cmd.command === 'prompt' && !cmd.text && !hasOptions && !attachments) return;
@@ -182,6 +182,7 @@ export class SlackBridge {
         await reply(listAppsText(apps, this.defaultApp(apps).id));
         return;
       }
+      if (cmd.terminal && attachments) { await reply('A terminal request cannot include attachments. Use `[terminal]` with optional app/infra selectors.'); return; }
       const staged = attachments ? await this.downloadAttachments(ev, record, reply) : { images: [], files: [] };
       // An attachment-only message is a request to look at the attachment.
       if (!cmd.text && (staged.images.length || staged.files.length)) cmd.text = 'See the attached file(s).';
@@ -219,9 +220,11 @@ export class SlackBridge {
 
   private async handlePrompt(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>, staged: StagedAttachments): Promise<void> {
     const record = this.d.state.getThread(key);
-    const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined;
+    const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined || cmd.app !== undefined || cmd.infra !== undefined || cmd.terminal !== undefined;
     try {
       if (isStopKeyword(cmd.text) && !hasOptions) return await this.stopSession(record, reply);
+      if (cmd.terminal) return await this.startTerminal(ev, key, threadTs, cmd, reply);
+      if (record?.kind === 'terminal') return await this.continueTerminal(record, cmd, staged, reply);
       if (!record) return await this.startSession(ev, key, threadTs, cmd, reply, staged);
       return await this.continueThread(ev, record, cmd, reply, staged);
     } catch (err) {
@@ -303,26 +306,10 @@ export class SlackBridge {
       await reply('Tell me what to do, e.g. `@amirobot review PR 2013`. Send `[help]` for options.');
       return;
     }
-    const apps = await this.d.propanes.listApplications();
-    let app: AppInfo;
-    if (cmd.app !== undefined) {
-      const match = resolveApp(apps, cmd.app);
-      if (match.kind === 'many') { await reply(ambiguousAppText(cmd.app, match.apps)); return; }
-      if (match.kind === 'none') { await reply(unknownAppText(cmd.app, apps, this.defaultApp(apps).id)); return; }
-      app = match.app;
-    } else {
-      app = this.defaultApp(apps);
-    }
+    const target = await this.resolveTargets(cmd, reply);
+    if (!target) return;
+    const { app, infra } = target;
     const appId = app.id;
-    let infra: InfraTarget | undefined;
-    if (cmd.infra !== undefined) {
-      const list = await this.d.propanes.listDispatchTargets();
-      const match = resolveInfra(list, cmd.infra);
-      if (match.kind === 'many') { await reply(ambiguousInfraText(cmd.infra, match.targets)); return; }
-      if (match.kind === 'offline') { await reply(offlineInfraText(match.target, list)); return; }
-      if (match.kind === 'none') { await reply(unknownInfraText(cmd.infra, list)); return; }
-      if (match.target.launcherId !== LOCAL_LAUNCHER_ID) infra = match.target;
-    }
     const agents = await this.d.propanes.listAgents(appId);
     const remembered = ev.user ? this.d.state.getRuntimePref(ev.teamId, ev.user) : undefined;
     const runtime: Runtime = cmd.runtime ?? remembered ?? configuredDefaultRuntime(agents, appId);
@@ -370,6 +357,71 @@ export class SlackBridge {
     if (ev.user) this.d.state.setRuntimePref(ev.teamId, ev.user, runtime);
     await reply(this.initialReply(record, staged.images.length + forwarded.length));
     this.watch(key);
+  }
+
+  private async resolveTargets(cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<{ app: AppInfo; infra?: InfraTarget } | undefined> {
+    const apps = await this.d.propanes.listApplications();
+    let app: AppInfo;
+    if (cmd.app !== undefined) {
+      const match = resolveApp(apps, cmd.app);
+      if (match.kind === 'many') { await reply(ambiguousAppText(cmd.app, match.apps)); return; }
+      if (match.kind === 'none') { await reply(unknownAppText(cmd.app, apps, this.defaultApp(apps).id)); return; }
+      app = match.app;
+    } else {
+      app = this.defaultApp(apps);
+    }
+    let infra: InfraTarget | undefined;
+    if (cmd.infra !== undefined) {
+      const list = await this.d.propanes.listDispatchTargets();
+      const match = resolveInfra(list, cmd.infra);
+      if (match.kind === 'many') { await reply(ambiguousInfraText(cmd.infra, match.targets)); return; }
+      if (match.kind === 'offline') { await reply(offlineInfraText(match.target, list)); return; }
+      if (match.kind === 'none') { await reply(unknownInfraText(cmd.infra, list)); return; }
+      if (match.target.launcherId !== LOCAL_LAUNCHER_ID) infra = match.target;
+    }
+    return { app, infra };
+  }
+
+  private async startTerminal(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<void> {
+    const target = await this.resolveTargets(cmd, reply);
+    if (!target) return;
+    const { app, infra } = target;
+    if (infra?.isHarness || infra?.isSprite) {
+      await reply('Plain terminal requests support local or remote machines. Choose a machine with `[infra:name]`. Nothing was started.');
+      return;
+    }
+    const { sessionId } = await this.d.propanes.createTerminal({
+      permissionProfile: 'plain',
+      ...(cmd.app ? { appId: app.id } : {}),
+      ...(infra ? { launcherId: infra.launcherId } : {}),
+    });
+    const previous = this.d.state.getThread(key);
+    // A separate terminal link must not replace an existing agent conversation.
+    if (!previous || previous.kind === 'terminal') {
+      const nowIso = new Date(this.now()).toISOString();
+      this.d.state.putThread({
+        key, teamId: ev.teamId, channel: ev.channel, threadTs, kind: 'terminal',
+        appId: app.id, appName: app.name, launcherId: infra?.launcherId, infraName: infra?.name,
+        sessionId, feedbackId: '', runtime: 'claude', agentEndpointId: '', agentName: 'Terminal',
+        mode: 'default', images: false, history: [], delivery: freshCheckpoint(this.now()),
+        watching: false, createdAt: nowIso, updatedAt: nowIso,
+      });
+    }
+    await reply(`Terminal started: ${this.link(sessionId)}${infra ? ` · ${escapeMrkdwn(infra.name)}` : ''}${cmd.app ? ` · ${escapeMrkdwn(app.name)}` : ''}. ${previous && previous.kind !== 'terminal' ? 'Replies in this thread continue to reach the agent.' : 'Reply here to send shell input · `stop` closes it · `[status]`.'}`);
+  }
+
+  private async continueTerminal(record: ThreadRecord, cmd: ParsedCommand, staged: StagedAttachments, reply: (t: string) => Promise<unknown>): Promise<void> {
+    if (cmd.runtime || cmd.mode || cmd.images || cmd.app || cmd.infra || staged.images.length || staged.files.length) {
+      await reply(`Use ${this.link(record.sessionId)} to access this terminal, or reply with shell input. Send \`[terminal]\` with selectors to open another.`);
+      return;
+    }
+    const session = await this.currentSession(record);
+    if (!isLive(session.status)) {
+      await reply(`Terminal ${this.link(record.sessionId)} has ended. Send \`[terminal]\` to open another.`);
+      return;
+    }
+    const result = await this.d.propanes.sendKeys(record.sessionId, cmd.text.replace(/\r?\n/g, ' ⏎ '));
+    if (!result.ok) await reply(`⚠️ Could not send terminal input: ${escapeMrkdwn(result.error || 'send-keys failed')}`);
   }
 
   private initialReply(record: ThreadRecord, attached = 0): string {
@@ -526,6 +578,11 @@ export class SlackBridge {
     await this.d.propanes.kill(record.sessionId);
     record.delivery.turnOpen = false;
     record.delivery.turnTexts = [];
+    if (record.kind === 'terminal') {
+      this.d.state.putThread(record);
+      await reply(`Stopped terminal ${this.link(record.sessionId)}. Send \`[terminal]\` to open another.`);
+      return;
+    }
     record.paused = { at: new Date(this.now()).toISOString(), reason: 'stop', sessionId: record.sessionId };
     this.d.state.putThread(record);
     await reply(`🛑 Stopped session ${this.link(record.sessionId)}; its conversation is kept. Reply here to resume it with a new message.`);
@@ -535,6 +592,7 @@ export class SlackBridge {
     if (!record) return 'No session is associated with this thread. Mention me with a request to start one.';
     let session: SessionInfo | null = null;
     try { session = await this.currentSession(record); } catch { /* reported below */ }
+    if (record.kind === 'terminal') return `*terminal* ${this.link(record.sessionId)}${this.infraLabel(record)} · *state* ${escapeMrkdwn(session?.status ?? 'unknown (ProPanes unreachable)')}`;
     const paused = record.paused?.sessionId === record.sessionId && session && !isLive(session.status)
       ? (record.paused.reason === 'idle' ? `paused after ${formatDuration(this.d.config.idleStopMs)} idle` : 'stopped on request') + ' — reply to resume'
       : null;
@@ -584,7 +642,7 @@ export class SlackBridge {
 
   private async currentSession(record: ThreadRecord): Promise<SessionInfo> {
     let rows: SessionInfo[] = [];
-    try { rows = await this.d.propanes.listSessions(record.feedbackId); } catch { /* fall back to the single row */ }
+    try { if (record.feedbackId) rows = await this.d.propanes.listSessions(record.feedbackId); } catch { /* fall back to the single row */ }
     return rows.find((r) => r.id === record.sessionId) ?? await this.d.propanes.getSession(record.sessionId);
   }
 
@@ -882,6 +940,11 @@ export function helpText(defaultAppName?: string): string {
     '• reply `stop` (or `cancel`) — stop the thread\'s running session; a later reply resumes it',
     '• sessions idle for an hour are paused (agent stopped, conversation kept); any reply resumes them with their full context',
     '• prompts typed in the ProPanes terminal or structured view are echoed here as `👤 User asked outside Slack`, so the replies that follow are attributable',
+    '',
+    '*Terminals*',
+    '• `[terminal]` / `[infra:macbook terminal]` — open a plain shell and return its session link; optional `[app:name]` supplies app context',
+    '• App/infra names accept partial matches and small typos; ambiguous matches list exact selectors to retry',
+    '• A terminal opened in an agent thread is separate; replies keep reaching the agent',
     '',
     '*Output modes* (remembered per thread)',
     '• default — all assistant text (progress and answer); no tool calls or tool output',

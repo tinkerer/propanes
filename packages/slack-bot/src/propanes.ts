@@ -79,6 +79,7 @@ export function isLive(status: string | null | undefined): boolean {
 /** The same backend operations the admin structured view uses. */
 export interface PropanesClient {
   me(): Promise<{ user: { id: string; username: string; role: string } }>;
+  createTerminal(input: { appId?: string; launcherId?: string; cwd?: string; permissionProfile: 'plain' }): Promise<{ sessionId: string }>;
   listAgents(appId: string): Promise<AgentEndpointInfo[]>;
   /** GET /api/v1/admin/applications — the registered projects a session can run in. */
   listApplications(): Promise<AppInfo[]>;
@@ -114,6 +115,11 @@ export function createPropanesClient(api: PropanesFetch): PropanesClient {
   const post = (path: string, body: unknown) => api(path, { method: 'POST', body: JSON.stringify(body) });
   return {
     me: () => api('/api/v1/auth/me'),
+    createTerminal: async (input) => {
+      const result = await post('/api/v1/admin/terminal', input);
+      if (!result?.sessionId) throw new Error('terminal did not return a session id');
+      return { sessionId: result.sessionId };
+    },
     listAgents: (appId) => api(`/api/v1/admin/agents?appId=${encodeURIComponent(appId)}`),
     listDispatchTargets: async () => {
       const r = await api('/api/v1/admin/dispatch-targets');

@@ -2,6 +2,7 @@
  * Chosen per request with `[app:<name>]`, otherwise the configured default.
  * Matching is forgiving (case, spaces, punctuation; name, id or project
  * directory name) but never guesses between several candidates. */
+import { matchTargets } from './targets';
 import { escapeMrkdwn } from './format';
 
 export interface AppInfo {
@@ -25,18 +26,12 @@ function dirName(app: AppInfo): string {
   return dir.slice(dir.lastIndexOf('/') + 1);
 }
 
-/** Exact (id, name or project directory name) beats partial; several partial
+/** Exact (id, name or project directory name) beats partial and typo matching; several
  * hits are reported, never picked from. */
 export function resolveApp(apps: readonly AppInfo[], query: string): AppMatch {
-  const q = normalizeAppName(query);
-  if (!q) return { kind: 'none' };
-  const exact = apps.find((a) => a.id.toLowerCase() === query.trim().toLowerCase())
-    ?? apps.find((a) => normalizeAppName(a.name) === q)
-    ?? apps.find((a) => normalizeAppName(dirName(a)) === q);
-  if (exact) return { kind: 'one', app: exact };
-  const partial = apps.filter((a) => normalizeAppName(a.name).includes(q) || normalizeAppName(dirName(a)).includes(q));
-  if (partial.length === 1) return { kind: 'one', app: partial[0] };
-  if (partial.length > 1) return { kind: 'many', apps: partial };
+  const matches = matchTargets(apps, query, a => a.id, a => [a.name, dirName(a)]);
+  if (matches.length === 1) return { kind: 'one', app: matches[0] };
+  if (matches.length > 1) return { kind: 'many', apps: matches };
   return { kind: 'none' };
 }
 
@@ -49,9 +44,9 @@ export function defaultApp(apps: readonly AppInfo[], query: string | undefined, 
   return apps.find((a) => a.id === fallbackId) ?? apps[0] ?? { id: fallbackId, name: fallbackId };
 }
 
-function appLine(app: AppInfo, defaultId?: string): string {
+function appLine(app: AppInfo, defaultId?: string, exactSelector = false): string {
   const dir = dirName(app);
-  return `• *${escapeMrkdwn(app.name)}*${dir ? ` — \`${escapeMrkdwn(dir)}\`` : ''}${app.id === defaultId ? ' _(default)_' : ''} → \`[app:${escapeMrkdwn(app.name.toLowerCase())}]\``;
+  return `• *${escapeMrkdwn(app.name)}*${dir ? ` — \`${escapeMrkdwn(dir)}\`` : ''}${app.id === defaultId ? ' _(default)_' : ''} → \`[app:${escapeMrkdwn(exactSelector ? app.id : app.name.toLowerCase())}]\``;
 }
 
 export function listAppsText(apps: readonly AppInfo[], defaultId?: string): string {
@@ -65,8 +60,8 @@ export function listAppsText(apps: readonly AppInfo[], defaultId?: string): stri
 export function ambiguousAppText(query: string, apps: readonly AppInfo[]): string {
   return [
     `❓ \`app:${escapeMrkdwn(query)}\` matches ${apps.length} applications — which one?`,
-    ...apps.map((a) => appLine(a)),
-    'Repeat your request with the full name (spaces are fine, e.g. `[app:reports staging]`). Nothing was started.',
+    ...apps.map((a) => appLine(a, undefined, true)),
+    'Mention me again with your request and an exact `[app:ID]` selector above. Nothing was started.',
   ].join('\n');
 }
 

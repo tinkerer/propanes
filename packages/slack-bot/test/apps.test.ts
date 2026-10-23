@@ -32,3 +32,12 @@ test('the default application is resolved by name, then by the legacy id', () =>
   assert.match(text, /\*Applications\* \(5\)/);
   assert.match(text, /\*Atlas\* — `atlas` _\(default\)_ → `\[app:atlas\]`/);
 });
+
+test('app typos resolve conservatively and duplicate names offer exact IDs', () => {
+  const typo = resolveApp(apps, 'storfront');
+  assert.equal(typo.kind, 'one');
+  if (typo.kind === 'one') assert.equal(typo.app.id, 'app-sc');
+  const duplicate = resolveApp([...apps, { id: 'app-sc-2', name: 'Storefront' }], 'storefront');
+  assert.equal(duplicate.kind, 'many');
+  if (duplicate.kind === 'many') assert.match(ambiguousAppText('storefront', duplicate.apps), /app:app-sc\][\s\S]*app:app-sc-2\]/);
+});

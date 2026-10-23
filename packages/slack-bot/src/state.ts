@@ -37,6 +37,7 @@ export interface DeliveryCheckpoint {
 export interface SessionLink { sessionId: string; runtime: Runtime; agentName: string; createdAt: string; }
 
 export interface ThreadRecord {
+  kind?: 'terminal';
   key: string;
   teamId: string;
   channel: string;

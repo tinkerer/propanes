@@ -36,3 +36,14 @@ test('the list shows the server first, state, load and the option to type', () =
   assert.match(t, /• \*dev-laptop\* \(dev-laptop\.local\) — machine · online · 3\/5 sessions → `\[infra:dev-laptop\]`/);
   assert.match(t, /• \*build-vm\* — machine · offline → `\[infra:build-vm\]`/);
 });
+
+test('infra typos use raw name words and duplicate names retain exact ID choices', () => {
+  const machines = { localTarget: null, targets: [
+    { launcherId: 'mac-1', name: 'Amir MacBook', online: true },
+    { launcherId: 'mac-2', name: 'Other MacBook', online: true },
+  ] };
+  assert.equal(resolveInfra(machines, 'macobok').kind, 'many');
+  assert.equal(resolveInfra(machines, 'mac-2').kind, 'one');
+  const one = resolveInfra({ ...machines, targets: machines.targets.slice(0, 1) }, 'macbok');
+  assert.equal(one.kind, 'one');
+});
