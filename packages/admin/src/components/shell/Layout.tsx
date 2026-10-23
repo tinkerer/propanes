@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import { currentRoute, navigate, selectedAppId, applications, addAppModalOpen, spotlightOpen, closeSpotlight, toggleSpotlight } from '../../lib/state.js';
 import { parsePrUrls, prNumberFromUrl } from '../PrBadges.js';
-import { SessionPrMenu } from '../sessions/SessionPrMenu.js';
+import { SessionPrMenu, prMenuRowCount } from '../sessions/SessionPrMenu.js';
 import { QuickDispatchPopup } from '../dispatch/QuickDispatchPopup.js';
 import { api } from '../../lib/api.js';
 import { idMenuOpen } from '../panes/LeafPane.js';
@@ -674,7 +674,7 @@ export function Layout() {
         const menuExited = exitedSessions.value.has(menuSid);
         const isRunning = menuSess?.status === 'running';
         const menuPrUrls = menuSess ? parsePrUrls(menuSess.prUrls) : [];
-        const menuHeight = 200 + menuPrUrls.length * 26;
+        const menuHeight = 200 + prMenuRowCount(menuPrUrls.length) * 26;
         const flipUp = sidebarStatusMenu.value!.y + menuHeight > window.innerHeight;
         const menuStyle = flipUp
           ? { left: `${sidebarStatusMenu.value!.x}px`, bottom: `${window.innerHeight - sidebarStatusMenu.value!.y - 20}px` }
