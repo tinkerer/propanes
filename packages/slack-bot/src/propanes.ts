@@ -1,6 +1,7 @@
 /** Authenticated API access; keep credentials out of URLs, errors and logs. */
 import type { AgentEndpointInfo } from './agents';
 import type { AppInfo } from './apps';
+import type { InfraList } from './infra';
 import type { DownloadedFile } from './attachments';
 import type { Runtime } from './options';
 
@@ -81,6 +82,8 @@ export interface PropanesClient {
   listAgents(appId: string): Promise<AgentEndpointInfo[]>;
   /** GET /api/v1/admin/applications — the registered projects a session can run in. */
   listApplications(): Promise<AppInfo[]>;
+  /** GET /api/v1/admin/dispatch-targets — connected launchers/machines plus the server host (the dispatch popup's target list). */
+  listDispatchTargets(): Promise<InfraList>;
   /** POST /api/v1/feedback — JSON, or multipart with `screenshots` when images are attached
    * (the same shape the admin composer submits; screenshots render into the prompt). */
   createFeedback(input: { title: string; description: string; appId: string; tags?: string[]; screenshots?: DownloadedFile[] }): Promise<{ id: string }>;
@@ -89,7 +92,7 @@ export interface PropanesClient {
   /** POST /api/v1/uploads — the composer's non-image file attachments. */
   uploadFiles(sessionId: string | undefined, files: DownloadedFile[], appId: string): Promise<{ files: { id: string; filename: string; originalName: string; path: string }[] }>;
   /** POST /api/v1/admin/dispatch — what the admin dispatch popup calls. */
-  dispatch(input: { feedbackId: string; agentEndpointId: string; instructions: string; permissionProfile: string }): Promise<{ sessionId: string }>;
+  dispatch(input: { feedbackId: string; agentEndpointId: string; instructions: string; permissionProfile: string; launcherId?: string }): Promise<{ sessionId: string }>;
   getSession(id: string): Promise<SessionInfo>;
   /** Session rows for a feedback item, newest first, with live inputState. */
   listSessions(feedbackId: string): Promise<SessionInfo[]>;
@@ -112,6 +115,10 @@ export function createPropanesClient(api: PropanesFetch): PropanesClient {
   return {
     me: () => api('/api/v1/auth/me'),
     listAgents: (appId) => api(`/api/v1/admin/agents?appId=${encodeURIComponent(appId)}`),
+    listDispatchTargets: async () => {
+      const r = await api('/api/v1/admin/dispatch-targets');
+      return { targets: Array.isArray(r?.targets) ? r.targets : [], localTarget: r?.localTarget ?? null };
+    },
     listApplications: async () => {
       const rows = await api('/api/v1/admin/applications');
       return (Array.isArray(rows) ? rows : rows?.applications ?? []).map((a: any) => ({ id: a.id, name: a.name ?? a.id, projectDir: a.projectDir ?? null, description: a.description ?? null }));

@@ -3,21 +3,23 @@ export type Runtime = 'claude' | 'codex';
 export type OutputMode = 'default' | 'verbose' | 'quiet';
 
 export interface ParsedCommand {
-  command: 'help' | 'status' | 'list-apps' | 'prompt';
+  command: 'help' | 'status' | 'list-apps' | 'list-infra' | 'prompt';
   runtime?: Runtime;
   mode?: OutputMode;
   images?: boolean;
   /** `[app:<name>]` — the ProPanes application (project) to run in, as typed (lower-cased). */
   app?: string;
+  /** `[infra:<name>]` — the connected machine/launcher to run on, as typed (lower-cased). */
+  infra?: string;
   /** The request text with mentions and bracket options removed. */
   text: string;
   /** Set when the options are unknown or conflict; nothing must be dispatched. */
   error?: string;
 }
 
-export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'help', 'status', 'list-apps', 'app:<name>'] as const;
-const STANDALONE = ['help', 'status', 'list-apps'] as const;
-const APP_TOKEN = /^app\s*[:=]\s*(.*)$/;
+export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'help', 'status', 'list-apps', 'app:<name>', 'list-infra', 'infra:<name>'] as const;
+const STANDALONE = ['help', 'status', 'list-apps', 'list-infra'] as const;
+const VALUE_TOKEN = /^(app|infra)\s*[:=]\s*(.*)$/;
 
 const MENTION_RE = /<@[A-Z0-9]+(?:\|[^>]*)?>/g;
 
@@ -57,19 +59,23 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   }
   text = text.trim();
 
-  const appValues: string[] = [];
+  const values: Record<'app' | 'infra', string[]> = { app: [], infra: [] };
   const plain: string[] = [];
   for (const t of tokens) {
-    const m = APP_TOKEN.exec(t);
-    if (m) appValues.push(m[1].trim());
-    else plain.push(t === 'apps' ? 'list-apps' : t);
+    const m = VALUE_TOKEN.exec(t);
+    if (m) values[m[1] as 'app' | 'infra'].push(m[2].trim());
+    else plain.push(t === 'apps' ? 'list-apps' : t === 'infra' || t === 'machines' ? 'list-infra' : t);
   }
-  if (appValues.some((v) => !v)) {
-    return { command: 'prompt', text, error: '`[app:]` needs an application name, e.g. `[app:atlas]`. Send `[list-apps]` to see them.' };
+  for (const [key, example, list] of [['app', 'my-app', 'list-apps'], ['infra', 'laptop', 'list-infra']] as const) {
+    if (values[key].some((v) => !v)) {
+      return { command: 'prompt', text, error: `\`[${key}:]\` needs a name, e.g. \`[${key}:${example}]\`. Send \`[${list}]\` to see them.` };
+    }
+    if (values[key].length > 1) {
+      return { command: 'prompt', text, error: `Choose one ${key === 'app' ? 'application' : 'infrastructure target'}: ${values[key].map((v) => `\`[${key}:${v}]\``).join(' or ')}, not both.` };
+    }
   }
-  if (appValues.length > 1) {
-    return { command: 'prompt', text, error: `Choose one application: ${appValues.map((v) => `\`[app:${v}]\``).join(' or ')}, not both.` };
-  }
+  const appValues = values.app;
+  const valueTokens = [...values.app.map((v) => `app:${v}`), ...values.infra.map((v) => `infra:${v}`)];
   tokens = plain;
   const unknown = tokens.filter((t) => !(KNOWN_OPTIONS as readonly string[]).includes(t));
   if (unknown.length) {
@@ -82,8 +88,8 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   const standalone = STANDALONE.find(has);
   if (standalone) {
     const others = tokens.filter((t) => t !== standalone);
-    if (others.length || appValues.length) {
-      const all = [...tokens, ...appValues.map((v) => `app:${v}`)];
+    if (others.length || valueTokens.length) {
+      const all = [...tokens, ...valueTokens];
       return { command: standalone, text, error: `\`[${standalone}]\` cannot be combined with other options (got \`[${all.join(', ')}]\`).` };
     }
     return { command: standalone, text };
@@ -101,6 +107,7 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   if (modes.length === 1) out.mode = modes[0];
   if (has('images')) out.images = true;
   if (appValues.length === 1) out.app = appValues[0];
+  if (values.infra.length === 1) out.infra = values.infra[0];
   return out;
 }
 

@@ -16,6 +16,8 @@ process.
 | `@amirobot [codex] review PR 2013` | Explicitly use Codex |
 | `@amirobot [app:storefront] add a toggle` | Run in that ProPanes application (project); combinable: `[claude, app:storefront]`. See "Applications" |
 | `@amirobot [list-apps]` | The registered applications with their `[app:…]` option and the default. Never creates a session |
+| `@amirobot [infra:laptop] build it` | Run the session on that connected machine/launcher instead of this server; combinable: `[codex, app:propanes, infra:laptop]`. See "Connected infrastructure" |
+| `@amirobot [list-infra]` | Connected infrastructure (this server, machines, harnesses, sprites) with state, load and the `[infra:…]` option. Never creates a session |
 | `@amirobot [help]` | Threaded help: commands, defaults, output modes, examples. Never creates a session |
 | `@amirobot [status]` | The thread's session link, agent, state (working / waiting / idle / completed…) and history. Never creates, interrupts or resumes anything |
 | reply `stop` (also `cancel`, `halt`, `kill`) | Kills the thread's running session (preserved from the previous bot). A later reply resumes it |
@@ -48,6 +50,28 @@ and uploads are created under the thread's app, and agents are resolved for it
 (`GET /admin/agents?appId=` includes global endpoints such as `yolo` /
 `codex-yolo`). Threads created before app selection existed fall back to
 `PROPANES_APP_ID`.
+
+### Connected infrastructure
+
+Sessions run on this server unless a new request carries `[infra:<name>]`
+(`infra=` works too). Targets come from `GET /api/v1/admin/dispatch-targets`
+— the dispatch popup's list: connected remote launchers, running harnesses,
+sprites, machines marked online without a launcher, plus the server host
+(`[infra:local]`, also `server` / `here` or its machine name). Resolution
+matches the target name, machine name, hostname or launcher id: an exact match
+wins, a single partial match is accepted (`[infra:laptop]` →
+*dev-laptop*), several partial matches get a clarifying list, and an
+**offline** target is refused — the server would otherwise fall back to running
+the session locally without saying so. `[list-infra]` (or `[infra]`,
+`[machines]`) prints the list with state and `active/max` sessions.
+
+The chosen launcher is passed as `launcherId` on `POST /admin/dispatch`; the
+server pushes the application's project to the launcher and keeps the app's
+working directory, so `[app:…]` and `[infra:…]` compose. The first reply and
+`[status]` show `*infra* <name>` for remote targets. Infrastructure is fixed
+per thread: continuations resume with the parent session's launcher
+server-side, and `[infra:…]` naming another target in a later reply is refused
+without sending the message.
 
 ### Agent selection
 

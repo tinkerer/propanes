@@ -665,3 +665,50 @@ test('an application cannot change inside a thread; the message is held back', a
   assert.ok(f.world.calls.includes('send-keys:S1:same app is fine'), f.world.calls.join('|'));
   assert.equal(f.world.sessions.size, 1);
 });
+
+test('[infra:<name>] dispatches to that launcher; the reply and status name it; continuations stay there', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[codex, app:propanes, infra:laptop] build the app'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('dispatch-infra:laptop-1'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('feedback-app:app-1'), f.world.calls.join('|'));
+  assert.match(f.slack.texts()[0], /\*app\* Admin Console · \*infra\* dev-laptop · \*agent\* Codex/);
+  await f.bridge.handleEvent(threadReply('[status]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /\*infra\* dev-laptop/);
+  // The session finished; a reply resumes it with no launcher of its own — the server keeps the parent's.
+  await f.bridge.handleEvent(threadReply('and screenshot it'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.some((c) => c.startsWith('resume:S1:')), f.world.calls.join('|'));
+  assert.equal(f.world.calls.filter((c) => c.startsWith('dispatch-infra')).length, 1);
+});
+
+test('[infra:local] runs on the server; offline, ambiguous and unknown targets start nothing', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[infra:local] start here'));
+  await f.bridge.drain();
+  assert.ok(!f.world.calls.some((c) => c.startsWith('dispatch-infra')), f.world.calls.join('|'));
+  assert.doesNotMatch(f.slack.texts()[0], /\*infra\*/);
+  for (const [q, re] of [['build', /is offline/], ['gpu', /matches 2 targets/], ['nope', /No infrastructure matches/]] as const) {
+    await f.bridge.handleEvent(mention(`[infra:${q}] go`, { ts: `${200 + Math.random()}` }));
+    await f.bridge.drain();
+    assert.match(f.slack.texts().at(-1)!, re);
+  }
+  assert.equal(f.world.sessions.size, 1);
+});
+
+test('[list-infra] lists targets without starting anything; infra cannot change mid-thread', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[list-infra]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /\*Connected infrastructure\* \(5\)[\s\S]*dev-laptop/);
+  assert.equal(f.world.sessions.size, 0);
+  f.steps.push(() => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start', { ts: '300.000' }));
+  await f.bridge.handleEvent(threadReply('[infra:laptop] now there', { threadTs: '300.000' }));
+  await f.bridge.handleEvent(threadReply('[infra:local] same place is fine', { threadTs: '300.000' }));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().find((x) => x.includes('infrastructure cannot change'))!, /runs on this server[\s\S]*not sent/);
+  assert.ok(!f.world.calls.some((c) => c.includes('now there')), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('send-keys:S1:same place is fine'), f.world.calls.join('|'));
+});

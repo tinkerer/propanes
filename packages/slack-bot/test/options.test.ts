@@ -58,5 +58,16 @@ test('[app:<name>] selects an application and [list-apps] is a standalone comman
   assert.match(parseCommand('[list-apps, claude]').error!, /cannot be combined/);
   assert.match(parseCommand('[help, app:x]').error!, /cannot be combined/);
   assert.match(parseCommand('[app:a, app:b] go').error!, /Choose one application/);
-  assert.match(parseCommand('[app:] go').error!, /needs an application name/);
+  assert.match(parseCommand('[app:] go').error!, /needs a name, e.g. `\[app:my-app\]`/);
+});
+
+test('[infra:<name>] selects a target and [list-infra] is standalone', () => {
+  assert.deepEqual(parseCommand('<@UBOT> [codex, app:propanes, infra:laptop] build it'), { command: 'prompt', runtime: 'codex', app: 'propanes', infra: 'laptop', text: 'build it' });
+  assert.equal(parseCommand('[Infra = dev-laptop.local] go').infra, 'dev-laptop.local');
+  assert.equal(parseCommand('[list-infra]').command, 'list-infra');
+  assert.equal(parseCommand('[infra]').command, 'list-infra');
+  assert.equal(parseCommand('[machines]').command, 'list-infra');
+  assert.match(parseCommand('[list-infra, infra:x]').error!, /cannot be combined/);
+  assert.match(parseCommand('[infra:a, infra:b] go').error!, /Choose one infrastructure target/);
+  assert.match(parseCommand('[infra:] go').error!, /needs a name/);
 });
