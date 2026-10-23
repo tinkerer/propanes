@@ -14,48 +14,91 @@ process.
 | `@amirobot review PR 2013` | New session with the remembered agent (the ProPanes default the first time) |
 | `@amirobot [claude] review PR 2013` | Explicitly use Claude |
 | `@amirobot [codex] review PR 2013` | Explicitly use Codex |
-| `@amirobot [app:propanes infra:macbook] fix the bug` | Resolve the app and infra before dispatching |
-| `@amirobot [terminal]` | Open a plain shell and reply with its public session link |
-| `@amirobot [infra:macbook terminal]` | Open a shell on the matching infra and reply with its session link |
+| `@amirobot [app:storefront] add a toggle` | Run in that ProPanes application (project); combinable: `[claude, app:storefront]`. See "Applications" |
+| `@amirobot [list-apps]` | The registered applications with their `[app:…]` option and the default. Never creates a session |
+| `@amirobot [infra:laptop] build it` | Run the session on that connected machine/launcher instead of this server; combinable: `[codex, app:propanes, infra:laptop]`. See "Connected infrastructure" |
+| `@amirobot [list-infra]` | Connected infrastructure (this server, machines, harnesses, sprites) with state, load and the `[infra:…]` option. Never creates a session |
+| `@amirobot [terminal]` | Open a plain shell and reply with its session link |
+| `@amirobot [infra:macbook terminal]` | Open a shell on that machine and reply with its session link |
 | `@amirobot [help]` | Threaded help: commands, defaults, output modes, examples. Never creates a session |
 | `@amirobot [status]` | The thread's session link, agent, state (working / waiting / idle / completed…) and history. Never creates, interrupts or resumes anything |
 | reply `stop` (also `cancel`, `halt`, `kill`) | Kills the thread's running session (preserved from the previous bot). A later reply resumes it |
 
 Leading bracket options are case-insensitive, comma separated and may be split
 across groups: `[claude, verbose, images]` ≡ `[Claude] [VERBOSE] [images]`.
-Spaces can also separate options, as in `[infra:macbook terminal]`; app and infra
-selectors can contain multiword names (`[app:Propanes Admin]`).
+Spaces can separate options too: `[infra:macbook terminal]`. Multiword app and
+infra names remain supported (`[app:Admin Console]`).
 Unknown options, `[claude, codex]`, `[verbose, quiet]` and `[help]`/`[status]`
 combined with anything else get a threaded explanation and nothing is created or
 changed.
 
-### App / infra selection and terminals
+### Applications
 
-Use `[app:name]` and `[infra:name]` on a new request. The bot reads the
-applications and launchers visible to its bearer token from the authenticated
-admin APIs. Matching tries exact IDs, case/punctuation-insensitive names and
-hostnames, partial names, then conservative typo matching (including words in
-multiword names). A unique match is required. Ambiguity replies list exact
-`[app:ID]` / `[infra:ID]` choices; mention the bot again with the original request
-and a choice. Unknown or offline targets produce an explanation. These failures
-create no feedback or session and never fall back to another infra.
+Every session runs in one ProPanes application (its project directory). A new
+request uses the default application — `PROPANES_DEFAULT_APP` by name or id,
+falling back to `PROPANES_APP_ID` — unless it carries
+`[app:<name>]` (`app=` works too; spaces are allowed, e.g.
+`[app:reports staging]`). Resolution against `GET /api/v1/admin/applications`:
 
-Omitting selectors retains the configured app and backend infra defaults. An
-explicit app selects both the feedback's app and its agent endpoints; explicit
-infra is passed as `launcherId` to dispatch. The initial reply and `[status]`
-show selected names. The app is persisted for later runtime switches; continuations
-inherit the backend session's infra. To change an agent thread's target, start
-a new Slack thread.
+- an exact match on the name, id or project-directory name wins
+  (`[app:reports]` → *Reports*, not *Reports Staging*);
+- otherwise a single partial match is accepted (`[app:store]` → *Storefront*);
+- if no partial matches exist, small typos (including swapped adjacent letters)
+  are accepted against names and individual words;
+- several matches get a clarifying list of the candidates and nothing is
+  started; no match gets the full list. `[list-apps]` (or `[apps]`) prints the
+  same list with the default marked. Ambiguous replies include exact `[app:ID]`
+  selectors; mention the bot again with the original request and a choice.
 
-`[terminal]` opens a plain shell without feedback, agent dispatch or transcript
-polling. It accepts optional app/infra selectors, including
-`[app:Propanes Admin infra:macbook terminal]`, but no prompt or agent/output
-options. An app supplies its project directory for local terminals; remote launchers use
-the machine's configured default directory (home when unset). The response links the session in the admin UI.
-In a new terminal thread, replies send shell input, `stop` closes the shell and
-`[status]` reports its state; an ended shell requires a new `[terminal]` request.
-A terminal requested in an existing agent thread opens separately and leaves
-that thread's agent conversation intact.
+The application is fixed per thread (the session's working directory cannot
+move): `[app:…]` in a later reply naming another app is refused and that message
+is not sent. The first reply and `[status]` show `*app* <name>`; feedback items
+and uploads are created under the thread's app, and agents are resolved for it
+(`GET /admin/agents?appId=` includes global endpoints such as `yolo` /
+`codex-yolo`). Threads created before app selection existed fall back to
+`PROPANES_APP_ID`.
+
+### Connected infrastructure
+
+Sessions run on this server unless a new request carries `[infra:<name>]`
+(`infra=` works too). Targets come from `GET /api/v1/admin/dispatch-targets`
+— the dispatch popup's list: connected remote launchers, running harnesses,
+sprites, machines marked online without a launcher, plus the server host
+(`[infra:local]`, also `server` / `here` or its machine name). Resolution
+matches the target name, machine name, hostname or launcher id: an exact match
+wins, a single partial match is accepted (`[infra:laptop]` →
+*dev-laptop*), then conservative typo matching is attempted. Several matches
+get a clarifying list with exact `[infra:ID]` selectors to retry, and an
+**offline** target is refused — the server would otherwise fall back to running
+the session locally without saying so. `[list-infra]` (or `[infra]`,
+`[machines]`) prints the list with state and `active/max` sessions.
+
+The chosen launcher is passed as `launcherId` on `POST /admin/dispatch`; the
+server pushes the application's project to the launcher and keeps the app's
+working directory, so `[app:…]` and `[infra:…]` compose. The first reply and
+`[status]` show `*infra* <name>` for remote targets. Infrastructure is fixed
+per thread: continuations resume with the parent session's launcher
+server-side, and `[infra:…]` naming another target in a later reply is refused
+without sending the message.
+
+### Terminals
+
+`[terminal]` creates a plain shell through `POST /api/v1/admin/terminal` and
+returns its public session link, without feedback, agent dispatch or transcript
+polling. Add optional app/infra selectors, including `[infra:macbook terminal]`
+or `[app:propanes infra:laptop terminal]`. The same target resolution and
+ambiguity/offline explanations apply. Plain terminals support local/remote
+machines; harness and sprite targets receive an explanation instead of
+opening a shell on the wrong host. Prompt text, attachments and agent/output
+options cannot be combined with `[terminal]`.
+
+An app supplies its project directory for local terminals; remote launchers
+use the machine's configured default directory (home when unset). In a new
+terminal thread, replies send shell input, `stop` closes the shell and
+`[status]` reports its state. An ended shell requires another `[terminal]`
+request. A terminal requested in an existing agent thread opens separately,
+leaving that thread's agent conversation intact. Terminal mappings survive
+listener restarts without starting a transcript watcher.
 
 ### Agent selection
 
@@ -93,16 +136,40 @@ that thread's agent conversation intact.
      "send to running process"); multi-line Slack text is sent as one line
      (`⏎` between lines) because the TTY submits on newline;
    - session finished (`completed`/`failed`/`killed`) → `POST /:id/resume`
-     with the text as `additionalPrompt` (the input bar's explicit Resume). The
-     thread follows the new session; the reply links both.
+     with the text as `additionalPrompt` (the input bar's explicit Resume) and
+     the bot's TTY profile (`interactive-yolo`) pinned. The server continues
+     the agent's own conversation (`claude --resume <session>` /
+     `codex resume <thread>`), so the agent keeps its full context instead of
+     a re-typed task summary. The thread follows the new session; the reply
+     links both.
    There is no blanket kill-and-resume. A `waiting` session (permission prompt,
    AskUserQuestion) is announced once in the thread with the pending tool; a
    reply answers it through the same send-keys path (`y`, `1`, free text).
-4. Bot messages, message edits/deletes and other subtypes are ignored. Slack
+   **Prompts typed outside Slack** — in the admin terminal, the structured
+   view's input bar or a follow-up queue — appear in the transcript as user
+   turns the bot never sent. They are echoed into the thread in every output
+   mode as `👤 User asked outside Slack:` followed by the quoted prompt, so the
+   replies that follow are attributable, and they open a turn like a Slack
+   reply would (quiet mode delivers the final `<cos-reply>` for them too).
+   The bot remembers the prompts it sent per session (`sentPrompts` in the
+   delivery checkpoint) and matches transcript user turns against them, verbatim
+   or embedded in the server's dispatch/resume wrapper; harness-written user
+   envelopes (`<system-reminder>`, slash-command output, codex
+   `<environment_context>`, "Request interrupted") are never announced.
+4. Bot messages, message edits/deletes and other subtypes are ignored; a
+   message with attachments (subtype `file_share`) is a human request and is
+   delivered with its attachments (see "Attachments from Slack"). Slack
    retries and duplicate deliveries are dropped by `event_id` (persisted).
    Replies in threads the bot does not know about are ignored. DMs work without
    a mention; a flat DM is one conversation.
-5. Output is read only from the structured transcript
+5. **Idle pause.** A session with no activity for `IDLE_STOP_MS` (1 h) while
+   no turn is open is stopped (`POST /:id/kill`) and the thread is told
+   (`💤 Paused … Reply in this thread to resume it where it left off`). The
+   transcript stays on disk, so the next reply resumes the same conversation
+   through the native resume above; `[status]` shows `paused after 1 h idle —
+   reply to resume`. A turn still in progress is never paused. `stop` behaves
+   the same way on request (`stopped on request — reply to resume`).
+6. Output is read only from the structured transcript
    (`POST /:id/jsonl` with a cursor, the structured view's differential poll),
    parsed with the admin's own `JsonOutputParser` / `CodexOutputParser`.
    Terminal output is never scraped.
@@ -151,6 +218,29 @@ text are never uploaded. Rules:
   the installed app ever lacks it, the bot posts one explanation per thread
   and skips images instead of failing.
 
+### Attachments from Slack
+
+Files attached to a mention or a thread reply are passed to the session the
+same way the admin composer passes dropped files, so the agent sees them
+exactly as it would from the UI:
+
+- Each file is downloaded from Slack with the bot token (`files:read` scope).
+  PNG/JPEG/GIF/WebP count as screenshots; everything else is a file. Limit
+  20 MB per file; Slack posts, snippets, external and deleted files are
+  skipped with a note. Nothing is ever invented for a file that could not be
+  fetched — the thread is told which ones were skipped and why.
+- New request: screenshots are attached to the feedback item (`POST
+  /api/v1/feedback` multipart), so the dispatcher renders them into the
+  prompt and ships them to remote launchers; other files go through `POST
+  /api/v1/uploads` and are listed under "Attached files (read from these local
+  paths…)" with a download URL, exactly as the dispatch popup words it.
+- Reply in a thread: screenshots go through `POST /api/v1/screenshots` and
+  files through `POST /api/v1/uploads` for that session, and the paths/URLs are
+  appended to the text — one line for a live session (send-keys), a block for
+  a resume. An attachment with no text sends "See the attached file(s)."
+- Missing `files:read`: the text is still delivered and the thread is told
+  once that attachments cannot be read until the scope is added.
+
 ### Reliability
 
 - State file (`$STATE_DIRECTORY/amirobot-state.json`, dev: `packages/slack-bot/state/`)
@@ -166,9 +256,10 @@ text are never uploaded. Rules:
   acknowledgements never wait on dispatch, polling or posting.
 - Watchers poll every `POLL_MS` (4 s) while a turn is open, `IDLE_POLL_MS`
   (30 s) once idle — admin-side activity in the same session still reaches the
-  thread — and stop after `IDLE_STOP_MS` (6 h) of idleness; the next Slack reply
-  re-arms them. After 30 consecutive poll failures the thread is told and the
-  watcher stops.
+  thread — and after `IDLE_STOP_MS` (1 h) of idleness they stop the session
+  and pause the thread (see "Idle pause"); the next Slack reply resumes it. If
+  the stop itself fails the thread is told and only the watcher stops. After
+  30 consecutive poll failures the thread is told and the watcher stops.
 - Slack requests never bypass ProPanes access control: every call carries the
   listener's bearer token, so the bot sees and drives exactly what that user may.
 
@@ -178,8 +269,9 @@ Socket Mode on; event subscriptions: `app_mention`, `message.channels`,
 `message.groups`, `message.im`, `message.mpim` (thread replies without a
 mention arrive as `message` events). Bot token scopes: `app_mentions:read`,
 `chat:write`, `reactions:write`, `channels:history`, `groups:history`,
-`im:history`, `mpim:history`, and `files:write` for image uploads (all
-installed on the deployed workspace as of 2026-10-22). Adding a scope later
+`im:history`, `mpim:history`, `files:write` for image uploads and
+`files:read` to download attachments people share with the bot (all but
+`files:read` installed on the deployed workspace as of 2026-10-22). Adding a scope later
 requires reinstalling/reauthorizing the app in Slack, which only a workspace
 admin can do. Invite the bot to the channels where it should answer; channel
 membership decides who can launch work.
@@ -188,10 +280,12 @@ membership decides who can launch work.
 
 Keep credentials only in the ignored `packages/slack-bot/.env` (mode `0600`),
 never in the unit, repository or logs. Configure `PROPANES_URL` for the local
-API, `PROPANES_PUBLIC_URL` for operator-visible session links, `PROPANES_APP_ID`
-for the application, and `PROPANES_TOKEN` (an authorized ProPanes bearer token;
+API, `PROPANES_PUBLIC_URL` for operator-visible session links,
+`PROPANES_DEFAULT_APP` for the default application by name (`PROPANES_APP_ID` is
+the id fallback), and `PROPANES_TOKEN` (an authorized ProPanes bearer token;
 track its expiry). Optional: `AGENT_ENDPOINT_ID`, `POLL_MS`, `IDLE_POLL_MS`,
-`IDLE_STOP_MS`, `AMIROBOT_STATE_FILE`. The listener verifies API authentication
+`IDLE_STOP_MS`, `AMIROBOT_STATE_FILE`. The bot token also downloads Slack
+attachments. The listener verifies API authentication
 and lists which runtimes resolve before opening its socket.
 
 ```bash
@@ -219,8 +313,7 @@ transport and startup checks, not a full reply. For acceptance, send a harmless
 `@amirobot [help]` (no session) and then `@amirobot say hello and finish` in the
 intended channel: expect 👀, a session link, the agent's text in the thread, and
 `[status]` reporting the session. Synthetic tests cover option parsing, agent
-selection and persistence, app/infra matching and ambiguity, terminal creation
-and routing, help/status, the initial link, send-keys vs resume,
+selection and persistence, help/status, the initial link, send-keys vs resume,
 runtime switches, default/verbose/quiet delivery, final-tag parsing and
 fallbacks, image resolution/upload/scope errors, duplicates, concurrency and
 restart recovery without sending Slack messages or launching agents.

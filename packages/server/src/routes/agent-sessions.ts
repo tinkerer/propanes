@@ -23,11 +23,11 @@ import { storeUploads } from './uploads.js';
 import { listSessions, sendCommand } from '../sessions.js';
 import { getAdminUser, memberSessionScope, visibleToMember } from '../admin-auth.js';
 import { applyPrOverride, defaultRepoForSession, effectivePrUrls, normalizePrInput, parseUrlList } from '../pr-overrides.js';
+import { feedbackTagsSubquery, parseFeedbackTags } from '../session-source.js';
 import {
   computeJsonlPath,
   computeJsonlDir,
   resolveSessionJsonlPath,
-  findContinuationJsonlsCached,
   readJsonlWithSubagents,
   filterJsonlLines,
   extractArtifactPaths,
@@ -38,6 +38,7 @@ import {
   readJsonlFileDelta,
   type JsonlUnit,
 } from '../jsonl-utils.js';
+import { findContinuationJsonlsCached } from '../jsonl-continuations.js';
 
 // Resolve the JSONL path, falling back to session cwd when the app's projectDir doesn't match.
 // Fafo runs use a temp directory as cwd, so the JSONL file lives under that path, not the app's projectDir.
@@ -405,6 +406,11 @@ const sessionSelectFields = {
   lastActivityAt: schema.agentSessions.lastActivityAt,
   feedbackTitle: schema.feedbackItems.title,
   feedbackAppId: schema.feedbackItems.appId,
+  // Tags on the linked feedback row, comma-joined by SQLite. The Slack bridge
+  // tags every thread it dispatches `slack` + `amirobot`, which is how the
+  // admin tells an amirobot thread apart from a session someone dispatched by
+  // hand (session-source.ts).
+  feedbackTags: feedbackTagsSubquery(schema.agentSessions.feedbackId),
   agentName: schema.agentEndpoints.name,
   agentAppId: schema.agentEndpoints.appId,
   appProjectDir: schema.applications.projectDir,
@@ -521,6 +527,7 @@ async function enrichSessions(rows: SessionRow[]) {
       completedAt: r.completedAt,
       lastActivityAt: r.lastActivityAt,
       feedbackTitle: r.feedbackTitle || null,
+      feedbackTags: parseFeedbackTags(r.feedbackTags),
       agentName: r.agentName || null,
       title: r.title || null,
       prUrls: (() => {
@@ -644,7 +651,15 @@ agentSessionRoutes.get('/:id', async (c) => {
   }
 
   const prUrls = effectivePrUrls(session.prUrls, session.prUrlsAdded, session.prUrlsHidden);
-  return c.json({ ...session, prUrls: prUrls.length ? JSON.stringify(prUrls) : null });
+  const feedbackTags = session.feedbackId
+    ? parseFeedbackTags(
+      db.select({ tags: feedbackTagsSubquery(schema.feedbackItems.id) })
+        .from(schema.feedbackItems)
+        .where(eq(schema.feedbackItems.id, session.feedbackId))
+        .get()?.tags,
+    )
+    : null;
+  return c.json({ ...session, feedbackTags, prUrls: prUrls.length ? JSON.stringify(prUrls) : null });
 });
 
 // Correct the session's PR badges by hand: `{ add }` takes a PR URL,
@@ -994,7 +1009,7 @@ agentSessionRoutes.get('/:id/jsonl-files', async (c) => {
   const files = existsSync(jsonlPath)
     ? (isCodex
         ? [{ id: `main:${resolvedSessionId || basename(jsonlPath, '.jsonl')}`, claudeSessionId: resolvedSessionId || basename(jsonlPath, '.jsonl'), type: 'main' as const, label: `Codex: ${basename(jsonlPath)}`, filePath: jsonlPath, order: 0, parentSessionId: undefined, agentId: undefined }]
-        : listJsonlFiles(jsonlPath))
+        : listJsonlFiles(jsonlPath, findContinuationJsonlsCached))
     : [];
   return c.json({
     claudeSessionId: resolvedSessionId,
@@ -1221,7 +1236,7 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
   // Resolve the ordered list of physical files in merge order.
   let units: JsonlUnit[];
   if (fileFilter && !isCodex) {
-    const allFiles = listJsonlFiles(jsonlPath);
+    const allFiles = listJsonlFiles(jsonlPath, findContinuationJsonlsCached);
     const target = allFiles.find(f => f.id === fileFilter);
     if (!target) {
       if (isDifferential) return pendingDelta();
@@ -1239,7 +1254,7 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
     units = [{ key, path: target.filePath }];
   } else {
     // Merged view (codex always has just the one rollout file).
-    units = collectJsonlUnits(jsonlPath, isCodex);
+    units = collectJsonlUnits(jsonlPath, isCodex, findContinuationJsonlsCached);
   }
 
   // Differential mode: ship only bytes appended past the cursor's per-file
@@ -1555,7 +1570,7 @@ agentSessionRoutes.get('/:id/export-context', async (c) => {
   const effectiveProjectDir = computeJsonlPath(row.appProjectDir || process.cwd(), claudeSessionId) === jsonlPath
     ? (row.appProjectDir || process.cwd())
     : (row.session.cwd || row.appProjectDir || process.cwd());
-  const pkg = exportSessionFiles(effectiveProjectDir, claudeSessionId);
+  const pkg = exportSessionFiles(effectiveProjectDir, claudeSessionId, findContinuationJsonlsCached);
   const sanitized = effectiveProjectDir.replaceAll('/', '-').replaceAll('.', '-');
 
   return c.json({

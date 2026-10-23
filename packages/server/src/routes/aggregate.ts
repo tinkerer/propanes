@@ -16,9 +16,9 @@ import { dispatchAgentSession } from '../dispatch.js';
 import {
   computeJsonlPath as computeClaudeJsonlPath,
   computeCodexJsonlPath,
-  findContinuationJsonlsCached,
   readJsonlWithSubagents,
 } from '../jsonl-utils.js';
+import { findContinuationJsonlsCached } from '../jsonl-continuations.js';
 
 export const aggregateRoutes = new Hono();
 

@@ -24,14 +24,20 @@ export interface DeliveryCheckpoint {
   uploadedImages: string[];
   scopeWarned: boolean;
   lastActivityAt: number;
+  /** Transcript events stamped before this epoch-ms are never posted: a fresh
+   * session's first poll may still resolve to another session's transcript,
+   * and a resumed session continues the transcript the thread already saw. */
+  since?: number;
+  /** Prompts this listener sent to the session (Slack text, send-keys text,
+   * resume prompts), newest last. A transcript user turn matching none of
+   * them was typed outside Slack and is announced in the thread. */
+  sentPrompts?: string[];
 }
 
 export interface SessionLink { sessionId: string; runtime: Runtime; agentName: string; createdAt: string; }
 
 export interface ThreadRecord {
   kind?: 'terminal';
-  appId?: string;
-  targetLabel?: string;
   key: string;
   teamId: string;
   channel: string;
@@ -39,6 +45,14 @@ export interface ThreadRecord {
   threadTs: string | null;
   sessionId: string;
   feedbackId: string;
+  /** ProPanes application the thread's sessions run in (records from before
+   * app selection fall back to the configured default). */
+  appId?: string;
+  appName?: string;
+  /** Remote launcher the thread's sessions run on (`[infra:…]`); unset = this server.
+   * Continuations inherit it server-side (resume falls back to the parent's launcher). */
+  launcherId?: string;
+  infraName?: string;
   runtime: Runtime;
   agentEndpointId: string;
   agentName: string;
@@ -48,6 +62,11 @@ export interface ThreadRecord {
   history: SessionLink[];
   delivery: DeliveryCheckpoint;
   watching: boolean;
+  /** The thread was already told the bot cannot read Slack files (missing scope). */
+  filesReadWarned?: boolean;
+  /** The current session was stopped on purpose (idle timeout or `stop`) and
+   * the next reply resumes it; cleared once a continuation starts. */
+  paused?: { at: string; reason: 'idle' | 'stop'; sessionId: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -63,10 +82,11 @@ export function emptyState(): BotState {
   return { version: 1, threads: {}, runtimePrefs: {}, seenEvents: [] };
 }
 
-export function freshCheckpoint(now = Date.now()): DeliveryCheckpoint {
+export function freshCheckpoint(now = Date.now(), since?: number): DeliveryCheckpoint {
   return {
     cursor: 'init', delivered: [], turnOpen: true, turnTexts: [], lastStatus: null, lastInputState: null,
     idlePolls: 0, waitingNotified: false, uploadedImages: [], scopeWarned: false, lastActivityAt: now,
+    ...(since !== undefined ? { since } : {}),
   };
 }
 

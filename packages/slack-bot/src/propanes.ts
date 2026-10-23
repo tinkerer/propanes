@@ -1,5 +1,8 @@
 /** Authenticated API access; keep credentials out of URLs, errors and logs. */
 import type { AgentEndpointInfo } from './agents';
+import type { AppInfo } from './apps';
+import type { InfraList } from './infra';
+import type { DownloadedFile } from './attachments';
 import type { Runtime } from './options';
 
 export class PropanesApiError extends Error {
@@ -29,7 +32,8 @@ export function createPropanesFetch(
   const base = baseUrl.replace(/\/$/, '');
   const raw = async (path: string, opts?: RequestInit): Promise<Response> => {
     const headers = new Headers(opts?.headers);
-    if (!headers.has('Content-Type') && opts?.body) headers.set('Content-Type', 'application/json');
+    // Multipart bodies set their own boundary; only JSON strings get the header.
+    if (!headers.has('Content-Type') && typeof opts?.body === 'string') headers.set('Content-Type', 'application/json');
     headers.set('Authorization', `Bearer ${token.trim()}`);
     const response = await request(`${base}${path}`, {
       ...opts,
@@ -47,9 +51,6 @@ export function createPropanesFetch(
 }
 
 export type PropanesFetch = ReturnType<typeof createPropanesFetch>;
-
-export interface ApplicationInfo { id: string; name: string; }
-export interface InfraInfo { id: string; name: string; hostname?: string; online: boolean; }
 
 export interface SessionInfo {
   id: string;
@@ -78,11 +79,19 @@ export function isLive(status: string | null | undefined): boolean {
 /** The same backend operations the admin structured view uses. */
 export interface PropanesClient {
   me(): Promise<{ user: { id: string; username: string; role: string } }>;
-  listApplications(): Promise<ApplicationInfo[]>;
-  listInfra(): Promise<InfraInfo[]>;
   createTerminal(input: { appId?: string; launcherId?: string; cwd?: string; permissionProfile: 'plain' }): Promise<{ sessionId: string }>;
   listAgents(appId: string): Promise<AgentEndpointInfo[]>;
-  createFeedback(input: { title: string; description: string; appId: string; tags?: string[] }): Promise<{ id: string }>;
+  /** GET /api/v1/admin/applications — the registered projects a session can run in. */
+  listApplications(): Promise<AppInfo[]>;
+  /** GET /api/v1/admin/dispatch-targets — connected launchers/machines plus the server host (the dispatch popup's target list). */
+  listDispatchTargets(): Promise<InfraList>;
+  /** POST /api/v1/feedback — JSON, or multipart with `screenshots` when images are attached
+   * (the same shape the admin composer submits; screenshots render into the prompt). */
+  createFeedback(input: { title: string; description: string; appId: string; tags?: string[]; screenshots?: DownloadedFile[] }): Promise<{ id: string }>;
+  /** POST /api/v1/screenshots — InterruptBar's image attachments for a running session. */
+  uploadScreenshots(sessionId: string | undefined, images: DownloadedFile[], appId: string): Promise<{ screenshots: { id: string; filename: string; path: string }[] }>;
+  /** POST /api/v1/uploads — the composer's non-image file attachments. */
+  uploadFiles(sessionId: string | undefined, files: DownloadedFile[], appId: string): Promise<{ files: { id: string; filename: string; originalName: string; path: string }[] }>;
   /** POST /api/v1/admin/dispatch — what the admin dispatch popup calls. */
   dispatch(input: { feedbackId: string; agentEndpointId: string; instructions: string; permissionProfile: string; launcherId?: string }): Promise<{ sessionId: string }>;
   getSession(id: string): Promise<SessionInfo>;
@@ -99,19 +108,47 @@ export interface PropanesClient {
   fetchImage(path: string): Promise<{ bytes: Buffer; mime: string }>;
 }
 
+// Buffer is typed over ArrayBufferLike; Blob wants a plain ArrayBuffer view.
+const toBlob = (f: DownloadedFile) => new Blob([f.bytes as unknown as Uint8Array<ArrayBuffer>], { type: f.mime });
+
 export function createPropanesClient(api: PropanesFetch): PropanesClient {
   const post = (path: string, body: unknown) => api(path, { method: 'POST', body: JSON.stringify(body) });
   return {
     me: () => api('/api/v1/auth/me'),
-    listApplications: () => api('/api/v1/admin/applications'),
-    listInfra: async () => (await api('/api/v1/admin/launchers')).launchers,
     createTerminal: async (input) => {
       const result = await post('/api/v1/admin/terminal', input);
       if (!result?.sessionId) throw new Error('terminal did not return a session id');
       return { sessionId: result.sessionId };
     },
     listAgents: (appId) => api(`/api/v1/admin/agents?appId=${encodeURIComponent(appId)}`),
-    createFeedback: (input) => post('/api/v1/feedback', { type: 'manual', ...input }),
+    listDispatchTargets: async () => {
+      const r = await api('/api/v1/admin/dispatch-targets');
+      return { targets: Array.isArray(r?.targets) ? r.targets : [], localTarget: r?.localTarget ?? null };
+    },
+    listApplications: async () => {
+      const rows = await api('/api/v1/admin/applications');
+      return (Array.isArray(rows) ? rows : rows?.applications ?? []).map((a: any) => ({ id: a.id, name: a.name ?? a.id, projectDir: a.projectDir ?? null, description: a.description ?? null }));
+    },
+    createFeedback: (input) => {
+      const { screenshots, ...fields } = input;
+      if (!screenshots?.length) return post('/api/v1/feedback', { type: 'manual', ...fields });
+      const fd = new FormData();
+      fd.append('feedback', JSON.stringify({ type: 'manual', ...fields }));
+      for (const f of screenshots) fd.append('screenshots', toBlob(f), f.name);
+      return api('/api/v1/feedback', { method: 'POST', body: fd });
+    },
+    uploadScreenshots: (sessionId, images, appId) => {
+      const fd = new FormData();
+      for (const f of images) fd.append('screenshots', toBlob(f), f.name);
+      fd.append('meta', JSON.stringify({ sessionId, appId, sourceUrl: 'slack' }));
+      return api('/api/v1/screenshots', { method: 'POST', body: fd });
+    },
+    uploadFiles: (sessionId, files, appId) => {
+      const fd = new FormData();
+      for (const f of files) fd.append('files', toBlob(f), f.name);
+      fd.append('meta', JSON.stringify({ sessionId, appId, sourceUrl: 'slack' }));
+      return api('/api/v1/uploads', { method: 'POST', body: fd });
+    },
     dispatch: async (input) => {
       const result = await post('/api/v1/admin/dispatch', input);
       const sessionId = result?.sessionId ?? result?.id;

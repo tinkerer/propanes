@@ -1,7 +1,6 @@
 import { homedir } from 'node:os';
 import { resolve, join, basename, dirname, normalize, isAbsolute } from 'node:path';
 import { existsSync, readFileSync, readdirSync, openSync, readSync, closeSync, statSync } from 'node:fs';
-import { sqlite } from './db/index.js';
 
 export function computeJsonlDir(projectDir: string, homeDir = homedir()): string {
   const sanitized = projectDir.replaceAll('/', '-').replaceAll('.', '-');
@@ -128,6 +127,29 @@ export function computeCodexJsonlPath(
   return findRolloutByCwd(codexRoot, cwd, startedAt) || direct;
 }
 
+const ROLLOUT_ID_RE = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+
+/** The codex thread UUID embedded in a rollout filename
+ * (`rollout-2026-10-22T18-52-41-<uuid>.jsonl`), or null. */
+export function codexRolloutIdFromPath(rolloutPath: string | null): string | null {
+  if (!rolloutPath) return null;
+  const m = ROLLOUT_ID_RE.exec(basename(rolloutPath));
+  return m ? m[1].toLowerCase() : null;
+}
+
+/** The codex thread UUID a finished session can be continued from with
+ * `codex resume <id>`: its recorded rollout when we stashed one, otherwise the
+ * rollout that matches the session's cwd and start time. Null when no rollout
+ * can be attributed to the session (callers fall back to a context rebuild). */
+export function resolveCodexResumeId(
+  cwd: string | null,
+  codexSessionId: string | null,
+  startedAt?: string | null,
+  homeDir = homedir(),
+): string | null {
+  return codexRolloutIdFromPath(computeCodexJsonlPath(cwd, codexSessionId, startedAt, false, homeDir));
+}
+
 function findRolloutByCodexId(codexRoot: string, sessionId: string): string | null {
   // Scan year/month/day directories. Bounded by ~3 years of history; in
   // practice the file is in the past few days so we walk newest-first.
@@ -185,12 +207,21 @@ function findRolloutByCwd(codexRoot: string, cwd: string, startedAt?: string | n
   return candidates[0].path;
 }
 
+/** Clock slack between the session row's startedAt and codex's session_meta timestamp. */
+const ROLLOUT_START_TOLERANCE_MS = 15_000;
+
 function findRolloutsByCwd(codexRoot: string, cwd: string, startedAt?: string | null): { path: string; mtime: number }[] {
   // Search recent days around/after startedAt for rollouts whose session_meta.cwd
   // matches. Live Codex threads can rotate to a new rollout after /clear or
   // compaction, so callers may choose newest instead of closest-to-start.
   const startTs = startedAt ? Date.parse(startedAt) : Date.now();
   const startDate = isNaN(startTs) ? new Date() : new Date(startTs);
+  // A rollout recorded before this session started cannot be its own: codex
+  // writes session_meta a second or two after launch, and in that window the
+  // closest-in-time match used to be an older session in the same cwd, so the
+  // structured view (and anything following it) showed that session's
+  // transcript. Better to answer "no transcript yet" than someone else's.
+  const earliest = startedAt && !isNaN(startTs) ? startTs - ROLLOUT_START_TOLERANCE_MS : -Infinity;
   const candidates: { path: string; mtime: number }[] = [];
   const seenDays = new Set<string>();
 
@@ -218,6 +249,7 @@ function findRolloutsByCwd(codexRoot: string, cwd: string, startedAt?: string | 
         if (fileCwd !== cwd) continue;
         const ts = Date.parse(obj?.payload?.timestamp || obj?.timestamp || '');
         const mtime = isNaN(ts) ? statSync(filePath).mtimeMs : ts;
+        if (mtime < earliest) continue;
         candidates.push({ path: filePath, mtime });
       } catch { /* skip unreadable */ }
     }
@@ -282,87 +314,6 @@ export function findContinuationJsonls(mainJsonlPath: string): string[] {
   return chain;
 }
 
-// DB-backed continuation lookup — O(1) per hop instead of scanning all files.
-// Falls back to file scan if DB has no data, then populates DB.
-export function findContinuationJsonlsCached(mainJsonlPath: string): string[] {
-  const dir = dirname(mainJsonlPath);
-  const mainSessionId = basename(mainJsonlPath, '.jsonl');
-  const sanitized = dir.split('/').pop() || '';
-  // projectDir is the last two path components of the jsonl dir (projects/<sanitized>)
-  // but we store the sanitized dir name directly
-  const projectDir = sanitized;
-
-  const stmtQuery = sqlite.prepare(
-    'SELECT child_session_id FROM jsonl_continuations WHERE parent_session_id = ? AND project_dir = ?'
-  );
-
-  // Follow chain in DB
-  const chain: string[] = [];
-  const visited = new Set<string>();
-  let currentId = mainSessionId;
-
-  while (true) {
-    if (visited.has(currentId)) break;
-    visited.add(currentId);
-    const row = stmtQuery.get(currentId, projectDir) as { child_session_id: string } | undefined;
-    if (!row) break;
-    const childPath = join(dir, `${row.child_session_id}.jsonl`);
-    if (!existsSync(childPath)) break;
-    chain.push(childPath);
-    currentId = row.child_session_id;
-  }
-
-  // Even if DB had entries, try to extend the chain via file scan from the last known child.
-  // This catches new continuation files created since the DB was last populated.
-  const lastKnownId = chain.length > 0 ? basename(chain[chain.length - 1], '.jsonl') : mainSessionId;
-  const lastKnownPath = chain.length > 0 ? chain[chain.length - 1] : mainJsonlPath;
-
-  // Only do a file scan if the last known file exists (session is likely still active)
-  if (existsSync(lastKnownPath)) {
-    const extended = findContinuationJsonls(lastKnownPath);
-    if (extended.length > 0) {
-      storeJsonlContinuations(lastKnownId, projectDir, extended);
-      chain.push(...extended);
-    }
-  }
-
-  if (chain.length > 0) return chain;
-
-  // DB had nothing — fall back to full file scan and populate
-  const scanned = findContinuationJsonls(mainJsonlPath);
-  if (scanned.length > 0) {
-    storeJsonlContinuations(mainSessionId, projectDir, scanned);
-  }
-  return scanned;
-}
-
-// Store continuation relationships in DB from a scanned chain
-function storeJsonlContinuations(mainSessionId: string, projectDir: string, chain: string[]): void {
-  const stmtInsert = sqlite.prepare(
-    'INSERT OR IGNORE INTO jsonl_continuations (child_session_id, parent_session_id, project_dir, discovered_at) VALUES (?, ?, ?, ?)'
-  );
-  const now = new Date().toISOString();
-  let parentId = mainSessionId;
-  for (const filePath of chain) {
-    const childId = basename(filePath, '.jsonl');
-    stmtInsert.run(childId, parentId, projectDir, now);
-    parentId = childId;
-  }
-}
-
-// Detect continuation chain for a session and store in DB.
-// Called on session end and during startup backfill.
-export function detectAndStoreJsonlContinuations(claudeSessionId: string, projectDir: string): void {
-  const jsonlPath = computeJsonlPath(projectDir, claudeSessionId);
-  if (!existsSync(jsonlPath)) return;
-
-  const sanitizedDir = computeJsonlDir(projectDir).split('/').pop() || '';
-  const chain = findContinuationJsonls(jsonlPath);
-  if (chain.length > 0) {
-    storeJsonlContinuations(claudeSessionId, sanitizedDir, chain);
-  }
-}
-
 export function filterJsonlLines(text: string): string[] {
   return text.split('\n').filter(line => {
     if (!line.trim()) return false;
@@ -423,16 +374,17 @@ export function jsonlCursorNeedsReset(
   return Object.keys(offsets).some((key) => !unitKeys.has(key));
 }
 
-export function collectJsonlUnits(mainJsonlPath: string, isCodex: boolean, useContinuationCache = true): JsonlUnit[] {
+export function collectJsonlUnits(
+  mainJsonlPath: string,
+  isCodex: boolean,
+  findContinuations: (mainJsonlPath: string) => string[] = findContinuationJsonls,
+): JsonlUnit[] {
   const baseDir = dirname(mainJsonlPath);
   const toKey = (p: string) => p.startsWith(baseDir + '/') ? p.slice(baseDir.length + 1) : p;
   if (isCodex) {
     return existsSync(mainJsonlPath) ? [{ key: toKey(mainJsonlPath), path: mainJsonlPath }] : [];
   }
-  const continuations = useContinuationCache
-    ? findContinuationJsonlsCached(mainJsonlPath)
-    : findContinuationJsonls(mainJsonlPath);
-  const files = [mainJsonlPath, ...continuations];
+  const files = [mainJsonlPath, ...findContinuations(mainJsonlPath)];
   const units: JsonlUnit[] = [];
   for (const fp of files) {
     if (!existsSync(fp)) continue;
@@ -496,7 +448,10 @@ export interface JsonlFileInfo {
 }
 
 // List all JSONL files for a session: main + continuations + subagents
-export function listJsonlFiles(mainJsonlPath: string, useContinuationCache = true): JsonlFileInfo[] {
+export function listJsonlFiles(
+  mainJsonlPath: string,
+  findContinuations: (mainJsonlPath: string) => string[] = findContinuationJsonls,
+): JsonlFileInfo[] {
   const files: JsonlFileInfo[] = [];
   const mainSessionId = basename(mainJsonlPath, '.jsonl');
   let order = 0;
@@ -514,10 +469,7 @@ export function listJsonlFiles(mainJsonlPath: string, useContinuationCache = tru
     order = files.length;
   }
 
-  const continuations = useContinuationCache
-    ? findContinuationJsonlsCached(mainJsonlPath)
-    : findContinuationJsonls(mainJsonlPath);
-  for (const contPath of continuations) {
+  for (const contPath of findContinuations(mainJsonlPath)) {
     const contId = basename(contPath, '.jsonl');
     files.push({
       id: `cont:${contId}`,
@@ -625,7 +577,11 @@ export interface SessionFilePackage {
 }
 
 // Package all session JSONL files (main + continuations + subagents) and artifact files for export
-export function exportSessionFiles(projectDir: string, claudeSessionId: string): SessionFilePackage {
+export function exportSessionFiles(
+  projectDir: string,
+  claudeSessionId: string,
+  findContinuations: (mainJsonlPath: string) => string[] = findContinuationJsonls,
+): SessionFilePackage {
   const jsonlPath = computeJsonlPath(projectDir, claudeSessionId);
   const jsonlDir = computeJsonlDir(projectDir);
   const jsonlFiles: Array<{ relativePath: string; content: string }> = [];
@@ -640,9 +596,7 @@ export function exportSessionFiles(projectDir: string, claudeSessionId: string):
     collectSubagentFiles(jsonlDir, claudeSessionId, jsonlFiles);
   }
 
-  // Find and include continuation chain (DB-backed, falls back to file scan)
-  const continuations = findContinuationJsonlsCached(jsonlPath);
-  for (const contPath of continuations) {
+  for (const contPath of findContinuations(jsonlPath)) {
     const relPath = contPath.startsWith(jsonlDir)
       ? contPath.slice(jsonlDir.length + 1)
       : basename(contPath);

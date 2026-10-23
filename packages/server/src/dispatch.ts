@@ -28,7 +28,8 @@ import { getLauncher, addSessionToLauncher, sendAndWait } from './launcher-regis
 import { feedbackEvents } from './events.js';
 import { getSession } from './sessions.js';
 import { inputSessionRemote, sendKeysSessionRemote } from './session-service-client.js';
-import { extractArtifactPaths, exportSessionFiles } from './jsonl-utils.js';
+import { extractArtifactPaths, exportSessionFiles, resolveCodexResumeId } from './jsonl-utils.js';
+import { findContinuationJsonlsCached } from './jsonl-continuations.js';
 import { launchSpriteSession } from './sprite-sessions.js';
 import { createWorktreeIsolate, type Isolate } from './isolates.js';
 import { beginUsage } from './metering.js';
@@ -1008,6 +1009,11 @@ export async function dispatchTerminalSession(params: {
   const profile: PermissionProfile = params.permissionProfile || 'plain';
 
   const launcher = params.launcherId ? getLauncher(params.launcherId) : undefined;
+  // A named launcher that isn't connected must not silently fall back to a
+  // shell on this server — the user asked for a terminal on another machine.
+  if (params.launcherId && launcher?.ws?.readyState !== 1) {
+    throw new Error(`Launcher ${params.launcherId} is not connected`);
+  }
 
   // Default the title to "<app-slug>-XXXXXX" so sidebar tabs read like
   // "propanes-admin-FT94P6" instead of a bare ULID. Caller-supplied title
@@ -1321,6 +1327,51 @@ export async function resumeAgentSession(
       if (shouldAutoContinue) scheduleAutoContinueForYoloResume(sessionId, null);
     }
 
+    return { sessionId };
+  }
+
+  // Codex keeps its transcript in a rollout file keyed by a thread UUID; when
+  // that rollout can be attributed to the parent, continue it natively with
+  // `codex resume <id>` (same context restoration as claude's --resume). The
+  // new row records the rollout id so transcript lookups hit it directly.
+  const codexResumeId = runtime === 'codex' && parent.runtime === 'codex'
+    ? resolveCodexResumeId(parent.cwd, parent.claudeSessionId, parent.startedAt)
+    : null;
+  if (codexResumeId) {
+    db.insert(schema.agentSessions)
+      .values({
+        id: sessionId,
+        feedbackId: parent.feedbackId,
+        agentEndpointId: parent.agentEndpointId,
+        cosThreadId: parent.cosThreadId,
+        parentSessionId,
+        runtime,
+        permissionProfile,
+        status: 'pending',
+        outputBytes: 0,
+        claudeSessionId: codexResumeId,
+        launcherId: launcher ? launcher.id : null,
+        cwd,
+        ownerUserId: parent.ownerUserId ?? null,
+        orgId: parent.orgId ?? null,
+        createdAt: now,
+      })
+      .run();
+    const resumePrompt = additionalPrompt ? additionalPrompt.trim() : '';
+    const params = { prompt: resumePrompt, cwd, runtime, permissionProfile, resumeSessionId: codexResumeId };
+    if (launcher && launcher.ws.readyState === 1) {
+      const msg: LaunchSession = { type: 'launch_session', sessionId, ...params, cols: ptyColsForProfile(permissionProfile), rows: 40 };
+      try {
+        launcher.ws.send(JSON.stringify(msg));
+        addSessionToLauncher(launcher.id, sessionId);
+        console.log(`[dispatch] Sent codex resume ${sessionId} (thread ${codexResumeId}) to launcher ${launcher.id}`);
+      } catch (err) {
+        console.error(`[dispatch] Failed to send codex resume to launcher, falling back to local:`, err);
+        spawnLocal(sessionId, params).catch(() => {});
+      }
+    } else {
+      spawnLocal(sessionId, params).catch(() => {});
+    }
     return { sessionId };
   }
 
@@ -1692,7 +1743,7 @@ async function doTransfer(transfer: TransferState, targetCwd?: string): Promise<
     }
   } else {
     // Source is local — use shared export utility
-    const pkg = exportSessionFiles(projectDir, claudeSessionId);
+    const pkg = exportSessionFiles(projectDir, claudeSessionId, findContinuationJsonlsCached);
     jsonlFiles = pkg.jsonlFiles;
     artifactFiles = pkg.artifactFiles;
   }

@@ -11,7 +11,7 @@ import {
 } from './session-service-client.js';
 import { getLauncher, listLaunchers } from './launcher-registry.js';
 import { updateFeedbackOnSessionEnd } from './feedback-status.js';
-import { detectAndStoreJsonlContinuations } from './jsonl-utils.js';
+import { detectAndStoreJsonlContinuations } from './jsonl-continuations.js';
 import { sendInputToSprite, killSpriteSession, isSpriteSession } from './sprite-sessions.js';
 
 // Maps admin WS → upstream target (either session-service WS or launcher info)

@@ -59,7 +59,8 @@ import { loadCosDispatches, cosGroupForSession } from '../../lib/cos-dispatches.
 import { chiefOfStaffAgents, chiefOfStaffActiveId, ensureChiefOfStaffAgent, loadChiefOfStaffHistory, setChiefOfStaffOpen } from '../../lib/chief-of-staff.js';
 import { cosActiveThread } from '../../lib/cos-popout-tree.js';
 import { getSessionIdForThread } from '../../lib/cos-thread-meta.js';
-import { PrBadges, RuntimeBadge, parsePrUrls } from '../PrBadges.js';
+import { PrBadges, RuntimeBadge, SourceBadge, parsePrUrls } from '../PrBadges.js';
+import { isSlackSession } from '../../lib/session-source.js';
 
 const autoJumpMenuOpen = signal(false);
 
@@ -396,6 +397,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
               {sessionSearchQuery.value ? highlightMatch(raw, sessionSearchQuery.value) : raw}
             </span>
           )}
+          {!opts?.hideBadges && <SourceBadge session={s} />}
           {!opts?.hideBadges && <RuntimeBadge runtime={s.runtime} permissionProfile={s.permissionProfile} />}
           {!opts?.hideBadges && <PrBadges prUrls={s.prUrls} compact />}
           <button
@@ -683,6 +685,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                   .filter((c) => c.permissionProfile !== 'plain' && (c.runtime || c.permissionProfile))
                   .map((c) => (c.runtime === 'codex' ? 'codex' : 'claude')))];
                 const threadPrUrls = threadChildren.flatMap((c) => parsePrUrls(c.prUrls));
+                const threadFromSlack = threadChildren.some(isSlackSession);
                 out.push(
                   <div
                     key={`cos-thread-${tid}`}
@@ -765,6 +768,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                   >
                     <span class="sidebar-cos-thread-divider-label">{link?.name || 'Thread'}</span>
                     <span class="sidebar-cos-thread-divider-badges">
+                      <SourceBadge slack={threadFromSlack} />
                       {threadRuntimes.map((rt) => <RuntimeBadge key={rt} runtime={rt} />)}
                       <PrBadges prUrls={threadPrUrls} compact />
                     </span>

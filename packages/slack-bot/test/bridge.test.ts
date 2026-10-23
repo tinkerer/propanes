@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SlackBridge } from '../src/bridge';
+import { SlackFileAccessError } from '../src/attachments';
 import { StateRepo } from '../src/state';
-import { fixture, line, mention, sessionUrl, threadReply, agents, APP, PUBLIC } from './helpers';
+import { fixture, line, mention, sessionUrl, stamped, threadReply, agents, APP, PUBLIC } from './helpers';
 
 test('help and status reply in the thread and never dispatch work', async () => {
   const f = fixture();
@@ -343,49 +344,379 @@ test('the bridge is constructed with the public URL from config', () => {
   assert.equal(APP, 'app-1');
 });
 
-test('approximate app and infra names route feedback and dispatch to resolved IDs', async () => {
+const png = { name: 'shot.png', mime: 'image/png', bytes: Buffer.from('89504e470d0a1a0a', 'hex') };
+const log = { name: 'build.log', mime: 'text/plain', bytes: Buffer.from('error: boom') };
+const fileInfo = (id: string, name: string, mimetype: string, size = 100) => ({ id, name, mimetype, size, url_private_download: `https://files.slack.test/${id}` });
+
+test('attachments on a new request become feedback screenshots and uploaded files the prompt names', async () => {
   const f = fixture();
-  await f.bridge.handleEvent(mention('[app:storfront infra:macbok] fix it'));
+  f.world.slackFiles.set('F1', png);
+  f.world.slackFiles.set('F2', log);
+  await f.bridge.handleEvent(mention('why does this fail?', { subtype: 'file_share', files: [fileInfo('F1', 'shot.png', 'image/png'), fileInfo('F2', 'build.log', 'text/plain')] }));
   await f.bridge.drain();
-  assert.deepEqual(f.world.agentAppIds, ['app-2']);
-  assert.equal(f.world.feedbackInputs[0].appId, 'app-2');
-  assert.equal(f.world.dispatchInputs[0].launcherId, 'mac-1');
-  assert.match(f.slack.texts()[0], /Storefront.*Amir MacBook/);
+  assert.ok(f.world.calls.includes('feedback:Slack: why does this fail?:screenshots=shot.png'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('upload-files:none:build.log'));
+  const instructions = f.world.calls.find((c) => c.startsWith('instructions:'))!;
+  assert.match(instructions, /Attached files \(read from these local paths if you are on the server host\):\n- \/tmp\/up-build\.log \(download: https:\/\/propanes\.example\.test\/api\/v1\/uploads\/UP1\)/);
+  assert.match(f.slack.texts()[0], /📎 2 attachments passed to the session/);
+});
+
+test('attachments in a running thread are staged for that session and referenced in the send-keys text', async () => {
+  const f = fixture();
+  f.world.slackFiles.set('F1', png);
+  f.world.slackFiles.set('F2', log);
+  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('compare with this', { subtype: 'file_share', files: [fileInfo('F1', 'shot.png', 'image/png'), fileInfo('F2', 'build.log', 'text/plain')] }));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('upload-screenshots:S1:shot.png'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('upload-files:S1:build.log'));
+  const sent = f.world.calls.find((c) => c.startsWith('send-keys:S1:compare'))!;
+  assert.equal(sent, 'send-keys:S1:compare with this Attached screenshots: /tmp/sc-shot.png (GET https://propanes.example.test/api/v1/screenshots/SC1) · Attached files: /tmp/up-build.log (download: https://propanes.example.test/api/v1/uploads/UP1)');
+});
+
+test('attachments for a finished session ride along on the explicit resume prompt', async () => {
+  const f = fixture();
+  f.world.slackFiles.set('F2', log);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  await f.bridge.handleEvent(threadReply('see log', { subtype: 'file_share', files: [fileInfo('F2', 'build.log', 'text/plain')] }));
+  await f.bridge.drain();
+  const resume = f.world.calls.find((c) => c.startsWith('resume:S1:'))!;
+  assert.match(resume, /^resume:S1:inherit:see log\n\nAttached files \(read from these local paths if you are on the server host\):\n- \/tmp\/up-build\.log \(download: /);
+});
+
+test('an attachment-only message asks the session to look at the file', async () => {
+  const f = fixture();
+  f.world.slackFiles.set('F1', png);
+  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('', { subtype: 'file_share', files: [fileInfo('F1', 'shot.png', 'image/png')] }));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.some((c) => c.startsWith('send-keys:S1:See the attached file(s). Attached screenshots: /tmp/sc-shot.png')), f.world.calls.join('|'));
+});
+
+test('a missing files:read scope is explained once per thread and the text still goes through', async () => {
+  const f = fixture();
+  f.world.slackFiles.set('F1', new SlackFileAccessError('missing_scope', 'sign-in page'));
+  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('first', { subtype: 'file_share', files: [fileInfo('F1', 'shot.png', 'image/png')] }));
+  await f.bridge.handleEvent(threadReply('second', { subtype: 'file_share', files: [fileInfo('F1', 'shot.png', 'image/png')] }));
+  await f.bridge.drain();
+  assert.equal(f.slack.texts().filter((t) => t.includes('files:read')).length, 1);
+  assert.ok(f.world.calls.includes('send-keys:S1:first') && f.world.calls.includes('send-keys:S1:second'), f.world.calls.join('|'));
+  assert.ok(!f.world.calls.some((c) => c.startsWith('upload')), 'nothing staged, no path invented');
+});
+
+test('oversized, undownloadable and failed attachments are reported, never fabricated', async () => {
+  const f = fixture();
+  f.world.slackFiles.set('F3', new SlackFileAccessError('http_error', 'download failed (500)'));
+  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('look', { subtype: 'file_share', files: [
+    fileInfo('F1', 'huge.zip', 'application/zip', 50 * 1024 * 1024),
+    { id: 'F2', name: 'post', mimetype: 'application/vnd.slack-docs' },
+    fileInfo('F3', 'flaky.txt', 'text/plain'),
+  ] }));
+  await f.bridge.drain();
+  const note = f.slack.texts().find((t) => t.startsWith('📎'))!;
+  assert.match(note, /skipped huge\.zip: 50\.0 MB exceeds the 20 MB limit/);
+  assert.match(note, /skipped post: not downloadable/);
+  assert.match(note, /could not download flaky\.txt: download failed \(500\)/);
+  assert.ok(f.world.calls.includes('send-keys:S1:look'));
+  assert.ok(!f.world.calls.some((c) => c.startsWith('upload')));
+});
+
+test('without a configured downloader attachments are announced as not forwarded; other subtypes stay ignored', async () => {
+  const f = fixture({ noDownloader: true });
+  f.steps.push(() => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('here', { subtype: 'file_share', files: [fileInfo('F1', 'a.txt', 'text/plain')] }));
+  await f.bridge.handleEvent(threadReply('edited text', { subtype: 'message_changed' }));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().find((t) => t.startsWith('📎'))!, /1 attachment not forwarded/);
+  assert.ok(f.world.calls.includes('send-keys:S1:here'));
+  assert.ok(!f.world.calls.some((c) => c.includes('edited text')));
+});
+
+test('a session idle for IDLE_STOP_MS is stopped and the thread is told how to resume it', async () => {
+  const f = fixture({ config: { idleStopMs: 3_600_000 } });
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(line.assistant('Done for now.')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined, // second idle poll finishes the turn
+    () => { f.clock.now += 3_600_001; }, // nothing happened for over an hour
+    () => undefined,
+  );
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('kill:S1'), f.world.calls.join('|'));
+  assert.equal(f.world.session('S1').status, 'killed');
+  const pause = f.slack.texts().find((t) => t.startsWith('💤 Paused'))!;
+  assert.ok(pause.includes(sessionUrl('S1')) && /after 1 h without activity/.test(pause) && /Reply in this thread to resume/.test(pause), pause);
+  const repo = new StateRepo(f.store);
+  const rec = repo.getThread('T1:C1:100.000')!;
+  assert.equal(rec.watching, false);
+  assert.deepEqual({ reason: rec.paused?.reason, sessionId: rec.paused?.sessionId }, { reason: 'idle', sessionId: 'S1' });
+
+  await f.bridge.handleEvent(threadReply('[status]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /paused after 1 h idle — reply to resume/);
+
+  // The next reply resumes the same conversation natively, keeping the TTY profile.
+  await f.bridge.handleEvent(threadReply('pick it back up'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('resume:S1:inherit:pick it back up'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('resume-profile:S1:interactive-yolo'), f.world.calls.join('|'));
+  const resumed = f.slack.texts().find((t) => t.startsWith('▶️ Resuming'))!;
+  assert.ok(resumed.includes(sessionUrl('S1')) && resumed.includes(sessionUrl('S2')) && /conversation restored/.test(resumed), resumed);
+  const after = new StateRepo(f.store).getThread('T1:C1:100.000')!;
+  assert.equal(after.sessionId, 'S2');
+  assert.equal(after.paused, undefined);
+  assert.deepEqual(after.history.map((h) => h.sessionId), ['S1', 'S2']);
+});
+
+test('a turn still in progress is never paused, however long it runs', async () => {
+  const f = fixture({ config: { idleStopMs: 60_000 } });
+  f.steps.push(
+    () => { f.clock.now += 61_000; },
+    () => { f.clock.now += 61_000; f.world.session('S1').lines.push(line.toolUse('Bash', { command: 'pnpm test' }, 't1')); },
+    () => { f.clock.now += 61_000; },
+  );
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  assert.ok(!f.world.calls.some((c) => c.startsWith('kill')), f.world.calls.join('|'));
+  assert.ok(!f.slack.texts().some((t) => t.startsWith('💤')), f.slack.texts().join('|'));
+  assert.equal(f.world.session('S1').status, 'completed');
+});
+
+test('an idle session that cannot be stopped is reported and merely unwatched', async () => {
+  const f = fixture({ config: { idleStopMs: 60_000 } });
+  f.world.propanes.kill = async (id) => { f.world.calls.push(`kill:${id}`); throw new Error('Propanes kill → 503'); };
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(line.assistant('Done for now.')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined,
+    () => { f.clock.now += 61_000; },
+    () => undefined,
+  );
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('kill:S1'));
+  assert.ok(f.slack.texts().some((t) => /could not be stopped/.test(t) && /stopped following it/.test(t)), f.slack.texts().join('|'));
   const rec = new StateRepo(f.store).getThread('T1:C1:100.000')!;
-  assert.equal(rec.appId, 'app-2');
-  await f.bridge.handleEvent(threadReply('[codex] try again'));
-  await f.bridge.drain();
-  assert.equal(f.world.agentAppIds.at(-1), 'app-2');
+  assert.equal(rec.watching, false);
+  assert.equal(rec.paused, undefined);
 });
 
-test('ambiguous or unknown app and infra selectors create no feedback or session', async () => {
-  for (const [input, pattern] of [
-    ['[app:store] fix', /Ambiguous app.*app-2.*app-3/],
-    ['[infra:mac] fix', /Ambiguous infra.*mac-1.*mac-2/],
-    ['[app:missing] fix', /No app matches/],
-    ['[infra:missing terminal]', /No infra matches/],
-  ] as const) {
-    const f = fixture();
-    f.world.apps.push({ id: 'app-3', name: 'Storefront Dev' });
-    f.world.infra.push({ id: 'mac-2', name: 'Mac Mini', hostname: 'mini.local', online: true });
-    await f.bridge.handleEvent(mention(input));
-    await f.bridge.drain();
-    assert.match(f.slack.texts()[0], pattern);
-    assert.deepEqual(f.world.calls, []);
-  }
-});
-
-test('offline infra is explained without dispatching or silently using local infra', async () => {
+test('`stop` keeps the conversation and a later reply resumes it with the pinned profile', async () => {
   const f = fixture();
-  f.world.infra[0].online = false;
-  await f.bridge.handleEvent(mention('[infra:macbook terminal]'));
-  assert.deepEqual(f.world.calls, []);
-  assert.match(f.slack.texts()[0], /offline/);
+  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('stop'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('kill:S1'));
+  assert.match(f.slack.texts().find((t) => t.startsWith('🛑'))!, /conversation is kept/);
+  await f.bridge.handleEvent(threadReply('[status]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /stopped on request — reply to resume/);
+  await f.bridge.handleEvent(threadReply('continue please'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('resume:S1:inherit:continue please'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('resume-profile:S1:interactive-yolo'));
+  assert.ok(f.slack.texts().some((t) => /▶️ Resuming .*stopped earlier on request/.test(t)), f.slack.texts().join('|'));
+});
+
+test('transcript lines written before the session started are never posted (another session\'s transcript)', async () => {
+  const f = fixture();
+  f.clock.now = Date.parse('2026-10-22T20:38:59Z');
+  // First poll answers with a neighbour's rollout from hours earlier; the real one appears next poll.
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(stamped(line.assistant('I will describe the OLD image'), '2026-10-22T18:47:10Z'), stamped(line.toolUse('exec', { cmd: 'view_image' }, 'old-1'), '2026-10-22T18:47:11Z')); },
+    () => { f.world.session('S1').lines.push(stamped(line.assistant('Connecting to the Mac now.'), '2026-10-22T20:39:05Z')); },
+    () => undefined,
+  );
+  await f.bridge.handleEvent(mention('[verbose] build the app on the mac'));
+  await f.bridge.drain();
+  const texts = f.slack.texts();
+  assert.ok(!texts.some((t) => /OLD image|view_image/.test(t)), texts.join('|'));
+  assert.ok(texts.some((t) => /Connecting to the Mac now/.test(t)), texts.join('|'));
+});
+
+test('a resumed session does not re-post the conversation the thread already saw', async () => {
+  const f = fixture();
+  f.clock.now = Date.parse('2026-10-22T10:00:00Z');
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(stamped(line.assistant('First answer.'), '2026-10-22T10:00:05Z')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined,
+    () => { f.world.session('S1').status = 'completed'; },
+  );
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  assert.equal(f.slack.texts().filter((t) => /First answer/.test(t)).length, 1);
+
+  f.clock.now = Date.parse('2026-10-22T12:00:00Z');
+  f.steps.push(
+    // The continuation serves the whole transcript again (same file), then appends the new turn.
+    () => { f.world.latest().lines.push(...f.world.session('S1').lines, stamped(line.assistant('Second answer.'), '2026-10-22T12:00:07Z')); f.world.latest().inputState = 'idle'; },
+    () => undefined,
+    () => { f.world.latest().status = 'completed'; },
+  );
+  await f.bridge.handleEvent(threadReply('go on'));
+  await f.bridge.drain();
+  const texts = f.slack.texts();
+  assert.equal(texts.filter((t) => /First answer/.test(t)).length, 1, texts.join('|'));
+  assert.equal(texts.filter((t) => /Second answer/.test(t)).length, 1, texts.join('|'));
+});
+
+test('a prompt typed in the ProPanes UI is echoed as "User asked outside Slack"; Slack-sent and harness prompts are not', async () => {
+  const f = fixture();
+  f.steps.push(
+    // The server's dispatch prompt wraps the Slack text; the TTY echoes a send-keys reply as one line.
+    () => { f.world.session('S1').lines.push(line.user('# Feedback: start\n\nreview the PR\nand the tests\n\n[SLACK THREAD]\n…'), line.assistant('On it.')); },
+    () => undefined,
+    () => { f.world.session('S1').lines.push(line.user('also check\nthe docs'), line.user('<system-reminder>\nhook output\n</system-reminder>')); },
+    () => { f.world.session('S1').lines.push(line.user('fix the lint errors too'), line.assistant('Fixing lint.')); },
+    () => undefined,
+    () => undefined,
+  );
+  await f.bridge.handleEvent(mention('review the PR\nand the tests'));
+  await f.bridge.handleEvent(threadReply('also check\nthe docs'));
+  await f.bridge.drain();
+  const texts = f.slack.texts();
+  const notices = texts.filter((t) => t.includes('User asked outside Slack'));
+  assert.deepEqual(notices, ['👤 _User asked outside Slack:_\n> fix the lint errors too\n\nFixing lint.'], texts.join('|'));
+  assert.ok(!texts.some((t) => /hook output|review the PR/.test(t) && t.includes('outside')), texts.join('|'));
+});
+
+test('an outside prompt reopens the turn so quiet mode delivers its final answer', async () => {
+  const f = fixture();
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(line.assistant('<cos-reply>First done.</cos-reply>')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined,
+    () => undefined,
+    () => { f.world.session('S1').lines.push(line.user('now the second thing'), line.assistant('<cos-reply>Second done.</cos-reply>')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined,
+    () => undefined,
+    () => { f.world.session('S1').status = 'completed'; },
+  );
+  await f.bridge.handleEvent(mention('[quiet] start'));
+  await f.bridge.drain();
+  const texts = f.slack.texts();
+  const i1 = texts.findIndex((t) => /First done/.test(t));
+  const i2 = texts.findIndex((t) => /now the second thing/.test(t));
+  const i3 = texts.findIndex((t) => /Second done/.test(t));
+  assert.ok(i1 >= 0 && i2 > i1 && i3 > i2, texts.join('|'));
+  assert.ok(texts[i2].includes('User asked outside Slack'), texts[i2]);
+});
+
+test('[app:<name>] runs the request in that application; the reply and status name it', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[claude, app:storefront] add a dark theme toggle'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('feedback-app:app-sc'), f.world.calls.join('|'));
+  assert.match(f.slack.texts()[0], /\*app\* Storefront/);
+  await f.bridge.handleEvent(threadReply('[status]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /\*app\* Storefront/);
+});
+
+test('an ambiguous or unknown application gets a clarifying list and nothing is started', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[app:rep] fix the chart'));
+  await f.bridge.drain();
+  let t = f.slack.texts().at(-1)!;
+  assert.match(t, /matches 2 applications/);
+  assert.ok(t.includes('*Reports*') && t.includes('*Reports Staging*'), t);
+  await f.bridge.handleEvent(mention('[app:nope] fix the chart', { ts: '101.000' }));
+  await f.bridge.drain();
+  t = f.slack.texts().at(-1)!;
+  assert.match(t, /No application matches `app:nope`/);
+  assert.ok(t.includes('*Atlas*'), t);
+  assert.equal(f.world.sessions.size, 0);
+  assert.ok(!f.world.calls.some((c) => c.startsWith('feedback') || c.startsWith('dispatch')), f.world.calls.join('|'));
+});
+
+test('[list-apps] lists the applications with the default marked; the default comes from config by name', async () => {
+  const f = fixture({ config: { defaultApp: 'atlas' } });
+  await f.bridge.handleEvent(mention('[list-apps]'));
+  await f.bridge.drain();
+  const t = f.slack.texts().at(-1)!;
+  assert.match(t, /\*Applications\* \(5\)/);
+  assert.match(t, /\*Atlas\*.*_\(default\)_/);
+  assert.equal(f.world.sessions.size, 0);
+  await f.bridge.handleEvent(mention('review the login flow', { ts: '102.000' }));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('feedback-app:app-atlas'), f.world.calls.join('|'));
+  assert.match(f.slack.texts().find((x) => x.includes('Session started'))!, /\*app\* Atlas/);
+  await f.bridge.handleEvent(mention('[help]', { ts: '103.000' }));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /default: \*Atlas\*[\s\S]*\[list-apps\]/);
+});
+
+test('an application cannot change inside a thread; the message is held back', async () => {
+  const f = fixture();
+  f.steps.push(() => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('[app:atlas] start'));
+  await f.bridge.handleEvent(threadReply('[app:storefront] now do it there'));
+  await f.bridge.handleEvent(threadReply('[app:atlas] same app is fine'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().find((x) => x.includes('cannot change mid-thread'))!, /runs in \*Atlas\*[\s\S]*not sent/);
+  assert.ok(!f.world.calls.some((c) => c.includes('now do it there')), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('send-keys:S1:same app is fine'), f.world.calls.join('|'));
+  assert.equal(f.world.sessions.size, 1);
+});
+
+test('[infra:<name>] dispatches to that launcher; the reply and status name it; continuations stay there', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[codex, app:propanes, infra:laptop] build the app'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('dispatch-infra:laptop-1'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('feedback-app:app-1'), f.world.calls.join('|'));
+  assert.match(f.slack.texts()[0], /\*app\* Admin Console · \*infra\* dev-laptop · \*agent\* Codex/);
+  await f.bridge.handleEvent(threadReply('[status]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /\*infra\* dev-laptop/);
+  // The session finished; a reply resumes it with no launcher of its own — the server keeps the parent's.
+  await f.bridge.handleEvent(threadReply('and screenshot it'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.some((c) => c.startsWith('resume:S1:')), f.world.calls.join('|'));
+  assert.equal(f.world.calls.filter((c) => c.startsWith('dispatch-infra')).length, 1);
+});
+
+test('[infra:local] runs on the server; offline, ambiguous and unknown targets start nothing', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[infra:local] start here'));
+  await f.bridge.drain();
+  assert.ok(!f.world.calls.some((c) => c.startsWith('dispatch-infra')), f.world.calls.join('|'));
+  assert.doesNotMatch(f.slack.texts()[0], /\*infra\*/);
+  for (const [q, re] of [['build', /is offline/], ['gpu', /matches 2 targets/], ['nope', /No infrastructure matches/]] as const) {
+    await f.bridge.handleEvent(mention(`[infra:${q}] go`, { ts: `${200 + Math.random()}` }));
+    await f.bridge.drain();
+    assert.match(f.slack.texts().at(-1)!, re);
+  }
+  assert.equal(f.world.sessions.size, 1);
+});
+
+test('[list-infra] lists targets without starting anything; infra cannot change mid-thread', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[list-infra]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /\*Connected infrastructure\* \(5\)[\s\S]*dev-laptop/);
+  assert.equal(f.world.sessions.size, 0);
+  f.steps.push(() => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start', { ts: '300.000' }));
+  await f.bridge.handleEvent(threadReply('[infra:laptop] now there', { threadTs: '300.000' }));
+  await f.bridge.handleEvent(threadReply('[infra:local] same place is fine', { threadTs: '300.000' }));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().find((x) => x.includes('infrastructure cannot change'))!, /runs on this server[\s\S]*not sent/);
+  assert.ok(!f.world.calls.some((c) => c.includes('now there')), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('send-keys:S1:same place is fine'), f.world.calls.join('|'));
 });
 
 test('[terminal] and [infra:macbook terminal] return plain shell session links', async () => {
   for (const input of ['[terminal]', '[infra:macbook terminal]', '[app:storefront infra:macbook terminal]']) {
     const f = fixture();
+    f.world.infra.targets.push({ launcherId: 'mac-1', name: 'Amir MacBook', online: true });
     await f.bridge.handleEvent(mention(input));
     await f.bridge.drain();
     assert.equal(f.world.sessions.size, 1);
@@ -394,8 +725,7 @@ test('[terminal] and [infra:macbook terminal] return plain shell session links',
     const data = JSON.parse(f.world.calls[0].slice('terminal:'.length));
     assert.equal(data.permissionProfile, 'plain');
     assert.equal(data.launcherId, input.includes('infra:') ? 'mac-1' : undefined);
-    assert.equal(data.appId, input.includes('app:') ? 'app-2' : undefined);
-    if (input === '[infra:macbook terminal]') assert.equal(data.cwd, '~');
+    assert.equal(data.appId, input.includes('app:') ? 'app-sc' : undefined);
     assert.equal(f.world.calls.length, 1);
     const record = new StateRepo(f.store).getThread('T1:C1:100.000')!;
     assert.equal(record.kind, 'terminal');
@@ -412,19 +742,6 @@ test('[terminal] and [infra:macbook terminal] return plain shell session links',
   }
 });
 
-test('a separate terminal preserves an existing agent thread and rejects target changes', async () => {
-  const f = fixture();
-  await f.bridge.handleEvent(mention('start'));
-  await f.bridge.drain();
-  await f.bridge.handleEvent(threadReply('[infra:macbook terminal]'));
-  assert.match(f.slack.texts().at(-1)!, /Replies in this thread continue to reach the agent/);
-  assert.equal(new StateRepo(f.store).getThread('T1:C1:100.000')!.sessionId, 'S1');
-  const before = f.world.calls.length;
-  await f.bridge.handleEvent(threadReply('[app:storefront] change target'));
-  assert.equal(f.world.calls.length, before);
-  assert.match(f.slack.texts().at(-1)!, /Start a new Slack thread/);
-});
-
 test('terminal creation failures and duplicate deliveries do not create extra sessions', async () => {
   const f = fixture();
   const event = mention('[terminal]');
@@ -435,4 +752,72 @@ test('terminal creation failures and duplicate deliveries do not create extra se
   await failed.bridge.handleEvent(mention('[terminal]'));
   assert.match(failed.slack.texts()[0], /launcher unavailable/);
   assert.equal(new StateRepo(failed.store).threads().length, 0);
+});
+
+
+test('approximate app and infra queries compose and display resolved targets', async () => {
+  const f = fixture();
+  f.world.infra.targets.push({ launcherId: 'mac-1', name: 'Amir MacBook', online: true });
+  await f.bridge.handleEvent(mention('[app:storfront infra:macbok] fix it'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('feedback-app:app-sc'));
+  assert.ok(f.world.calls.includes('dispatch-infra:mac-1'));
+  assert.match(f.slack.texts()[0], /Storefront.*Amir MacBook/);
+});
+
+test('terminal target failures never create sessions; duplicate names list exact choices', async () => {
+  for (const [input, pattern] of [
+    ['[app:rep terminal]', /matches 2 applications[\s\S]*app:app-rep/],
+    ['[infra:gpu terminal]', /matches 2 targets[\s\S]*infra:gpu-1/],
+    ['[infra:build terminal]', /offline/],
+    ['[app:missing terminal]', /No application matches/],
+    ['[infra:missing terminal]', /No infrastructure matches/],
+  ] as const) {
+    const f = fixture();
+    await f.bridge.handleEvent(mention(input));
+    await f.bridge.drain();
+    assert.match(f.slack.texts()[0], pattern);
+    assert.deepEqual(f.world.calls, []);
+  }
+});
+
+test('a separate terminal leaves agent thread context intact', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  await f.bridge.handleEvent(threadReply('[infra:laptop terminal]'));
+  assert.match(f.slack.texts().at(-1)!, /Replies in this thread continue to reach the agent/);
+  assert.equal(new StateRepo(f.store).getThread('T1:C1:100.000')!.sessionId, 'S1');
+});
+
+test('terminal requests reject attachments and unsupported harness/sprite targets', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[terminal]', { files: [{ id: 'file-1', name: 'file.txt' }] }));
+  assert.match(f.slack.texts()[0], /cannot include attachments/);
+  f.world.infra.targets.push({ launcherId: 'h-1', name: 'harness', online: true, isHarness: true });
+  await f.bridge.handleEvent(mention('[infra:harness terminal]'));
+  assert.match(f.slack.texts().at(-1)!, /support local or remote machines/);
+  assert.deepEqual(f.world.calls, []);
+});
+
+test('an ambiguous terminal request can be retried with an exact infra ID', async () => {
+  const f = fixture();
+  f.world.infra.targets.push({ launcherId: 'mac-1', name: 'MacBook', online: true }, { launcherId: 'mac-2', name: 'MacBook', online: true });
+  await f.bridge.handleEvent(mention('[infra:macbook terminal]'));
+  assert.equal(f.world.sessions.size, 0);
+  assert.match(f.slack.texts()[0], /infra:mac-1\][\s\S]*infra:mac-2\]/);
+  await f.bridge.handleEvent(mention('[infra:mac-2 terminal]', { threadTs: '100.000' }));
+  assert.equal(f.world.sessions.size, 1);
+  assert.match(f.world.calls[0], /"launcherId":"mac-2"/);
+});
+
+test('terminal mappings recover without transcript watchers', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[terminal]'));
+  const restarted = fixture({ store: f.store });
+  restarted.world.sessions = f.world.sessions;
+  assert.equal(restarted.bridge.recover(), 0);
+  await restarted.bridge.handleEvent(threadReply('pwd'));
+  assert.ok(restarted.world.calls.includes('send-keys:S1:pwd'));
+  assert.ok(!restarted.world.calls.some(c => c.startsWith('resume:')));
 });

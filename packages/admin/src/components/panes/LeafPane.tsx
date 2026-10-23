@@ -77,7 +77,7 @@ import { showHotkeyHints, popoutMode, type PopoutMode } from '../../lib/settings
 import { selectedAppId, applications, appFeedbackCounts } from '../../lib/state.js';
 import { copyWithTooltip } from '../../lib/clipboard.js';
 import { cosArtifacts } from '../../lib/cos-artifacts.js';
-import { PrBadges, RuntimeBadge } from '../PrBadges.js';
+import { PrBadges, RuntimeBadge, SourceBadge } from '../PrBadges.js';
 
 // --- Shared signals (also used by Layout.tsx for keyboard shortcuts) ---
 // leafId gates which LeafPane instance renders the menu — module-level signal
@@ -343,6 +343,7 @@ function PaneHeader({
               {sess?.feedbackTitle || 'View feedback'}
             </a>
           )}
+          <SourceBadge session={sess} />
           <RuntimeBadge runtime={sess?.runtime} permissionProfile={sess?.permissionProfile} />
           {/* compact: 2 badges + "+N" chip, like the sessions list — a session
               with a dozen PRs must not crowd the ticket title out of the header. */}

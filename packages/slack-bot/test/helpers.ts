@@ -1,6 +1,9 @@
 /** Mocked Slack + ProPanes for bridge tests: no network, no real sessions. */
 import { SlackBridge, type BridgeConfig, type IncomingSlackMessage } from '../src/bridge';
 import type { AgentEndpointInfo } from '../src/agents';
+import type { AppInfo } from '../src/apps';
+import type { InfraList } from '../src/infra';
+import { SlackFileAccessError, type DownloadedFile, type SlackFileDownloader, type SlackFileInfo } from '../src/attachments';
 import type { JsonlDelta, PropanesClient, SessionInfo } from '../src/propanes';
 import type { SlackPoster, UploadArgs, PostArgs } from '../src/slack';
 import { MemoryStateStore, StateRepo, type StateStore } from '../src/state';
@@ -16,8 +19,18 @@ export const agents: AgentEndpointInfo[] = [
 
 export interface FakeSession extends SessionInfo { lines: string[]; }
 
+export const apps: AppInfo[] = [
+  { id: APP, name: 'Admin Console', projectDir: '/home/x/propanes' },
+  { id: 'app-atlas', name: 'Atlas', projectDir: '/home/x/atlas' },
+  { id: 'app-sc', name: 'Storefront', projectDir: '/home/x/storefront' },
+  { id: 'app-rep', name: 'Reports', projectDir: '/home/x/reports' },
+  { id: 'app-rep-st', name: 'Reports Staging', projectDir: '/mnt/reports-staging-src' },
+];
+
 let uuidCounter = 0;
 const uuid = () => `u-${++uuidCounter}`;
+/** Re-stamp a fixture line (keys above default to 2026-10-22T00:00:00Z). */
+export const stamped = (jsonLine: string, iso: string) => jsonLine.replace('"timestamp":"2026-10-22T00:00:00Z"', `"timestamp":"${iso}"`);
 export const line = {
   assistant: (text: string) => JSON.stringify({ type: 'assistant', uuid: uuid(), timestamp: '2026-10-22T00:00:00Z', message: { role: 'assistant', content: [{ type: 'text', text }] } }),
   toolUse: (name: string, input: Record<string, unknown>, id: string) => JSON.stringify({ type: 'assistant', uuid: uuid(), timestamp: '2026-10-22T00:00:00Z', message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] } }),
@@ -28,13 +41,18 @@ export const line = {
 export class World {
   sessions = new Map<string, FakeSession>();
   calls: string[] = [];
-  agentAppIds: string[] = [];
-  dispatchInputs: Parameters<PropanesClient['dispatch']>[0][] = [];
-  feedbackInputs: Parameters<PropanesClient['createFeedback']>[0][] = [];
   images = new Map<string, { bytes: Buffer; mime: string }>();
   agents = agents.slice();
-  apps = [{ id: APP, name: 'Propanes Admin' }, { id: 'app-2', name: 'Storefront' }];
-  infra = [{ id: 'mac-1', name: 'Amir MacBook', hostname: 'amir-macbook.local', online: true }];
+  apps = apps.slice();
+  infra: InfraList = {
+    localTarget: { name: 'shared-vm', hostname: 'shared-vm', machineId: 'm-local' },
+    targets: [
+      { launcherId: 'laptop-1', name: 'dev-laptop', hostname: 'dev-laptop.local', machineName: 'dev-laptop', machineId: 'm-laptop', online: true, activeSessions: 3, maxSessions: 5 },
+      { launcherId: 'db-machine:m-stage', name: 'build-vm', hostname: 'build-vm', machineName: 'build-vm', machineId: 'm-stage', online: false },
+      { launcherId: 'gpu-1', name: 'gpu-box-a', hostname: 'gpu-a', online: true, activeSessions: 0, maxSessions: 2 },
+      { launcherId: 'gpu-2', name: 'gpu-box-b', hostname: 'gpu-b', online: true, activeSessions: 0, maxSessions: 2 },
+    ],
+  };
   private n = 0;
 
   newSession(feedbackId: string, runtime: string, parent?: string): FakeSession {
@@ -47,20 +65,44 @@ export class World {
   session(id: string): FakeSession { return this.sessions.get(id)!; }
   latest(): FakeSession { return this.sessions.get(`S${this.n}`)!; }
 
+  /** Slack file id → bytes, or an error to throw. */
+  slackFiles = new Map<string, DownloadedFile | Error>();
+  downloader: SlackFileDownloader = {
+    download: async (file: SlackFileInfo) => {
+      const hit = this.slackFiles.get(file.id);
+      if (!hit) throw new SlackFileAccessError('not_found', 'file not found');
+      if (hit instanceof Error) throw hit;
+      this.calls.push(`download:${file.id}`);
+      return hit;
+    },
+  };
+
   propanes: PropanesClient = {
     me: async () => ({ user: { id: 'env-admin', username: 'admin', role: 'admin' } }),
-    listApplications: async () => this.apps,
-    listInfra: async () => this.infra,
     createTerminal: async (input) => {
       this.calls.push(`terminal:${JSON.stringify(input)}`);
       return { sessionId: this.newSession('', 'plain').id };
     },
-    listAgents: async (appId) => { this.agentAppIds.push(appId); return this.agents; },
-    createFeedback: async (input) => { this.feedbackInputs.push(input); this.calls.push(`feedback:${input.title}`); return { id: `F${this.n + 1}` }; },
+    listAgents: async () => this.agents,
+    listApplications: async () => this.apps,
+    listDispatchTargets: async () => this.infra,
+    createFeedback: async (input) => {
+      this.calls.push(`feedback-app:${input.appId}`);
+      this.calls.push(`feedback:${input.title}${input.screenshots?.length ? `:screenshots=${input.screenshots.map((s) => s.name).join(',')}` : ''}`);
+      return { id: `F${this.n + 1}` };
+    },
+    uploadScreenshots: async (sessionId, images) => {
+      this.calls.push(`upload-screenshots:${sessionId ?? 'none'}:${images.map((i) => i.name).join(',')}`);
+      return { screenshots: images.map((i, n) => ({ id: `SC${n + 1}`, filename: i.name, path: `/tmp/sc-${i.name}` })) };
+    },
+    uploadFiles: async (sessionId, files) => {
+      this.calls.push(`upload-files:${sessionId ?? 'none'}:${files.map((i) => i.name).join(',')}`);
+      return { files: files.map((i, n) => ({ id: `UP${n + 1}`, filename: `up-${i.name}`, originalName: i.name, path: `/tmp/up-${i.name}` })) };
+    },
     dispatch: async (input) => {
-      this.dispatchInputs.push(input);
       const agent = this.agents.find((a) => a.id === input.agentEndpointId)!;
       this.calls.push(`dispatch:${input.agentEndpointId}:${input.permissionProfile}`);
+      if (input.launcherId) this.calls.push(`dispatch-infra:${input.launcherId}`);
       this.calls.push(`instructions:${input.instructions}`);
       return { sessionId: this.newSession(input.feedbackId, agent.runtime || 'claude').id };
     },
@@ -80,6 +122,7 @@ export class World {
       const parent = this.sessions.get(id)!;
       if (parent.status === 'running') throw new Error('Session is still active');
       this.calls.push(`resume:${id}:${input.runtime ?? 'inherit'}:${input.additionalPrompt}`);
+      this.calls.push(`resume-profile:${id}:${input.permissionProfile ?? 'inherit'}`);
       return { sessionId: this.newSession(parent.feedbackId!, input.runtime ?? parent.runtime!, id).id };
     },
     kill: async (id) => { this.calls.push(`kill:${id}`); this.sessions.get(id)!.status = 'killed'; },
@@ -113,7 +156,7 @@ export class FakeSlack implements SlackPoster {
 
 export interface Fixture { world: World; slack: FakeSlack; store: StateStore; bridge: SlackBridge; steps: Array<() => void>; clock: { now: number }; }
 
-export function fixture(opts: { store?: StateStore; config?: Partial<BridgeConfig> } = {}): Fixture {
+export function fixture(opts: { store?: StateStore; config?: Partial<BridgeConfig>; noDownloader?: boolean } = {}): Fixture {
   const world = new World();
   const slack = new FakeSlack();
   const store = opts.store ?? new MemoryStateStore();
@@ -122,6 +165,7 @@ export function fixture(opts: { store?: StateStore; config?: Partial<BridgeConfi
   const bridge = new SlackBridge({
     propanes: world.propanes,
     slack,
+    files: opts.noDownloader ? undefined : world.downloader,
     state: new StateRepo(store),
     config: { appId: APP, publicUrl: PUBLIC, botUserId: 'UBOT', pollMs: 1, idlePollMs: 1, idleStopMs: 60_000, transcriptTail: 2000, ...opts.config },
     log: () => undefined,
