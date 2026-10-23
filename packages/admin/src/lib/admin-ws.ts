@@ -1,6 +1,7 @@
 // admin-ws.ts — WebSocket client for /ws/admin push notifications
 
 import { onWake } from './wake.js';
+import { closeSocketQuietly } from './ws-close.js';
 
 type Callback = (data: any) => void;
 
@@ -74,7 +75,7 @@ export function connectAdminWs() {
       if (document.hidden) {
         // Disconnect when tab is hidden to save resources
         if (ws) {
-          ws.close();
+          closeSocketQuietly(ws);
           ws = null;
         }
         if (reconnectTimer) {
@@ -102,7 +103,10 @@ export function connectAdminWs() {
     offWake = onWake(() => {
       if (ws && ws.readyState === WebSocket.OPEN) return;
       if (document.hidden) return;
-      if (ws) { try { ws.close(); } catch { /* already closing */ } ws = null; }
+      // A socket still in flight is not dead, only slow: let it finish rather
+      // than tearing it down and starting a second handshake behind it.
+      if (ws && ws.readyState === WebSocket.CONNECTING) return;
+      if (ws) { closeSocketQuietly(ws); ws = null; }
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
       reconnectDelay = 1000;
       connectAdminWs();
@@ -136,7 +140,7 @@ export function subscribeAdmin(topic: string, cb: Callback): () => void {
 
 export function disconnectAdminWs() {
   if (ws) {
-    ws.close();
+    closeSocketQuietly(ws);
     ws = null;
   }
   if (reconnectTimer) {

@@ -9,6 +9,7 @@ import { copyText } from '../../lib/clipboard.js';
 import { openUrlCompanion } from '../../lib/companion-state.js';
 import { recordPerfEntry } from '../../lib/perf.js';
 import { onWake } from '../../lib/wake.js';
+import { closeSocketQuietly } from '../../lib/ws-close.js';
 import { settleTerminalCursor } from '../../lib/terminal-cursor.js';
 import { useSessionFileDrop, SessionDropOverlay } from './SessionFileDrop.js';
 import type { InputState } from '../../lib/sessions.js';
@@ -920,14 +921,10 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       }
       const stale = wsRef.current;
       if (stale) {
-        // Drop the handlers before closing: the close we are about to force
-        // must not schedule a second reconnect racing this one.
-        stale.onopen = null;
-        stale.onmessage = null;
-        stale.onclose = null;
-        stale.onerror = null;
+        // Handlers are dropped before closing: the close we are about to
+        // force must not schedule a second reconnect racing this one.
         wsRef.current = null;
-        try { stale.close(); } catch { /* already closing */ }
+        closeSocketQuietly(stale);
       }
       connect();
     }
@@ -1256,7 +1253,7 @@ export function AgentTerminal({ sessionId, isActive, onExit, onInputStateChange,
       if (graceTimer) clearTimeout(graceTimer);
       scrollDispose.dispose();
       observer.disconnect();
-      wsRef.current?.close();
+      closeSocketQuietly(wsRef.current);
       term.dispose();
       termRef.current = null;
       wsRef.current = null;

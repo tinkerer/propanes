@@ -16,7 +16,7 @@ import {
   getSessionOutcome,
   DEFAULT_RESTORE_PROMPT,
 } from '../restore-queue.js';
-import { getSessionLiveStates, inputSessionRemote, sendKeysSessionRemote } from '../session-service-client.js';
+import { getSessionLiveStates, inputSessionRemote, killSessionRemote, sendKeysSessionRemote } from '../session-service-client.js';
 import { getLauncher, sendAndWait } from '../launcher-registry.js';
 import { getTmuxPanePid } from '../tmux-pty.js';
 import { storeUploads } from './uploads.js';
@@ -1628,6 +1628,12 @@ agentSessionRoutes.delete('/:id', async (c) => {
 
   if (session.status === 'running' || session.status === 'pending') {
     await killSession(id);
+  } else if (!session.launcherId && !session.spriteConfigId) {
+    // A row that is already killed/completed/failed can still have its tmux
+    // session (and the agent inside) running: the kill path used to drop
+    // only the attach client. Ask the service to tear it down before the
+    // row goes away, or nothing will ever know the session existed.
+    try { await killSessionRemote(id); } catch { /* service unreachable; reaper sweeps later */ }
   }
 
   await db.delete(schema.agentSessions).where(eq(schema.agentSessions.id, id));
