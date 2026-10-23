@@ -19,7 +19,9 @@ const APP_ID = process.env.PROPANES_APP_ID ?? '01KNR6HYSPE08RZJSQJG6WE1PK';
 const AGENT_ENDPOINT_ID_OVERRIDE = process.env.AGENT_ENDPOINT_ID || undefined;
 const POLL_MS = parseInt(process.env.POLL_MS ?? '4000', 10) || 4000;
 const IDLE_POLL_MS = parseInt(process.env.IDLE_POLL_MS ?? '30000', 10) || 30000;
-const IDLE_STOP_MS = parseInt(process.env.IDLE_STOP_MS ?? String(6 * 60 * 60 * 1000), 10) || 6 * 60 * 60 * 1000;
+// An hour without session activity stops the agent (its transcript stays
+// resumable); the next Slack reply resumes it natively (--resume / codex resume).
+const IDLE_STOP_MS = parseInt(process.env.IDLE_STOP_MS ?? String(60 * 60 * 1000), 10) || 60 * 60 * 1000;
 // systemd's StateDirectory= exports STATE_DIRECTORY; dev runs keep state next to the package.
 const STATE_FILE = process.env.AMIROBOT_STATE_FILE
   ?? join(process.env.STATE_DIRECTORY ?? join(__dirname, '..', 'state'), 'amirobot-state.json');

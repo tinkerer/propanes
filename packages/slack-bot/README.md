@@ -60,18 +60,40 @@ changed.
      "send to running process"); multi-line Slack text is sent as one line
      (`⏎` between lines) because the TTY submits on newline;
    - session finished (`completed`/`failed`/`killed`) → `POST /:id/resume`
-     with the text as `additionalPrompt` (the input bar's explicit Resume). The
-     thread follows the new session; the reply links both.
+     with the text as `additionalPrompt` (the input bar's explicit Resume) and
+     the bot's TTY profile (`interactive-yolo`) pinned. The server continues
+     the agent's own conversation (`claude --resume <session>` /
+     `codex resume <thread>`), so the agent keeps its full context instead of
+     a re-typed task summary. The thread follows the new session; the reply
+     links both.
    There is no blanket kill-and-resume. A `waiting` session (permission prompt,
    AskUserQuestion) is announced once in the thread with the pending tool; a
    reply answers it through the same send-keys path (`y`, `1`, free text).
+   **Prompts typed outside Slack** — in the admin terminal, the structured
+   view's input bar or a follow-up queue — appear in the transcript as user
+   turns the bot never sent. They are echoed into the thread in every output
+   mode as `👤 User asked outside Slack:` followed by the quoted prompt, so the
+   replies that follow are attributable, and they open a turn like a Slack
+   reply would (quiet mode delivers the final `<cos-reply>` for them too).
+   The bot remembers the prompts it sent per session (`sentPrompts` in the
+   delivery checkpoint) and matches transcript user turns against them, verbatim
+   or embedded in the server's dispatch/resume wrapper; harness-written user
+   envelopes (`<system-reminder>`, slash-command output, codex
+   `<environment_context>`, "Request interrupted") are never announced.
 4. Bot messages, message edits/deletes and other subtypes are ignored; a
    message with attachments (subtype `file_share`) is a human request and is
    delivered with its attachments (see "Attachments from Slack"). Slack
    retries and duplicate deliveries are dropped by `event_id` (persisted).
    Replies in threads the bot does not know about are ignored. DMs work without
    a mention; a flat DM is one conversation.
-5. Output is read only from the structured transcript
+5. **Idle pause.** A session with no activity for `IDLE_STOP_MS` (1 h) while
+   no turn is open is stopped (`POST /:id/kill`) and the thread is told
+   (`💤 Paused … Reply in this thread to resume it where it left off`). The
+   transcript stays on disk, so the next reply resumes the same conversation
+   through the native resume above; `[status]` shows `paused after 1 h idle —
+   reply to resume`. A turn still in progress is never paused. `stop` behaves
+   the same way on request (`stopped on request — reply to resume`).
+6. Output is read only from the structured transcript
    (`POST /:id/jsonl` with a cursor, the structured view's differential poll),
    parsed with the admin's own `JsonOutputParser` / `CodexOutputParser`.
    Terminal output is never scraped.
@@ -158,9 +180,10 @@ exactly as it would from the UI:
   acknowledgements never wait on dispatch, polling or posting.
 - Watchers poll every `POLL_MS` (4 s) while a turn is open, `IDLE_POLL_MS`
   (30 s) once idle — admin-side activity in the same session still reaches the
-  thread — and stop after `IDLE_STOP_MS` (6 h) of idleness; the next Slack reply
-  re-arms them. After 30 consecutive poll failures the thread is told and the
-  watcher stops.
+  thread — and after `IDLE_STOP_MS` (1 h) of idleness they stop the session
+  and pause the thread (see "Idle pause"); the next Slack reply resumes it. If
+  the stop itself fails the thread is told and only the watcher stops. After
+  30 consecutive poll failures the thread is told and the watcher stops.
 - Slack requests never bypass ProPanes access control: every call carries the
   listener's bearer token, so the bot sees and drives exactly what that user may.
 

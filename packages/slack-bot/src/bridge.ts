@@ -14,6 +14,7 @@ import { extractImageRefs, filenameFor, IMAGE_MAX_BYTES, IMAGE_MIMES, type Image
 import { isStopKeyword, parseCommand, type OutputMode, type ParsedCommand, type Runtime } from './options';
 import { isLive, PropanesApiError, TERMINAL_STATUSES, type JsonlDelta, type PropanesClient, type SessionInfo } from './propanes';
 import { slackErrorCode, type SlackPoster } from './slack';
+import { isOutsideInput, rememberSentPrompt, renderOutsideInput } from './outside-input';
 import { freshCheckpoint, threadKey, type StateRepo, type ThreadRecord } from './state';
 
 export type { SlackFileInfo } from './attachments';
@@ -49,7 +50,8 @@ export interface BridgeConfig {
   pollMs: number;
   /** Poll interval once the session is idle (admin-side activity still reaches Slack). */
   idlePollMs: number;
-  /** Stop watching an idle session after this long; the next Slack reply re-arms it. */
+  /** Stop the session (and its watcher) after this long without activity; the
+   * next Slack reply resumes it with the agent's native resume. */
   idleStopMs: number;
   /** Transcript lines requested on the first poll (also enables image elision). */
   transcriptTail: number;
@@ -79,6 +81,13 @@ const MAX_CONSECUTIVE_POLL_FAILURES = 30;
 const IDLE_POLLS_TO_FINISH = 2;
 /** A turn with no assistant text at all still finishes after this many idle polls. */
 const IDLE_POLLS_NO_TEXT = 15;
+/** Nothing stamped earlier than this before a dispatch can belong to the new
+ * session (its transcript may not exist yet and the server may answer with a
+ * neighbour's); the slack covers clock skew with remote launchers. */
+const FRESH_SESSION_GRACE_MS = 60_000;
+/** A continuation appends to the transcript the thread already followed; only
+ * what is written after the resume request is news. */
+const RESUME_GRACE_MS = 10_000;
 
 export function slackInstructions(mode: OutputMode): string {
   const lines = [
@@ -319,8 +328,9 @@ export class SlackBridge {
       sessionId, feedbackId: feedback.id, runtime, agentEndpointId: endpoint.id, agentName: endpoint.name || endpoint.id,
       mode, images,
       history: [{ sessionId, runtime, agentName: endpoint.name || endpoint.id, createdAt: nowIso }],
-      delivery: freshCheckpoint(this.now()), watching: true, createdAt: nowIso, updatedAt: nowIso,
+      delivery: freshCheckpoint(this.now(), this.now() - FRESH_SESSION_GRACE_MS), watching: true, createdAt: nowIso, updatedAt: nowIso,
     };
+    record.delivery.sentPrompts = rememberSentPrompt(undefined, cmd.text);
     this.d.state.putThread(record);
     if (ev.user) this.d.state.setRuntimePref(ev.teamId, ev.user, runtime);
     await reply(this.initialReply(record, staged.images.length + forwarded.length));
@@ -362,9 +372,11 @@ export class SlackBridge {
     let session = await this.currentSession(record);
     if (isLive(session.status)) {
       // Same operation as the structured view's input bar: keys straight to the live process.
-      const result = await this.d.propanes.sendKeys(record.sessionId, promptForSendKeys(oneLineText, record.mode));
+      const keys = promptForSendKeys(oneLineText, record.mode);
+      const result = await this.d.propanes.sendKeys(record.sessionId, keys);
       if (result.ok) {
         this.openTurn(record);
+        record.delivery.sentPrompts = rememberSentPrompt(record.delivery.sentPrompts, keys);
         this.d.state.putThread(record);
         this.watch(record.key);
         return;
@@ -377,7 +389,17 @@ export class SlackBridge {
         return;
       }
     }
-    await this.resumeInto(record, multiLineText, undefined, reply, `Session ${this.link(record.sessionId)} had ${session.status === 'completed' ? 'finished' : `ended (${session.status})`}`);
+    await this.resumeInto(record, multiLineText, undefined, reply, this.resumeReason(record, session));
+  }
+
+  private resumeReason(record: ThreadRecord, session: SessionInfo): string {
+    const link = this.link(record.sessionId);
+    if (record.paused?.sessionId === record.sessionId) {
+      return record.paused.reason === 'idle'
+        ? `▶️ Resuming ${link}, paused after ${formatDuration(this.d.config.idleStopMs)} without activity`
+        : `▶️ Resuming ${link}, stopped earlier on request`;
+    }
+    return `Session ${link} had ${session.status === 'completed' ? 'finished' : `ended (${session.status})`}`;
   }
 
   /** Explicit runtime change inside a thread: the thread keeps its history and
@@ -409,8 +431,12 @@ export class SlackBridge {
   private async resumeInto(record: ThreadRecord, text: string, runtime: Runtime | undefined, reply: (t: string) => Promise<unknown>, reason: string): Promise<boolean> {
     const parentId = record.sessionId;
     try {
+      // The agent's own resume (claude --resume / codex resume) restores the
+      // conversation; the thread's TTY profile is pinned so a drifted row never
+      // turns the continuation into a headless stream.
       const { sessionId } = await this.d.propanes.resume(parentId, {
         additionalPrompt: promptForResume(text, record.mode),
+        permissionProfile: PERMISSION_PROFILE,
         ...(runtime ? { runtime } : {}),
       });
       const nextRuntime = runtime ?? record.runtime;
@@ -419,11 +445,13 @@ export class SlackBridge {
       record.runtime = nextRuntime;
       record.agentName = agentName;
       record.history.push({ sessionId, runtime: nextRuntime, agentName, createdAt: new Date(this.now()).toISOString() });
-      record.delivery = freshCheckpoint(this.now());
+      record.delivery = freshCheckpoint(this.now(), this.now() - RESUME_GRACE_MS);
+      record.delivery.sentPrompts = rememberSentPrompt(undefined, text);
       record.watching = true;
+      record.paused = undefined;
       this.followers.delete(record.key);
       this.d.state.putThread(record);
-      await reply(`${reason} — continuing in ${this.link(sessionId)} (${runtimeLabel(nextRuntime)}, ${record.mode}). Previous session: ${this.link(parentId)}.`);
+      await reply(`${reason} — continuing in ${this.link(sessionId)} (${runtimeLabel(nextRuntime)}, ${record.mode}) with its conversation restored. Previous session: ${this.link(parentId)}.`);
       this.watch(record.key);
       return true;
     } catch (err) {
@@ -445,15 +473,20 @@ export class SlackBridge {
     await this.d.propanes.kill(record.sessionId);
     record.delivery.turnOpen = false;
     record.delivery.turnTexts = [];
+    record.paused = { at: new Date(this.now()).toISOString(), reason: 'stop', sessionId: record.sessionId };
     this.d.state.putThread(record);
-    await reply(`🛑 Stopped session ${this.link(record.sessionId)}. Reply here to resume it with a new message.`);
+    await reply(`🛑 Stopped session ${this.link(record.sessionId)}; its conversation is kept. Reply here to resume it with a new message.`);
   }
 
   async statusText(record: ThreadRecord | undefined): Promise<string> {
     if (!record) return 'No session is associated with this thread. Mention me with a request to start one.';
     let session: SessionInfo | null = null;
     try { session = await this.currentSession(record); } catch { /* reported below */ }
+    const paused = record.paused?.sessionId === record.sessionId && session && !isLive(session.status)
+      ? (record.paused.reason === 'idle' ? `paused after ${formatDuration(this.d.config.idleStopMs)} idle` : 'stopped on request') + ' — reply to resume'
+      : null;
     const state = !session ? 'unknown (ProPanes unreachable)'
+      : paused ? paused
       : TERMINAL_STATUSES.has(session.status) ? session.status
       : session.inputState === 'waiting' ? 'running — waiting for your input'
       : session.inputState === 'idle' ? 'running — idle (turn finished)'
@@ -558,7 +591,10 @@ export class SlackBridge {
       // The thread moved to a continuation while we were polling; start over on it.
       if (record.sessionId !== sessionId) continue;
 
-      const events = follower.ingest(delta).filter((e) => !record.delivery.delivered.includes(e.key));
+      const since = record.delivery.since ?? 0;
+      const events = follower.ingest(delta)
+        .filter((e) => !record.delivery.delivered.includes(e.key))
+        .filter((e) => !(since && e.msg.timestamp > 0 && e.msg.timestamp < since));
       if (events.length) {
         await this.deliverEvents(record, follower, events);
         record.delivery.lastActivityAt = this.now();
@@ -595,14 +631,35 @@ export class SlackBridge {
         continue; // the top of the loop exits unless a continuation re-armed the thread
       }
       if (!record.delivery.turnOpen && this.now() - record.delivery.lastActivityAt > this.d.config.idleStopMs) {
-        record.watching = false;
-        this.d.state.putThread(record);
-        this.d.log(`Stopped watching idle session ${sessionId}`);
+        await this.pauseIdle(record, session);
         return;
       }
       this.d.state.putThread(record);
       await this.sleep(record.delivery.turnOpen ? this.d.config.pollMs : this.d.config.idlePollMs);
     }
+  }
+
+  /** Idle timeout: stop the agent so it does not sit in a TTY for hours. Its
+   * transcript stays on disk, so the next reply resumes the same conversation
+   * (claude --resume / codex resume) instead of re-explaining the task. */
+  private async pauseIdle(record: ThreadRecord, session: SessionInfo): Promise<void> {
+    const link = this.link(record.sessionId);
+    const idleFor = formatDuration(this.d.config.idleStopMs);
+    record.watching = false;
+    if (isLive(session.status)) {
+      try {
+        await this.d.propanes.kill(record.sessionId);
+      } catch (err) {
+        this.d.state.putThread(record);
+        this.d.log(`Could not stop idle session ${record.sessionId}: ${err instanceof Error ? err.name : 'error'}`);
+        await this.post(record, `⚠️ ${link} has been idle for ${idleFor} but could not be stopped (${escapeMrkdwn(safeMessage(err))}); I stopped following it. Reply here to re-attach.`);
+        return;
+      }
+    }
+    record.paused = { at: new Date(this.now()).toISOString(), reason: 'idle', sessionId: record.sessionId };
+    this.d.state.putThread(record);
+    this.d.log(`Paused idle session ${record.sessionId}`);
+    await this.post(record, `💤 Paused ${link} after ${idleFor} without activity: the agent is stopped and its conversation is kept. Reply in this thread to resume it where it left off.`);
   }
 
   private async deliverEvents(record: ThreadRecord, follower: TranscriptFollower, events: { key: string; msg: import('./transcript').ParsedMessage }[]): Promise<void> {
@@ -613,6 +670,13 @@ export class SlackBridge {
     };
     for (const { msg } of events) {
       if (msg.role === 'assistant' && !msg.subagentId && msg.content.trim()) record.delivery.turnTexts.push(msg.content);
+      if (msg.role === 'user_input' && !msg.subagentId && isOutsideInput(msg.content, record.delivery.sentPrompts)) {
+        // Typed in the admin PTY / structured view: say so in every mode, so
+        // the replies that follow are attributable, and treat it as a new turn
+        // (quiet mode then delivers its final answer like any Slack-sent turn).
+        pieces.push(renderOutsideInput(msg.content));
+        if (!record.delivery.turnOpen) this.openTurn(record);
+      }
       const rendered = renderEvent(msg, record.mode);
       if (rendered) pieces.push(rendered);
       if (record.images) {
@@ -709,6 +773,13 @@ export function promptForSendKeys(text: string, mode: OutputMode): string {
   return mode === 'quiet' ? oneLine + QUIET_SUFFIX : oneLine;
 }
 
+export function formatDuration(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = minutes / 60;
+  return Number.isInteger(hours) ? `${hours} h` : `${hours.toFixed(1)} h`;
+}
+
 export function promptForResume(text: string, mode: OutputMode): string {
   return mode === 'quiet' ? `${text.trim()}\n\n${slackInstructions('quiet')}` : text.trim();
 }
@@ -723,6 +794,8 @@ export function helpText(): string {
     '• `@amirobot [claude] …` / `[codex] …` — pick the agent; inside a thread this continues the task on the other agent',
     '• `@amirobot [help]` — this message · `[status]` — the thread\'s session, agent, state and link',
     '• reply `stop` (or `cancel`) — stop the thread\'s running session; a later reply resumes it',
+    '• sessions idle for an hour are paused (agent stopped, conversation kept); any reply resumes them with their full context',
+    '• prompts typed in the ProPanes terminal or structured view are echoed here as `👤 User asked outside Slack`, so the replies that follow are attributable',
     '',
     '*Output modes* (remembered per thread)',
     '• default — all assistant text (progress and answer); no tool calls or tool output',

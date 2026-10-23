@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { SlackBridge } from '../src/bridge';
 import { SlackFileAccessError } from '../src/attachments';
 import { StateRepo } from '../src/state';
-import { fixture, line, mention, sessionUrl, threadReply, agents, APP, PUBLIC } from './helpers';
+import { fixture, line, mention, sessionUrl, stamped, threadReply, agents, APP, PUBLIC } from './helpers';
 
 test('help and status reply in the thread and never dispatch work', async () => {
   const f = fixture();
@@ -438,4 +438,173 @@ test('without a configured downloader attachments are announced as not forwarded
   assert.match(f.slack.texts().find((t) => t.startsWith('📎'))!, /1 attachment not forwarded/);
   assert.ok(f.world.calls.includes('send-keys:S1:here'));
   assert.ok(!f.world.calls.some((c) => c.includes('edited text')));
+});
+
+test('a session idle for IDLE_STOP_MS is stopped and the thread is told how to resume it', async () => {
+  const f = fixture({ config: { idleStopMs: 3_600_000 } });
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(line.assistant('Done for now.')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined, // second idle poll finishes the turn
+    () => { f.clock.now += 3_600_001; }, // nothing happened for over an hour
+    () => undefined,
+  );
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('kill:S1'), f.world.calls.join('|'));
+  assert.equal(f.world.session('S1').status, 'killed');
+  const pause = f.slack.texts().find((t) => t.startsWith('💤 Paused'))!;
+  assert.ok(pause.includes(sessionUrl('S1')) && /after 1 h without activity/.test(pause) && /Reply in this thread to resume/.test(pause), pause);
+  const repo = new StateRepo(f.store);
+  const rec = repo.getThread('T1:C1:100.000')!;
+  assert.equal(rec.watching, false);
+  assert.deepEqual({ reason: rec.paused?.reason, sessionId: rec.paused?.sessionId }, { reason: 'idle', sessionId: 'S1' });
+
+  await f.bridge.handleEvent(threadReply('[status]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /paused after 1 h idle — reply to resume/);
+
+  // The next reply resumes the same conversation natively, keeping the TTY profile.
+  await f.bridge.handleEvent(threadReply('pick it back up'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('resume:S1:inherit:pick it back up'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('resume-profile:S1:interactive-yolo'), f.world.calls.join('|'));
+  const resumed = f.slack.texts().find((t) => t.startsWith('▶️ Resuming'))!;
+  assert.ok(resumed.includes(sessionUrl('S1')) && resumed.includes(sessionUrl('S2')) && /conversation restored/.test(resumed), resumed);
+  const after = new StateRepo(f.store).getThread('T1:C1:100.000')!;
+  assert.equal(after.sessionId, 'S2');
+  assert.equal(after.paused, undefined);
+  assert.deepEqual(after.history.map((h) => h.sessionId), ['S1', 'S2']);
+});
+
+test('a turn still in progress is never paused, however long it runs', async () => {
+  const f = fixture({ config: { idleStopMs: 60_000 } });
+  f.steps.push(
+    () => { f.clock.now += 61_000; },
+    () => { f.clock.now += 61_000; f.world.session('S1').lines.push(line.toolUse('Bash', { command: 'pnpm test' }, 't1')); },
+    () => { f.clock.now += 61_000; },
+  );
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  assert.ok(!f.world.calls.some((c) => c.startsWith('kill')), f.world.calls.join('|'));
+  assert.ok(!f.slack.texts().some((t) => t.startsWith('💤')), f.slack.texts().join('|'));
+  assert.equal(f.world.session('S1').status, 'completed');
+});
+
+test('an idle session that cannot be stopped is reported and merely unwatched', async () => {
+  const f = fixture({ config: { idleStopMs: 60_000 } });
+  f.world.propanes.kill = async (id) => { f.world.calls.push(`kill:${id}`); throw new Error('Propanes kill → 503'); };
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(line.assistant('Done for now.')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined,
+    () => { f.clock.now += 61_000; },
+    () => undefined,
+  );
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('kill:S1'));
+  assert.ok(f.slack.texts().some((t) => /could not be stopped/.test(t) && /stopped following it/.test(t)), f.slack.texts().join('|'));
+  const rec = new StateRepo(f.store).getThread('T1:C1:100.000')!;
+  assert.equal(rec.watching, false);
+  assert.equal(rec.paused, undefined);
+});
+
+test('`stop` keeps the conversation and a later reply resumes it with the pinned profile', async () => {
+  const f = fixture();
+  f.steps.push(() => undefined, () => undefined, () => undefined, () => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.handleEvent(threadReply('stop'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('kill:S1'));
+  assert.match(f.slack.texts().find((t) => t.startsWith('🛑'))!, /conversation is kept/);
+  await f.bridge.handleEvent(threadReply('[status]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /stopped on request — reply to resume/);
+  await f.bridge.handleEvent(threadReply('continue please'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('resume:S1:inherit:continue please'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('resume-profile:S1:interactive-yolo'));
+  assert.ok(f.slack.texts().some((t) => /▶️ Resuming .*stopped earlier on request/.test(t)), f.slack.texts().join('|'));
+});
+
+test('transcript lines written before the session started are never posted (another session\'s transcript)', async () => {
+  const f = fixture();
+  f.clock.now = Date.parse('2026-10-22T20:38:59Z');
+  // First poll answers with a neighbour's rollout from hours earlier; the real one appears next poll.
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(stamped(line.assistant('I will describe the OLD image'), '2026-10-22T18:47:10Z'), stamped(line.toolUse('exec', { cmd: 'view_image' }, 'old-1'), '2026-10-22T18:47:11Z')); },
+    () => { f.world.session('S1').lines.push(stamped(line.assistant('Connecting to the Mac now.'), '2026-10-22T20:39:05Z')); },
+    () => undefined,
+  );
+  await f.bridge.handleEvent(mention('[verbose] build the app on the mac'));
+  await f.bridge.drain();
+  const texts = f.slack.texts();
+  assert.ok(!texts.some((t) => /OLD image|view_image/.test(t)), texts.join('|'));
+  assert.ok(texts.some((t) => /Connecting to the Mac now/.test(t)), texts.join('|'));
+});
+
+test('a resumed session does not re-post the conversation the thread already saw', async () => {
+  const f = fixture();
+  f.clock.now = Date.parse('2026-10-22T10:00:00Z');
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(stamped(line.assistant('First answer.'), '2026-10-22T10:00:05Z')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined,
+    () => { f.world.session('S1').status = 'completed'; },
+  );
+  await f.bridge.handleEvent(mention('start'));
+  await f.bridge.drain();
+  assert.equal(f.slack.texts().filter((t) => /First answer/.test(t)).length, 1);
+
+  f.clock.now = Date.parse('2026-10-22T12:00:00Z');
+  f.steps.push(
+    // The continuation serves the whole transcript again (same file), then appends the new turn.
+    () => { f.world.latest().lines.push(...f.world.session('S1').lines, stamped(line.assistant('Second answer.'), '2026-10-22T12:00:07Z')); f.world.latest().inputState = 'idle'; },
+    () => undefined,
+    () => { f.world.latest().status = 'completed'; },
+  );
+  await f.bridge.handleEvent(threadReply('go on'));
+  await f.bridge.drain();
+  const texts = f.slack.texts();
+  assert.equal(texts.filter((t) => /First answer/.test(t)).length, 1, texts.join('|'));
+  assert.equal(texts.filter((t) => /Second answer/.test(t)).length, 1, texts.join('|'));
+});
+
+test('a prompt typed in the ProPanes UI is echoed as "User asked outside Slack"; Slack-sent and harness prompts are not', async () => {
+  const f = fixture();
+  f.steps.push(
+    // The server's dispatch prompt wraps the Slack text; the TTY echoes a send-keys reply as one line.
+    () => { f.world.session('S1').lines.push(line.user('# Feedback: start\n\nreview the PR\nand the tests\n\n[SLACK THREAD]\n…'), line.assistant('On it.')); },
+    () => undefined,
+    () => { f.world.session('S1').lines.push(line.user('also check\nthe docs'), line.user('<system-reminder>\nhook output\n</system-reminder>')); },
+    () => { f.world.session('S1').lines.push(line.user('fix the lint errors too'), line.assistant('Fixing lint.')); },
+    () => undefined,
+    () => undefined,
+  );
+  await f.bridge.handleEvent(mention('review the PR\nand the tests'));
+  await f.bridge.handleEvent(threadReply('also check\nthe docs'));
+  await f.bridge.drain();
+  const texts = f.slack.texts();
+  const notices = texts.filter((t) => t.includes('User asked outside Slack'));
+  assert.deepEqual(notices, ['👤 _User asked outside Slack:_\n> fix the lint errors too\n\nFixing lint.'], texts.join('|'));
+  assert.ok(!texts.some((t) => /hook output|review the PR/.test(t) && t.includes('outside')), texts.join('|'));
+});
+
+test('an outside prompt reopens the turn so quiet mode delivers its final answer', async () => {
+  const f = fixture();
+  f.steps.push(
+    () => { f.world.session('S1').lines.push(line.assistant('<cos-reply>First done.</cos-reply>')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined,
+    () => undefined,
+    () => { f.world.session('S1').lines.push(line.user('now the second thing'), line.assistant('<cos-reply>Second done.</cos-reply>')); f.world.session('S1').inputState = 'idle'; },
+    () => undefined,
+    () => undefined,
+    () => { f.world.session('S1').status = 'completed'; },
+  );
+  await f.bridge.handleEvent(mention('[quiet] start'));
+  await f.bridge.drain();
+  const texts = f.slack.texts();
+  const i1 = texts.findIndex((t) => /First done/.test(t));
+  const i2 = texts.findIndex((t) => /now the second thing/.test(t));
+  const i3 = texts.findIndex((t) => /Second done/.test(t));
+  assert.ok(i1 >= 0 && i2 > i1 && i3 > i2, texts.join('|'));
+  assert.ok(texts[i2].includes('User asked outside Slack'), texts[i2]);
 });
