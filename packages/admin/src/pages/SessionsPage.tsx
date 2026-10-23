@@ -7,7 +7,7 @@ import { DeletedItemsPanel, trackDeletion } from '../components/ui/DeletedItemsP
 import { cachedTargets, ensureTargetsLoaded } from '../components/dispatch/DispatchTargetSelect.js';
 import { isMobile } from '../lib/viewport.js';
 import { loadCosDispatches, cosGroupForSession } from '../lib/cos-dispatches.js';
-import { PrBadges, RuntimeBadge, parsePrUrls } from '../components/PrBadges.js';
+import { PrBadges, RuntimeBadge, SourceBadge, parsePrUrls } from '../components/PrBadges.js';
 
 const ALL_STATUSES = ['running', 'pending', 'completed', 'failed', 'killed', 'deleted'] as const;
 const DEFAULT_STATUSES = new Set<string>(['running', 'pending', 'completed', 'failed', 'killed']);
@@ -573,6 +573,7 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
           <span class="session-card-label">
             {feedbackTitle || s.title || agentLabel || `Session ${s.id.slice(-8)}`}
           </span>
+          <SourceBadge session={s} />
           <RuntimeBadge runtime={s.runtime} permissionProfile={s.permissionProfile} />
           <PrBadges prUrls={s.prUrls} />
           <span class="session-card-id">{s.id.slice(-8)}</span>

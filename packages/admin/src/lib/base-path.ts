@@ -55,6 +55,17 @@ export function serverPath(path: string): string {
   return `${BASE_PATH}${path}`;
 }
 
+/** URL of a file in packages/admin/public (served next to the SPA shell at
+ *  Vite's BASE_URL, '/admin/'), prefixed for a proxied mount. For img src —
+ *  fetch() callers don't need this. */
+export function publicAssetPath(file: string): string {
+  // import.meta.env is a Vite augmentation not visible to the bare ts
+  // compiler; cast through unknown so the path picks up the configured base
+  // URL without dragging vite/client types into tsconfig.
+  const env = (import.meta as unknown as { env?: { BASE_URL?: string } }).env;
+  return serverPath(`${env?.BASE_URL ?? '/'}${file.replace(/^\/+/, '')}`);
+}
+
 function rewriteUrl(input: string): string {
   try {
     const u = new URL(input, window.location.href);
