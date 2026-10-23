@@ -154,26 +154,22 @@ export function attachAdmin(sessionId: string, ws: WsWebSocket): boolean {
   }
 
   if (session?.launcherId) {
-    const launcher = getLauncher(session.launcherId);
-    if (launcher && launcher.ws.readyState === 1) {
-      adminBridges.set(ws, { kind: 'launcher', launcherId: session.launcherId, sessionId });
-      if (!launcherSessionAdmins.has(sessionId)) {
-        launcherSessionAdmins.set(sessionId, new Set());
-      }
-      launcherSessionAdmins.get(sessionId)!.add(ws);
-
-      // Send stored output history
-      if (session.outputLog) {
-        ws.send(JSON.stringify({ type: 'history', data: session.outputLog }));
-      } else {
-        ws.send(JSON.stringify({ type: 'history', data: '' }));
-      }
-      if (session.status !== 'pending' && session.status !== 'running') {
-        ws.send(JSON.stringify({ type: 'exit', exitCode: session.exitCode, status: session.status }));
-      }
-      return true;
+    // A remote session is bridged to its launcher whether or not the launcher
+    // is connected right now: the pane shows the stored history, input is
+    // dropped until the launcher is back, and output resumes when it
+    // reconnects. It is never bridged to the session-service, which has no
+    // tmux session for it and would mark the row failed.
+    adminBridges.set(ws, { kind: 'launcher', launcherId: session.launcherId, sessionId });
+    if (!launcherSessionAdmins.has(sessionId)) {
+      launcherSessionAdmins.set(sessionId, new Set());
     }
-    // Launcher offline — fall through to DB-only path below
+    launcherSessionAdmins.get(sessionId)!.add(ws);
+
+    ws.send(JSON.stringify({ type: 'history', data: session.outputLog || '' }));
+    if (session.status !== 'pending' && session.status !== 'running') {
+      ws.send(JSON.stringify({ type: 'exit', exitCode: session.exitCode, status: session.status }));
+    }
+    return true;
   }
 
   // No DB record at all → reject immediately
@@ -452,6 +448,9 @@ export interface LivenessContext {
  * the original sweep can be recognized as alive later, when the queue is
  * actually viewed.
  */
+/** A reconnected launcher lists its sessions on its first heartbeat (30 s). */
+export const LAUNCHER_REPORT_GRACE_MS = 90_000;
+
 export async function snapshotLiveness(): Promise<LivenessContext> {
   const serviceHealth = await getSessionServiceHealthSnapshot();
 
@@ -490,6 +489,16 @@ export function isSessionAliveNow(
   if (ctx.serviceTmuxSessions?.has(sessionId)) return true;
   if (isSpriteSession(sessionId)) return true;
   if (launcherId && ctx.launcherSessions.has(sessionId)) return true;
+  if (launcherId) {
+    // A remote session is dead only when its launcher is connected, has had
+    // time to report its sessions, and does not list it. A disconnected or
+    // just-reconnected launcher (it registers with an empty session list and
+    // fills it in on the first heartbeat) is inconclusive, never "dead".
+    const launcher = getLauncher(launcherId);
+    if (!launcher || launcher.ws.readyState !== 1) return null;
+    if (Date.now() - Date.parse(launcher.connectedAt) < LAUNCHER_REPORT_GRACE_MS) return null;
+    return false;
+  }
   if (!ctx.activeSvcSessions) return null; // service unreachable: inconclusive
   if (ctx.tmuxAvailable === false) return null; // tmux itself unavailable: inconclusive
   return false;
