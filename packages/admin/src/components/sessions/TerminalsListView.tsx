@@ -21,6 +21,7 @@ import {
 } from '../../lib/sessions.js';
 import { selectedAppId } from '../../lib/state.js';
 import { PrBadges } from '../PrBadges.js';
+import { toggleDotMenu } from '../../lib/dot-menu.js';
 
 export function TerminalsListView() {
   const sessions = allSessions.value;
@@ -95,7 +96,7 @@ export function TerminalsListView() {
                     onClick={(e) => {
                       e.stopPropagation();
                       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                      sidebarStatusMenu.value = { sessionId: s.id, x: rect.right + 4, y: rect.top };
+                      sidebarStatusMenu.value = toggleDotMenu(sidebarStatusMenu.value, { sessionId: s.id, x: rect.right + 4, y: rect.top });
                     }}
                   />
                 </span>

@@ -84,6 +84,7 @@ import { copyText, copyWithTooltip } from '../../lib/clipboard.js';
 import { TerminalPicker } from '../pickers/TerminalPicker.js';
 import { SessionIdMenu } from '../sessions/SessionIdMenu.js';
 import { beginDragShield } from '../../lib/drag-shield.js';
+import { toggleDotMenu } from '../../lib/dot-menu.js';
 
 const statusMenuOpen = signal<{ sessionId: string; x: number; y: number } | null>(null);
 const renamingSessionId = signal<string | null>(null);
@@ -491,7 +492,7 @@ function PaneTabBar({
               onClick={(e) => {
                 e.stopPropagation();
                 const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                statusMenuOpen.value = { sessionId: sid, x: rect.left, y: rect.bottom + 4 };
+                statusMenuOpen.value = toggleDotMenu(statusMenuOpen.value, { sessionId: sid, x: rect.left, y: rect.bottom + 4 });
               }}
             >
               {ctrlShiftHeld.value && tabNum !== null && (

@@ -15,6 +15,7 @@ import {
 import { startPanelDrag } from '../../lib/tab-drag.js';
 import { IdDropdownMenu, WindowMenu } from './PopoutPanelContent.js';
 import { popoutIdMenuOpen, popoutWindowMenuOpen, popoutStatusMenuOpen } from './popout-signals.js';
+import { toggleDotMenu } from '../../lib/dot-menu.js';
 
 // Tab/header bar used when a panel holds exactly one tab.
 //
@@ -69,7 +70,11 @@ export function PopoutSingletonBar({
           onClick={(e) => {
             e.stopPropagation();
             const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-            popoutStatusMenuOpen.value = { sessionId: activeId, panelId: panel.id, x: rect.left, y: rect.bottom + 4 };
+            popoutStatusMenuOpen.value = toggleDotMenu(
+              popoutStatusMenuOpen.value,
+              { sessionId: activeId, panelId: panel.id, x: rect.left, y: rect.bottom + 4 },
+              (a, b) => a.sessionId === b.sessionId && a.panelId === b.panelId,
+            );
           }}
         />
       )}

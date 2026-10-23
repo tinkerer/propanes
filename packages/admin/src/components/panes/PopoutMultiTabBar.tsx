@@ -20,6 +20,7 @@ import {
 } from '../../lib/sessions.js';
 import { startTabDrag, startPanelDrag } from '../../lib/tab-drag.js';
 import { ctrlShiftHeld } from '../../lib/shortcuts.js';
+import { toggleDotMenu } from '../../lib/dot-menu.js';
 import { PanelTabBadge, IdDropdownMenu, WindowMenu } from './PopoutPanelContent.js';
 import {
   popoutIdMenuOpen,
@@ -130,7 +131,11 @@ export function PopoutMultiTabBar({
                   onClick={(e) => {
                     e.stopPropagation();
                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                    popoutStatusMenuOpen.value = { sessionId: sid, panelId: panel.id, x: rect.left, y: rect.bottom + 4 };
+                    popoutStatusMenuOpen.value = toggleDotMenu(
+                      popoutStatusMenuOpen.value,
+                      { sessionId: sid, panelId: panel.id, x: rect.left, y: rect.bottom + 4 },
+                      (a, b) => a.sessionId === b.sessionId && a.panelId === b.panelId,
+                    );
                   }}
                 >
                   {ctrlShiftHeld.value && gn !== null && <PanelTabBadge tabNum={gn} />}
