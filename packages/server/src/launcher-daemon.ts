@@ -52,7 +52,7 @@ import {
 } from './jsonl-utils.js';
 import { newTranscriptCursor, scanTranscriptForPrUrls, type TranscriptScanCursor } from './pr-transcript-scan.js';
 import { buildCodexArgs, resolveCodexCommand } from './codex-bin.js';
-import { createEdgeSession, resolveEdgeConfig } from './workbench-edge.js';
+import { createPortalSession, resolvePortalConfig } from './auth-portal.js';
 import { mapMessagePaths, parsePathMap } from './launcher-paths.js';
 
 const SERVER_WS_URL = process.env.SERVER_WS_URL || 'ws://localhost:3001/ws/launcher';
@@ -63,8 +63,9 @@ const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || '5', 10);
 const MACHINE_ID = process.env.MACHINE_ID || undefined;
 const LAUNCHER_VERSION = (globalThis as any).__LAUNCHER_VERSION__ || '0.1.0';
 const PATH_MAP = parsePathMap(process.env.LAUNCHER_PATH_MAP);
-const edgeConfig = resolveEdgeConfig(SERVER_WS_URL);
-const edgeSession = edgeConfig ? createEdgeSession(edgeConfig) : null;
+// Servers behind an SSO auth portal need its session cookie on the WS upgrade.
+const portalConfig = resolvePortalConfig(SERVER_WS_URL);
+const portalSession = portalConfig ? createPortalSession(portalConfig) : null;
 
 const MAX_OUTPUT_LOG = 500 * 1024;
 // How often a running agent's transcript is re-read for PR URLs.
@@ -1181,9 +1182,9 @@ async function connect(): Promise<void> {
   if (shuttingDown) return;
 
   let headers: Record<string, string> | undefined;
-  if (edgeSession) {
+  if (portalSession) {
     try {
-      headers = { Cookie: await edgeSession.cookie() };
+      headers = { Cookie: await portalSession.cookie() };
     } catch (err: any) {
       console.error(`[launcher] ${err.message}`);
       scheduleReconnect();
@@ -1192,7 +1193,7 @@ async function connect(): Promise<void> {
     if (shuttingDown) return;
   }
 
-  console.log(`[launcher] Connecting to ${SERVER_WS_URL}${edgeSession ? ` via Workbench edge (${edgeConfig!.host})` : ''}...`);
+  console.log(`[launcher] Connecting to ${SERVER_WS_URL}${portalSession ? ` through auth portal ${portalConfig!.url} (session for ${portalConfig!.host})` : ''}...`);
   ws = new WebSocket(SERVER_WS_URL, { headers });
 
   ws.on('open', () => {
@@ -1246,8 +1247,8 @@ async function connect(): Promise<void> {
 
   ws.on('error', (err) => {
     console.error(`[launcher] WebSocket error:`, err.message);
-    // The edge bounces an expired/revoked wb_session to its login page.
-    if (edgeSession && /Unexpected server response: (302|401|403)/.test(err.message)) edgeSession.invalidate();
+    // The portal bounces an expired/revoked session to its login page.
+    if (portalSession && /Unexpected server response: (302|401|403)/.test(err.message)) portalSession.invalidate();
   });
 }
 

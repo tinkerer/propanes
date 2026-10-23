@@ -351,11 +351,19 @@ curl -s 'http://localhost:3001/api/v1/launchers' | python3 -m json.tool
 
 Launchers connect via WebSocket, spawn PTY sessions, stream output with seq-numbered packets, heartbeat every 30s.
 
-**Servers behind the Workbench SSO edge** (`*.myworkbench.ai`) 302 the launcher's WS upgrade to a login page. Give the launcher a `wbcli_` token and it mints a `wb_session` cookie per connect (`src/workbench-edge.ts`): either set `WORKBENCH_CLI_TOKEN` (optional `WORKBENCH_EDGE`, `WORKBENCH_HOST`), or run `propanes login --workbench --server https://<host>` on that machine first and the launcher picks the token up from `~/.config/propanes/config.json`.
+**Servers behind an SSO auth portal.** Some deployments front the server with a login gateway that 302s every request without its session cookie, including the launcher's WS upgrade. The launcher then mints that cookie from a portal token before each connect (`src/auth-portal.ts`, generic protocol: `POST <portal>/auth/cli/session {host}` → `sso_url` → GET sets the cookie) and refreshes it before it expires. The portal, token and cookie are deployment specifics and live in the launcher's environment (or in the CLI's stored login for that server origin, `servers[origin].portal` in `~/.config/propanes/config.json`), never in code:
+
+| Variable | Meaning |
+|---|---|
+| `PROPANES_PORTAL_URL` | Portal base URL (the SSO login host) |
+| `PROPANES_PORTAL_TOKEN` | Portal token issued to this machine |
+| `PROPANES_PORTAL_HOST` | Host the session is minted for (default: the server's host) |
+| `PROPANES_PORTAL_COOKIE` | Session cookie name (default: whatever the callback sets) |
 
 ```bash
-SERVER_WS_URL=wss://propanes-vm.myworkbench.ai/ws/launcher LAUNCHER_ID=$(hostname -s) MACHINE_ID=<machine id on that server> \
-  LAUNCHER_PATH_MAP=/home/azureuser/propanes=$HOME/work/github.com/propanes-vm node dist/launcher-bundle.mjs
+SERVER_WS_URL=wss://<server-host>/ws/launcher LAUNCHER_ID=$(hostname -s) MACHINE_ID=<machine id on that server> \
+  PROPANES_PORTAL_URL=https://<portal-host> PROPANES_PORTAL_TOKEN=<token> \
+  LAUNCHER_PATH_MAP=<server project dir>=<local checkout> node dist/launcher-bundle.mjs
 ```
 
 Set `MACHINE_ID` to the machine row on *that* server, or the machine card there stays offline and won't target the launcher. `LAUNCHER_PATH_MAP` (`serverPrefix=localPrefix,…`) rewrites the server's project paths for a machine with a different layout. Point it at a dedicated worktree, not your working checkout: dispatch syncs code with `git checkout FETCH_HEAD --force` in that directory.
