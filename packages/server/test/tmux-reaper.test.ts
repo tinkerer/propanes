@@ -29,12 +29,12 @@ function plan(
 
 test('reaps unattached old sessions whose row is terminal or missing', () => {
   const out = plan(
-    [sess('killed1', 2 * MIN_AGE), sess('done1', 2 * MIN_AGE), sess('failed1', 2 * MIN_AGE), sess('gone1', 2 * MIN_AGE)],
-    { killed1: 'killed', done1: 'completed', failed1: 'failed' },
+    [sess('killed1', 2 * MIN_AGE), sess('done1', 2 * MIN_AGE), sess('failed1', 2 * MIN_AGE), sess('soft1', 2 * MIN_AGE), sess('gone1', 2 * MIN_AGE)],
+    { killed1: 'killed', done1: 'completed', failed1: 'failed', soft1: 'deleted' },
   );
   assert.deepEqual(
     out.map((c) => [c.sessionId, c.reason]),
-    [['killed1', 'killed'], ['done1', 'completed'], ['failed1', 'failed'], ['gone1', 'missing-row']],
+    [['killed1', 'killed'], ['done1', 'completed'], ['failed1', 'failed'], ['soft1', 'deleted'], ['gone1', 'missing-row']],
   );
   assert.equal(out[0].ageMs, 2 * MIN_AGE);
 });
