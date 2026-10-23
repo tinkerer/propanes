@@ -821,3 +821,74 @@ test('terminal mappings recover without transcript watchers', async () => {
   assert.ok(restarted.world.calls.includes('send-keys:S1:pwd'));
   assert.ok(!restarted.world.calls.some(c => c.startsWith('resume:')));
 });
+
+test('session and terminal list commands link all active items without creating or changing a thread', async () => {
+  const f = fixture();
+  const agent = f.world.newSession('F1', 'codex');
+  agent.appId = APP;
+  agent.title = 'Active bugfix';
+  const terminal = f.world.newSession('', 'claude');
+  terminal.permissionProfile = 'plain';
+  terminal.launcherName = 'MacBook';
+  const ended = f.world.newSession('F2', 'claude');
+  ended.status = 'completed';
+  await f.bridge.handleEvent(mention('[list-sessions]'));
+  await f.bridge.handleEvent(mention('[list-terminals]', { ts: '101.000' }));
+  await f.bridge.drain();
+  assert.ok(f.slack.texts()[0].includes(sessionUrl(agent.id)));
+  assert.ok(!f.slack.texts()[0].includes(sessionUrl(terminal.id)));
+  assert.ok(f.slack.texts()[1].includes(sessionUrl(terminal.id)));
+  assert.ok(!f.slack.texts().join().includes(sessionUrl(ended.id)));
+  assert.deepEqual(f.world.calls, []);
+  assert.equal(new StateRepo(f.store).threads().length, 0);
+  assert.equal(f.slack.posts[0].thread_ts, '100.000');
+});
+
+test('app-filtered listing resolves names and typos and excludes other apps', async () => {
+  for (const app of ['propanes', 'app-1', 'admin consle']) {
+    const f = fixture();
+    const own = f.world.newSession('F1', 'claude');
+    own.appId = APP;
+    const other = f.world.newSession('F2', 'codex');
+    other.appId = 'app-atlas';
+    await f.bridge.handleEvent(mention(`[app:${app} list-sessions]`));
+    assert.match(f.slack.texts()[0], /Active sessions for Admin Console/);
+    assert.ok(f.slack.texts()[0].includes(sessionUrl(own.id)));
+    assert.ok(!f.slack.texts()[0].includes(sessionUrl(other.id)));
+    assert.deepEqual(f.world.calls, []);
+  }
+});
+
+test('ambiguous and unknown app filters produce explanations before requesting session data', async () => {
+  for (const [app, pattern] of [['rep', /matches 2 applications/], ['missing', /No application matches/]] as const) {
+    const f = fixture();
+    f.world.propanes.listActiveSessions = async () => { throw new Error('must not be called'); };
+    await f.bridge.handleEvent(mention(`[app:${app} list-sessions]`));
+    assert.match(f.slack.texts()[0], pattern);
+    assert.deepEqual(f.world.calls, []);
+  }
+});
+
+test('listing inside an agent or terminal thread leaves its session mapping and state untouched', async () => {
+  for (const request of ['start work', '[terminal]']) {
+    const f = fixture();
+    await f.bridge.handleEvent(mention(request));
+    await f.bridge.drain();
+    const before = JSON.stringify(new StateRepo(f.store).threads());
+    const calls = f.world.calls.slice();
+    await f.bridge.handleEvent(threadReply('[list-sessions]'));
+    await f.bridge.handleEvent(threadReply('[list-terminals]'));
+    assert.equal(JSON.stringify(new StateRepo(f.store).threads()), before);
+    assert.deepEqual(f.world.calls, calls);
+  }
+});
+
+test('empty and failed listings return truthful messages', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[app:propanes list-sessions]'));
+  assert.equal(f.slack.texts()[0], 'No active sessions for Admin Console.');
+  f.world.propanes.listActiveSessions = async () => { throw new Error('API unavailable'); };
+  await f.bridge.handleEvent(mention('[list-terminals]'));
+  assert.match(f.slack.texts().at(-1)!, /Could not list active terminals: API unavailable/);
+  assert.deepEqual(f.world.calls, []);
+});

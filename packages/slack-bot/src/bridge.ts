@@ -16,6 +16,7 @@ import { extractImageRefs, filenameFor, IMAGE_MAX_BYTES, IMAGE_MIMES, type Image
 import { isStopKeyword, parseCommand, type OutputMode, type ParsedCommand, type Runtime } from './options';
 import { isLive, PropanesApiError, TERMINAL_STATUSES, type JsonlDelta, type PropanesClient, type SessionInfo } from './propanes';
 import { slackErrorCode, type SlackPoster } from './slack';
+import { sessionListing } from './session-listing';
 import { isOutsideInput, rememberSentPrompt, renderOutsideInput } from './outside-input';
 import { freshCheckpoint, threadKey, type StateRepo, type ThreadRecord } from './state';
 
@@ -173,6 +174,10 @@ export class SlackBridge {
       await this.react(ev);
       if (cmd.command === 'help') { await reply(helpText(await this.defaultAppName())); return; }
       if (cmd.command === 'status') { await reply(await this.statusText(record)); return; }
+      if (cmd.command === 'list-sessions' || cmd.command === 'list-terminals') {
+        await this.listActiveSessions(cmd, reply);
+        return;
+      }
       if (cmd.command === 'list-infra') {
         await reply(listInfraText(await this.d.propanes.listDispatchTargets()));
         return;
@@ -357,6 +362,24 @@ export class SlackBridge {
     if (ev.user) this.d.state.setRuntimePref(ev.teamId, ev.user, runtime);
     await reply(this.initialReply(record, staged.images.length + forwarded.length));
     this.watch(key);
+  }
+
+  private async listActiveSessions(cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<void> {
+    try {
+      let app: AppInfo | undefined;
+      if (cmd.app !== undefined) {
+        const apps = await this.d.propanes.listApplications();
+        const match = resolveApp(apps, cmd.app);
+        if (match.kind === 'many') { await reply(ambiguousAppText(cmd.app, match.apps)); return; }
+        if (match.kind === 'none') { await reply(unknownAppText(cmd.app, apps)); return; }
+        app = match.app;
+      }
+      const sessions = await this.d.propanes.listActiveSessions();
+      const parts = sessionListing(sessions, cmd.command === 'list-terminals', id => this.sessionUrl(id), app);
+      for (const part of parts) await reply(part);
+    } catch (err) {
+      await reply(`⚠️ Could not list active ${cmd.command === 'list-terminals' ? 'terminals' : 'sessions'}: ${escapeMrkdwn(safeMessage(err))}`);
+    }
   }
 
   private async resolveTargets(cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<{ app: AppInfo; infra?: InfraTarget } | undefined> {
@@ -940,6 +963,11 @@ export function helpText(defaultAppName?: string): string {
     '• reply `stop` (or `cancel`) — stop the thread\'s running session; a later reply resumes it',
     '• sessions idle for an hour are paused (agent stopped, conversation kept); any reply resumes them with their full context',
     '• prompts typed in the ProPanes terminal or structured view are echoed here as `👤 User asked outside Slack`, so the replies that follow are attributable',
+    '',
+    '*Session lists*',
+    '• `[list-sessions]` — all active agent sessions with clickable links',
+    '• `[app:propanes list-sessions]` — active agent sessions for that app (approximate app matching supported)',
+    '• `[list-terminals]` — all active plain terminals with clickable links',
     '',
     '*Terminals*',
     '• `[terminal]` / `[infra:macbook terminal]` — open a plain shell and return its session link; optional `[app:name]` supplies app context',

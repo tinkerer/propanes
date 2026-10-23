@@ -20,6 +20,9 @@ process.
 | `@amirobot [list-infra]` | Connected infrastructure (this server, machines, harnesses, sprites) with state, load and the `[infra:…]` option. Never creates a session |
 | `@amirobot [terminal]` | Open a plain shell and reply with its session link |
 | `@amirobot [infra:macbook terminal]` | Open a shell on that machine and reply with its session link |
+| `@amirobot [list-sessions]` | List all active agent sessions with clickable links |
+| `@amirobot [app:propanes list-sessions]` | List active agent sessions for the matching application |
+| `@amirobot [list-terminals]` | List all active plain terminals with clickable links |
 | `@amirobot [help]` | Threaded help: commands, defaults, output modes, examples. Never creates a session |
 | `@amirobot [status]` | The thread's session link, agent, state (working / waiting / idle / completed…) and history. Never creates, interrupts or resumes anything |
 | reply `stop` (also `cancel`, `halt`, `kill`) | Kills the thread's running session (preserved from the previous bot). A later reply resumes it |
@@ -80,6 +83,32 @@ working directory, so `[app:…]` and `[infra:…]` compose. The first reply and
 per thread: continuations resume with the parent session's launcher
 server-side, and `[infra:…]` naming another target in a later reply is refused
 without sending the message.
+
+### Listing active sessions and terminals
+
+`[list-sessions]` lists all active agent sessions visible to the bot's bearer
+token. `[app:propanes list-sessions]` restricts that list to the resolved app;
+commas (`[app:propanes, list-sessions]`) and separate bracket groups work too.
+App matching uses the same exact, partial and typo matching as dispatch.
+Ambiguous or unknown app names receive the existing explanatory replies before
+sessions are fetched. Without an app selector, the list covers every visible app,
+including when requested inside a thread associated with a particular app.
+
+`[list-terminals]` lists all active plain shell sessions. These commands treat
+`running`, `pending` and `dispatching` sessions as active, including running
+sessions waiting for input or idle. Completed, failed, killed and deleted items
+are excluded. Agent sessions and plain terminals appear in their respective
+lists, including sessions launched outside Slack.
+
+Each entry links to the public admin session page and includes its title (or
+feedback title/ID), ID, runtime or shell, status, and machine name when available.
+Long lists are split into Slack-sized messages without truncating the result set.
+An empty list explicitly says there are no active items. Listing is read-only:
+it never creates, interrupts or resumes sessions, forwards text to them, changes
+user preferences, or replaces the thread's current session mapping.
+
+Only `[list-sessions]` accepts an optional app selector. Other agent, infra,
+output, terminal options and prompt text are rejected for these list commands.
 
 ### Terminals
 

@@ -89,3 +89,17 @@ test('terminal rejects agent/output options, prompt text and standalone commands
     assert.ok(parseCommand(input).error, input);
   }
 });
+
+test('session listings accept optional app filtering, spaces, commas and groups', () => {
+  assert.deepEqual(parseCommand('[list-sessions]'), { command: 'list-sessions', text: '' });
+  assert.deepEqual(parseCommand('[list-terminals]'), { command: 'list-terminals', text: '' });
+  for (const input of ['[app:propanes list-sessions]', '[LIST-SESSIONS, APP=Propanes]', '[app:propanes] [list-sessions]']) {
+    assert.deepEqual(parseCommand(input), { command: 'list-sessions', app: 'propanes', text: '' });
+  }
+});
+
+test('session listing commands reject incompatible options and prompt text', () => {
+  for (const input of ['[list-sessions list-terminals]', '[list-sessions help]', '[list-sessions codex]', '[list-sessions quiet]', '[list-sessions terminal]', '[infra:local list-sessions]', '[app:propanes list-terminals]', '[list-terminals images]', '[list-sessions] run tests']) {
+    assert.ok(parseCommand(input).error, input);
+  }
+});

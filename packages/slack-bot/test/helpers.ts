@@ -112,6 +112,7 @@ export class World {
       const { lines: _l, ...row } = s;
       return row;
     },
+    listActiveSessions: async () => [...this.sessions.values()].map(({ lines: _l, ...row }) => row),
     listSessions: async (feedbackId) => [...this.sessions.values()].filter((s) => s.feedbackId === feedbackId).map(({ lines: _l, ...row }) => row),
     sendKeys: async (id, keys) => {
       this.calls.push(`send-keys:${id}:${keys}`);

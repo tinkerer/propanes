@@ -60,3 +60,19 @@ test('terminal API responses without a session ID are rejected', async () => {
   const client = createPropanesClient(createPropanesFetch('https://propanes.example.test', 'fixture-token', async () => new Response('{}')));
   await assert.rejects(client.createTerminal({ permissionProfile: 'plain' }), /did not return a session id/);
 });
+
+test('active session discovery fetches the complete authenticated list without a recent-row limit', async () => {
+  const { createPropanesClient } = await import('../src/propanes');
+  const client = createPropanesClient(createPropanesFetch('https://propanes.example.test', 'fixture-token', async (url, init) => {
+    assert.equal(String(url), 'https://propanes.example.test/api/v1/admin/agent-sessions');
+    assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer fixture-token');
+    return new Response(JSON.stringify([
+      { id: 'live', status: 'running', appId: 'app-1' },
+      { id: 'pending', status: 'pending' },
+      { id: 'dispatching', status: 'dispatching' },
+      { id: 'old', status: 'completed' },
+      { id: 'killed', status: 'killed' },
+    ]));
+  }));
+  assert.deepEqual((await client.listActiveSessions()).map(s => s.id), ['live', 'pending', 'dispatching']);
+});

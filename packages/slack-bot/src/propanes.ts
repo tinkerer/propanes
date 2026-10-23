@@ -61,6 +61,10 @@ export interface SessionInfo {
   feedbackId?: string | null;
   claudeSessionId?: string | null;
   title?: string | null;
+  appId?: string | null;
+  feedbackTitle?: string | null;
+  launcherName?: string | null;
+  machineName?: string | null;
 }
 
 export interface JsonlDelta {
@@ -95,6 +99,8 @@ export interface PropanesClient {
   /** POST /api/v1/admin/dispatch — what the admin dispatch popup calls. */
   dispatch(input: { feedbackId: string; agentEndpointId: string; instructions: string; permissionProfile: string; launcherId?: string }): Promise<{ sessionId: string }>;
   getSession(id: string): Promise<SessionInfo>;
+  /** Active sessions visible to the bot's bearer token; no recent-row limit. */
+  listActiveSessions(): Promise<SessionInfo[]>;
   /** Session rows for a feedback item, newest first, with live inputState. */
   listSessions(feedbackId: string): Promise<SessionInfo[]>;
   /** POST /:id/send-keys — SessionInputBar.sendTerminalText for a running session. */
@@ -156,6 +162,10 @@ export function createPropanesClient(api: PropanesFetch): PropanesClient {
       return { sessionId };
     },
     getSession: (id) => api(`/api/v1/admin/agent-sessions/${encodeURIComponent(id)}`),
+    listActiveSessions: async () => {
+      const rows: SessionInfo[] = await api('/api/v1/admin/agent-sessions');
+      return rows.filter(row => isLive(row.status));
+    },
     listSessions: (feedbackId) => api(`/api/v1/admin/agent-sessions?feedbackId=${encodeURIComponent(feedbackId)}`),
     sendKeys: async (id, keys) => {
       try {
