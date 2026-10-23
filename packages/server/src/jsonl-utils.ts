@@ -128,6 +128,29 @@ export function computeCodexJsonlPath(
   return findRolloutByCwd(codexRoot, cwd, startedAt) || direct;
 }
 
+const ROLLOUT_ID_RE = /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+
+/** The codex thread UUID embedded in a rollout filename
+ * (`rollout-2026-10-22T18-52-41-<uuid>.jsonl`), or null. */
+export function codexRolloutIdFromPath(rolloutPath: string | null): string | null {
+  if (!rolloutPath) return null;
+  const m = ROLLOUT_ID_RE.exec(basename(rolloutPath));
+  return m ? m[1].toLowerCase() : null;
+}
+
+/** The codex thread UUID a finished session can be continued from with
+ * `codex resume <id>`: its recorded rollout when we stashed one, otherwise the
+ * rollout that matches the session's cwd and start time. Null when no rollout
+ * can be attributed to the session (callers fall back to a context rebuild). */
+export function resolveCodexResumeId(
+  cwd: string | null,
+  codexSessionId: string | null,
+  startedAt?: string | null,
+  homeDir = homedir(),
+): string | null {
+  return codexRolloutIdFromPath(computeCodexJsonlPath(cwd, codexSessionId, startedAt, false, homeDir));
+}
+
 function findRolloutByCodexId(codexRoot: string, sessionId: string): string | null {
   // Scan year/month/day directories. Bounded by ~3 years of history; in
   // practice the file is in the past few days so we walk newest-first.

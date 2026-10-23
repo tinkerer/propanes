@@ -61,3 +61,37 @@ export function resolveCodexCommand(
   }
   return 'codex';
 }
+
+export interface CodexArgsInput {
+  /** `exec` (one-shot, pipe profiles) instead of the interactive TUI. */
+  pipe: boolean;
+  /** Pass --dangerously-bypass-approvals-and-sandbox (the *-yolo profiles). */
+  skip: boolean;
+  prompt?: string | null;
+  /** Codex thread (rollout) UUID to continue natively with `codex resume`. */
+  resumeSessionId?: string | null;
+}
+
+/**
+ * Argument list for a codex session. A resume continues the recorded thread
+ * with codex's own `resume` subcommand (`codex resume <id> [prompt]` for the
+ * TUI, `codex exec resume <id> [prompt]` for pipe profiles) so the agent gets
+ * its full prior context back instead of a re-typed task summary.
+ */
+export function buildCodexArgs({ pipe, skip, prompt, resumeSessionId }: CodexArgsInput): string[] {
+  const args: string[] = [];
+  if (pipe) args.push('exec');
+  if (resumeSessionId) args.push('resume');
+  if (!pipe) {
+    // The codex TUI runs tool calls in a shared, long-lived app-server
+    // daemon, so shell commands inherit the daemon's environment instead of
+    // this session's — PROPANES_TOKEN / PROPANES_API_URL (per-session) never
+    // reach them and the agent gets 401s. Keep the TUI in-process.
+    // `exec` already runs in-process and doesn't accept the flag.
+    args.push('--no-daemon');
+  }
+  if (skip) args.push('--dangerously-bypass-approvals-and-sandbox');
+  if (resumeSessionId) args.push(resumeSessionId);
+  if (prompt) args.push(prompt);
+  return args;
+}
