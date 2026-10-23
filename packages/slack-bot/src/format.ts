@@ -31,6 +31,19 @@ export function truncate(s: string, max: number): string {
   return `${s.slice(0, max)}… (+${(s.length - max).toLocaleString()} chars)`;
 }
 
+/** Feedback title for a Slack-dispatched session: the request's first line,
+ * cut at a word boundary. Session headers ellipsize whatever does not fit, so
+ * the cap only needs to keep the DB column (500) and list rows sane — the old
+ * 80-char cut lost the end of most one-sentence requests. */
+export const FEEDBACK_TITLE_MAX = 200;
+export function feedbackTitle(text: string): string {
+  const line = text.trim().split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+  if (line.length <= FEEDBACK_TITLE_MAX) return `Slack: ${line}`;
+  const cut = line.slice(0, FEEDBACK_TITLE_MAX);
+  const space = cut.lastIndexOf(' ');
+  return `Slack: ${(space > FEEDBACK_TITLE_MAX / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
 /** Split long text on paragraph/line boundaries, keeping code fences balanced. */
 export function chunkText(text: string, max = SLACK_CHUNK): string[] {
   if (text.length <= max) return [text];
