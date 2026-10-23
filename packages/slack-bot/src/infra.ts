@@ -4,6 +4,8 @@
  * Matching mirrors `[app:…]` — forgiving on case/punctuation, exact beats
  * partial, never a guess between several — and an offline target is refused
  * instead of silently running on the server. */
+import type { SectionBlock } from '@slack/bolt';
+import { OPEN_INFRA_TERMINAL_ACTION } from './infra-actions';
 import { matchTargets } from './targets';
 import { escapeMrkdwn } from './format';
 
@@ -76,6 +78,32 @@ export function listInfraText(list: InfraList): string {
     `*Connected infrastructure* (${all.length}) — start a request with \`[infra:<name>]\` to run the session there; without it sessions run on this server. The application (\`[app:…]\`) is synced to the target.`,
     ...all.map((t) => infraLine(t, LOCAL_LAUNCHER_ID)),
   ].join('\n');
+}
+
+/** Each target gets its own block; keep every message below Slack's 50-block limit. */
+export function listInfraMessages(list: InfraList): { text: string; blocks: SectionBlock[] }[] {
+  const targets = [localAsTarget(list.localTarget), ...list.targets];
+  const messages: { text: string; blocks: SectionBlock[] }[] = [];
+  for (let offset = 0; offset < targets.length; offset += 40) {
+    const rows = targets.slice(offset, offset + 40);
+    const heading = offset ? '*Connected infrastructure (continued)*' : `*Connected infrastructure* (${targets.length}) — choose a machine to open a new terminal.`;
+    const blocks: SectionBlock[] = [{ type: 'section', text: { type: 'mrkdwn', text: heading } }];
+    for (const target of rows) {
+      blocks.push({
+        type: 'section', text: { type: 'mrkdwn', text: infraLine(target, LOCAL_LAUNCHER_ID).slice(0, 2900) },
+        ...(canOpenTerminal(target) ? { accessory: {
+          type: 'button' as const, text: { type: 'plain_text' as const, text: 'Open terminal' },
+          action_id: OPEN_INFRA_TERMINAL_ACTION, value: target.launcherId,
+        } } : {}),
+      });
+    }
+    messages.push({ text: [heading, ...rows.map(t => infraLine(t, LOCAL_LAUNCHER_ID))].join('\n'), blocks });
+  }
+  return messages;
+}
+
+export function canOpenTerminal(target: InfraTarget): boolean {
+  return target.online && !target.isHarness && !target.isSprite;
 }
 
 export function ambiguousInfraText(query: string, targets: InfraTarget[]): string {

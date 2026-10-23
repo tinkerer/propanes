@@ -47,3 +47,22 @@ test('infra typos use raw name words and duplicate names retain exact ID choices
   const one = resolveInfra({ ...machines, targets: machines.targets.slice(0, 1) }, 'macbok');
   assert.equal(one.kind, 'one');
 });
+
+test('infra messages offer exact-target terminal buttons only for available machines', async () => {
+  const { listInfraMessages } = await import('../src/infra');
+  const result = listInfraMessages({ ...list, targets: [...list.targets,
+    { launcherId: 'h-1', name: 'Harness', online: true, isHarness: true },
+    { launcherId: 's-1', name: 'Sprite', online: true, isSprite: true },
+  ] });
+  const ids = result.flatMap(m => m.blocks).flatMap(b => b.accessory?.type === 'button' ? [b.accessory.value] : []);
+  assert.deepEqual(ids, ['local', 'laptop-1', 'gpu-1', 'gpu-2']);
+});
+
+test('large infra lists are split below the Slack block limit without losing targets', async () => {
+  const { listInfraMessages } = await import('../src/infra');
+  const targets = Array.from({ length: 100 }, (_, i) => ({ launcherId: `l-${i}`, name: `Machine ${i}`, online: true }));
+  const result = listInfraMessages({ localTarget: null, targets });
+  assert.ok(result.length > 1);
+  assert.ok(result.every(m => m.blocks.length <= 50));
+  assert.equal(result.flatMap(m => m.blocks).filter(b => b.accessory?.type === 'button').length, 101);
+});

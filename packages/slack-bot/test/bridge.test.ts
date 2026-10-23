@@ -650,7 +650,7 @@ test('[list-apps] lists the applications with the default marked; the default co
   assert.match(f.slack.texts().find((x) => x.includes('Session started'))!, /\*app\* Atlas/);
   await f.bridge.handleEvent(mention('[help]', { ts: '103.000' }));
   await f.bridge.drain();
-  assert.match(f.slack.texts().at(-1)!, /default: \*Atlas\*[\s\S]*\[list-apps\]/);
+  assert.match(f.slack.texts().at(-1)!, /default: \*Atlas\*[\s\S]*\[apps\]/);
 });
 
 test('an application cannot change inside a thread; the message is held back', async () => {

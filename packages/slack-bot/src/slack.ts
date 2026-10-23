@@ -1,6 +1,8 @@
 /** Minimal Slack surface the bridge needs, plus a per-channel pacing queue
  * (Slack's chat.postMessage guidance is ~1 message/second/channel). */
-export interface PostArgs { channel: string; thread_ts?: string; text: string; }
+import type { KnownBlock } from '@slack/bolt';
+
+export interface PostArgs { channel: string; thread_ts?: string; text: string; blocks?: KnownBlock[]; }
 export interface UploadArgs { channel: string; thread_ts?: string; filename: string; title: string; bytes: Buffer; comment?: string; }
 
 export interface SlackPoster {

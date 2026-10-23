@@ -18,7 +18,7 @@ export interface ParsedCommand {
   error?: string;
 }
 
-export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'terminal', 'help', 'status', 'list-apps', 'app:<name>', 'list-infra', 'infra:<name>', 'list-sessions', 'list-terminals'] as const;
+export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'terminal', 'help', 'status', 'list-apps', 'app:<name>', 'list-infra', 'infra:<name>', 'list-sessions', 'list-terminals', 'apps', 'infra', 'sessions', 'terminals'] as const;
 const STANDALONE = ['help', 'status', 'list-apps', 'list-infra'] as const;
 const VALUE_TOKEN = /^(app|infra)\s*[:=]\s*(.*)$/;
 
@@ -52,7 +52,7 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   const bracket = /^\[([^\]]*)\]\s*/;
   let m: RegExpExecArray | null;
   while ((m = bracket.exec(text)) !== null) {
-    for (const part of m[1].split(/,|\s+(?=(?:(?:app|infra)\s*[:=]|claude\b|codex\b|verbose\b|quiet\b|default\b|images\b|terminal\b|help\b|status\b|list-apps\b|list-infra\b|list-sessions\b|list-terminals\b))/i)) {
+    for (const part of m[1].split(/,|\s+(?=(?:(?:app|infra)\s*[:=]|claude\b|codex\b|verbose\b|quiet\b|default\b|images\b|terminal\b|help\b|status\b|list-apps\b|list-infra\b|list-sessions\b|list-terminals\b|apps\b|infra\b|sessions\b|terminals\b))/i)) {
       const t = part.trim().toLowerCase();
       if (t) tokens.push(t);
     }
@@ -65,9 +65,9 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   for (const t of tokens) {
     const m = VALUE_TOKEN.exec(t);
     if (m) values[m[1] as 'app' | 'infra'].push(m[2].trim());
-    else plain.push(t === 'apps' ? 'list-apps' : t === 'infra' || t === 'machines' ? 'list-infra' : t);
+    else plain.push(t === 'apps' ? 'list-apps' : t === 'infra' || t === 'machines' ? 'list-infra' : t === 'sessions' ? 'list-sessions' : t === 'terminals' ? 'list-terminals' : t);
   }
-  for (const [key, example, list] of [['app', 'my-app', 'list-apps'], ['infra', 'laptop', 'list-infra']] as const) {
+  for (const [key, example, list] of [['app', 'my-app', 'apps'], ['infra', 'laptop', 'infra']] as const) {
     if (values[key].some((v) => !v)) {
       return { command: 'prompt', text, error: `\`[${key}:]\` needs a name, e.g. \`[${key}:${example}]\`. Send \`[${list}]\` to see them.` };
     }
@@ -90,7 +90,7 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   if (listing) {
     const others = tokens.filter(t => t !== listing);
     if (others.length || values.infra.length || (listing === 'list-terminals' && appValues.length) || text) {
-      return { command: listing, text, error: `\`[${listing}]\` accepts ${listing === 'list-sessions' ? 'only an optional app selector' : 'no other options'} and no prompt text.` };
+      return { command: listing, text, error: `\`[${listing.replace(/^list-/, '')}]\` accepts ${listing === 'list-sessions' ? 'only an optional app selector' : 'no other options'} and no prompt text.` };
     }
     return { command: listing, text, ...(appValues.length ? { app: appValues[0] } : {}) };
   }
@@ -99,7 +99,7 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
     const others = tokens.filter((t) => t !== standalone);
     if (others.length || valueTokens.length) {
       const all = [...tokens, ...valueTokens];
-      return { command: standalone, text, error: `\`[${standalone}]\` cannot be combined with other options (got \`[${all.join(', ')}]\`).` };
+      return { command: standalone, text, error: `\`[${standalone.replace(/^list-/, '')}]\` cannot be combined with other options (got \`[${all.join(', ')}]\`).` };
     }
     return { command: standalone, text };
   }

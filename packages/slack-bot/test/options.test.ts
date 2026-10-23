@@ -103,3 +103,15 @@ test('session listing commands reject incompatible options and prompt text', () 
     assert.ok(parseCommand(input).error, input);
   }
 });
+
+test('short app/infra/session/terminal commands retain the list-* aliases', () => {
+  for (const [short, long] of [['apps', 'list-apps'], ['infra', 'list-infra'], ['sessions', 'list-sessions'], ['terminals', 'list-terminals']]) {
+    assert.deepEqual(parseCommand(`[${short.toUpperCase()}]`), parseCommand(`[${long}]`));
+  }
+  for (const input of ['[app:propanes sessions]', '[sessions app:propanes]', '[app:propanes, sessions]']) {
+    assert.deepEqual(parseCommand(input), { command: 'list-sessions', app: 'propanes', text: '' });
+  }
+  for (const input of ['[sessions terminals]', '[sessions infra]', '[apps sessions]', '[sessions codex]', '[terminals quiet]']) {
+    assert.ok(parseCommand(input).error, input);
+  }
+});
