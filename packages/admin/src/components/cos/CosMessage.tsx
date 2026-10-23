@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { serverPath } from '../../lib/base-path.js';
+import { publicAssetPath } from '../../lib/base-path.js';
 import {
   getSessionIdForThread,
   retryFailedAssistantMessage,
@@ -110,13 +110,7 @@ export function DayDivider({ ts }: { ts: number }) {
 }
 
 export function getAgentAvatarSrc(agentId: string | null | undefined): string | null {
-  if (agentId === 'default') {
-    // import.meta.env is a Vite augmentation not visible to the bare ts
-    // compiler; cast through unknown so the avatar path picks up the
-    // configured base URL without dragging vite/client types into tsconfig.
-    const env = (import.meta as unknown as { env?: { BASE_URL?: string } }).env;
-    return serverPath(`${env?.BASE_URL ?? '/'}chief-of-staff-avatar.svg`);
-  }
+  if (agentId === 'default') return publicAssetPath('chief-of-staff-avatar.svg');
   return null;
 }
 

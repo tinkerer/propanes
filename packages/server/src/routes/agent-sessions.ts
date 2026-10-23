@@ -23,6 +23,7 @@ import { storeUploads } from './uploads.js';
 import { listSessions, sendCommand } from '../sessions.js';
 import { getAdminUser, memberSessionScope, visibleToMember } from '../admin-auth.js';
 import { applyPrOverride, defaultRepoForSession, effectivePrUrls, normalizePrInput, parseUrlList } from '../pr-overrides.js';
+import { feedbackTagsSubquery, parseFeedbackTags } from '../session-source.js';
 import {
   computeJsonlPath,
   computeJsonlDir,
@@ -405,6 +406,11 @@ const sessionSelectFields = {
   lastActivityAt: schema.agentSessions.lastActivityAt,
   feedbackTitle: schema.feedbackItems.title,
   feedbackAppId: schema.feedbackItems.appId,
+  // Tags on the linked feedback row, comma-joined by SQLite. The Slack bridge
+  // tags every thread it dispatches `slack` + `amirobot`, which is how the
+  // admin tells an amirobot thread apart from a session someone dispatched by
+  // hand (session-source.ts).
+  feedbackTags: feedbackTagsSubquery(schema.agentSessions.feedbackId),
   agentName: schema.agentEndpoints.name,
   agentAppId: schema.agentEndpoints.appId,
   appProjectDir: schema.applications.projectDir,
@@ -521,6 +527,7 @@ async function enrichSessions(rows: SessionRow[]) {
       completedAt: r.completedAt,
       lastActivityAt: r.lastActivityAt,
       feedbackTitle: r.feedbackTitle || null,
+      feedbackTags: parseFeedbackTags(r.feedbackTags),
       agentName: r.agentName || null,
       title: r.title || null,
       prUrls: (() => {
@@ -644,7 +651,15 @@ agentSessionRoutes.get('/:id', async (c) => {
   }
 
   const prUrls = effectivePrUrls(session.prUrls, session.prUrlsAdded, session.prUrlsHidden);
-  return c.json({ ...session, prUrls: prUrls.length ? JSON.stringify(prUrls) : null });
+  const feedbackTags = session.feedbackId
+    ? parseFeedbackTags(
+      db.select({ tags: feedbackTagsSubquery(schema.feedbackItems.id) })
+        .from(schema.feedbackItems)
+        .where(eq(schema.feedbackItems.id, session.feedbackId))
+        .get()?.tags,
+    )
+    : null;
+  return c.json({ ...session, feedbackTags, prUrls: prUrls.length ? JSON.stringify(prUrls) : null });
 });
 
 // Correct the session's PR badges by hand: `{ add }` takes a PR URL,

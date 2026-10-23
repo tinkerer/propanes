@@ -1,4 +1,6 @@
 import { useState } from 'preact/hooks';
+import { publicAssetPath } from '../lib/base-path.js';
+import { isSlackSession } from '../lib/session-source.js';
 
 // "PR #123" tag shown next to a session wherever it's listed. The server
 // detects GitHub PR URLs in the session's PTY output (pr-detect.ts) and in its
@@ -44,14 +46,34 @@ export function prSearchText(prUrls: unknown): string {
   }).join(' ').toLowerCase();
 }
 
-// Runtime tag (claude / codex) — shown next to the PR badges wherever an agent
-// session is listed. Hidden for plain terminals and unknown sessions.
+// Runtime tag — shown next to the PR badges wherever an agent session is
+// listed. Renders the vendor's favicon (claude.ai / chatgpt.com, checked into
+// public/badges) rather than a text label so the rows stay narrow; the name
+// lives in the tooltip. Hidden for plain terminals and unknown sessions.
+const RUNTIME_BADGES = {
+  claude: { icon: 'badges/claude.png', label: 'Claude' },
+  codex: { icon: 'badges/chatgpt.png', label: 'Codex (OpenAI)' },
+} as const;
+
 export function RuntimeBadge({ runtime, permissionProfile }: { runtime?: string | null; permissionProfile?: string | null }) {
   if (permissionProfile === 'plain' || (!runtime && !permissionProfile)) return null;
   const rt = runtime === 'codex' ? 'codex' : 'claude';
+  const { icon, label } = RUNTIME_BADGES[rt];
   return (
-    <span class={`session-runtime-badge rt-${rt}`} title={`Runtime: ${rt === 'codex' ? 'Codex' : 'Claude'}`}>
-      {rt}
+    <span class={`session-runtime-badge rt-${rt}`} title={`Runtime: ${label}`} aria-label={`Runtime: ${label}`}>
+      <img class="session-badge-icon" src={publicAssetPath(icon)} alt="" draggable={false} />
+    </span>
+  );
+}
+
+// Source tag — a Slack favicon on sessions the amirobot bridge dispatched from
+// a Slack thread (feedback tagged `slack`, see lib/session-source.ts). Pass a
+// session row, or `slack` directly for an aggregate (a CoS thread divider).
+export function SourceBadge({ session, slack }: { session?: { feedbackTags?: unknown } | null; slack?: boolean }) {
+  if (!(slack ?? isSlackSession(session))) return null;
+  return (
+    <span class="session-source-badge src-slack" title="amirobot Slack thread" aria-label="amirobot Slack thread">
+      <img class="session-badge-icon" src={publicAssetPath('badges/slack.png')} alt="" draggable={false} />
     </span>
   );
 }
