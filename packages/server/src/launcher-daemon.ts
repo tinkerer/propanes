@@ -1038,7 +1038,10 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
       if (targetSession && targetSession.status === 'running') {
         targetSession.ptyProcess.write(msg.keys.normalize('NFC'));
         if (msg.enter !== false) {
-          setTimeout(() => targetSession.ptyProcess.write('\r'), 150);
+          // Codex keeps treating Enter as a newline for 120 ms after a burst
+          // of typed text, timed from when it ingests the text; leave a margin
+          // for a TUI that is busy rendering (see tmux-pty SEND_KEYS_ENTER_DELAY_MS).
+          setTimeout(() => targetSession.ptyProcess.write('\r'), 400);
         }
         const result: SendKeysResult = { type: 'send_keys_result', sessionId: msg.sessionId, ok: true };
         sendToServer(result);
