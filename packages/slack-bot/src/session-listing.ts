@@ -12,6 +12,7 @@ export function sessionListing(
   terminals: boolean,
   sessionUrl: (id: string) => string,
   app?: AppInfo,
+  apps: AppInfo[] = [],
 ): string[] {
   const rows = sessions.filter(s => isLive(s.status)
     && (s.permissionProfile === 'plain') === terminals
@@ -20,12 +21,26 @@ export function sessionListing(
   const scope = app ? ` for ${label(app.name)}` : '';
   if (!rows.length) return [`No active ${kind}${scope}.`];
   const lines = [`*Active ${kind}${scope}* (${rows.length})`];
+  // Group by identity, keeping the API's order within each application.
+  const groups = new Map<string | null, SessionInfo[]>();
   for (const s of rows) {
-    const title = label(s.title || s.feedbackTitle || s.id);
-    const state = s.inputState === 'waiting' ? `${s.status}, waiting for input`
-      : s.inputState === 'idle' ? `${s.status}, idle` : s.status;
-    const infra = s.machineName || s.launcherName;
-    lines.push(`• <${sessionUrl(s.id)}|${title}> · ${label(s.id)} · ${terminals ? 'shell' : label(s.runtime || 'agent')} · ${label(state)}${infra ? ` · ${label(infra)}` : ''}`);
+    const key = terminals ? null : s.appId || null;
+    const group = groups.get(key) || [];
+    group.push(s);
+    groups.set(key, group);
+  }
+  const appNames = new Map(apps.map(a => [a.id, a.name]));
+  if (app) appNames.set(app.id, app.name);
+  for (const [appId, group] of groups) {
+    const appName = appId ? appNames.get(appId) || `Unknown app (${appId})` : 'No app';
+    for (const [index, s] of group.entries()) {
+      const title = label(s.title || s.feedbackTitle || s.id);
+      const state = s.inputState === 'waiting' ? `${s.status}, waiting for input`
+        : s.inputState === 'idle' ? `${s.status}, idle` : s.status;
+      const infra = s.machineName || s.launcherName;
+      const heading = !terminals && index === 0 ? `*${label(appName)}*\n` : '';
+      lines.push(`${heading}• <${sessionUrl(s.id)}|${title}> · ${label(s.id)} · ${terminals ? 'shell' : label(s.runtime || 'agent')} · ${label(state)}${infra ? ` · ${label(infra)}` : ''}`);
+    }
   }
   return coalesce(lines);
 }
