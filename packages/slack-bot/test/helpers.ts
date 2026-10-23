@@ -1,6 +1,8 @@
 /** Mocked Slack + ProPanes for bridge tests: no network, no real sessions. */
 import { SlackBridge, type BridgeConfig, type IncomingSlackMessage } from '../src/bridge';
 import type { AgentEndpointInfo } from '../src/agents';
+import type { AppInfo } from '../src/apps';
+import type { InfraList } from '../src/infra';
 import { SlackFileAccessError, type DownloadedFile, type SlackFileDownloader, type SlackFileInfo } from '../src/attachments';
 import type { JsonlDelta, PropanesClient, SessionInfo } from '../src/propanes';
 import type { SlackPoster, UploadArgs, PostArgs } from '../src/slack';
@@ -16,6 +18,14 @@ export const agents: AgentEndpointInfo[] = [
 ];
 
 export interface FakeSession extends SessionInfo { lines: string[]; }
+
+export const apps: AppInfo[] = [
+  { id: APP, name: 'Admin Console', projectDir: '/home/x/propanes' },
+  { id: 'app-atlas', name: 'Atlas', projectDir: '/home/x/atlas' },
+  { id: 'app-sc', name: 'Storefront', projectDir: '/home/x/storefront' },
+  { id: 'app-rep', name: 'Reports', projectDir: '/home/x/reports' },
+  { id: 'app-rep-st', name: 'Reports Staging', projectDir: '/mnt/reports-staging-src' },
+];
 
 let uuidCounter = 0;
 const uuid = () => `u-${++uuidCounter}`;
@@ -33,6 +43,16 @@ export class World {
   calls: string[] = [];
   images = new Map<string, { bytes: Buffer; mime: string }>();
   agents = agents.slice();
+  apps = apps.slice();
+  infra: InfraList = {
+    localTarget: { name: 'shared-vm', hostname: 'shared-vm', machineId: 'm-local' },
+    targets: [
+      { launcherId: 'laptop-1', name: 'dev-laptop', hostname: 'dev-laptop.local', machineName: 'dev-laptop', machineId: 'm-laptop', online: true, activeSessions: 3, maxSessions: 5 },
+      { launcherId: 'db-machine:m-stage', name: 'build-vm', hostname: 'build-vm', machineName: 'build-vm', machineId: 'm-stage', online: false },
+      { launcherId: 'gpu-1', name: 'gpu-box-a', hostname: 'gpu-a', online: true, activeSessions: 0, maxSessions: 2 },
+      { launcherId: 'gpu-2', name: 'gpu-box-b', hostname: 'gpu-b', online: true, activeSessions: 0, maxSessions: 2 },
+    ],
+  };
   private n = 0;
 
   newSession(feedbackId: string, runtime: string, parent?: string): FakeSession {
@@ -60,7 +80,10 @@ export class World {
   propanes: PropanesClient = {
     me: async () => ({ user: { id: 'env-admin', username: 'admin', role: 'admin' } }),
     listAgents: async () => this.agents,
+    listApplications: async () => this.apps,
+    listDispatchTargets: async () => this.infra,
     createFeedback: async (input) => {
+      this.calls.push(`feedback-app:${input.appId}`);
       this.calls.push(`feedback:${input.title}${input.screenshots?.length ? `:screenshots=${input.screenshots.map((s) => s.name).join(',')}` : ''}`);
       return { id: `F${this.n + 1}` };
     },
@@ -75,6 +98,7 @@ export class World {
     dispatch: async (input) => {
       const agent = this.agents.find((a) => a.id === input.agentEndpointId)!;
       this.calls.push(`dispatch:${input.agentEndpointId}:${input.permissionProfile}`);
+      if (input.launcherId) this.calls.push(`dispatch-infra:${input.launcherId}`);
       this.calls.push(`instructions:${input.instructions}`);
       return { sessionId: this.newSession(input.feedbackId, agent.runtime || 'claude').id };
     },

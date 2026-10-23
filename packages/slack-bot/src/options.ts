@@ -3,17 +3,23 @@ export type Runtime = 'claude' | 'codex';
 export type OutputMode = 'default' | 'verbose' | 'quiet';
 
 export interface ParsedCommand {
-  command: 'help' | 'status' | 'prompt';
+  command: 'help' | 'status' | 'list-apps' | 'list-infra' | 'prompt';
   runtime?: Runtime;
   mode?: OutputMode;
   images?: boolean;
+  /** `[app:<name>]` — the ProPanes application (project) to run in, as typed (lower-cased). */
+  app?: string;
+  /** `[infra:<name>]` — the connected machine/launcher to run on, as typed (lower-cased). */
+  infra?: string;
   /** The request text with mentions and bracket options removed. */
   text: string;
   /** Set when the options are unknown or conflict; nothing must be dispatched. */
   error?: string;
 }
 
-export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'help', 'status'] as const;
+export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'help', 'status', 'list-apps', 'app:<name>', 'list-infra', 'infra:<name>'] as const;
+const STANDALONE = ['help', 'status', 'list-apps', 'list-infra'] as const;
+const VALUE_TOKEN = /^(app|infra)\s*[:=]\s*(.*)$/;
 
 const MENTION_RE = /<@[A-Z0-9]+(?:\|[^>]*)?>/g;
 
@@ -41,7 +47,7 @@ export function decodeSlackText(text: string): string {
 /** Parse every leading `[...]` group, case-insensitively, comma separated. */
 export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   let text = decodeSlackText(stripMentions(raw ?? '', botUserId));
-  const tokens: string[] = [];
+  let tokens: string[] = [];
   const bracket = /^\[([^\]]*)\]\s*/;
   let m: RegExpExecArray | null;
   while ((m = bracket.exec(text)) !== null) {
@@ -53,6 +59,24 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   }
   text = text.trim();
 
+  const values: Record<'app' | 'infra', string[]> = { app: [], infra: [] };
+  const plain: string[] = [];
+  for (const t of tokens) {
+    const m = VALUE_TOKEN.exec(t);
+    if (m) values[m[1] as 'app' | 'infra'].push(m[2].trim());
+    else plain.push(t === 'apps' ? 'list-apps' : t === 'infra' || t === 'machines' ? 'list-infra' : t);
+  }
+  for (const [key, example, list] of [['app', 'my-app', 'list-apps'], ['infra', 'laptop', 'list-infra']] as const) {
+    if (values[key].some((v) => !v)) {
+      return { command: 'prompt', text, error: `\`[${key}:]\` needs a name, e.g. \`[${key}:${example}]\`. Send \`[${list}]\` to see them.` };
+    }
+    if (values[key].length > 1) {
+      return { command: 'prompt', text, error: `Choose one ${key === 'app' ? 'application' : 'infrastructure target'}: ${values[key].map((v) => `\`[${key}:${v}]\``).join(' or ')}, not both.` };
+    }
+  }
+  const appValues = values.app;
+  const valueTokens = [...values.app.map((v) => `app:${v}`), ...values.infra.map((v) => `infra:${v}`)];
+  tokens = plain;
   const unknown = tokens.filter((t) => !(KNOWN_OPTIONS as readonly string[]).includes(t));
   if (unknown.length) {
     return {
@@ -61,13 +85,14 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
     };
   }
   const has = (t: string) => tokens.includes(t);
-  if (has('help') || has('status')) {
-    const cmd = has('help') ? 'help' : 'status';
-    const others = tokens.filter((t) => t !== cmd);
-    if (others.length || (has('help') && has('status'))) {
-      return { command: cmd, text, error: `\`[${cmd}]\` cannot be combined with other options (got \`[${tokens.join(', ')}]\`).` };
+  const standalone = STANDALONE.find(has);
+  if (standalone) {
+    const others = tokens.filter((t) => t !== standalone);
+    if (others.length || valueTokens.length) {
+      const all = [...tokens, ...valueTokens];
+      return { command: standalone, text, error: `\`[${standalone}]\` cannot be combined with other options (got \`[${all.join(', ')}]\`).` };
     }
-    return { command: cmd, text };
+    return { command: standalone, text };
   }
   if (has('claude') && has('codex')) {
     return { command: 'prompt', text, error: 'Choose one agent: `[claude]` or `[codex]`, not both.' };
@@ -81,6 +106,8 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   if (has('codex')) out.runtime = 'codex';
   if (modes.length === 1) out.mode = modes[0];
   if (has('images')) out.images = true;
+  if (appValues.length === 1) out.app = appValues[0];
+  if (values.infra.length === 1) out.infra = values.infra[0];
   return out;
 }
 

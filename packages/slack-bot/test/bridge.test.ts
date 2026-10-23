@@ -608,3 +608,107 @@ test('an outside prompt reopens the turn so quiet mode delivers its final answer
   assert.ok(i1 >= 0 && i2 > i1 && i3 > i2, texts.join('|'));
   assert.ok(texts[i2].includes('User asked outside Slack'), texts[i2]);
 });
+
+test('[app:<name>] runs the request in that application; the reply and status name it', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[claude, app:storefront] add a dark theme toggle'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('feedback-app:app-sc'), f.world.calls.join('|'));
+  assert.match(f.slack.texts()[0], /\*app\* Storefront/);
+  await f.bridge.handleEvent(threadReply('[status]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /\*app\* Storefront/);
+});
+
+test('an ambiguous or unknown application gets a clarifying list and nothing is started', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[app:rep] fix the chart'));
+  await f.bridge.drain();
+  let t = f.slack.texts().at(-1)!;
+  assert.match(t, /matches 2 applications/);
+  assert.ok(t.includes('*Reports*') && t.includes('*Reports Staging*'), t);
+  await f.bridge.handleEvent(mention('[app:nope] fix the chart', { ts: '101.000' }));
+  await f.bridge.drain();
+  t = f.slack.texts().at(-1)!;
+  assert.match(t, /No application matches `app:nope`/);
+  assert.ok(t.includes('*Atlas*'), t);
+  assert.equal(f.world.sessions.size, 0);
+  assert.ok(!f.world.calls.some((c) => c.startsWith('feedback') || c.startsWith('dispatch')), f.world.calls.join('|'));
+});
+
+test('[list-apps] lists the applications with the default marked; the default comes from config by name', async () => {
+  const f = fixture({ config: { defaultApp: 'atlas' } });
+  await f.bridge.handleEvent(mention('[list-apps]'));
+  await f.bridge.drain();
+  const t = f.slack.texts().at(-1)!;
+  assert.match(t, /\*Applications\* \(5\)/);
+  assert.match(t, /\*Atlas\*.*_\(default\)_/);
+  assert.equal(f.world.sessions.size, 0);
+  await f.bridge.handleEvent(mention('review the login flow', { ts: '102.000' }));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('feedback-app:app-atlas'), f.world.calls.join('|'));
+  assert.match(f.slack.texts().find((x) => x.includes('Session started'))!, /\*app\* Atlas/);
+  await f.bridge.handleEvent(mention('[help]', { ts: '103.000' }));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /default: \*Atlas\*[\s\S]*\[list-apps\]/);
+});
+
+test('an application cannot change inside a thread; the message is held back', async () => {
+  const f = fixture();
+  f.steps.push(() => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('[app:atlas] start'));
+  await f.bridge.handleEvent(threadReply('[app:storefront] now do it there'));
+  await f.bridge.handleEvent(threadReply('[app:atlas] same app is fine'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().find((x) => x.includes('cannot change mid-thread'))!, /runs in \*Atlas\*[\s\S]*not sent/);
+  assert.ok(!f.world.calls.some((c) => c.includes('now do it there')), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('send-keys:S1:same app is fine'), f.world.calls.join('|'));
+  assert.equal(f.world.sessions.size, 1);
+});
+
+test('[infra:<name>] dispatches to that launcher; the reply and status name it; continuations stay there', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[codex, app:propanes, infra:laptop] build the app'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.includes('dispatch-infra:laptop-1'), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('feedback-app:app-1'), f.world.calls.join('|'));
+  assert.match(f.slack.texts()[0], /\*app\* Admin Console · \*infra\* dev-laptop · \*agent\* Codex/);
+  await f.bridge.handleEvent(threadReply('[status]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /\*infra\* dev-laptop/);
+  // The session finished; a reply resumes it with no launcher of its own — the server keeps the parent's.
+  await f.bridge.handleEvent(threadReply('and screenshot it'));
+  await f.bridge.drain();
+  assert.ok(f.world.calls.some((c) => c.startsWith('resume:S1:')), f.world.calls.join('|'));
+  assert.equal(f.world.calls.filter((c) => c.startsWith('dispatch-infra')).length, 1);
+});
+
+test('[infra:local] runs on the server; offline, ambiguous and unknown targets start nothing', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[infra:local] start here'));
+  await f.bridge.drain();
+  assert.ok(!f.world.calls.some((c) => c.startsWith('dispatch-infra')), f.world.calls.join('|'));
+  assert.doesNotMatch(f.slack.texts()[0], /\*infra\*/);
+  for (const [q, re] of [['build', /is offline/], ['gpu', /matches 2 targets/], ['nope', /No infrastructure matches/]] as const) {
+    await f.bridge.handleEvent(mention(`[infra:${q}] go`, { ts: `${200 + Math.random()}` }));
+    await f.bridge.drain();
+    assert.match(f.slack.texts().at(-1)!, re);
+  }
+  assert.equal(f.world.sessions.size, 1);
+});
+
+test('[list-infra] lists targets without starting anything; infra cannot change mid-thread', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[list-infra]'));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().at(-1)!, /\*Connected infrastructure\* \(5\)[\s\S]*dev-laptop/);
+  assert.equal(f.world.sessions.size, 0);
+  f.steps.push(() => undefined, () => undefined, () => undefined);
+  await f.bridge.handleEvent(mention('start', { ts: '300.000' }));
+  await f.bridge.handleEvent(threadReply('[infra:laptop] now there', { threadTs: '300.000' }));
+  await f.bridge.handleEvent(threadReply('[infra:local] same place is fine', { threadTs: '300.000' }));
+  await f.bridge.drain();
+  assert.match(f.slack.texts().find((x) => x.includes('infrastructure cannot change'))!, /runs on this server[\s\S]*not sent/);
+  assert.ok(!f.world.calls.some((c) => c.includes('now there')), f.world.calls.join('|'));
+  assert.ok(f.world.calls.includes('send-keys:S1:same place is fine'), f.world.calls.join('|'));
+});

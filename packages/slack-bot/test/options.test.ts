@@ -48,3 +48,26 @@ test('Slack link and entity markup is decoded before the text reaches the agent'
   assert.equal(parseCommand('<@UBOT> [claude] check <https://a.test/b|a.test/b>', 'UBOT').text, 'check a.test/b (https://a.test/b)');
   assert.equal(decodeSlackText('1 &lt; 2 <@UALICE>'), '1 < 2 <@UALICE>');
 });
+
+test('[app:<name>] selects an application and [list-apps] is a standalone command', () => {
+  assert.deepEqual(parseCommand('<@UBOT> [claude, app:storefront] add a toggle'), { command: 'prompt', runtime: 'claude', app: 'storefront', text: 'add a toggle' });
+  assert.equal(parseCommand('[App: Reports Staging] go').app, 'reports staging');
+  assert.equal(parseCommand('[app=atlas] go').app, 'atlas');
+  assert.equal(parseCommand('[list-apps]').command, 'list-apps');
+  assert.equal(parseCommand('[apps]').command, 'list-apps');
+  assert.match(parseCommand('[list-apps, claude]').error!, /cannot be combined/);
+  assert.match(parseCommand('[help, app:x]').error!, /cannot be combined/);
+  assert.match(parseCommand('[app:a, app:b] go').error!, /Choose one application/);
+  assert.match(parseCommand('[app:] go').error!, /needs a name, e.g. `\[app:my-app\]`/);
+});
+
+test('[infra:<name>] selects a target and [list-infra] is standalone', () => {
+  assert.deepEqual(parseCommand('<@UBOT> [codex, app:propanes, infra:laptop] build it'), { command: 'prompt', runtime: 'codex', app: 'propanes', infra: 'laptop', text: 'build it' });
+  assert.equal(parseCommand('[Infra = dev-laptop.local] go').infra, 'dev-laptop.local');
+  assert.equal(parseCommand('[list-infra]').command, 'list-infra');
+  assert.equal(parseCommand('[infra]').command, 'list-infra');
+  assert.equal(parseCommand('[machines]').command, 'list-infra');
+  assert.match(parseCommand('[list-infra, infra:x]').error!, /cannot be combined/);
+  assert.match(parseCommand('[infra:a, infra:b] go').error!, /Choose one infrastructure target/);
+  assert.match(parseCommand('[infra:] go').error!, /needs a name/);
+});

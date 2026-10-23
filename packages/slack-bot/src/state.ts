@@ -44,6 +44,14 @@ export interface ThreadRecord {
   threadTs: string | null;
   sessionId: string;
   feedbackId: string;
+  /** ProPanes application the thread's sessions run in (records from before
+   * app selection fall back to the configured default). */
+  appId?: string;
+  appName?: string;
+  /** Remote launcher the thread's sessions run on (`[infra:…]`); unset = this server.
+   * Continuations inherit it server-side (resume falls back to the parent's launcher). */
+  launcherId?: string;
+  infraName?: string;
   runtime: Runtime;
   agentEndpointId: string;
   agentName: string;

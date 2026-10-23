@@ -7,9 +7,11 @@
  * structured transcript poll, rendered per the thread's mode, and delivered
  * by a per-thread watcher that checkpoints its cursor after every post. */
 import { AgentUnavailableError, configuredDefaultRuntime, resolveAgentEndpoint, runtimeLabel, type AgentEndpointInfo } from './agents';
+import { ambiguousAppText, defaultApp, listAppsText, resolveApp, unknownAppText, type AppInfo } from './apps';
 import { attachmentBlock, classifyAttachment, displayName, SlackFileAccessError, type DownloadedFile, type ForwardedAttachment, type SlackFileDownloader, type SlackFileInfo } from './attachments';
 import { extractFinalCosReply } from './cos-reply';
 import { coalesce, escapeMrkdwn, renderEvent, summarizeToolInput, toMrkdwn } from './format';
+import { ambiguousInfraText, listInfraText, LOCAL_LAUNCHER_ID, offlineInfraText, resolveInfra, unknownInfraText, type InfraTarget } from './infra';
 import { extractImageRefs, filenameFor, IMAGE_MAX_BYTES, IMAGE_MIMES, type ImageRef } from './images';
 import { isStopKeyword, parseCommand, type OutputMode, type ParsedCommand, type Runtime } from './options';
 import { isLive, PropanesApiError, TERMINAL_STATUSES, type JsonlDelta, type PropanesClient, type SessionInfo } from './propanes';
@@ -42,7 +44,10 @@ export interface IncomingSlackMessage {
 const HUMAN_SUBTYPES = new Set(['file_share', 'thread_broadcast']);
 
 export interface BridgeConfig {
+  /** Legacy default application id (fallback when `defaultApp` does not resolve). */
   appId: string;
+  /** Default application by name or id (`PROPANES_DEFAULT_APP`); `[app:<name>]` overrides per thread. */
+  defaultApp?: string;
   publicUrl: string;
   botUserId?: string;
   agentEndpointOverride?: string;
@@ -156,7 +161,7 @@ export class SlackBridge {
       if (!isDm && !ev.mentionsBot && !record) return; // ordinary chatter in an unrelated thread
 
       const cmd = parseCommand(ev.text, this.d.config.botUserId);
-      const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined;
+      const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined || cmd.app !== undefined || cmd.infra !== undefined;
       const attachments = ev.files?.length ?? 0;
       const reply = (text: string) => this.d.slack.postMessage({ channel: ev.channel, thread_ts: threadTs ?? undefined, text });
       if (!cmd.error && cmd.command === 'prompt' && !cmd.text && !hasOptions && !attachments) return;
@@ -166,8 +171,17 @@ export class SlackBridge {
         return;
       }
       await this.react(ev);
-      if (cmd.command === 'help') { await reply(helpText()); return; }
+      if (cmd.command === 'help') { await reply(helpText(await this.defaultAppName())); return; }
       if (cmd.command === 'status') { await reply(await this.statusText(record)); return; }
+      if (cmd.command === 'list-infra') {
+        await reply(listInfraText(await this.d.propanes.listDispatchTargets()));
+        return;
+      }
+      if (cmd.command === 'list-apps') {
+        const apps = await this.d.propanes.listApplications();
+        await reply(listAppsText(apps, this.defaultApp(apps).id));
+        return;
+      }
       const staged = attachments ? await this.downloadAttachments(ev, record, reply) : { images: [], files: [] };
       // An attachment-only message is a request to look at the attachment.
       if (!cmd.text && (staged.images.length || staged.files.length)) cmd.text = 'See the attached file(s).';
@@ -265,7 +279,7 @@ export class SlackBridge {
     const sessionId = record?.sessionId;
     if (staged.images.length) {
       try {
-        const up = await this.d.propanes.uploadScreenshots(sessionId, staged.images, this.d.config.appId);
+        const up = await this.d.propanes.uploadScreenshots(sessionId, staged.images, record ? this.threadAppId(record) : (await this.defaultAppInfo()).id);
         up.screenshots.forEach((s, i) => out.push({ kind: 'image', name: staged.images[i]?.name ?? s.filename, path: s.path, url: `${base}/api/v1/screenshots/${s.id}` }));
       } catch (err) {
         await reply(`📎 ⚠️ Could not stage ${staged.images.length} image${staged.images.length === 1 ? '' : 's'} for the session: ${escapeMrkdwn(safeMessage(err))}`);
@@ -273,7 +287,7 @@ export class SlackBridge {
     }
     if (staged.files.length) {
       try {
-        const up = await this.d.propanes.uploadFiles(sessionId, staged.files, this.d.config.appId);
+        const up = await this.d.propanes.uploadFiles(sessionId, staged.files, record ? this.threadAppId(record) : (await this.defaultAppInfo()).id);
         up.files.forEach((f) => out.push({ kind: 'file', name: f.originalName || f.filename, path: f.path, url: `${base}/api/v1/uploads/${f.id}` }));
       } catch (err) {
         await reply(`📎 ⚠️ Could not stage ${staged.files.length} file${staged.files.length === 1 ? '' : 's'} for the session: ${escapeMrkdwn(safeMessage(err))}`);
@@ -289,7 +303,26 @@ export class SlackBridge {
       await reply('Tell me what to do, e.g. `@amirobot review PR 2013`. Send `[help]` for options.');
       return;
     }
-    const { appId } = this.d.config;
+    const apps = await this.d.propanes.listApplications();
+    let app: AppInfo;
+    if (cmd.app !== undefined) {
+      const match = resolveApp(apps, cmd.app);
+      if (match.kind === 'many') { await reply(ambiguousAppText(cmd.app, match.apps)); return; }
+      if (match.kind === 'none') { await reply(unknownAppText(cmd.app, apps, this.defaultApp(apps).id)); return; }
+      app = match.app;
+    } else {
+      app = this.defaultApp(apps);
+    }
+    const appId = app.id;
+    let infra: InfraTarget | undefined;
+    if (cmd.infra !== undefined) {
+      const list = await this.d.propanes.listDispatchTargets();
+      const match = resolveInfra(list, cmd.infra);
+      if (match.kind === 'many') { await reply(ambiguousInfraText(cmd.infra, match.targets)); return; }
+      if (match.kind === 'offline') { await reply(offlineInfraText(match.target, list)); return; }
+      if (match.kind === 'none') { await reply(unknownInfraText(cmd.infra, list)); return; }
+      if (match.target.launcherId !== LOCAL_LAUNCHER_ID) infra = match.target;
+    }
     const agents = await this.d.propanes.listAgents(appId);
     const remembered = ev.user ? this.d.state.getRuntimePref(ev.teamId, ev.user) : undefined;
     const runtime: Runtime = cmd.runtime ?? remembered ?? configuredDefaultRuntime(agents, appId);
@@ -321,11 +354,13 @@ export class SlackBridge {
       agentEndpointId: endpoint.id,
       instructions: slackInstructions(mode) + extra,
       permissionProfile: PERMISSION_PROFILE,
+      ...(infra ? { launcherId: infra.launcherId } : {}),
     });
     const nowIso = new Date(this.now()).toISOString();
     const record: ThreadRecord = {
       key, teamId: ev.teamId, channel: ev.channel, threadTs,
-      sessionId, feedbackId: feedback.id, runtime, agentEndpointId: endpoint.id, agentName: endpoint.name || endpoint.id,
+      sessionId, feedbackId: feedback.id, appId, appName: app.name, runtime,
+      ...(infra ? { launcherId: infra.launcherId, infraName: infra.name } : {}), agentEndpointId: endpoint.id, agentName: endpoint.name || endpoint.id,
       mode, images,
       history: [{ sessionId, runtime, agentName: endpoint.name || endpoint.id, createdAt: nowIso }],
       delivery: freshCheckpoint(this.now(), this.now() - FRESH_SESSION_GRACE_MS), watching: true, createdAt: nowIso, updatedAt: nowIso,
@@ -340,7 +375,7 @@ export class SlackBridge {
   private initialReply(record: ThreadRecord, attached = 0): string {
     const lines = [
       `🚀 Session started: ${this.link(record.sessionId)}`,
-      `*agent* ${runtimeLabel(record.runtime)} (${escapeMrkdwn(record.agentName)}) · *output* ${record.mode} · *images* ${record.images ? 'on' : 'off'}`,
+      `*app* ${escapeMrkdwn(this.appLabel(record))}${this.infraLabel(record)} · *agent* ${runtimeLabel(record.runtime)} (${escapeMrkdwn(record.agentName)}) · *output* ${record.mode} · *images* ${record.images ? 'on' : 'off'}`,
     ];
     if (attached) lines.push(`📎 ${attached} attachment${attached === 1 ? '' : 's'} passed to the session.`);
     if (record.mode === 'quiet') lines.push('_Quiet mode: I will post only the final answer here when the session finishes._');
@@ -349,6 +384,23 @@ export class SlackBridge {
   }
 
   private async continueThread(ev: IncomingSlackMessage, record: ThreadRecord, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>, staged: StagedAttachments): Promise<void> {
+    if (cmd.app !== undefined) {
+      const apps = await this.d.propanes.listApplications();
+      const match = resolveApp(apps, cmd.app);
+      if (match.kind !== 'one' || match.app.id !== this.threadAppId(record)) {
+        await reply(`ℹ️ This thread's session runs in *${escapeMrkdwn(this.appLabel(record))}*; an application cannot change mid-thread. Start a new thread with \`[app:${escapeMrkdwn(cmd.app)}]\` for another project. Your message was not sent.`);
+        return;
+      }
+    }
+    if (cmd.infra !== undefined) {
+      const match = resolveInfra(await this.d.propanes.listDispatchTargets(), cmd.infra);
+      const sameTarget = match.kind === 'one' && (match.target.launcherId === (record.launcherId ?? LOCAL_LAUNCHER_ID));
+      if (!sameTarget) {
+        const where = record.infraName ? `on *${escapeMrkdwn(record.infraName)}*` : 'on this server';
+        await reply(`ℹ️ This thread's session runs ${where}; infrastructure cannot change mid-thread (continuations stay where the conversation is). Start a new thread with \`[infra:${escapeMrkdwn(cmd.infra)}]\`. Your message was not sent.`);
+        return;
+      }
+    }
     let changed = false;
     if (cmd.mode && cmd.mode !== record.mode) { record.mode = cmd.mode; changed = true; }
     if (cmd.images !== undefined && cmd.images !== record.images) { record.images = cmd.images; changed = true; }
@@ -406,9 +458,10 @@ export class SlackBridge {
    * the previous session's link; the new runtime starts as a continuation
    * (child session) of the current one, carrying the thread's task context. */
   private async switchRuntime(ev: IncomingSlackMessage, record: ThreadRecord, runtime: Runtime, text: string, reply: (t: string) => Promise<unknown>): Promise<void> {
-    const agents = await this.d.propanes.listAgents(this.d.config.appId);
+    const appId = this.threadAppId(record);
+    const agents = await this.d.propanes.listAgents(appId);
     try {
-      resolveAgentEndpoint(agents, runtime, this.d.config.appId);
+      resolveAgentEndpoint(agents, runtime, appId);
     } catch (err) {
       if (err instanceof AgentUnavailableError) {
         await reply(`⚠️ ${escapeMrkdwn(err.message)}. Staying on ${runtimeLabel(record.runtime)}; your message was not sent.`);
@@ -492,13 +545,41 @@ export class SlackBridge {
       : session.inputState === 'idle' ? 'running — idle (turn finished)'
       : `${session.status} — working`;
     const lines = [
-      `*session* ${this.link(record.sessionId)} · *agent* ${runtimeLabel(record.runtime)} (${escapeMrkdwn(record.agentName)})`,
+      `*session* ${this.link(record.sessionId)} · *app* ${escapeMrkdwn(this.appLabel(record))}${this.infraLabel(record)} · *agent* ${runtimeLabel(record.runtime)} (${escapeMrkdwn(record.agentName)})`,
       `*output* ${record.mode} · *images* ${record.images ? 'on' : 'off'} · *state* ${escapeMrkdwn(state)}`,
     ];
     if (record.history.length > 1) {
       lines.push(`*history* ${record.history.slice(0, -1).map((h) => `${this.link(h.sessionId)} (${runtimeLabel(h.runtime)})`).join(' → ')}`);
     }
     return lines.join('\n');
+  }
+
+  private threadAppId(record: ThreadRecord): string {
+    return record.appId ?? this.d.config.appId;
+  }
+
+  private infraLabel(record: ThreadRecord): string {
+    return record.launcherId ? ` · *infra* ${escapeMrkdwn(record.infraName ?? record.launcherId)}` : '';
+  }
+
+  private appLabel(record: ThreadRecord): string {
+    return record.appName ?? record.appId ?? this.d.config.appId;
+  }
+
+  private defaultApp(apps: AppInfo[]): AppInfo {
+    return defaultApp(apps, this.d.config.defaultApp, this.d.config.appId);
+  }
+
+  private async defaultAppInfo(): Promise<AppInfo> {
+    try {
+      return this.defaultApp(await this.d.propanes.listApplications());
+    } catch {
+      return { id: this.d.config.appId, name: this.d.config.defaultApp ?? this.d.config.appId };
+    }
+  }
+
+  private async defaultAppName(): Promise<string> {
+    return (await this.defaultAppInfo()).name;
   }
 
   private async currentSession(record: ThreadRecord): Promise<SessionInfo> {
@@ -784,15 +865,20 @@ export function promptForResume(text: string, mode: OutputMode): string {
   return mode === 'quiet' ? `${text.trim()}\n\n${slackInstructions('quiet')}` : text.trim();
 }
 
-export function helpText(): string {
+export function helpText(defaultAppName?: string): string {
+  const def = defaultAppName ? ` (default: *${escapeMrkdwn(defaultAppName)}*)` : '';
   return [
     '*amirobot — Slack ⇄ ProPanes sessions*',
     'Mention me with a request to start an agent session; every reply in the thread is sent to that session (no mention needed). Leading `[options]` are case-insensitive and may be comma-separated.',
     '',
     '*Commands*',
-    '• `@amirobot review PR 2013` — new session with your remembered agent (ProPanes default the first time)',
+    `• \`@amirobot review PR 2013\` — new session in the default application${def} with your remembered agent (ProPanes default the first time)`,
+    '• `@amirobot [app:<name>] …` / `[claude, app:storefront] …` — run in that application (project); partial names work when they match exactly one app, otherwise I list the candidates. Fixed per thread.',
+    '• `@amirobot [list-apps]` — the registered applications and their `[app:…]` option',
+    '• `@amirobot [infra:laptop] …` — run the session on that connected machine/launcher instead of this server (the app is synced there); offline or ambiguous targets are refused with the list. Fixed per thread.',
+    '• `@amirobot [list-infra]` — connected infrastructure (machines, harnesses, this server) with state, load and the `[infra:…]` option',
     '• `@amirobot [claude] …` / `[codex] …` — pick the agent; inside a thread this continues the task on the other agent',
-    '• `@amirobot [help]` — this message · `[status]` — the thread\'s session, agent, state and link',
+    '• `@amirobot [help]` — this message · `[status]` — the thread\'s session, app, agent, state and link',
     '• reply `stop` (or `cancel`) — stop the thread\'s running session; a later reply resumes it',
     '• sessions idle for an hour are paused (agent stopped, conversation kept); any reply resumes them with their full context',
     '• prompts typed in the ProPanes terminal or structured view are echoed here as `👤 User asked outside Slack`, so the replies that follow are attributable',
@@ -805,6 +891,8 @@ export function helpText(): string {
     '',
     '*Examples*',
     '• `@amirobot [codex, verbose] investigate the failing e2e test`',
+    '• `@amirobot [app:storefront] add a dark theme toggle`',
+    '• `@amirobot [codex, app:storefront, infra:laptop] build the app and screenshot it`',
     '• `@amirobot [quiet, images] screenshot the dashboard and describe it`',
     '• in a thread: `[verbose]` switches that thread to verbose for later replies',
   ].join('\n');
