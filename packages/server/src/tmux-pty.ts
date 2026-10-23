@@ -333,6 +333,32 @@ export function listPwTmuxSessions(): string[] {
   }
 }
 
+/** Every Propanes tmux session with the facts the orphan reaper needs. */
+export function listPwTmuxSessionsDetailed(): Array<{ sessionId: string; createdAt: number; attached: boolean }> {
+  try {
+    const output = execFileSync('tmux', [
+      ...TMUX_SOCKET, 'list-sessions', '-F', '#{session_name}\t#{session_created}\t#{session_attached}',
+    ], {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const out: Array<{ sessionId: string; createdAt: number; attached: boolean }> = [];
+    for (const line of output.split('\n')) {
+      const [name, created, attached] = line.split('\t');
+      if (!name || !name.startsWith(TMUX_PREFIX)) continue;
+      const createdSec = Number(created);
+      out.push({
+        sessionId: name.slice(TMUX_PREFIX.length),
+        createdAt: Number.isFinite(createdSec) ? createdSec * 1000 : 0,
+        attached: Number(attached) > 0,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 export interface TmuxSessionInfo {
   name: string;
   windows: number;

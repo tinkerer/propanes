@@ -110,13 +110,21 @@ systemRoutes.get('/read-file', (c) => {
   }
 });
 
+// The admin SPA is sometimes opened with the app's public key (pw_…) in
+// place of its id — the widget only ever knows the key, and the hash route it
+// opens carries that until applications have loaded. Accept either.
+function findApplication(idOrKey: string) {
+  return db.select().from(schema.applications).where(eq(schema.applications.id, idOrKey)).get()
+    ?? db.select().from(schema.applications).where(eq(schema.applications.apiKey, idOrKey)).get();
+}
+
 // Browse files in an app's projectDir (files + directories)
 systemRoutes.get('/browse-files', (c) => {
   const appId = c.req.query('appId');
   const relPath = c.req.query('path') || '.';
   if (!appId) return c.json({ error: 'appId query parameter required' }, 400);
 
-  const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
+  const app = findApplication(appId);
   if (!app) return c.json({ error: 'Application not found' }, 404);
   if (!app.projectDir) return c.json({ error: 'Application has no projectDir' }, 400);
 
@@ -166,7 +174,7 @@ systemRoutes.get('/git-status', (c) => {
   const appId = c.req.query('appId');
   if (!appId) return c.json({ error: 'appId query parameter required' }, 400);
 
-  const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
+  const app = findApplication(appId);
   if (!app) return c.json({ error: 'Application not found' }, 404);
   if (!app.projectDir) return c.json({ error: 'Application has no projectDir' }, 400);
 
@@ -209,7 +217,7 @@ systemRoutes.get('/git-diff', (c) => {
   const staged = c.req.query('staged') === 'true';
   if (!appId) return c.json({ error: 'appId query parameter required' }, 400);
 
-  const app = db.select().from(schema.applications).where(eq(schema.applications.id, appId)).get();
+  const app = findApplication(appId);
   if (!app) return c.json({ error: 'Application not found' }, 404);
   if (!app.projectDir) return c.json({ error: 'Application has no projectDir' }, 400);
 

@@ -13,7 +13,8 @@ import { db, schema, runMigrations } from './db/index.js';
 import type { AgentRuntime, PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
 import { STREAM_PROFILE_PTY_COLS } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
-import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, SEND_KEYS_ENTER_DELAY_MS, listPwTmuxSessions, getTmuxPaneCommand, detachTmuxClients, getTmuxPanePid, refreshTmuxClient } from './tmux-pty.js';
+import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, SEND_KEYS_ENTER_DELAY_MS, listPwTmuxSessions, listPwTmuxSessionsDetailed, killTmuxSession, getTmuxPaneCommand, detachTmuxClients, getTmuxPanePid, refreshTmuxClient } from './tmux-pty.js';
+import { planTmuxReap, TMUX_REAP_INTERVAL_MS } from './tmux-reaper.js';
 import { detectClaudeAuthRequired, detectClaudeTrustPrompt, stripTerminalControl } from './claude-auth-detect.js';
 import { createRecoveryParking } from './session-recovery.js';
 import { mergePrUrls, mergePrUrlList } from './pr-detect.js';
@@ -815,6 +816,9 @@ function killSessionProcess(sessionId: string): boolean {
   proc.status = 'killed';
   appendProcAuditMarker(proc, 'session-service killSessionProcess marked session killed');
   proc.ptyProcess.kill();
+  // ptyProcess is only our `tmux attach-session` client. Killing it detaches;
+  // the agent keeps running in the tmux session until that is killed too.
+  if (proc.tmuxSessionName) killTmuxSession(sessionId);
   clearInterval(proc.flushTimer);
   sendSequenced(proc, { kind: 'exit', exitCode: -1, status: 'killed' });
 
@@ -1283,10 +1287,16 @@ app.post('/spawn', async (c) => {
 app.post('/kill/:id', (c) => {
   const id = c.req.param('id');
   const killed = killSessionProcess(id);
-  if (!killed) {
-    return c.json({ error: 'Session not running or not found' }, 404);
+  if (killed) return c.json({ ok: true, id });
+  // Not one of ours (already killed, service restarted and never
+  // re-attached, row deleted) but the tmux session may still be running the
+  // agent. Tear it down so a kill or delete never leaves a process behind.
+  if (isTmuxAvailable() && tmuxSessionExists(id)) {
+    const ok = killTmuxSession(id);
+    appendSessionAuditMarker(id, `session-service /kill found no active process; tmux session ${ok ? 'killed' : 'kill failed'}`);
+    return c.json({ ok, id, tmuxOnly: true });
   }
-  return c.json({ ok: true, id });
+  return c.json({ error: 'Session not running or not found' }, 404);
 });
 
 app.post('/resize/:id', async (c) => {
@@ -1485,6 +1495,50 @@ try {
 } catch (err) {
   console.error('[session-service] recoverSessions failed at startup (continuing):', err);
 }
+
+// Kill tmux sessions nothing owns any more: rows already killed/completed/
+// failed (the kill path used to drop only the attach client, leaving the
+// agent running), and rows that were deleted. See tmux-reaper.ts for the
+// rules. Returns the number of sessions reaped.
+function reapOrphanedTmuxSessions(): number {
+  if (!isTmuxAvailable()) return 0;
+  const candidates = planTmuxReap({
+    tmuxSessions: listPwTmuxSessionsDetailed(),
+    lookupStatus: (sessionId) => {
+      const row = db.select({ status: schema.agentSessions.status })
+        .from(schema.agentSessions)
+        .where(eq(schema.agentSessions.id, sessionId))
+        .get();
+      return row ? row.status : null;
+    },
+    isActive: (sessionId) => activeSessions.has(sessionId),
+    isParked: (sessionId) => recoveryParking.isParked(sessionId),
+  });
+  let reaped = 0;
+  for (const c of candidates) {
+    const ok = killTmuxSession(c.sessionId);
+    if (ok) reaped++;
+    const ageMin = Math.round(c.ageMs / 60_000);
+    console.log(`[session-service] tmux reaper: ${ok ? 'killed' : 'failed to kill'} pw-${c.sessionId} (row ${c.reason}, ${ageMin} min old)`);
+    if (c.reason !== 'missing-row') {
+      appendSessionAuditMarker(c.sessionId, `session-service tmux reaper ${ok ? 'killed' : 'could not kill'} the orphaned tmux session (row ${c.reason}, ${ageMin} min old)`);
+    }
+  }
+  if (candidates.length > 0) {
+    console.log(`[session-service] tmux reaper: ${reaped}/${candidates.length} orphaned tmux sessions killed`);
+  }
+  return reaped;
+}
+
+// First sweep shortly after recovery so late re-attaches and parked viewers
+// have settled; then on an interval, because the main server marks rows
+// killed on its own when this service is unreachable.
+setTimeout(() => {
+  try { reapOrphanedTmuxSessions(); } catch (err) { console.error('[session-service] tmux reaper failed:', err); }
+}, 15_000).unref();
+setInterval(() => {
+  try { reapOrphanedTmuxSessions(); } catch (err) { console.error('[session-service] tmux reaper failed:', err); }
+}, TMUX_REAP_INTERVAL_MS).unref();
 
 // Give ended sessions that predate transcript scanning their PR badges. Off
 // the startup path so a slow disk never delays recovery or the listen.

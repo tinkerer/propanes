@@ -5,6 +5,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { eq } from 'drizzle-orm';
 
+// Spawns must fail fast instead of reaching a real session-service: on a dev
+// box with the service up, every run of this file otherwise starts two real
+// claude sessions that nothing ever kills.
+process.env.SESSION_SERVICE_URL = 'http://127.0.0.1:9';
 const tempDir = mkdtempSync(join(tmpdir(), 'propanes-resume-test-'));
 const dbPath = join(tempDir, 'test.db');
 process.env.DB_PATH = dbPath;
