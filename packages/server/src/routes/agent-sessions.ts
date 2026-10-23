@@ -6,7 +6,7 @@ import { basename, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { db, schema } from '../db/index.js';
 import { killSession } from '../agent-sessions.js';
-import { resumeAgentSession, dispatchTerminalSession, transferSession, getTransfer } from '../dispatch.js';
+import { forkAgentSession, resumeAgentSession, dispatchTerminalSession, transferSession, getTransfer } from '../dispatch.js';
 import {
   listRestoreQueue,
   restoreQueueItem,
@@ -714,6 +714,26 @@ agentSessionRoutes.post('/:id/kill', async (c) => {
   }
 
   return c.json({ id, killed: true });
+});
+
+agentSessionRoutes.post('/:id/fork', async (c) => {
+  const id = c.req.param('id');
+  const user = getAdminUser(c);
+  const parent = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, id)).get();
+  if (!parent || !visibleToMember(parent, user)) return c.json({ error: 'Session not found' }, 404);
+  if (user.role === 'member' && user.launcherId && parent.launcherId !== user.launcherId) {
+    return c.json({ error: 'Fork on your assigned machine only' }, 403);
+  }
+  const body = await c.req.json().catch(() => ({}));
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return c.json({ error: 'Expected an object' }, 400);
+  if (body.additionalPrompt !== undefined && typeof body.additionalPrompt !== 'string') {
+    return c.json({ error: 'additionalPrompt must be a string' }, 400);
+  }
+  try {
+    return c.json(await forkAgentSession(id, body.additionalPrompt));
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Fork failed' }, 400);
+  }
 });
 
 agentSessionRoutes.post('/:id/resume', async (c) => {

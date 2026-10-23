@@ -31,6 +31,7 @@ export interface LauncherCapabilities {
   maxSessions: number;
   hasClaudeCli: boolean;
   hasDocker?: boolean;
+  nativeForks?: boolean;
 }
 
 export interface LauncherHeartbeat {
@@ -43,6 +44,7 @@ export interface LauncherHeartbeat {
 export interface LauncherSessionStarted {
   type: 'launcher_session_started';
   sessionId: string;
+  claudeSessionId?: string;
   pid: number;
 }
 
@@ -234,6 +236,8 @@ export interface LaunchSession {
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
+  forkSessionId?: string;
+  forkStartedAt?: string;
   cols: number;
   rows: number;
 }

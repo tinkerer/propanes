@@ -7,6 +7,7 @@ export interface UploadArgs { channel: string; thread_ts?: string; filename: str
 
 export interface SlackPoster {
   postMessage(args: PostArgs): Promise<unknown>;
+  permalink(channel: string, ts: string): Promise<string>;
   addReaction(args: { channel: string; timestamp: string; name: string }): Promise<unknown>;
   uploadFile(args: UploadArgs): Promise<unknown>;
 }
@@ -26,7 +27,7 @@ export function slackErrorCode(error: unknown): string {
 }
 
 type BoltClient = {
-  chat: { postMessage(args: Record<string, unknown>): Promise<unknown> };
+  chat: { postMessage(args: Record<string, unknown>): Promise<unknown>; getPermalink(args: { channel: string; message_ts: string }): Promise<{ permalink?: string }> };
   reactions: { add(args: { channel: string; timestamp: string; name: string }): Promise<unknown> };
   files: { uploadV2(args: Record<string, unknown>): Promise<unknown> };
 };
@@ -34,6 +35,11 @@ type BoltClient = {
 export function posterFromClient(client: BoltClient): SlackPoster {
   return {
     postMessage: (args) => client.chat.postMessage({ ...args, unfurl_links: false, unfurl_media: false }),
+    permalink: async (channel, ts) => {
+      const result = await client.chat.getPermalink({ channel, message_ts: ts });
+      if (!result.permalink) throw new Error('Slack did not return a thread link');
+      return result.permalink;
+    },
     addReaction: (args) => client.reactions.add(args),
     uploadFile: ({ bytes, comment, ...rest }) => client.files.uploadV2({
       channel_id: rest.channel,
@@ -69,6 +75,7 @@ export class PacedPoster implements SlackPoster {
   }
 
   postMessage(args: PostArgs) { return this.run(args.channel, () => this.inner.postMessage(args)); }
+  permalink(channel: string, ts: string) { return this.inner.permalink(channel, ts); }
   addReaction(args: { channel: string; timestamp: string; name: string }) { return this.inner.addReaction(args); }
   uploadFile(args: UploadArgs) { return this.run(args.channel, () => this.inner.uploadFile(args)); }
 }

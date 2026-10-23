@@ -25,6 +25,7 @@ process.
 | `@amirobot [terminals]` | List all active plain terminals with clickable links |
 | `@amirobot [help]` | Threaded help: commands, defaults, output modes, examples. Never creates a session |
 | `@amirobot [status]` | The thread's session link, agent, state (working / waiting / idle / completed…) and history. Never creates, interrupts or resumes anything |
+| reply `[session] try another approach` | Fork this agent conversation with full native history into a new Slack thread; leave the original running |
 | reply `stop` (also `cancel`, `halt`, `kill`) | Kills the thread's running session (preserved from the previous bot). A later reply resumes it |
 
 Leading bracket options are case-insensitive, comma separated and may be split
@@ -38,6 +39,38 @@ changed.
 The short commands `[apps]`, `[infra]`, `[sessions]` and `[terminals]` are
 preferred; the existing `[list-apps]`, `[list-infra]`, `[list-sessions]` and
 `[list-terminals]` remain supported as aliases.
+
+### Thread replies and session branches
+
+After addressing the bot once, reply without another mention to use `[help]`,
+`[infra]`, `[terminals]`, `[sessions]`, `[apps]` and their long aliases. The bot
+remembers these conversations even when no session was started, including across
+listener restarts. Lists and help stay in the requesting thread.
+
+A new task in a thread with no session starts its own bot-rooted Slack thread.
+`[terminal]` and infrastructure terminal buttons also open a separate thread,
+where replies send shell input and `stop` closes that terminal. The source
+thread gets a link and retains its original session mapping.
+
+Reply `[session] optional task` in an existing agent thread to branch its full
+conversation into a separate Slack thread. With no task, the branch waits for
+your next reply instead of sending a model turn. The branch inherits the agent, app,
+machine and permission profile; output-mode options are allowed. Forks currently
+require the same runtime/app/machine, so target-changing selectors are rejected.
+Without an existing agent conversation, `[session] task` starts a fresh session
+in its own thread. Plain replies continue the current conversation.
+
+Forks use native CLI history: Claude `--resume … --fork-session --session-id …`,
+and Codex `exec fork --json` without a prompt (a local copy with no model turn),
+followed by `resume` of the new ID. Parent and branch have independent native
+transcripts; old inherited output is filtered from Slack delivery. Missing
+history, offline machines and older launchers fail explicitly, without resuming
+or stopping the parent or falling back to another machine.
+
+Deploy this change by rebuilding/restarting the Slack bot, main server and
+session service. Remote fork support also requires rebuilding/restarting the
+launcher on each target machine; launchers advertise `nativeForks` so old
+versions cannot silently discard fork requests. There are no admin UI changes.
 
 ### Applications
 
@@ -89,7 +122,7 @@ without sending the message.
 
 The `[infra]` response includes an **Open terminal** button for this server and
 each online remote machine. Clicking creates a plain terminal on that exact
-infrastructure and posts its clickable session link in the same thread. Existing
+infrastructure and opens a new thread for its clickable session link and input. Existing
 agent conversations stay associated with their original sessions. The target is
 rechecked at click time: removed/offline targets are refused, and harness/sprite
 targets have no plain-terminal button. Duplicate Socket Mode delivery of the same
