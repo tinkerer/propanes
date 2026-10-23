@@ -13,7 +13,7 @@ import { db, schema, runMigrations } from './db/index.js';
 import type { AgentRuntime, PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
 import { STREAM_PROFILE_PTY_COLS } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
-import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, listPwTmuxSessions, getTmuxPaneCommand, detachTmuxClients, getTmuxPanePid, refreshTmuxClient } from './tmux-pty.js';
+import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, SEND_KEYS_ENTER_DELAY_MS, listPwTmuxSessions, getTmuxPaneCommand, detachTmuxClients, getTmuxPanePid, refreshTmuxClient } from './tmux-pty.js';
 import { detectClaudeAuthRequired, detectClaudeTrustPrompt, stripTerminalControl } from './claude-auth-detect.js';
 import { createRecoveryParking } from './session-recovery.js';
 import { mergePrUrls, mergePrUrlList } from './pr-detect.js';
@@ -915,7 +915,7 @@ function sendKeysToSession(sessionId: string, keys: string, enter = true): void 
 
   writeToSession(sessionId, keys);
   if (enter) {
-    setTimeout(() => writeToSession(sessionId, '\r'), 150);
+    setTimeout(() => writeToSession(sessionId, '\r'), SEND_KEYS_ENTER_DELAY_MS);
   }
 }
 

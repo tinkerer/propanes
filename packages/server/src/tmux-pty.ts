@@ -225,31 +225,50 @@ export function captureTmuxPane(sessionId: string): string {
   }
 }
 
+// Codex's composer treats Enter as a newline, not a submit, while a "paste
+// burst" of typed characters is in flight and for a further 120 ms after the
+// last one — timed from when its event loop ingests the characters, not from
+// when tmux wrote them. A fixed 150 ms gap between text and Enter therefore
+// lost the race whenever the TUI was busy rendering, and the prompt sat in the
+// composer with a trailing newline until the next message submitted both.
+//
+// Text wrapped in bracketed-paste markers is an explicit paste instead, which
+// ends the burst window outright, so the text goes in through `paste-buffer
+// -p` (tmux adds the markers only when the pane's program has requested
+// bracketed paste; a plain shell gets the raw characters). Enter still follows
+// after a margin generous enough to cover a stalled TUI for programs that
+// don't use bracketed paste.
+export const SEND_KEYS_ENTER_DELAY_MS = 400;
+
+// Control characters are keystrokes (Escape, Ctrl-C, …) and must not be
+// pasted as text; tab, newline and carriage return are fine inside a paste.
+const KEYSTROKE_CONTROL_CHARS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/;
+let pasteBufferSeq = 0;
+
 export function sendKeysToTmux(sessionId: string, keys: string, enter = true): boolean {
   const name = tmuxName(sessionId);
   try {
-    if (keys) {
+    if (keys && !KEYSTROKE_CONTROL_CHARS.test(keys)) {
+      const buffer = `pw-keys-${process.pid}-${++pasteBufferSeq}`;
       execFileSync('tmux', [
-        ...TMUX_SOCKET,
-        'send-keys',
-        '-t', name,
-        '-l',
-        keys,
+        ...TMUX_SOCKET, 'load-buffer', '-b', buffer, '-',
+      ], { stdio: 'pipe', input: keys });
+      execFileSync('tmux', [
+        ...TMUX_SOCKET, 'paste-buffer', '-p', '-d', '-b', buffer, '-t', name,
+      ], { stdio: 'pipe' });
+    } else if (keys) {
+      execFileSync('tmux', [
+        ...TMUX_SOCKET, 'send-keys', '-t', name, '-l', keys,
       ], { stdio: 'pipe' });
     }
     if (enter) {
-      // Codex treats immediate text+Enter as pasted multiline input. Delay
-      // the Enter key so the composer handles it as an explicit submit.
       setTimeout(() => {
         try {
           execFileSync('tmux', [
-            ...TMUX_SOCKET,
-            'send-keys',
-            '-t', name,
-            'Enter',
+            ...TMUX_SOCKET, 'send-keys', '-t', name, 'Enter',
           ], { stdio: 'pipe' });
         } catch {}
-      }, 150);
+      }, SEND_KEYS_ENTER_DELAY_MS);
     }
     return true;
   } catch {
