@@ -12,6 +12,7 @@ import { hydrateFeedback } from '../../dispatch.js';
 import { feedbackEvents } from '../../events.js';
 import { mintFeedbackThread } from '../../cos-inbox.js';
 import { getAdminUser, memberFeedbackScope, visibleToMember } from '../../admin-auth.js';
+import { sseResponse } from '../../sse.js';
 
 export const feedbackRoutes = new Hono();
 
@@ -51,49 +52,31 @@ feedbackRoutes.get('/feedback/tags', async (c) => {
   return c.json(rows);
 });
 
+// Live feedback change feed. The stream is recycled by sseResponse() under
+// the edge proxy's request timeout, so the client refetches on every
+// (re)open rather than relying on an unbroken event sequence.
 feedbackRoutes.get('/feedback/events', async (c) => {
   const user = getAdminUser(c);
-  return c.body(
-    new ReadableStream({
-      start(controller) {
-        const encoder = new TextEncoder();
-        const send = (event: string, data: unknown) => {
-          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-        };
+  return sseResponse(c, (sink) => {
+    sink.send('connected', { ts: Date.now() });
 
-        send('connected', { ts: Date.now() });
+    const canSee = (item: { id: string }) => {
+      const row = db.select({ ownerUserId: schema.feedbackItems.ownerUserId, orgId: schema.feedbackItems.orgId })
+        .from(schema.feedbackItems)
+        .where(eq(schema.feedbackItems.id, item.id))
+        .get();
+      return !!row && visibleToMember(row, user);
+    };
+    const onNew = (item: { id: string; appId: string | null }) => { if (canSee(item)) sink.send('new-feedback', item); };
+    const onUpdated = (item: { id: string; appId: string | null }) => { if (canSee(item)) sink.send('feedback-updated', item); };
+    feedbackEvents.on('new', onNew);
+    feedbackEvents.on('updated', onUpdated);
 
-        const canSee = (item: { id: string }) => {
-          const row = db.select({ ownerUserId: schema.feedbackItems.ownerUserId, orgId: schema.feedbackItems.orgId })
-            .from(schema.feedbackItems)
-            .where(eq(schema.feedbackItems.id, item.id))
-            .get();
-          return !!row && visibleToMember(row, user);
-        };
-        const onNew = (item: { id: string; appId: string | null }) => { if (canSee(item)) send('new-feedback', item); };
-        const onUpdated = (item: { id: string; appId: string | null }) => { if (canSee(item)) send('feedback-updated', item); };
-        feedbackEvents.on('new', onNew);
-        feedbackEvents.on('updated', onUpdated);
-
-        const keepalive = setInterval(() => {
-          try { controller.enqueue(encoder.encode(': keepalive\n\n')); } catch { /* closed */ }
-        }, 30_000);
-
-        c.req.raw.signal.addEventListener('abort', () => {
-          feedbackEvents.off('new', onNew);
-          feedbackEvents.off('updated', onUpdated);
-          clearInterval(keepalive);
-        });
-      },
-    }),
-    {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      },
-    }
-  );
+    return () => {
+      feedbackEvents.off('new', onNew);
+      feedbackEvents.off('updated', onUpdated);
+    };
+  });
 });
 
 feedbackRoutes.post('/feedback', async (c) => {

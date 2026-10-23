@@ -19,6 +19,7 @@ import {
   subscribeThreadEvents,
   subscribeAgentEvents,
 } from './cos-event-bus.js';
+import { sseResponse } from '../../sse.js';
 
 export const cosStreamRoutes = new Hono();
 
@@ -52,91 +53,62 @@ cosStreamRoutes.get('/chief-of-staff/threads/:id/events', async (c) => {
   });
   if (!thread) return c.json({ error: 'Thread not found' }, 404);
 
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    start(controller) {
-      let closed = false;
-      const enqueue = (event: string, data: unknown) => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-        } catch {
-          closed = true;
-        }
-      };
-      enqueue('hello', {
-        threadId,
-        at: Date.now(),
-        currentTurnId: thread.turnRequestId || null,
-        currentTurnStartSeq: thread.turnStartSeq ?? null,
-        replayTurnId,
-      });
+  // sseResponse() recycles the stream under the edge proxy's request
+  // timeout; the per-turn replay above covers the reconnect gap.
+  return sseResponse(c, (sink) => {
+    sink.send('hello', {
+      threadId,
+      at: Date.now(),
+      currentTurnId: thread.turnRequestId || null,
+      currentTurnStartSeq: thread.turnStartSeq ?? null,
+      replayTurnId,
+    });
 
-      // Replay buffered claude events so a late subscriber (or a reconnect)
-      // sees the gap between fromSeq and live. Prefer the explicit turnId
-      // from the query string; fall back to the thread's current in-flight
-      // turn for callers that didn't pin one (e.g. an idle dashboard).
-      const turnIdToReplay = replayTurnId || thread.turnRequestId || null;
-      if (turnIdToReplay) {
-        const replay = getTurnReplay(turnIdToReplay, fromSeq);
-        for (const ev of replay) enqueue('claude_event', ev);
+    // Replay buffered claude events so a late subscriber (or a reconnect)
+    // sees the gap between fromSeq and live. Prefer the explicit turnId
+    // from the query string; fall back to the thread's current in-flight
+    // turn for callers that didn't pin one (e.g. an idle dashboard).
+    const turnIdToReplay = replayTurnId || thread.turnRequestId || null;
+    if (turnIdToReplay) {
+      const replay = getTurnReplay(turnIdToReplay, fromSeq);
+      for (const ev of replay) sink.send('claude_event', ev);
+    }
+
+    // Replay the final turn_status if the requested turn has already
+    // ended. The live bus only delivers turn_status once, so a subscriber
+    // that joined post-completion (or one that reconnected after a brief
+    // EventSource drop while turn_status fired) would otherwise sit
+    // forever waiting and the optimistic assistant row would stay in
+    // "thinking" state indefinitely.
+    if (replayTurnId) {
+      const finalStatus = getTurnFinalStatus(replayTurnId);
+      if (finalStatus) {
+        sink.send('turn_status', finalStatus);
+      } else if (replayTurnId !== thread.turnRequestId) {
+        // No buffered status but the turn isn't current either — either
+        // the buffer was cleared (~30s after completion) or this turnId
+        // never existed. Either way the requested turn is definitively
+        // done from the server's perspective; synthesize a completed
+        // event so the client can settle.
+        sink.send('turn_status', {
+          kind: 'completed',
+          threadId,
+          turnId: replayTurnId,
+          exitCode: 0,
+          cancelled: false,
+        });
       }
+    }
 
-      // Replay the final turn_status if the requested turn has already
-      // ended. The live bus only delivers turn_status once, so a subscriber
-      // that joined post-completion (or one that reconnected after a brief
-      // EventSource drop while turn_status fired) would otherwise sit
-      // forever waiting and the optimistic assistant row would stay in
-      // "thinking" state indefinitely.
-      if (replayTurnId) {
-        const finalStatus = getTurnFinalStatus(replayTurnId);
-        if (finalStatus) {
-          enqueue('turn_status', finalStatus);
-        } else if (replayTurnId !== thread.turnRequestId) {
-          // No buffered status but the turn isn't current either — either
-          // the buffer was cleared (~30s after completion) or this turnId
-          // never existed. Either way the requested turn is definitively
-          // done from the server's perspective; synthesize a completed
-          // event so the client can settle.
-          enqueue('turn_status', {
-            kind: 'completed',
-            threadId,
-            turnId: replayTurnId,
-            exitCode: 0,
-            cancelled: false,
-          });
-        }
-      }
+    const unsubscribe = subscribeThreadEvents(threadId, (ev) => {
+      if (sink.closed) return;
+      if (ev.kind === 'claude_event') {
+        // Already replayed; suppress events the client has already seen.
+        if (ev.payload.seq > fromSeq) sink.send('claude_event', ev.payload);
+      } else if (ev.kind === 'turn_status') sink.send('turn_status', ev.payload);
+    });
 
-      const unsubscribe = subscribeThreadEvents(threadId, (ev) => {
-        if (closed) { try { unsubscribe(); } catch { /* ignore */ } return; }
-        if (ev.kind === 'claude_event') {
-          // Already replayed; suppress events the client has already seen.
-          if (ev.payload.seq > fromSeq) enqueue('claude_event', ev.payload);
-        } else if (ev.kind === 'turn_status') enqueue('turn_status', ev.payload);
-      });
-
-      const heartbeat = setInterval(() => {
-        if (closed) return;
-        try { controller.enqueue(encoder.encode(`event: ping\ndata: ${Date.now()}\n\n`)); } catch { closed = true; }
-      }, 25_000);
-      const cleanup = () => {
-        if (closed) return;
-        closed = true;
-        try { unsubscribe(); } catch { /* ignore */ }
-        clearInterval(heartbeat);
-        try { controller.close(); } catch { /* already closed */ }
-      };
-      c.req.raw.signal.addEventListener('abort', cleanup);
-    },
-  });
-  return c.body(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    },
+    return () => { try { unsubscribe(); } catch { /* ignore */ } };
   });
 });
 
@@ -147,44 +119,13 @@ cosStreamRoutes.get('/chief-of-staff/threads/:id/events', async (c) => {
 // its own /threads/:id/events stream which covers the gap.
 cosStreamRoutes.get('/chief-of-staff/agents/:agentId/stream', (c) => {
   const agentId = c.req.param('agentId');
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    start(controller) {
-      let closed = false;
-      const enqueue = (event: string, data: unknown) => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-        } catch {
-          closed = true;
-        }
-      };
-      enqueue('hello', { agentId, at: Date.now() });
-      const unsubscribe = subscribeAgentEvents(agentId, (ev) => {
-        if (closed) { try { unsubscribe(); } catch { /* ignore */ } return; }
-        if (ev.kind === 'claude_event') enqueue('claude_event', ev.payload);
-        else if (ev.kind === 'turn_status') enqueue('turn_status', ev.payload);
-      });
-      const heartbeat = setInterval(() => {
-        if (closed) return;
-        try { controller.enqueue(encoder.encode(`event: ping\ndata: ${Date.now()}\n\n`)); } catch { closed = true; }
-      }, 25_000);
-      const cleanup = () => {
-        if (closed) return;
-        closed = true;
-        try { unsubscribe(); } catch { /* ignore */ }
-        clearInterval(heartbeat);
-        try { controller.close(); } catch { /* already closed */ }
-      };
-      c.req.raw.signal.addEventListener('abort', cleanup);
-    },
-  });
-  return c.body(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    },
+  return sseResponse(c, (sink) => {
+    sink.send('hello', { agentId, at: Date.now() });
+    const unsubscribe = subscribeAgentEvents(agentId, (ev) => {
+      if (sink.closed) return;
+      if (ev.kind === 'claude_event') sink.send('claude_event', ev.payload);
+      else if (ev.kind === 'turn_status') sink.send('turn_status', ev.payload);
+    });
+    return () => { try { unsubscribe(); } catch { /* ignore */ } };
   });
 });

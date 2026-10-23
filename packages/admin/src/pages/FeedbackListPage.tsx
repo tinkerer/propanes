@@ -449,6 +449,19 @@ export function FeedbackListPage({ appId }: { appId: string }) {
     };
     es.addEventListener('new-feedback', onEvent);
     es.addEventListener('feedback-updated', onEvent);
+    // The server recycles the stream every ~90s (see server/src/sse.ts) and
+    // the browser reconnects on its own; anything emitted during that gap is
+    // covered by a refetch on each re-open. The first open is the initial
+    // loadFeedback() above.
+    let opened = false;
+    es.onopen = () => {
+      if (opened) {
+        loadFeedback();
+        api.getFeedbackTags(appId).then(tags => { availableTags.value = tags; }).catch(() => {});
+      }
+      opened = true;
+    };
+    es.onerror = () => { /* EventSource reconnects by itself */ };
 
     // Same-page widget submits: SSE on mobile Safari (and some proxies) can
     // buffer events, so piggyback on the widget's own submit event to reload
