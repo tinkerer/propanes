@@ -1067,6 +1067,14 @@ function attachAdminSocket(sessionId: string, ws: WebSocket): boolean {
       return true;
     }
 
+    if (session.status === 'running' && session.launcherId) {
+      // Hosted by a remote launcher: nothing to recover here and nothing to
+      // conclude about it. Show what we have; the main server bridges live
+      // output from the launcher.
+      ws.send(JSON.stringify({ type: 'history', data: stripTerminalFillRuns(session.outputLog || '') }));
+      return true;
+    }
+
     if (session.status === 'running') {
       // DB says running but not in activeSessions — try tmux recovery
       if (tryRecoverSession(session)) {
@@ -1169,7 +1177,14 @@ function recoverSessions(): void {
   let recovered = 0;
   let markedFailed = 0;
   let leftRecoverable = 0;
+  let remote = 0;
   for (const session of running) {
+    // Remote launcher sessions have no tmux session on this host; their
+    // liveness is the launcher's to report (main server, cleanupOrphanedSessions).
+    if (session.launcherId) {
+      remote++;
+      continue;
+    }
     if (tryRecoverSession(session)) {
       recovered++;
     } else {
@@ -1189,7 +1204,7 @@ function recoverSessions(): void {
   }
 
   if (running.length > 0) {
-    console.log(`[session-service] Recovery: ${recovered}/${running.length} sessions recovered from tmux; markedFailed=${markedFailed}; leftRecoverable=${leftRecoverable}`);
+    console.log(`[session-service] Recovery: ${recovered}/${running.length} sessions recovered from tmux; markedFailed=${markedFailed}; leftRecoverable=${leftRecoverable}; remote=${remote} (left to their launchers)`);
   }
 }
 
