@@ -52,6 +52,8 @@ import {
 } from './jsonl-utils.js';
 import { newTranscriptCursor, scanTranscriptForPrUrls, type TranscriptScanCursor } from './pr-transcript-scan.js';
 import { buildCodexArgs, resolveCodexCommand } from './codex-bin.js';
+import { createPortalSession, resolvePortalConfig } from './auth-portal.js';
+import { mapMessagePaths, parsePathMap } from './launcher-paths.js';
 
 const SERVER_WS_URL = process.env.SERVER_WS_URL || 'ws://localhost:3001/ws/launcher';
 const LAUNCHER_ID = process.env.LAUNCHER_ID || `launcher-${os.hostname()}`;
@@ -60,6 +62,10 @@ const LAUNCHER_AUTH_TOKEN = process.env.LAUNCHER_AUTH_TOKEN || '';
 const MAX_SESSIONS = parseInt(process.env.MAX_SESSIONS || '5', 10);
 const MACHINE_ID = process.env.MACHINE_ID || undefined;
 const LAUNCHER_VERSION = (globalThis as any).__LAUNCHER_VERSION__ || '0.1.0';
+const PATH_MAP = parsePathMap(process.env.LAUNCHER_PATH_MAP);
+// Servers behind an SSO auth portal need its session cookie on the WS upgrade.
+const portalConfig = resolvePortalConfig(SERVER_WS_URL);
+const portalSession = portalConfig ? createPortalSession(portalConfig) : null;
 
 const MAX_OUTPUT_LOG = 500 * 1024;
 // How often a running agent's transcript is re-read for PR URLs.
@@ -601,7 +607,7 @@ function handleReadSessionJsonl(msg: ReadSessionJsonl): void {
 
     let units: JsonlUnit[];
     if (msg.fileFilter && !isCodex) {
-      const target = listJsonlFiles(jsonlPath, false).find((file) => file.id === msg.fileFilter);
+      const target = listJsonlFiles(jsonlPath).find((file) => file.id === msg.fileFilter);
       if (!target || !existsSync(target.filePath)) {
         sendToServer(pending());
         return;
@@ -612,7 +618,7 @@ function handleReadSessionJsonl(msg: ReadSessionJsonl): void {
         : target.filePath;
       units = [{ key, path: target.filePath }];
     } else {
-      units = collectJsonlUnits(jsonlPath, isCodex, false);
+      units = collectJsonlUnits(jsonlPath, isCodex);
     }
 
     const offsets = decodeJsonlCursor(msg.cursor);
@@ -1164,11 +1170,31 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
   }
 }
 
-function connect(): void {
+function scheduleReconnect(): void {
+  console.log(`[launcher] Disconnected, reconnecting in ${reconnectDelay}ms...`);
+  reconnectTimer = setTimeout(() => {
+    reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
+    void connect();
+  }, reconnectDelay);
+}
+
+async function connect(): Promise<void> {
   if (shuttingDown) return;
 
-  console.log(`[launcher] Connecting to ${SERVER_WS_URL}...`);
-  ws = new WebSocket(SERVER_WS_URL);
+  let headers: Record<string, string> | undefined;
+  if (portalSession) {
+    try {
+      headers = { Cookie: await portalSession.cookie() };
+    } catch (err: any) {
+      console.error(`[launcher] ${err.message}`);
+      scheduleReconnect();
+      return;
+    }
+    if (shuttingDown) return;
+  }
+
+  console.log(`[launcher] Connecting to ${SERVER_WS_URL}${portalSession ? ` through auth portal ${portalConfig!.url} (session for ${portalConfig!.host})` : ''}...`);
+  ws = new WebSocket(SERVER_WS_URL, { headers });
 
   ws.on('open', () => {
     reconnectDelay = 1000;
@@ -1207,7 +1233,7 @@ function connect(): void {
 
   ws.on('message', (raw) => {
     try {
-      const msg = JSON.parse(raw.toString()) as ServerToLauncherMessage;
+      const msg = mapMessagePaths(JSON.parse(raw.toString()), PATH_MAP) as ServerToLauncherMessage;
       handleServerMessage(msg);
     } catch {}
   });
@@ -1216,16 +1242,13 @@ function connect(): void {
     ws = null;
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (shuttingDown) return;
-
-    console.log(`[launcher] Disconnected, reconnecting in ${reconnectDelay}ms...`);
-    reconnectTimer = setTimeout(() => {
-      reconnectDelay = Math.min(reconnectDelay * 2, 30_000);
-      connect();
-    }, reconnectDelay);
+    scheduleReconnect();
   });
 
   ws.on('error', (err) => {
     console.error(`[launcher] WebSocket error:`, err.message);
+    // The portal bounces an expired/revoked session to its login page.
+    if (portalSession && /Unexpected server response: (302|401|403)/.test(err.message)) portalSession.invalidate();
   });
 }
 
@@ -1251,5 +1274,5 @@ function shutdown(): void {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-connect();
-console.log(`[launcher] Daemon started: id=${LAUNCHER_ID}, name=${LAUNCHER_NAME}`);
+void connect();
+console.log(`[launcher] Daemon started: id=${LAUNCHER_ID}, name=${LAUNCHER_NAME}${PATH_MAP.length ? `, path map: ${PATH_MAP.map(([f, t]) => `${f} -> ${t}`).join(', ')}` : ''}`);
