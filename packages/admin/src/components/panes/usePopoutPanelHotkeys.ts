@@ -73,12 +73,6 @@ export function usePopoutPanelHotkeys(panels: PopoutPanelState[]) {
       let handled = true;
       if (key === 'c') {
         copyText(menuSessionId);
-      } else if (key === 'p') {
-        popBackIn(menuSessionId);
-      } else if (key === 'w') {
-        window.open(`#/session/${menuSessionId}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no');
-      } else if (key === 'b') {
-        window.open(`#/session/${menuSessionId}`, '_blank');
       } else if (key === 'j') {
         const s = sMap.get(menuSessionId);
         if (s?.jsonlPath) copyText(s.jsonlPath);

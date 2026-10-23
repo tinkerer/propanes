@@ -188,7 +188,6 @@ function PaneHeader({
   sessionId,
   sessionMap,
   exited,
-  canSplit,
   showCollapse,
   onToggleMinimized,
   onToggleMaximized,
@@ -196,7 +195,6 @@ function PaneHeader({
   sessionId: string | null;
   sessionMap: Map<string, any>;
   exited: Set<string>;
-  canSplit?: boolean;
   showCollapse?: boolean;
   onToggleMinimized?: () => void;
   onToggleMaximized?: () => void;
@@ -303,7 +301,7 @@ function PaneHeader({
                 isExited={isExited}
                 anchorRef={idMenuTriggerRef}
                 onClose={() => { idMenuOpen.value = null; }}
-                context={{ mode: 'tab', canSplit, enableSplit }}
+                context={{ mode: 'tab' }}
               />
             )}
           </div>
@@ -620,12 +618,6 @@ export function GlobalTerminalPanel() {
       let handled = true;
       if (key === 'c') {
         copyText(menuSessionId);
-      } else if (key === 'p') {
-        executePopout(menuSessionId, 'panel');
-      } else if (key === 'w') {
-        executePopout(menuSessionId, 'window');
-      } else if (key === 'b') {
-        executePopout(menuSessionId, 'tab');
       } else if (key === 'j') {
         const s = sessionMap.get(menuSessionId);
         if (s?.jsonlPath) copyText(s.jsonlPath);
@@ -836,7 +828,6 @@ export function GlobalTerminalPanel() {
   const ap = activePanelId.value;
   const fp = focusedPanelId.value;
   const isFocused = fp === 'global' || fp === 'split-left' || fp === 'split-right' || ap === 'global' || ap === 'split-left' || ap === 'split-right';
-  const canSplit = tabs.length >= 2 && !isSplit;
   const _zOrders = panelZOrders.value;
   const globalZIdx = getPanelZIndex('global-panel');
 
@@ -988,7 +979,6 @@ export function GlobalTerminalPanel() {
           sessionId={activeId}
           sessionMap={sessionMap}
           exited={exited}
-          canSplit={canSplit}
           showCollapse={!hasTabs}
           onToggleMinimized={toggleMinimized}
           onToggleMaximized={toggleMaximized}

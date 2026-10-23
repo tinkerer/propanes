@@ -2,7 +2,7 @@ import { useState } from 'preact/hooks';
 import { publicAssetPath } from '../lib/base-path.js';
 import { isSlackSession } from '../lib/session-source.js';
 
-// "PR #123" tag shown next to a session wherever it's listed. The server
+// "#123" PR tag shown next to a session wherever it's listed. The server
 // detects GitHub PR URLs in the session's PTY output (pr-detect.ts) and in its
 // transcript on disk (pr-transcript-scan.ts — where collapsed `gh pr` results
 // live) and exposes them as `prUrls` — string[] from the list API, raw JSON
@@ -105,7 +105,7 @@ export function PrBadges({ prUrls, compact }: { prUrls?: unknown; compact?: bool
             title={url}
             onClick={(e) => e.stopPropagation()}
           >
-            PR #{num}
+            #{num}
           </a>
         );
       })}
@@ -113,7 +113,7 @@ export function PrBadges({ prUrls, compact }: { prUrls?: unknown; compact?: bool
         <button
           type="button"
           class="session-pr-badge session-pr-badge-more"
-          title={hidden.map((u) => `PR #${prNumberFromUrl(u)} — ${u}`).join('\n')}
+          title={hidden.map((u) => `#${prNumberFromUrl(u)} — ${u}`).join('\n')}
           onClick={(e) => { e.stopPropagation(); setExpanded(true); }}
         >
           +{hidden.length}

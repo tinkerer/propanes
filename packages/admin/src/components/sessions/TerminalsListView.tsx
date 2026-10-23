@@ -9,7 +9,6 @@ import {
   persistPopoutState,
   openSession,
   focusOrDockSession,
-  deleteSession,
   focusSessionTerminal,
   getSessionLabel,
   getSessionColor,
@@ -18,7 +17,6 @@ import {
   activeTabId,
   rightPaneActiveId,
   sidebarStatusMenu,
-  sidebarItemMenu,
   sessionPassesFilters,
 } from '../../lib/sessions.js';
 import { selectedAppId } from '../../lib/state.js';
@@ -103,20 +101,6 @@ export function TerminalsListView() {
                 </span>
                 <span class="session-label">{label}</span>
                 <PrBadges prUrls={s.prUrls} compact />
-                <button
-                  class="sidebar-item-menu-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                    sidebarItemMenu.value = { sessionId: s.id, x: rect.right + 4, y: rect.top };
-                  }}
-                  title="Session actions"
-                >{'\u25BE'}</button>
-                <button
-                  class="session-delete-btn"
-                  onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}
-                  title="Archive session"
-                >{'\u00D7'}</button>
               </div>
             </div>
           );

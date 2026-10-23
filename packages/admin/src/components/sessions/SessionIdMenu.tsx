@@ -9,9 +9,6 @@ import {
   toggleCompanion,
   togglePanelCompanion,
   companionTabId,
-  popBackIn,
-  popOutTab,
-  removeSessionFromPanel,
   resumeSession,
   killSession,
   resolveSession,
@@ -26,7 +23,7 @@ import { branchPickerOpen, distillPickerOpen } from '../../lib/agent-actions.js'
 const RUNTIME_OPTIONS = ['claude', 'codex'] as const;
 
 export type SessionIdMenuContext =
-  | { mode: 'tab'; canSplit?: boolean; enableSplit?: () => void }
+  | { mode: 'tab' }
   | { mode: 'popout'; panel: PopoutPanelState }
   | { mode: 'standalone' };
 
@@ -94,20 +91,6 @@ export function SessionIdMenu({
       ? { kind: 'companion', sessionId, panelId: context.panel.id }
       : { kind: 'companion', sessionId };
   };
-
-  const panelAction = () => {
-    if (context.mode === 'popout') {
-      popBackIn(sessionId);
-    } else if (context.mode === 'tab') {
-      popOutTab(sessionId);
-    } else {
-      // standalone (mobile): no panel action; fall back to opening in a new tab
-      window.open(`#/session/${sessionId}`, '_blank');
-    }
-  };
-  const panelLabel = context.mode === 'popout' ? 'Pop back to tab bar' : 'Panel';
-
-  const canShowSplit = context.mode === 'tab' && context.canSplit && context.enableSplit;
 
   return (
     <PopupMenu anchorRef={anchorRef as any} onClose={onClose} className={`id-dropdown-menu${flipSubmenus ? ' flip-submenus' : ''}`}>
@@ -177,36 +160,9 @@ export function SessionIdMenu({
           )}
         </div>
       </div>
-      <div class={submenuClass('open-in')} onClick={(e: any) => e.stopPropagation()}>
-        <button type="button" class="id-submenu-trigger" onClick={() => toggleSubmenu('open-in')}>Open In</button>
-        <div class="id-submenu">
-          <button class="popup-menu-item" onClick={() => { onClose(); panelAction(); }}>
-            {panelLabel} <kbd>P</kbd>
-          </button>
-          <button class="popup-menu-item" onClick={() => {
-            onClose();
-            const win = window.open(`#/session/${sessionId}`, '_blank', 'width=900,height=600,menubar=no,toolbar=no');
-            if (win && context.mode === 'popout') removeSessionFromPanel(sessionId);
-          }}>
-            Window <kbd>W</kbd>
-          </button>
-          <button class="popup-menu-item" onClick={() => {
-            onClose();
-            const win = window.open(`#/session/${sessionId}`, '_blank');
-            if (win && context.mode === 'popout') removeSessionFromPanel(sessionId);
-          }}>
-            Browser Tab <kbd>B</kbd>
-          </button>
-          <button class="popup-menu-item" onClick={() => { onClose(); openLocalTerminal(sessionId); }}>
-            Terminal.app <kbd>T</kbd>
-          </button>
-          {canShowSplit && (
-            <button class="popup-menu-item" onClick={() => { onClose(); (context as { enableSplit: () => void }).enableSplit(); }}>
-              {'\u2AFF'} Split Panes <kbd>S</kbd>
-            </button>
-          )}
-        </div>
-      </div>
+      <button class="popup-menu-item" onClick={() => { onClose(); openLocalTerminal(sessionId); }}>
+        Open in Terminal.app <kbd>T</kbd>
+      </button>
       <div class={submenuClass('restart')} onClick={(e: any) => e.stopPropagation()}>
         <button type="button" class="id-submenu-trigger" onClick={() => toggleSubmenu('restart')}>{isExited ? 'Resume as...' : 'Restart as...'}</button>
         <div class="id-submenu">

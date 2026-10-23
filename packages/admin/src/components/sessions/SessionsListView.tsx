@@ -21,7 +21,6 @@ import {
   persistPopoutState,
   openSession,
   focusOrDockSession,
-  deleteSession,
   focusSessionTerminal,
   getSessionLabel,
   setSessionLabel,
@@ -37,7 +36,6 @@ import {
   pendingAutoJump,
   autoJumpPaused,
   sidebarStatusMenu,
-  sidebarItemMenu,
   sessionAppExcludes,
   toggleAppExclude,
   sessionGroupByApp,
@@ -265,13 +263,6 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
   }, [sidebarStatusMenu.value]);
 
   useEffect(() => {
-    if (!sidebarItemMenu.value) return;
-    const close = () => { sidebarItemMenu.value = null; };
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [sidebarItemMenu.value]);
-
-  useEffect(() => {
     loadCosDispatches();
     const timer = window.setInterval(() => { loadCosDispatches(); }, 30_000);
     return () => window.clearInterval(timer);
@@ -400,27 +391,6 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
           {!opts?.hideBadges && <SourceBadge session={s} />}
           {!opts?.hideBadges && <RuntimeBadge runtime={s.runtime} permissionProfile={s.permissionProfile} />}
           {!opts?.hideBadges && <PrBadges prUrls={s.prUrls} compact />}
-          <button
-            class="sidebar-item-menu-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-              sidebarItemMenu.value = { sessionId: s.id, x: rect.right + 4, y: rect.top };
-            }}
-            title="Session actions"
-          >
-            {'\u25BE'}
-          </button>
-          <button
-            class="session-delete-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              deleteSession(s.id);
-            }}
-            title="Archive session"
-          >
-            {'\u00D7'}
-          </button>
         </div>
         {showPausedPopup && (
           <div class="auto-jump-popup" onClick={(e) => e.stopPropagation()}>
