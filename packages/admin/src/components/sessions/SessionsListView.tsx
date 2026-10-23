@@ -58,6 +58,7 @@ import { chiefOfStaffAgents, chiefOfStaffActiveId, ensureChiefOfStaffAgent, load
 import { cosActiveThread } from '../../lib/cos-popout-tree.js';
 import { getSessionIdForThread } from '../../lib/cos-thread-meta.js';
 import { PrBadges, RuntimeBadge, SourceBadge, parsePrUrls } from '../PrBadges.js';
+import { toggleDotMenu } from '../../lib/dot-menu.js';
 import { isSlackSession } from '../../lib/session-source.js';
 
 const autoJumpMenuOpen = signal(false);
@@ -341,7 +342,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
               onClick={(e) => {
                 e.stopPropagation();
                 const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                sidebarStatusMenu.value = { sessionId: s.id, x: rect.right + 4, y: rect.top };
+                sidebarStatusMenu.value = toggleDotMenu(sidebarStatusMenu.value, { sessionId: s.id, x: rect.right + 4, y: rect.top });
               }}
             />
             {ctrlShiftHeld.value && inputSt === 'waiting' ? (

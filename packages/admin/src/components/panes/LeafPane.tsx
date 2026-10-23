@@ -78,6 +78,7 @@ import { selectedAppId, applications, appFeedbackCounts } from '../../lib/state.
 import { copyWithTooltip } from '../../lib/clipboard.js';
 import { cosArtifacts } from '../../lib/cos-artifacts.js';
 import { PrBadges, RuntimeBadge, SourceBadge } from '../PrBadges.js';
+import { toggleDotMenu } from '../../lib/dot-menu.js';
 
 // --- Shared signals (also used by Layout.tsx for keyboard shortcuts) ---
 // leafId gates which LeafPane instance renders the menu — module-level signal
@@ -1264,7 +1265,11 @@ export function LeafPane({ leaf }: LeafPaneProps) {
                   onClick={(e) => {
                     e.stopPropagation();
                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                    statusMenuOpen.value = { sessionId: sid, leafId: leaf.id, x: rect.left, y: rect.bottom + 4 };
+                    statusMenuOpen.value = toggleDotMenu(
+                      statusMenuOpen.value,
+                      { sessionId: sid, leafId: leaf.id, x: rect.left, y: rect.bottom + 4 },
+                      (a, b) => a.sessionId === b.sessionId && a.leafId === b.leafId,
+                    );
                   }}
                 >
                   {ctrlShiftHeld.value && tabNum !== null && (
