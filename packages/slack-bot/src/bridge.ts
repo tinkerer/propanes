@@ -11,11 +11,13 @@ import { ambiguousAppText, defaultApp, listAppsText, resolveApp, unknownAppText,
 import { attachmentBlock, classifyAttachment, displayName, SlackFileAccessError, type DownloadedFile, type ForwardedAttachment, type SlackFileDownloader, type SlackFileInfo } from './attachments';
 import { extractFinalCosReply } from './cos-reply';
 import { coalesce, escapeMrkdwn, renderEvent, summarizeToolInput, toMrkdwn } from './format';
-import { ambiguousInfraText, listInfraText, LOCAL_LAUNCHER_ID, offlineInfraText, resolveInfra, unknownInfraText, type InfraTarget } from './infra';
+import { ambiguousInfraText, canOpenTerminal, listInfraMessages, localAsTarget, LOCAL_LAUNCHER_ID, offlineInfraText, resolveInfra, unknownInfraText, type InfraTarget } from './infra';
 import { extractImageRefs, filenameFor, IMAGE_MAX_BYTES, IMAGE_MIMES, type ImageRef } from './images';
 import { isStopKeyword, parseCommand, type OutputMode, type ParsedCommand, type Runtime } from './options';
 import { isLive, PropanesApiError, TERMINAL_STATUSES, type JsonlDelta, type PropanesClient, type SessionInfo } from './propanes';
 import { slackErrorCode, type SlackPoster } from './slack';
+import type { InfraTerminalAction } from './infra-actions';
+import { sessionListing } from './session-listing';
 import { isOutsideInput, rememberSentPrompt, renderOutsideInput } from './outside-input';
 import { freshCheckpoint, threadKey, type StateRepo, type ThreadRecord } from './state';
 
@@ -176,8 +178,17 @@ export class SlackBridge {
       await this.react(ev);
       if (cmd.command === 'help') { await reply(helpText(await this.defaultAppName())); return; }
       if (cmd.command === 'status') { await reply(await this.statusText(record)); return; }
+      if (cmd.command === 'list-sessions' || cmd.command === 'list-terminals') {
+        await this.listActiveSessions(cmd, reply);
+        return;
+      }
       if (cmd.command === 'list-infra') {
-        await reply(listInfraText(await this.d.propanes.listDispatchTargets()));
+        try {
+          const messages = listInfraMessages(await this.d.propanes.listDispatchTargets());
+          for (const message of messages) await this.d.slack.postMessage({ channel: ev.channel, thread_ts: threadTs ?? undefined, ...message });
+        } catch (err) {
+          await reply(`⚠️ Could not list infrastructure: ${escapeMrkdwn(safeMessage(err))}`);
+        }
         return;
       }
       if (cmd.command === 'list-apps') {
@@ -191,6 +202,28 @@ export class SlackBridge {
       if (!cmd.text && (staged.images.length || staged.files.length)) cmd.text = 'See the attached file(s).';
       if (!cmd.text && !hasOptions) return; // nothing usable arrived (every attachment was rejected)
       await this.handlePrompt(ev, key, threadTs, cmd, reply, staged);
+    });
+  }
+
+  /** Button clicks use exact launcher IDs and the same per-thread lock as messages. */
+  async handleInfraTerminalAction(action: InfraTerminalAction): Promise<void> {
+    if (!this.d.state.markEvent(action.eventId)) return;
+    const key = threadKey(action.teamId, action.channel, action.threadTs);
+    const reply = (text: string) => this.d.slack.postMessage({ channel: action.channel, thread_ts: action.threadTs ?? undefined, text });
+    await this.withLock(key, async () => {
+      try {
+        const list = await this.d.propanes.listDispatchTargets();
+        const target = [localAsTarget(list.localTarget), ...list.targets].find(t => t.launcherId === action.launcherId);
+        if (!target || !canOpenTerminal(target)) {
+          await reply('That terminal target is unavailable. Send `[infra]` for the current list. Nothing was started.');
+          return;
+        }
+        await this.startTerminal({ teamId: action.teamId, channel: action.channel, user: action.user },
+          key, action.threadTs, { command: 'prompt', terminal: true, text: '' }, reply,
+          { app: await this.defaultAppInfo(), infra: target.launcherId === LOCAL_LAUNCHER_ID ? undefined : target });
+      } catch (err) {
+        await reply(`⚠️ Could not open terminal: ${escapeMrkdwn(safeMessage(err))}`);
+      }
     });
   }
 
@@ -362,6 +395,24 @@ export class SlackBridge {
     this.watch(key);
   }
 
+  private async listActiveSessions(cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<void> {
+    try {
+      let app: AppInfo | undefined;
+      if (cmd.app !== undefined) {
+        const apps = await this.d.propanes.listApplications();
+        const match = resolveApp(apps, cmd.app);
+        if (match.kind === 'many') { await reply(ambiguousAppText(cmd.app, match.apps)); return; }
+        if (match.kind === 'none') { await reply(unknownAppText(cmd.app, apps)); return; }
+        app = match.app;
+      }
+      const sessions = await this.d.propanes.listActiveSessions();
+      const parts = sessionListing(sessions, cmd.command === 'list-terminals', id => this.sessionUrl(id), app);
+      for (const part of parts) await reply(part);
+    } catch (err) {
+      await reply(`⚠️ Could not list active ${cmd.command === 'list-terminals' ? 'terminals' : 'sessions'}: ${escapeMrkdwn(safeMessage(err))}`);
+    }
+  }
+
   private async resolveTargets(cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<{ app: AppInfo; infra?: InfraTarget } | undefined> {
     const apps = await this.d.propanes.listApplications();
     let app: AppInfo;
@@ -385,8 +436,8 @@ export class SlackBridge {
     return { app, infra };
   }
 
-  private async startTerminal(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<void> {
-    const target = await this.resolveTargets(cmd, reply);
+  private async startTerminal(ev: Pick<IncomingSlackMessage, 'teamId' | 'channel' | 'user'>, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>, resolvedTarget?: { app: AppInfo; infra?: InfraTarget }): Promise<void> {
+    const target = resolvedTarget ?? await this.resolveTargets(cmd, reply);
     if (!target) return;
     const { app, infra } = target;
     if (infra?.isHarness || infra?.isSprite) {
@@ -935,14 +986,19 @@ export function helpText(defaultAppName?: string): string {
     '*Commands*',
     `• \`@amirobot review PR 2013\` — new session in the default application${def} with your remembered agent (ProPanes default the first time)`,
     '• `@amirobot [app:<name>] …` / `[claude, app:storefront] …` — run in that application (project); partial names work when they match exactly one app, otherwise I list the candidates. Fixed per thread.',
-    '• `@amirobot [list-apps]` — the registered applications and their `[app:…]` option',
+    '• `@amirobot [apps]` — the registered applications and their `[app:…]` option',
     '• `@amirobot [infra:laptop] …` — run the session on that connected machine/launcher instead of this server (the app is synced there); offline or ambiguous targets are refused with the list. Fixed per thread.',
-    '• `@amirobot [list-infra]` — connected infrastructure (machines, harnesses, this server) with state, load and the `[infra:…]` option',
+    '• `@amirobot [infra]` — connected infrastructure (machines, harnesses, this server) with state, load, the `[infra:…]` option and Open terminal buttons',
     '• `@amirobot [claude] …` / `[codex] …` — pick the agent; inside a thread this continues the task on the other agent',
     '• `@amirobot [help]` — this message · `[status]` — the thread\'s session, app, agent, state and link',
     '• reply `stop` (or `cancel`) — stop the thread\'s running session; a later reply resumes it',
     '• sessions idle for an hour are paused (agent stopped, conversation kept); any reply resumes them with their full context',
     '• prompts typed in the ProPanes terminal or structured view are echoed here as `👤 User asked outside Slack`, so the replies that follow are attributable',
+    '',
+    '*Session lists*',
+    '• `[sessions]` — all active agent sessions with clickable links',
+    '• `[app:propanes sessions]` — active agent sessions for that app (approximate app matching supported)',
+    '• `[terminals]` — all active plain terminals with clickable links',
     '',
     '*Terminals*',
     '• `[terminal]` / `[infra:macbook terminal]` — open a plain shell and return its session link; optional `[app:name]` supplies app context',

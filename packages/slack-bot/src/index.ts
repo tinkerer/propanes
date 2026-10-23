@@ -6,6 +6,7 @@ import { configuredDefaultRuntime, resolveAgentEndpoint, runtimeLabel } from './
 import { defaultApp } from './apps';
 import { createPropanesClient, createPropanesFetch } from './propanes';
 import { PacedPoster, posterFromClient } from './slack';
+import { infraTerminalAction, OPEN_INFRA_TERMINAL_ACTION } from './infra-actions';
 import { FileStateStore, StateRepo } from './state';
 
 const PROPANES_URL = process.env.PROPANES_URL ?? 'http://localhost:3001';
@@ -67,6 +68,14 @@ let botUserId: string | undefined;
 function enqueue(ev: IncomingSlackMessage): void {
   bridge.handleEvent(ev).catch((err) => log(`event handling failed: ${err instanceof Error ? err.name : 'error'}`));
 }
+
+app.action(OPEN_INFRA_TERMINAL_ACTION, async ({ ack, body }) => {
+  await ack();
+  if (body.type !== 'block_actions') return;
+  const action = infraTerminalAction(body);
+  if (!action) return;
+  bridge.handleInfraTerminalAction(action).catch((err) => log(`terminal action failed: ${err instanceof Error ? err.name : 'error'}`));
+});
 
 app.event('app_mention', async ({ event, body }) => {
   const e = event as any;

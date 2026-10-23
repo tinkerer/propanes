@@ -15,11 +15,14 @@ process.
 | `@amirobot [claude] review PR 2013` | Explicitly use Claude |
 | `@amirobot [codex] review PR 2013` | Explicitly use Codex |
 | `@amirobot [app:storefront] add a toggle` | Run in that ProPanes application (project); combinable: `[claude, app:storefront]`. See "Applications" |
-| `@amirobot [list-apps]` | The registered applications with their `[app:…]` option and the default. Never creates a session |
+| `@amirobot [apps]` | The registered applications with their `[app:…]` option and the default. Never creates a session |
 | `@amirobot [infra:laptop] build it` | Run the session on that connected machine/launcher instead of this server; combinable: `[codex, app:propanes, infra:laptop]`. See "Connected infrastructure" |
-| `@amirobot [list-infra]` | Connected infrastructure (this server, machines, harnesses, sprites) with state, load and the `[infra:…]` option. Never creates a session |
+| `@amirobot [infra]` | Connected infrastructure (this server, machines, harnesses, sprites) with state, load and the `[infra:…]` option. Never creates a session |
 | `@amirobot [terminal]` | Open a plain shell and reply with its session link |
 | `@amirobot [infra:macbook terminal]` | Open a shell on that machine and reply with its session link |
+| `@amirobot [sessions]` | List all active agent sessions with clickable links |
+| `@amirobot [app:propanes sessions]` | List active agent sessions for the matching application |
+| `@amirobot [terminals]` | List all active plain terminals with clickable links |
 | `@amirobot [help]` | Threaded help: commands, defaults, output modes, examples. Never creates a session |
 | `@amirobot [status]` | The thread's session link, agent, state (working / waiting / idle / completed…) and history. Never creates, interrupts or resumes anything |
 | reply `stop` (also `cancel`, `halt`, `kill`) | Kills the thread's running session (preserved from the previous bot). A later reply resumes it |
@@ -31,6 +34,10 @@ infra names remain supported (`[app:Admin Console]`).
 Unknown options, `[claude, codex]`, `[verbose, quiet]` and `[help]`/`[status]`
 combined with anything else get a threaded explanation and nothing is created or
 changed.
+
+The short commands `[apps]`, `[infra]`, `[sessions]` and `[terminals]` are
+preferred; the existing `[list-apps]`, `[list-infra]`, `[list-sessions]` and
+`[list-terminals]` remain supported as aliases.
 
 ### Applications
 
@@ -46,7 +53,7 @@ falling back to `PROPANES_APP_ID` — unless it carries
 - if no partial matches exist, small typos (including swapped adjacent letters)
   are accepted against names and individual words;
 - several matches get a clarifying list of the candidates and nothing is
-  started; no match gets the full list. `[list-apps]` (or `[apps]`) prints the
+  started; no match gets the full list. `[apps]` prints the
   same list with the default marked. Ambiguous replies include exact `[app:ID]`
   selectors; mention the bot again with the original request and a choice.
 
@@ -70,8 +77,7 @@ wins, a single partial match is accepted (`[infra:laptop]` →
 *dev-laptop*), then conservative typo matching is attempted. Several matches
 get a clarifying list with exact `[infra:ID]` selectors to retry, and an
 **offline** target is refused — the server would otherwise fall back to running
-the session locally without saying so. `[list-infra]` (or `[infra]`,
-`[machines]`) prints the list with state and `active/max` sessions.
+the session locally without saying so. `[infra]` (or `[machines]`) prints the list with state and `active/max` sessions.
 
 The chosen launcher is passed as `launcherId` on `POST /admin/dispatch`; the
 server pushes the application's project to the launcher and keeps the app's
@@ -80,6 +86,40 @@ working directory, so `[app:…]` and `[infra:…]` compose. The first reply and
 per thread: continuations resume with the parent session's launcher
 server-side, and `[infra:…]` naming another target in a later reply is refused
 without sending the message.
+
+The `[infra]` response includes an **Open terminal** button for this server and
+each online remote machine. Clicking creates a plain terminal on that exact
+infrastructure and posts its clickable session link in the same thread. Existing
+agent conversations stay associated with their original sessions. The target is
+rechecked at click time: removed/offline targets are refused, and harness/sprite
+targets have no plain-terminal button. Duplicate Socket Mode delivery of the same
+click creates only one terminal. Large lists are split below Slack's block limit.
+
+### Listing active sessions and terminals
+
+`[sessions]` lists all active agent sessions visible to the bot's bearer
+token. `[app:propanes sessions]` restricts that list to the resolved app;
+commas (`[app:propanes, sessions]`) and separate bracket groups work too.
+App matching uses the same exact, partial and typo matching as dispatch.
+Ambiguous or unknown app names receive the existing explanatory replies before
+sessions are fetched. Without an app selector, the list covers every visible app,
+including when requested inside a thread associated with a particular app.
+
+`[terminals]` lists all active plain shell sessions. These commands treat
+`running`, `pending` and `dispatching` sessions as active, including running
+sessions waiting for input or idle. Completed, failed, killed and deleted items
+are excluded. Agent sessions and plain terminals appear in their respective
+lists, including sessions launched outside Slack.
+
+Each entry links to the public admin session page and includes its title (or
+feedback title/ID), ID, runtime or shell, status, and machine name when available.
+Long lists are split into Slack-sized messages without truncating the result set.
+An empty list explicitly says there are no active items. Listing is read-only:
+it never creates, interrupts or resumes sessions, forwards text to them, changes
+user preferences, or replaces the thread's current session mapping.
+
+Only `[sessions]` accepts an optional app selector. Other agent, infra,
+output, terminal options and prompt text are rejected for these list commands.
 
 ### Terminals
 
@@ -265,7 +305,8 @@ exactly as it would from the UI:
 
 ## Slack app configuration
 
-Socket Mode on; event subscriptions: `app_mention`, `message.channels`,
+Socket Mode and **Interactivity & Shortcuts** on (button actions arrive through
+Socket Mode; no public interactivity request URL is needed); event subscriptions: `app_mention`, `message.channels`,
 `message.groups`, `message.im`, `message.mpim` (thread replies without a
 mention arrive as `message` events). Bot token scopes: `app_mentions:read`,
 `chat:write`, `reactions:write`, `channels:history`, `groups:history`,
