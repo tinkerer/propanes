@@ -18546,6 +18546,52 @@ body.cos-channel-list-resizing {
   color: #f87171;
 }
 
+/* "Review PRs ›" flyout for sessions with several PRs. The flyout is fixed
+   and viewport-capped (max-height set inline from placeSubmenu) so a long
+   list scrolls instead of running off the window. Opaque paint on purpose:
+   it floats over arbitrary content (see UI conventions). */
+.status-dot-submenu-host {
+  position: relative;
+}
+.status-dot-menu .status-dot-submenu-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.status-dot-menu .status-dot-submenu-trigger.open {
+  background: #334155;
+}
+.status-dot-submenu-count {
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 8px;
+  background: #334155;
+  color: #cbd5e1;
+}
+.status-dot-menu .status-dot-submenu-trigger.open .status-dot-submenu-count {
+  background: #475569;
+}
+.status-dot-submenu-chevron {
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 14px;
+  line-height: 1;
+  color: #94a3b8;
+}
+.status-dot-submenu {
+  position: fixed;
+  z-index: 10001;
+  min-width: 170px;
+  padding: 4px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+
 .standalone-fb-split {
   flex-direction: row;
   overflow: hidden;
