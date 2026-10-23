@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { chunkText, coalesce, renderEvent, toMrkdwn } from '../src/format';
+import { FEEDBACK_TITLE_MAX, chunkText, coalesce, feedbackTitle, renderEvent, toMrkdwn } from '../src/format';
 import type { ParsedMessage } from '../src/transcript';
 
 const msg = (over: Partial<ParsedMessage>): ParsedMessage => ({ id: 'm', role: 'assistant', timestamp: 0, content: '', ...over });
@@ -63,4 +63,19 @@ test('long output is chunked on paragraph boundaries with balanced code fences',
 test('coalesce packs consecutive pieces into few posts', () => {
   assert.deepEqual(coalesce(['a', 'b', 'c'], 100), ['a\n\nb\n\nc']);
   assert.equal(coalesce(['a'.repeat(90), 'b'.repeat(90)], 100).length, 2);
+});
+
+test('feedbackTitle keeps a whole one-sentence request and cuts long ones at a word', () => {
+  const sentence = "this didn't need to start a new thread, could have just produced the terminal link in place";
+  assert.equal(feedbackTitle(sentence), `Slack: ${sentence}`);
+  assert.equal(feedbackTitle('  first line\n\nsecond paragraph  '), 'Slack: first line');
+  const long = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ');
+  const title = feedbackTitle(long);
+  assert.ok(title.length <= FEEDBACK_TITLE_MAX + 'Slack: …'.length, title);
+  assert.ok(title.endsWith('…'));
+  assert.ok(!title.slice(0, -1).endsWith(' '));
+  assert.ok(long.startsWith(title.slice('Slack: '.length, -1)));
+  assert.ok(!title.includes('…\n'));
+  // no word boundary near the cap → hard cut, never an empty title
+  assert.equal(feedbackTitle('x'.repeat(300)), `Slack: ${'x'.repeat(FEEDBACK_TITLE_MAX)}…`);
 });

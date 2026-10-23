@@ -10,7 +10,7 @@ import { AgentUnavailableError, configuredDefaultRuntime, resolveAgentEndpoint, 
 import { ambiguousAppText, defaultApp, listAppsText, resolveApp, unknownAppText, type AppInfo } from './apps';
 import { attachmentBlock, classifyAttachment, displayName, SlackFileAccessError, type DownloadedFile, type ForwardedAttachment, type SlackFileDownloader, type SlackFileInfo } from './attachments';
 import { extractFinalCosReply } from './cos-reply';
-import { coalesce, escapeMrkdwn, renderEvent, summarizeToolInput, toMrkdwn } from './format';
+import { coalesce, escapeMrkdwn, feedbackTitle, renderEvent, summarizeToolInput, toMrkdwn } from './format';
 import { ambiguousInfraText, canOpenTerminal, listInfraMessages, localAsTarget, LOCAL_LAUNCHER_ID, offlineInfraText, resolveInfra, unknownInfraText, type InfraTarget } from './infra';
 import { extractImageRefs, filenameFor, IMAGE_MAX_BYTES, IMAGE_MIMES, type ImageRef } from './images';
 import { isStopKeyword, parseCommand, type OutputMode, type ParsedCommand, type Runtime } from './options';
@@ -429,7 +429,7 @@ export class SlackBridge {
     // Images become feedback screenshots (rendered into the prompt and shipped
     // to remote launchers by the dispatcher); other files go through uploads.
     const feedback = await this.d.propanes.createFeedback({
-      title: `Slack: ${cmd.text.slice(0, 80)}`,
+      title: feedbackTitle(cmd.text),
       description: cmd.text,
       appId,
       tags: ['slack', 'amirobot'],

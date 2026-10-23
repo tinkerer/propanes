@@ -4,6 +4,7 @@ import { SessionViewToggle, type ViewMode } from '../components/terminal/Session
 import { renderTabContent } from '../components/panes/PaneContent.js';
 import { SessionIdMenu } from '../components/sessions/SessionIdMenu.js';
 import { SshSetupDialog } from '../components/modals/SshSetupDialog.js';
+import { PrBadges, RuntimeBadge, SourceBadge } from '../components/PrBadges.js';
 import { allSessions, sessionMapComputed, startSessionPolling, getViewMode, setViewMode, markSessionExited, setSessionInputState, exitedSessions, getSessionLabel, feedbackTitleCache } from '../lib/sessions.js';
 import { applyTheme } from '../lib/settings.js';
 import { isMobile } from '../lib/viewport.js';
@@ -155,6 +156,15 @@ export function StandaloneSessionView({ sessionId, onClose, setDocumentTitle, sh
           >
             {sess.feedbackTitle}
           </button>
+        )}
+        {!companion && (
+          <>
+            {/* Same badge strip as the pane header (LeafPane): where the session
+                came from (Slack), which runtime runs it, and its PRs. */}
+            <SourceBadge session={sess} />
+            <RuntimeBadge runtime={sess?.runtime} permissionProfile={sess?.permissionProfile} />
+            <PrBadges prUrls={sess?.prUrls} compact />
+          </>
         )}
         <span style="flex:1" />
         {!companion && sess?.jsonlPath && (

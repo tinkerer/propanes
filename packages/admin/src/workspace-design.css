@@ -7,6 +7,9 @@
 .standalone-session-toolbar .view-mode-select { background: var(--pw-terminal-hover); color: var(--pw-terminal-foreground); border: 1px solid var(--pw-terminal-border); border-radius: 5px; padding: 4px 7px; flex-shrink: 0; font-size: 12px; }
 .standalone-session-toolbar .session-feedback-link { color: var(--pw-terminal-foreground); flex: 0 1 auto; }
 .standalone-session-toolbar .mobile-session-back { color: var(--pw-terminal-foreground); flex-shrink: 0; }
+.standalone-session-toolbar .session-runtime-badge,
+.standalone-session-toolbar .session-source-badge { flex-shrink: 0; }
+.standalone-session-toolbar .session-pr-badges.compact { flex-shrink: 0; flex-wrap: nowrap; max-height: none; }
 .standalone-session-toolbar .session-feedback-link:hover,
 .standalone-session-toolbar .mobile-session-back:hover { background: var(--pw-terminal-hover); }
 .standalone-session-toolbar :focus-visible { outline-color: var(--pw-terminal-foreground); outline-offset: 2px; }
