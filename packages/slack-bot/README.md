@@ -48,9 +48,10 @@ remembers these conversations even when no session was started, including across
 listener restarts. Lists and help stay in the requesting thread.
 
 A new task in a thread with no session starts its own bot-rooted Slack thread.
-`[terminal]` and infrastructure terminal buttons also open a separate thread,
-where replies send shell input and `stop` closes that terminal. The source
-thread gets a link and retains its original session mapping.
+`[terminal]` and infrastructure terminal buttons return a clickable terminal
+session link in the requesting conversation without starting a new Slack thread.
+Existing agent conversations retain their session mapping; otherwise replies
+send shell input and `stop` closes the terminal.
 
 Reply `[session] optional task` in an existing agent thread to branch its full
 conversation into a separate Slack thread. With no task, the branch waits for
@@ -122,8 +123,8 @@ without sending the message.
 
 The `[infra]` response includes an **Open terminal** button for this server and
 each online remote machine. Clicking creates a plain terminal on that exact
-infrastructure and opens a new thread for its clickable session link and input. Existing
-agent conversations stay associated with their original sessions. The target is
+infrastructure and replies in the current conversation with its clickable session
+link. Existing agent conversations stay associated with their original sessions. The target is
 rechecked at click time: removed/offline targets are refused, and harness/sprite
 targets have no plain-terminal button. Duplicate Socket Mode delivery of the same
 click creates only one terminal. Large lists are split below Slack's block limit.
@@ -166,10 +167,10 @@ opening a shell on the wrong host. Prompt text, attachments and agent/output
 options cannot be combined with `[terminal]`.
 
 An app supplies its project directory for local terminals; remote launchers
-use the machine's configured default directory (home when unset). In a new
-terminal thread, replies send shell input, `stop` closes the shell and
+use the machine's configured default directory (home when unset). In a conversation
+associated with a terminal, replies send shell input, `stop` closes the shell and
 `[status]` reports its state. An ended shell requires another `[terminal]`
-request. A terminal requested in an existing agent thread opens separately,
+request. A terminal requested in an existing agent thread returns its link there,
 leaving that thread's agent conversation intact. Terminal mappings survive
 listener restarts without starting a transcript watcher.
 

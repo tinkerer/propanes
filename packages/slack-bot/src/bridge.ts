@@ -280,8 +280,7 @@ export class SlackBridge {
         const ev = { teamId: action.teamId, channel: action.channel, user: action.user };
         const resolved = { app: await this.defaultAppInfo(), infra: target.launcherId === LOCAL_LAUNCHER_ID ? undefined : target };
         const cmd: ParsedCommand = { command: 'prompt', terminal: true, text: '' };
-        await this.newThread(ev, `Terminal: ${escapeMrkdwn(target.name)}`, reply,
-          (nextKey, ts, post) => this.startTerminal(ev, nextKey, ts, cmd, post, resolved));
+        await this.startTerminal(ev, key, action.threadTs, cmd, reply, resolved);
       } catch (err) {
         await reply(`⚠️ Could not open terminal: ${escapeMrkdwn(safeMessage(err))}`);
       }
@@ -322,8 +321,6 @@ export class SlackBridge {
       if (isStopKeyword(cmd.text) && !hasOptions) return await this.stopSession(record, reply);
       if (cmd.session) return await this.branchSession(ev, record, cmd, reply, staged);
       if (cmd.terminal) {
-        if (ev.threadTs || record) return await this.newThread(ev, 'Terminal', reply,
-          (nextKey, ts, post) => this.startTerminal(ev, nextKey, ts, cmd, post));
         return await this.startTerminal(ev, key, threadTs, cmd, reply);
       }
       if (!record && ev.threadTs && cmd.text) return await this.newThread(ev, `Session: ${escapeMrkdwn(cmd.text.slice(0, 120))}`, reply,

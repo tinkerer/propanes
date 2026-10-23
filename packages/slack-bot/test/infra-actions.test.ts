@@ -44,7 +44,8 @@ test('infra list button clicks create the selected terminal and post a session l
   assert.equal(f.world.sessions.size, 1);
   assert.deepEqual(JSON.parse(f.world.calls[0].slice('terminal:'.length)), { permissionProfile: 'plain', launcherId: 'laptop-1' });
   assert.ok(f.slack.texts().some(text => text.includes(sessionUrl('S1'))));
-  assert.match(f.slack.texts().at(-1)!, /New thread:/);
+  assert.match(f.slack.texts().at(-1)!, /Terminal started:/);
+  assert.ok(f.slack.posts.every(post => post.thread_ts === '100.000'));
   assert.equal(f.slack.posts.at(-1)!.thread_ts, '100.000');
 });
 
@@ -73,8 +74,12 @@ test('a terminal opened by a button preserves existing agent mapping and reports
   await f.bridge.drain();
   await f.bridge.handleInfraTerminalAction(click());
   assert.equal(new StateRepo(f.store).getThread('T1:C1:100.000')!.sessionId, 'S1');
-  assert.match(f.slack.texts().at(-1)!, /New thread:/);
-  assert.equal(new StateRepo(f.store).threads().find(t => t.kind === 'terminal')!.sessionId, 'S2');
+  assert.match(f.slack.texts().at(-1)!, /Terminal started:[\s\S]*Replies in this thread continue to reach the agent/);
+  assert.ok(f.slack.posts.every(post => post.thread_ts === '100.000'));
+  assert.equal(new StateRepo(f.store).threads().length, 1);
+  await f.bridge.handleEvent({ ...mention('continue'), threadTs: '100.000', eventId: 'continue-agent' });
+  await f.bridge.drain();
+  assert.ok(f.world.calls.some(call => call.startsWith('resume:S1:')));
   f.world.propanes.listDispatchTargets = async () => { throw new Error('API unavailable'); };
   await f.bridge.handleInfraTerminalAction(click({ eventId: 'click-2' }));
   assert.match(f.slack.texts().at(-1)!, /Could not open terminal: API unavailable/);
@@ -94,4 +99,14 @@ test('the Slack SDK adapter preserves interactive blocks and disables link unfur
   assert.deepEqual(posted?.blocks, message.blocks);
   assert.equal(posted?.thread_ts, '100.000');
   assert.equal(posted?.unfurl_links, false);
+});
+
+test('terminal buttons in direct messages return a single link without starting a Slack thread', async () => {
+  const f = fixture();
+  await f.bridge.handleInfraTerminalAction(click({ channel: 'D1', threadTs: null }));
+  assert.equal(f.world.sessions.size, 1);
+  assert.equal(f.slack.posts.length, 1);
+  assert.equal(f.slack.posts[0].channel, 'D1');
+  assert.equal(f.slack.posts[0].thread_ts, undefined);
+  assert.ok(f.slack.texts()[0].includes(sessionUrl('S1')));
 });

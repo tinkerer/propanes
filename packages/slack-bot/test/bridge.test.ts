@@ -821,8 +821,9 @@ test('a separate terminal leaves agent thread context intact', async () => {
   await f.bridge.handleEvent(mention('start'));
   await f.bridge.drain();
   await f.bridge.handleEvent(threadReply('[infra:laptop terminal]'));
-  assert.ok(f.slack.texts().some(text => /New thread:/.test(text)));
-  assert.equal(new StateRepo(f.store).threads().find(t => t.kind === 'terminal')!.sessionId, 'S2');
+  assert.match(f.slack.texts().at(-1)!, /Terminal started:[\s\S]*Replies in this thread continue to reach the agent/);
+  assert.ok(f.slack.posts.every(post => post.thread_ts === '100.000'));
+  assert.equal(new StateRepo(f.store).threads().length, 1);
   assert.equal(new StateRepo(f.store).getThread('T1:C1:100.000')!.sessionId, 'S1');
 });
 
@@ -927,4 +928,16 @@ test('empty and failed listings return truthful messages', async () => {
   await f.bridge.handleEvent(mention('[list-terminals]'));
   assert.match(f.slack.texts().at(-1)!, /Could not list active terminals: API unavailable/);
   assert.deepEqual(f.world.calls, []);
+});
+
+test('terminal requests in an existing conversation return the link without a new Slack root', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[infra:laptop terminal]', { threadTs: '100.000' }));
+  assert.equal(f.world.sessions.size, 1);
+  assert.equal(f.slack.posts.length, 1);
+  assert.equal(f.slack.posts[0].thread_ts, '100.000');
+  assert.match(f.slack.texts()[0], /Terminal started:/);
+  assert.ok(f.slack.texts()[0].includes(sessionUrl('S1')));
+  await f.bridge.handleEvent(threadReply('pwd'));
+  assert.ok(f.world.calls.includes('send-keys:S1:pwd'));
 });
