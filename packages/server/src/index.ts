@@ -7,6 +7,7 @@ import { runMigrations, db, schema } from './db/index.js';
 import { reconcileUsage } from './metering.js';
 import { destroyWorktreeIsolate, branchForIsolatePath } from './isolates.js';
 import { registerSession } from './sessions.js';
+import { startWsHealthSweep } from './ws-backpressure.js';
 import { verifyToken } from './auth.js';
 import { isGlobalAdmin, resolveAdminUser, visibleToMember } from './admin-auth.js';
 import {
@@ -656,6 +657,15 @@ launcherWss.on('connection', (ws, req) => {
 });
 
 // Route upgrades to appropriate WebSocket server
+// Bound every server-side socket's unsent backlog and reap dead peers, so a
+// viewer that stopped reading can't grow the heap until the process dies.
+startWsHealthSweep([
+  { label: 'widget', wss },
+  { label: 'agent-terminal', wss: agentWss },
+  { label: 'admin-push', wss: adminWss },
+  { label: 'launcher', wss: launcherWss },
+]);
+
 (server as unknown as Server).on('upgrade', (req, socket, head) => {
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
 

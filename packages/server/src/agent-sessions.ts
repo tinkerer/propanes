@@ -1,5 +1,6 @@
 import { WebSocket as WsWebSocket } from 'ws';
 import { eq } from 'drizzle-orm';
+import { sendOrDrop } from './ws-backpressure.js';
 import { ViewerSizes } from './viewer-sizes.js';
 import { db, schema } from './db/index.js';
 import type { AgentRuntime, PermissionProfile, InputToSession, ResizeSessionRequest } from '@propanes/shared';
@@ -221,9 +222,10 @@ export function attachAdmin(sessionId: string, ws: WsWebSocket): boolean {
   serviceWs.on('message', (raw) => {
     serviceDelivered = true;
     clearTimeout(dbHistoryFallback);
-    try {
-      ws.send(raw.toString());
-    } catch {
+    // A viewer that stopped reading must not pin this output in memory:
+    // sendOrDrop terminates it once its unsent backlog passes the cap, and
+    // the browser socket's close handler then tears down this bridge.
+    if (!sendOrDrop(ws, raw.toString(), 'agent-terminal')) {
       serviceWs.close();
     }
   });
@@ -360,11 +362,7 @@ export function broadcastToLauncherSessionAdmins(sessionId: string, data: string
   const admins = launcherSessionAdmins.get(sessionId);
   if (!admins) return;
   for (const ws of admins) {
-    try {
-      ws.send(data);
-    } catch {
-      admins.delete(ws);
-    }
+    if (!sendOrDrop(ws, data, 'launcher-terminal')) admins.delete(ws);
   }
 }
 

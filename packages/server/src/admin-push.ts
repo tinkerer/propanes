@@ -1,5 +1,6 @@
 import type { WebSocket } from 'ws';
 import { listSessions } from './sessions.js';
+import { sendOrDrop } from './ws-backpressure.js';
 import { listLaunchers, listHarnesses } from './launcher-registry.js';
 import { db, schema } from './db/index.js';
 import { getActiveRunIds } from './wiggum-controller.js';
@@ -53,9 +54,7 @@ export function broadcastAdmin(msg: { topic: string; data: unknown }) {
   for (const [ws, user] of adminClients) {
     const scoped = scopeTopicData(msg.topic, msg.data, user);
     if (scoped === undefined) continue;
-    try {
-      ws.send(JSON.stringify({ topic: msg.topic, data: scoped }));
-    } catch {
+    if (!sendOrDrop(ws, JSON.stringify({ topic: msg.topic, data: scoped }), 'admin-push')) {
       adminClients.delete(ws);
     }
   }
@@ -68,7 +67,7 @@ async function sendSnapshot(ws: WebSocket, topic: string) {
     const data = await getTopicData(topic);
     const scoped = scopeTopicData(topic, data, user);
     if (scoped === undefined) return;
-    ws.send(JSON.stringify({ topic, data: scoped }));
+    sendOrDrop(ws, JSON.stringify({ topic, data: scoped }), 'admin-push');
   } catch {
     // ignore
   }
