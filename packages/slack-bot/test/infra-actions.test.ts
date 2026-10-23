@@ -43,7 +43,8 @@ test('infra list button clicks create the selected terminal and post a session l
   await Promise.all([f.bridge.handleInfraTerminalAction(action), f.bridge.handleInfraTerminalAction(action)]);
   assert.equal(f.world.sessions.size, 1);
   assert.deepEqual(JSON.parse(f.world.calls[0].slice('terminal:'.length)), { permissionProfile: 'plain', launcherId: 'laptop-1' });
-  assert.ok(f.slack.texts().at(-1)!.includes(sessionUrl('S1')));
+  assert.ok(f.slack.texts().some(text => text.includes(sessionUrl('S1'))));
+  assert.match(f.slack.texts().at(-1)!, /New thread:/);
   assert.equal(f.slack.posts.at(-1)!.thread_ts, '100.000');
 });
 
@@ -72,7 +73,8 @@ test('a terminal opened by a button preserves existing agent mapping and reports
   await f.bridge.drain();
   await f.bridge.handleInfraTerminalAction(click());
   assert.equal(new StateRepo(f.store).getThread('T1:C1:100.000')!.sessionId, 'S1');
-  assert.match(f.slack.texts().at(-1)!, /Replies in this thread continue to reach the agent/);
+  assert.match(f.slack.texts().at(-1)!, /New thread:/);
+  assert.equal(new StateRepo(f.store).threads().find(t => t.kind === 'terminal')!.sessionId, 'S2');
   f.world.propanes.listDispatchTargets = async () => { throw new Error('API unavailable'); };
   await f.bridge.handleInfraTerminalAction(click({ eventId: 'click-2' }));
   assert.match(f.slack.texts().at(-1)!, /Could not open terminal: API unavailable/);
@@ -84,7 +86,7 @@ test('the Slack SDK adapter preserves interactive blocks and disables link unfur
   const f = fixture();
   let posted: Record<string, unknown> | undefined;
   const poster = posterFromClient({
-    chat: { postMessage: async args => { posted = args; } },
+    chat: { postMessage: async args => { posted = args; }, getPermalink: async () => ({ permalink: 'https://slack.example.test/thread' }) },
     reactions: { add: async () => undefined }, files: { uploadV2: async () => undefined },
   });
   const message = listInfraMessages(f.world.infra)[0];

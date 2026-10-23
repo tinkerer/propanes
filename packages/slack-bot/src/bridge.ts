@@ -163,7 +163,7 @@ export class SlackBridge {
       if (!isDm && !ev.mentionsBot && !record && !this.d.state.isEngagedThread(key)) return; // ordinary chatter in an unrelated thread
 
       const cmd = parseCommand(ev.text, this.d.config.botUserId);
-      const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined || cmd.app !== undefined || cmd.infra !== undefined || cmd.terminal !== undefined;
+      const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined || cmd.app !== undefined || cmd.infra !== undefined || cmd.terminal !== undefined || cmd.session !== undefined;
       const attachments = ev.files?.length ?? 0;
       const reply = (text: string) => this.d.slack.postMessage({ channel: ev.channel, thread_ts: threadTs ?? undefined, text });
       if (!cmd.error && cmd.command === 'prompt' && !cmd.text && !hasOptions && !attachments) return;
@@ -205,6 +205,65 @@ export class SlackBridge {
     });
   }
 
+  /** Slack cannot nest threads. A new bot message in the channel/DM is the
+   * root for every additional session; keep creation and early replies locked. */
+  private async newThread(ev: Pick<IncomingSlackMessage, 'teamId' | 'channel'>, title: string,
+    sourceReply: (text: string) => Promise<unknown>,
+    start: (key: string, ts: string, reply: (text: string) => Promise<unknown>) => Promise<void>): Promise<void> {
+    const result = await this.d.slack.postMessage({ channel: ev.channel, text: title }) as { ok?: boolean; ts?: string };
+    if (!result?.ts || result.ok === false) throw new Error('Slack did not return a new thread timestamp; no session was started');
+    const ts = result.ts;
+    const key = threadKey(ev.teamId, ev.channel, ts);
+    const reply = (text: string) => this.d.slack.postMessage({ channel: ev.channel, thread_ts: ts, text });
+    // The timestamp comes from Slack, so early human replies queue on this key.
+    await this.withLock(key, async () => {
+      this.d.state.engageThread(key);
+      try { await start(key, ts, reply); }
+      catch (err) { await reply(`⚠️ ${escapeMrkdwn(safeMessage(err))}`); }
+    });
+    try {
+      const link = await this.d.slack.permalink(ev.channel, ts);
+      await sourceReply(`New thread: <${link}|${title}>`);
+    } catch {
+      await sourceReply(`Opened a new thread in this conversation: ${title}.`);
+    }
+  }
+
+  private async branchSession(ev: IncomingSlackMessage, record: ThreadRecord | undefined, cmd: ParsedCommand,
+    reply: (text: string) => Promise<unknown>, staged: StagedAttachments): Promise<void> {
+    if (!record || record.kind === 'terminal') {
+      if (!cmd.text) { await reply('Add a task after `[session]` to start a new conversation.'); return; }
+      return this.newThread(ev, `Session: ${escapeMrkdwn(cmd.text.slice(0, 120))}`, reply,
+        (key, ts, post) => this.startSession(ev, key, ts, { ...cmd, session: undefined }, post, staged));
+    }
+    if ((cmd.runtime && cmd.runtime !== record.runtime) || cmd.app !== undefined || cmd.infra !== undefined) {
+      await reply('A native fork inherits its agent, app and machine. Use `[session]` with an optional task/output mode.');
+      return;
+    }
+    const mode = cmd.mode ?? record.mode;
+    return this.newThread(ev, `Session branch: ${escapeMrkdwn(cmd.text.slice(0, 100) || record.sessionId)}`, reply,
+      async (key, ts, post) => {
+        const files = await this.stageForSession(undefined, staged, post);
+        const task = [cmd.text, files.length ? attachmentBlock(files, false) : ''].filter(Boolean).join('\n\n');
+        const prompt = task ? `${task}\n\n${slackInstructions(mode)}` : '';
+        const forkStartedAt = this.now();
+        const { sessionId } = await this.d.propanes.fork(record.sessionId, { additionalPrompt: prompt });
+        const now = this.now();
+        const nowIso = new Date(now).toISOString();
+        const branch: ThreadRecord = {
+          ...record, key, threadTs: ts, sessionId, mode, images: cmd.images ?? record.images,
+          history: [{ sessionId, runtime: record.runtime, agentName: record.agentName, createdAt: nowIso }],
+          paused: undefined, delivery: freshCheckpoint(now, forkStartedAt),
+          watching: true, createdAt: nowIso, updatedAt: nowIso,
+        };
+        branch.delivery.turnOpen = !!prompt;
+        branch.delivery.sentPrompts = prompt ? rememberSentPrompt(undefined, prompt) : [];
+        this.d.state.putThread(branch);
+        await post(`Branched from ${this.link(record.sessionId)}.\n${this.initialReply(branch, files.length)}`);
+        this.watch(key);
+      });
+  }
+
   /** Button clicks use exact launcher IDs and the same per-thread lock as messages. */
   async handleInfraTerminalAction(action: InfraTerminalAction): Promise<void> {
     if (!this.d.state.markEvent(action.eventId)) return;
@@ -218,9 +277,11 @@ export class SlackBridge {
           await reply('That terminal target is unavailable. Send `[infra]` for the current list. Nothing was started.');
           return;
         }
-        await this.startTerminal({ teamId: action.teamId, channel: action.channel, user: action.user },
-          key, action.threadTs, { command: 'prompt', terminal: true, text: '' }, reply,
-          { app: await this.defaultAppInfo(), infra: target.launcherId === LOCAL_LAUNCHER_ID ? undefined : target });
+        const ev = { teamId: action.teamId, channel: action.channel, user: action.user };
+        const resolved = { app: await this.defaultAppInfo(), infra: target.launcherId === LOCAL_LAUNCHER_ID ? undefined : target };
+        const cmd: ParsedCommand = { command: 'prompt', terminal: true, text: '' };
+        await this.newThread(ev, `Terminal: ${escapeMrkdwn(target.name)}`, reply,
+          (nextKey, ts, post) => this.startTerminal(ev, nextKey, ts, cmd, post, resolved));
       } catch (err) {
         await reply(`⚠️ Could not open terminal: ${escapeMrkdwn(safeMessage(err))}`);
       }
@@ -256,10 +317,17 @@ export class SlackBridge {
 
   private async handlePrompt(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>, staged: StagedAttachments): Promise<void> {
     const record = this.d.state.getThread(key);
-    const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined || cmd.app !== undefined || cmd.infra !== undefined || cmd.terminal !== undefined;
+    const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined || cmd.app !== undefined || cmd.infra !== undefined || cmd.terminal !== undefined || cmd.session !== undefined;
     try {
       if (isStopKeyword(cmd.text) && !hasOptions) return await this.stopSession(record, reply);
-      if (cmd.terminal) return await this.startTerminal(ev, key, threadTs, cmd, reply);
+      if (cmd.session) return await this.branchSession(ev, record, cmd, reply, staged);
+      if (cmd.terminal) {
+        if (ev.threadTs || record) return await this.newThread(ev, 'Terminal', reply,
+          (nextKey, ts, post) => this.startTerminal(ev, nextKey, ts, cmd, post));
+        return await this.startTerminal(ev, key, threadTs, cmd, reply);
+      }
+      if (!record && ev.threadTs && cmd.text) return await this.newThread(ev, `Session: ${escapeMrkdwn(cmd.text.slice(0, 120))}`, reply,
+        (nextKey, ts, post) => this.startSession(ev, nextKey, ts, cmd, post, staged));
       if (record?.kind === 'terminal') return await this.continueTerminal(record, cmd, staged, reply);
       if (!record) return await this.startSession(ev, key, threadTs, cmd, reply, staged);
       return await this.continueThread(ev, record, cmd, reply, staged);
@@ -991,6 +1059,7 @@ export function helpText(defaultAppName?: string): string {
     '• `@amirobot [infra]` — connected infrastructure (machines, harnesses, this server) with state, load, the `[infra:…]` option and Open terminal buttons',
     '• `@amirobot [claude] …` / `[codex] …` — pick the agent; inside a thread this continues the task on the other agent',
     '• `@amirobot [help]` — this message · `[status]` — the thread\'s session, app, agent, state and link',
+    '• `[session] optional task` — branch this conversation into its own thread with full agent history; the original keeps running',
     '• reply `stop` (or `cancel`) — stop the thread\'s running session; a later reply resumes it',
     '• sessions idle for an hour are paused (agent stopped, conversation kept); any reply resumes them with their full context',
     '• prompts typed in the ProPanes terminal or structured view are echoed here as `👤 User asked outside Slack`, so the replies that follow are attributable',

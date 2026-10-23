@@ -11,6 +11,8 @@ export interface SpawnParams {
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
+  forkSessionId?: string;
+  forkStartedAt?: string;
   tmuxTarget?: string;
   appendSystemPrompt?: string;
 }
@@ -25,6 +27,11 @@ async function post(path: string, body?: unknown, timeoutMs?: number): Promise<R
 }
 
 export async function spawnSessionRemote(params: SpawnParams): Promise<void> {
+  if (params.forkSessionId !== undefined) {
+    const health = await fetch(`${SESSION_SERVICE_URL}/health`, { signal: AbortSignal.timeout(5000) })
+      .then(async res => res.ok ? await res.json() as { nativeForks?: boolean } : null).catch(() => null);
+    if (!health?.nativeForks) throw new Error('Rebuild and restart the session service before forking sessions');
+  }
   let res: Response;
   try {
     res = await post('/spawn', params);

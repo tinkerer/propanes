@@ -1,3 +1,4 @@
+import { claudeForkArgs, forkCodexSession } from './native-fork.js';
 import { applyInputState as transitionInputState } from './session-input-transitions.js';
 import { BRAILLE_SPINNERS, extractOscTitle, classifyOutput, type InputState } from './session-input-state.js';
 import { serve } from '@hono/node-server';
@@ -229,6 +230,7 @@ function buildAgentCommand(
   claudeSessionId?: string,
   resumeSessionId?: string,
   appendSystemPrompt?: string,
+  forkSessionId?: string,
 ): { command: string; args: string[] } {
   if (runtime === 'codex') {
     const command = resolveCodexCommand();
@@ -247,8 +249,8 @@ function buildAgentCommand(
   }
 
   // When resuming, use --resume — no --session-id (it conflicts)
-  if (resumeSessionId) {
-    const args = ['--resume', resumeSessionId];
+  if (resumeSessionId || forkSessionId) {
+    const args = forkSessionId ? claudeForkArgs(forkSessionId, claudeSessionId) : ['--resume', resumeSessionId!];
     if (SKIP_PROFILES.has(permissionProfile)) {
       args.push('--dangerously-skip-permissions');
     }
@@ -485,11 +487,14 @@ function spawnSession(params: {
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
+  forkSessionId?: string;
+  forkStartedAt?: string;
   appendSystemPrompt?: string;
   suppressAuthCompanion?: boolean;
   env?: Record<string, string>;
 }): void {
-  const { sessionId, cwd, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt, suppressAuthCompanion = false, env } = params;
+  const { sessionId, cwd, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId: requestedNativeId, resumeSessionId: requestedResumeId, forkSessionId, forkStartedAt, appendSystemPrompt, suppressAuthCompanion = false, env } = params;
+
   // NFC-normalize: decomposed unicode (NFD accents from macOS clipboards, etc.)
   // crossing a wrap boundary crashes Claude Code's TUI with "Failed to find
   // wrapped line in text" (anthropic/claude-code#395, #678, #34380).
@@ -499,6 +504,10 @@ function spawnSession(params: {
     throw new Error(`Session ${sessionId} is already running`);
   }
 
+  const forkId = runtime === 'codex' && forkSessionId !== undefined ? forkCodexSession(forkSessionId, cwd, forkStartedAt) : undefined;
+  const claudeSessionId = forkId || requestedNativeId;
+  const resumeSessionId = forkId || requestedResumeId;
+
   const { command, args } = buildAgentCommand(
     runtime,
     prompt,
@@ -507,6 +516,7 @@ function spawnSession(params: {
     claudeSessionId,
     resumeSessionId,
     appendSystemPrompt,
+    forkSessionId,
   );
 
   console.log(`[session-service] Spawning session ${sessionId}: runtime=${runtime}, command=${command}, profile=${permissionProfile}, cwd=${cwd}, tmux=${isTmuxAvailable()}`);
@@ -602,6 +612,7 @@ function spawnSession(params: {
       lastInputSeq: 0,
       outputBytes: 0,
       tmuxSessionName,
+      ...(forkSessionId !== undefined ? { claudeSessionId: claudeSessionId || null } : {}),
     })
     .where(eq(schema.agentSessions.id, sessionId))
     .run();
@@ -1200,6 +1211,7 @@ const app = new Hono();
 app.get('/health', (c) => {
   return c.json({
     ok: true,
+    nativeForks: true,
     activeSessions: activeSessions.size,
     sessions: Array.from(activeSessions.keys()),
     tmuxAvailable: isTmuxAvailable(),
@@ -1219,12 +1231,12 @@ app.get('/waiting', (c) => {
 
 app.post('/spawn', async (c) => {
   const body = await c.req.json();
-  const { sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt } = body;
+  const { sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, forkSessionId, forkStartedAt, appendSystemPrompt } = body;
 
   if (!sessionId || !cwd || !permissionProfile) {
     return c.json({ error: 'Missing required fields' }, 400);
   }
-  if (permissionProfile === 'headless-yolo' && !prompt && !resumeSessionId) {
+  if (permissionProfile === 'headless-yolo' && !prompt && !resumeSessionId && forkSessionId === undefined) {
     return c.json({ error: 'Prompt required for headless sessions' }, 400);
   }
 
@@ -1236,7 +1248,7 @@ app.post('/spawn', async (c) => {
   }
 
   try {
-    spawnSession({ sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, appendSystemPrompt, env });
+    spawnSession({ sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, forkSessionId, forkStartedAt, appendSystemPrompt, env });
     return c.json({ ok: true, sessionId });
   } catch (err) {
     const pending = pendingConnections.get(sessionId);

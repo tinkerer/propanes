@@ -1,3 +1,4 @@
+import { claudeForkArgs, forkCodexSession } from './native-fork.js';
 import WebSocket from 'ws';
 import * as os from 'node:os';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
@@ -202,6 +203,7 @@ function buildAgentCommand(
   allowedTools?: string | null,
   claudeSessionId?: string,
   resumeSessionId?: string,
+  forkSessionId?: string,
 ): { command: string; args: string[] } {
   if (runtime === 'codex') {
     const command = resolveCodexCommand();
@@ -220,8 +222,8 @@ function buildAgentCommand(
   }
 
   // When resuming, use --resume — no --session-id (it conflicts)
-  if (resumeSessionId) {
-    const args = ['--resume', resumeSessionId];
+  if (resumeSessionId || forkSessionId) {
+    const args = forkSessionId ? claudeForkArgs(forkSessionId, claudeSessionId) : ['--resume', resumeSessionId!];
     if (SKIP_PROFILES.has(permissionProfile)) {
       args.push('--dangerously-skip-permissions');
     }
@@ -315,10 +317,13 @@ function spawnSession(params: {
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
+  forkSessionId?: string;
+  forkStartedAt?: string;
   cols: number;
   rows: number;
 }): void {
-  const { sessionId, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId, resumeSessionId, cols, rows } = params;
+  const { sessionId, runtime = 'claude', permissionProfile, allowedTools, claudeSessionId: requestedNativeId, resumeSessionId: requestedResumeId, forkSessionId, forkStartedAt, cols, rows } = params;
+
   // NFC-normalize: decomposed unicode (NFD) crossing a wrap boundary crashes
   // Claude Code's TUI with "Failed to find wrapped line in text".
   const prompt = (params.prompt || '').normalize('NFC');
@@ -334,7 +339,11 @@ function spawnSession(params: {
     return;
   }
 
-  const { command, args } = buildAgentCommand(runtime, prompt, permissionProfile, allowedTools, claudeSessionId, resumeSessionId);
+  const forkId = runtime === 'codex' && forkSessionId !== undefined ? forkCodexSession(forkSessionId, cwd, forkStartedAt) : undefined;
+  const claudeSessionId = forkId || requestedNativeId;
+  const resumeSessionId = forkId || requestedResumeId;
+
+  const { command, args } = buildAgentCommand(runtime, prompt, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, forkSessionId);
 
   console.log(`[launcher] Spawning session ${sessionId}: runtime=${runtime}, command=${command}, profile=${permissionProfile}, cwd=${cwd}`);
 
@@ -373,6 +382,7 @@ function spawnSession(params: {
   const started: LauncherSessionStarted = {
     type: 'launcher_session_started',
     sessionId,
+    ...(forkSessionId !== undefined && claudeSessionId ? { claudeSessionId } : {}),
     pid: ptyProcess.pid,
   };
   sendToServer(started);
@@ -778,6 +788,7 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
       break;
 
     case 'launch_session':
+      try {
         spawnSession({
           sessionId: msg.sessionId,
           prompt: msg.prompt,
@@ -785,11 +796,16 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
           runtime: msg.runtime || 'claude',
           permissionProfile: msg.permissionProfile,
           allowedTools: msg.allowedTools,
-        claudeSessionId: msg.claudeSessionId,
-        resumeSessionId: msg.resumeSessionId,
-        cols: msg.cols,
-        rows: msg.rows,
-      });
+          claudeSessionId: msg.claudeSessionId,
+          resumeSessionId: msg.resumeSessionId,
+          forkSessionId: msg.forkSessionId,
+          forkStartedAt: msg.forkStartedAt,
+          cols: msg.cols,
+          rows: msg.rows,
+        });
+      } catch {
+        sendToServer({ type: 'launcher_session_ended', sessionId: msg.sessionId, exitCode: -1, status: 'failed', outputLog: 'Native fork or session startup failed. The parent conversation is unchanged.' });
+      }
       break;
 
     case 'kill_session': {
@@ -1005,6 +1021,7 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
         activeSessions: sessions.size,
         capabilities: {
           maxSessions: MAX_SESSIONS,
+          nativeForks: true,
           hasClaudeCli: false,
           hasDocker: false,
         },
@@ -1205,6 +1222,7 @@ async function connect(): Promise<void> {
 
     const caps: LauncherCapabilities = {
       maxSessions: MAX_SESSIONS,
+      nativeForks: true,
       hasClaudeCli: true,
       hasDocker,
     };

@@ -482,6 +482,7 @@ launcherWss.on('connection', (ws, req) => {
             .set({
               status: 'running',
               pid: msg.pid,
+              ...(msg.claudeSessionId ? { claudeSessionId: msg.claudeSessionId } : {}),
               startedAt: now,
               completedAt: null,
               exitCode: null,

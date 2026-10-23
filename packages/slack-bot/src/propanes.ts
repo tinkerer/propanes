@@ -107,6 +107,7 @@ export interface PropanesClient {
   sendKeys(id: string, keys: string): Promise<{ ok: boolean; error?: string }>;
   /** POST /:id/resume — SessionInputBar.submitPrompt for a stopped session. */
   resume(id: string, input: { additionalPrompt: string; runtime?: Runtime; permissionProfile?: string }): Promise<{ sessionId: string }>;
+  fork(id: string, input: { additionalPrompt?: string }): Promise<{ sessionId: string }>;
   kill(id: string): Promise<void>;
   /** POST /:id/jsonl — the structured view's differential transcript poll. */
   jsonlDelta(id: string, cursor: string, tail: number): Promise<JsonlDelta>;
@@ -184,6 +185,11 @@ export function createPropanesClient(api: PropanesFetch): PropanesClient {
       const sessionId = r?.sessionId ?? r?.id;
       if (!sessionId) throw new Error('resume did not return a session id');
       return { sessionId };
+    },
+    fork: async (id, input) => {
+      const result = await post(`/api/v1/admin/agent-sessions/${encodeURIComponent(id)}/fork`, input);
+      if (!result?.sessionId) throw new Error('fork did not return a session id');
+      return { sessionId: result.sessionId };
     },
     kill: async (id) => { await post(`/api/v1/admin/agent-sessions/${encodeURIComponent(id)}/kill`, {}); },
     jsonlDelta: (id, cursor, tail) => post(`/api/v1/admin/agent-sessions/${encodeURIComponent(id)}/jsonl`, { cursor, tail }),

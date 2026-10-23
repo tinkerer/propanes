@@ -123,6 +123,8 @@ export async function spawnAgentSession(params: {
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
+  forkSessionId?: string;
+  forkStartedAt?: string;
 }): Promise<void> {
   await spawnSessionRemote(params);
 }

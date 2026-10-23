@@ -971,6 +971,8 @@ async function spawnLocal(sessionId: string, params: {
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
+  forkSessionId?: string;
+  forkStartedAt?: string;
 }): Promise<void> {
   try {
     const runtime = params.runtime || 'claude';
@@ -983,6 +985,8 @@ async function spawnLocal(sessionId: string, params: {
       allowedTools: params.allowedTools,
       claudeSessionId: params.claudeSessionId,
       resumeSessionId: params.resumeSessionId,
+      forkSessionId: params.forkSessionId,
+      forkStartedAt: params.forkStartedAt,
     });
   } catch (err) {
     console.error(`Failed to spawn session ${sessionId}:`, err);
@@ -1112,6 +1116,56 @@ export async function dispatchCompanionTerminal(params: {
 
   spawnLocal(sessionId, { cwd: params.cwd, permissionProfile: 'plain' }).catch(() => {});
 
+  return { sessionId };
+}
+
+/** Branch a native conversation without stopping or modifying its parent.
+ * No context-dump or cross-machine fallback: a fork must preserve full history. */
+export async function forkAgentSession(parentSessionId: string, prompt = ''): Promise<{ sessionId: string }> {
+  const parent = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, parentSessionId)).get();
+  if (!parent) throw new Error('Parent session not found');
+  if (parent.permissionProfile === 'plain') throw new Error('Shell terminals have no agent conversation to fork');
+  if (parent.spriteConfigId) throw new Error('Native forks currently require a local or launcher machine');
+  if (parent.runtime !== 'claude' && parent.runtime !== 'codex') throw new Error('This runtime does not support native forks');
+  if (!parent.cwd) throw new Error('The parent session has no recorded working directory');
+  const launcher = parent.launcherId ? getLauncher(parent.launcherId) : undefined;
+  if (parent.launcherId && (!launcher || launcher.ws.readyState !== 1)) {
+    throw new Error('The parent session machine is offline; reconnect it before forking');
+  }
+  if (launcher && !launcher.capabilities.nativeForks) throw new Error('Update the parent machine launcher before forking sessions');
+  const nativeParentId = parent.runtime === 'codex' && !parent.launcherId
+    ? resolveCodexResumeId(parent.cwd, parent.claudeSessionId, parent.startedAt)
+    : parent.claudeSessionId;
+  if (!nativeParentId && !(parent.runtime === 'codex' && launcher && parent.startedAt)) throw new Error('No native conversation ID is recorded yet; wait for the session to start before forking');
+  const sessionId = ulid();
+  const nativeId = parent.runtime === 'claude' ? crypto.randomUUID() : undefined;
+  const permissionProfile = parent.permissionProfile as PermissionProfile;
+  const params = {
+    cwd: parent.cwd, runtime: parent.runtime as AgentRuntime, permissionProfile, prompt,
+    forkSessionId: nativeParentId || '', claudeSessionId: nativeId,
+    ...(parent.runtime === 'codex' && launcher && !nativeParentId ? { forkStartedAt: parent.startedAt! } : {}),
+  };
+  db.insert(schema.agentSessions).values({
+    id: sessionId, parentSessionId, feedbackId: parent.feedbackId, agentEndpointId: parent.agentEndpointId,
+    runtime: parent.runtime, permissionProfile, status: 'pending', outputBytes: 0,
+    claudeSessionId: nativeId || null, launcherId: parent.launcherId, cwd: parent.cwd,
+    ownerUserId: parent.ownerUserId, orgId: parent.orgId,
+    createdAt: new Date().toISOString(),
+  }).run();
+  try {
+    if (launcher) {
+      launcher.ws.send(JSON.stringify({ type: 'launch_session', sessionId, ...params, cols: ptyColsForProfile(permissionProfile), rows: 40 } satisfies LaunchSession));
+      addSessionToLauncher(launcher.id, sessionId);
+    } else {
+      // Await startup so a failed native copy is reported to the caller.
+      await spawnLocal(sessionId, params);
+    }
+  } catch (err) {
+    db.update(schema.agentSessions).set({ status: 'failed', completedAt: new Date().toISOString() })
+      .where(eq(schema.agentSessions.id, sessionId)).run();
+    if (err instanceof Error && err.message === 'Rebuild and restart the session service before forking sessions') throw err;
+    throw new Error('Could not start the native fork; the parent conversation is unchanged');
+  }
   return { sessionId };
 }
 

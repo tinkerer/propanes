@@ -40,15 +40,17 @@ test('help without a mention works after a sessionless bot reply, including afte
   }
 });
 
-test('a task following sessionless help starts a session in the same thread', async () => {
+test('a task following sessionless help starts a session in a separate thread', async () => {
   const f = fixture();
   await f.bridge.handleEvent(mention('[help]'));
   await f.bridge.handleEvent(threadReply('review PR 2013'));
   await f.bridge.drain();
   assert.equal(f.world.sessions.size, 1);
   assert.ok(f.world.calls.includes('dispatch:a-yolo:interactive-yolo'));
-  assert.ok(f.slack.posts.every((p) => p.thread_ts === '100.000'));
-  assert.deepEqual(new StateRepo(f.store).snapshot().engagedThreads, {});
+  const repo = new StateRepo(f.store);
+  assert.equal(repo.getThread('T1:C1:100.000'), undefined);
+  assert.notEqual(repo.threads()[0].threadTs, '100.000');
+  assert.ok(f.slack.texts().some(text => /New thread:/.test(text)));
 });
 
 test('a new request reacts first, creates a session and replies with the public link, agent and mode', async () => {
@@ -819,7 +821,8 @@ test('a separate terminal leaves agent thread context intact', async () => {
   await f.bridge.handleEvent(mention('start'));
   await f.bridge.drain();
   await f.bridge.handleEvent(threadReply('[infra:laptop terminal]'));
-  assert.match(f.slack.texts().at(-1)!, /Replies in this thread continue to reach the agent/);
+  assert.ok(f.slack.texts().some(text => /New thread:/.test(text)));
+  assert.equal(new StateRepo(f.store).threads().find(t => t.kind === 'terminal')!.sessionId, 'S2');
   assert.equal(new StateRepo(f.store).getThread('T1:C1:100.000')!.sessionId, 'S1');
 });
 

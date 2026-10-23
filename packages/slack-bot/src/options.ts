@@ -6,6 +6,7 @@ export interface ParsedCommand {
   command: 'help' | 'status' | 'list-apps' | 'list-infra' | 'list-sessions' | 'list-terminals' | 'prompt';
   runtime?: Runtime;
   terminal?: boolean;
+  session?: boolean;
   mode?: OutputMode;
   images?: boolean;
   /** `[app:<name>]` — the ProPanes application (project) to run in, as typed (lower-cased). */
@@ -18,7 +19,7 @@ export interface ParsedCommand {
   error?: string;
 }
 
-export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'terminal', 'help', 'status', 'list-apps', 'app:<name>', 'list-infra', 'infra:<name>', 'list-sessions', 'list-terminals', 'apps', 'infra', 'sessions', 'terminals'] as const;
+export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'terminal', 'session', 'help', 'status', 'list-apps', 'app:<name>', 'list-infra', 'infra:<name>', 'list-sessions', 'list-terminals', 'apps', 'infra', 'sessions', 'terminals'] as const;
 const STANDALONE = ['help', 'status', 'list-apps', 'list-infra'] as const;
 const VALUE_TOKEN = /^(app|infra)\s*[:=]\s*(.*)$/;
 
@@ -52,7 +53,7 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   const bracket = /^\[([^\]]*)\]\s*/;
   let m: RegExpExecArray | null;
   while ((m = bracket.exec(text)) !== null) {
-    for (const part of m[1].split(/,|\s+(?=(?:(?:app|infra)\s*[:=]|claude\b|codex\b|verbose\b|quiet\b|default\b|images\b|terminal\b|help\b|status\b|list-apps\b|list-infra\b|list-sessions\b|list-terminals\b|apps\b|infra\b|sessions\b|terminals\b))/i)) {
+    for (const part of m[1].split(/,|\s+(?=(?:(?:app|infra)\s*[:=]|claude\b|codex\b|verbose\b|quiet\b|default\b|images\b|terminal\b|session\b|help\b|status\b|list-apps\b|list-infra\b|list-sessions\b|list-terminals\b|apps\b|infra\b|sessions\b|terminals\b))/i)) {
       const t = part.trim().toLowerCase();
       if (t) tokens.push(t);
     }
@@ -110,11 +111,12 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   if (modes.length > 1) {
     return { command: 'prompt', text, error: `Choose one output mode: ${modes.map((x) => `\`[${x}]\``).join(' or ')} are mutually exclusive.` };
   }
-  if (has('terminal') && (has('claude') || has('codex') || has('images') || modes.length || text)) {
+  if (has('terminal') && (has('session') || has('claude') || has('codex') || has('images') || modes.length || text)) {
     return { command: 'prompt', text, error: 'Use `[terminal]` with optional `app:` / `infra:` selectors and no prompt or agent/output options.' };
   }
   const out: ParsedCommand = { command: 'prompt', text };
   if (has('terminal')) out.terminal = true;
+  if (has('session')) out.session = true;
   if (has('claude')) out.runtime = 'claude';
   if (has('codex')) out.runtime = 'codex';
   if (modes.length === 1) out.mode = modes[0];

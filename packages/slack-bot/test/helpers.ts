@@ -126,6 +126,11 @@ export class World {
       this.calls.push(`resume-profile:${id}:${input.permissionProfile ?? 'inherit'}`);
       return { sessionId: this.newSession(parent.feedbackId!, input.runtime ?? parent.runtime!, id).id };
     },
+    fork: async (id, input) => {
+      const parent = this.sessions.get(id)!;
+      this.calls.push(`fork:${id}:${input.additionalPrompt ?? ''}`);
+      return { sessionId: this.newSession(parent.feedbackId!, parent.runtime!, id).id };
+    },
     kill: async (id) => { this.calls.push(`kill:${id}`); this.sessions.get(id)!.status = 'killed'; },
     jsonlDelta: async (id, cursor, _tail): Promise<JsonlDelta> => {
       const s = this.sessions.get(id)!;
@@ -149,7 +154,8 @@ export class FakeSlack implements SlackPoster {
   uploads: UploadArgs[] = [];
   order: string[] = [];
   uploadError: unknown = null;
-  async postMessage(args: PostArgs) { this.posts.push(args); this.order.push(`post:${args.text.slice(0, 30)}`); return { ok: true }; }
+  async postMessage(args: PostArgs) { this.posts.push(args); this.order.push(`post:${args.text.slice(0, 30)}`); return { ok: true, ts: `900.${this.posts.length}` }; }
+  async permalink(channel: string, ts: string) { return `https://slack.example.test/archives/${channel}/p${ts.replace('.', '')}`; }
   async addReaction(args: { channel: string; timestamp: string; name: string }) { this.reactions.push(args); this.order.push(`react:${args.name}`); return { ok: true }; }
   async uploadFile(args: UploadArgs) { if (this.uploadError) throw this.uploadError; this.uploads.push(args); this.order.push(`upload:${args.filename}`); return { ok: true }; }
   texts(): string[] { return this.posts.map((p) => p.text); }
