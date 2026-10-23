@@ -74,12 +74,14 @@ export interface ThreadRecord {
 export interface BotState {
   version: 1;
   threads: Record<string, ThreadRecord>;
+  /** Conversations addressed to the bot before an agent session exists. */
+  engagedThreads: Record<string, true>;
   runtimePrefs: Record<string, Runtime>;
   seenEvents: string[];
 }
 
 export function emptyState(): BotState {
-  return { version: 1, threads: {}, runtimePrefs: {}, seenEvents: [] };
+  return { version: 1, threads: {}, engagedThreads: {}, runtimePrefs: {}, seenEvents: [] };
 }
 
 export function freshCheckpoint(now = Date.now(), since?: number): DeliveryCheckpoint {
@@ -127,10 +129,17 @@ export function threadKey(teamId: string, channel: string, threadTs: string | nu
 export class StateRepo {
   private state: BotState;
   constructor(private readonly store: StateStore) {
-    this.state = store.load();
+    this.state = { ...emptyState(), ...store.load() };
   }
 
   snapshot(): BotState { return this.state; }
+
+  isEngagedThread(key: string): boolean { return this.state.engagedThreads[key] === true; }
+  engageThread(key: string): void {
+    if (this.state.threads[key] || this.isEngagedThread(key)) return;
+    this.state.engagedThreads[key] = true;
+    this.store.save(this.state);
+  }
 
   getThread(key: string): ThreadRecord | undefined { return this.state.threads[key]; }
   putThread(record: ThreadRecord): void {
@@ -139,6 +148,7 @@ export class StateRepo {
       record.delivery.delivered = record.delivery.delivered.slice(-DELIVERED_CAP);
     }
     this.state.threads[record.key] = record;
+    delete this.state.engagedThreads[record.key];
     this.store.save(this.state);
   }
   threads(): ThreadRecord[] { return Object.values(this.state.threads); }

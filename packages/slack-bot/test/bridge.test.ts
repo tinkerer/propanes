@@ -18,6 +18,39 @@ test('help and status reply in the thread and never dispatch work', async () => 
   assert.deepEqual(f.slack.posts.map((p) => p.thread_ts), ['100.000', '101.000']);
 });
 
+test('help without a mention works after a sessionless bot reply, including after restart', async () => {
+  for (const initial of ['[infra:macbook terminal]', '[help]', '[status]', '[unknown]']) {
+    const f = fixture();
+    await f.bridge.handleEvent(mention(initial));
+    assert.equal(f.world.sessions.size, 0);
+    assert.equal(f.slack.posts.length, 1);
+    const restarted = fixture({ store: f.store });
+    await restarted.bridge.handleEvent(threadReply('[help]'));
+    await restarted.bridge.handleEvent(threadReply('[status]'));
+    await restarted.bridge.drain();
+    assert.equal(restarted.world.sessions.size, 0);
+    assert.match(restarted.slack.texts()[0], /Output modes/);
+    assert.match(restarted.slack.texts()[1], /No session is associated/);
+    assert.deepEqual(restarted.slack.posts.map((p) => p.thread_ts), ['100.000', '100.000']);
+    assert.equal(restarted.slack.reactions.length, 2);
+    await restarted.bridge.handleEvent(threadReply('[help]', { threadTs: '999.000' }));
+    await restarted.bridge.handleEvent(threadReply('[help]', { channel: 'C2' }));
+    await restarted.bridge.handleEvent(threadReply('[help]', { teamId: 'T2' }));
+    assert.equal(restarted.slack.posts.length, 2, 'unrelated threads are still ignored');
+  }
+});
+
+test('a task following sessionless help starts a session in the same thread', async () => {
+  const f = fixture();
+  await f.bridge.handleEvent(mention('[help]'));
+  await f.bridge.handleEvent(threadReply('review PR 2013'));
+  await f.bridge.drain();
+  assert.equal(f.world.sessions.size, 1);
+  assert.ok(f.world.calls.includes('dispatch:a-yolo:interactive-yolo'));
+  assert.ok(f.slack.posts.every((p) => p.thread_ts === '100.000'));
+  assert.deepEqual(new StateRepo(f.store).snapshot().engagedThreads, {});
+});
+
 test('a new request reacts first, creates a session and replies with the public link, agent and mode', async () => {
   const f = fixture();
   await f.bridge.handleEvent(mention('review PR 2013'));

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileStateStore, MemoryStateStore, StateRepo, freshCheckpoint, threadKey, type ThreadRecord } from '../src/state';
@@ -41,4 +41,18 @@ test('delivered keys are capped so the checkpoint stays small', () => {
 test('flat DMs and channel threads get distinct keys', () => {
   assert.equal(threadKey('T', 'D1', null), 'T:D1:dm');
   assert.equal(threadKey('T', 'C1', '2.0'), 'T:C1:2.0');
+});
+
+test('sessionless conversations persist and existing state files load with an empty registry', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'amirobot-')), 'state.json');
+  writeFileSync(path, JSON.stringify({ version: 1, threads: {}, runtimePrefs: {}, seenEvents: [] }));
+  const repo = new StateRepo(new FileStateStore(path));
+  assert.equal(repo.isEngagedThread('T:C:1.0'), false);
+  repo.engageThread('T:C:1.0');
+  const again = new StateRepo(new FileStateStore(path));
+  assert.equal(again.isEngagedThread('T:C:1.0'), true);
+  assert.deepEqual(again.threads(), [], 'no fabricated session or watcher');
+  again.putThread(record('T:C:1.0'));
+  assert.equal(again.isEngagedThread('T:C:1.0'), false);
+  assert.equal(new StateRepo(new FileStateStore(path)).getThread('T:C:1.0')?.sessionId, 'S');
 });

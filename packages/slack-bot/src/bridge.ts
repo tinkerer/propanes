@@ -158,7 +158,7 @@ export class SlackBridge {
     // behind it instead of being mistaken for unrelated chatter.
     await this.withLock(key, async () => {
       const record = this.d.state.getThread(key);
-      if (!isDm && !ev.mentionsBot && !record) return; // ordinary chatter in an unrelated thread
+      if (!isDm && !ev.mentionsBot && !record && !this.d.state.isEngagedThread(key)) return; // ordinary chatter in an unrelated thread
 
       const cmd = parseCommand(ev.text, this.d.config.botUserId);
       const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined || cmd.app !== undefined || cmd.infra !== undefined || cmd.terminal !== undefined;
@@ -166,6 +166,9 @@ export class SlackBridge {
       const reply = (text: string) => this.d.slack.postMessage({ channel: ev.channel, thread_ts: threadTs ?? undefined, text });
       if (!cmd.error && cmd.command === 'prompt' && !cmd.text && !hasOptions && !attachments) return;
 
+      // Remember addressed conversations even when we only send help, an
+      // option error or a request for a task. Follow-ups need no new mention.
+      if (!isDm && ev.mentionsBot) this.d.state.engageThread(key);
       if (cmd.error) {
         await reply(`⚠️ ${cmd.error}`);
         return;
