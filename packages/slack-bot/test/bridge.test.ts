@@ -869,9 +869,10 @@ test('session and terminal list commands link all active items without creating 
   terminal.launcherName = 'MacBook';
   const ended = f.world.newSession('F2', 'claude');
   ended.status = 'completed';
-  await f.bridge.handleEvent(mention('[list-sessions]'));
+  await f.bridge.handleEvent(mention('[sessions]'));
   await f.bridge.handleEvent(mention('[list-terminals]', { ts: '101.000' }));
   await f.bridge.drain();
+  assert.match(f.slack.texts()[0], /\*Admin Console\*\n•/);
   assert.ok(f.slack.texts()[0].includes(sessionUrl(agent.id)));
   assert.ok(!f.slack.texts()[0].includes(sessionUrl(terminal.id)));
   assert.ok(f.slack.texts()[1].includes(sessionUrl(terminal.id)));

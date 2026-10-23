@@ -53,3 +53,29 @@ test('large listings include every active session in bounded messages with intac
   assert.ok(result.every(text => text.length <= SLACK_CHUNK));
   for (const row of rows) assert.equal(result.filter(text => text.includes(`<${url(row.id)}|`)).length, 1);
 });
+
+test('sessions from interleaved apps appear together beneath their app names', () => {
+  const result = sessionListing(sessions, false, url, undefined, [
+    { id: 'app-1', name: 'Workbench' },
+    { id: 'app-2', name: 'ProPanes' },
+  ]).join('\n');
+  const first = result.indexOf('*Workbench*');
+  const second = result.indexOf('*ProPanes*');
+  assert.ok(first >= 0 && second > first);
+  for (const id of ['agent-running', 'agent-dispatching']) {
+    assert.ok(result.indexOf(url(id)) > first && result.indexOf(url(id)) < second);
+  }
+  assert.ok(result.indexOf(url('agent-pending')) > second);
+  assert.equal(result.split('*Workbench*').length, 2);
+});
+
+test('app headings escape Slack syntax and distinguish unknown and unassigned apps', () => {
+  const result = sessionListing([
+    { id: 'known', appId: 'known-app', status: 'running' },
+    { id: 'unknown', appId: 'deleted-app', status: 'running' },
+    { id: 'unassigned', status: 'running' },
+  ], false, url, undefined, [{ id: 'known-app', name: 'R&D <@EVERYONE>\nSuite' }]).join('\n');
+  assert.ok(result.includes('*R&amp;D &lt;@EVERYONE&gt; Suite*\n•'));
+  assert.ok(result.includes('*Unknown app (deleted-app)*\n•'));
+  assert.ok(result.includes('*No app*\n•'));
+});

@@ -463,15 +463,16 @@ export class SlackBridge {
   private async listActiveSessions(cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<void> {
     try {
       let app: AppInfo | undefined;
+      const apps = cmd.command === 'list-sessions' || cmd.app !== undefined
+        ? await this.d.propanes.listApplications() : [];
       if (cmd.app !== undefined) {
-        const apps = await this.d.propanes.listApplications();
         const match = resolveApp(apps, cmd.app);
         if (match.kind === 'many') { await reply(ambiguousAppText(cmd.app, match.apps)); return; }
         if (match.kind === 'none') { await reply(unknownAppText(cmd.app, apps)); return; }
         app = match.app;
       }
       const sessions = await this.d.propanes.listActiveSessions();
-      const parts = sessionListing(sessions, cmd.command === 'list-terminals', id => this.sessionUrl(id), app);
+      const parts = sessionListing(sessions, cmd.command === 'list-terminals', id => this.sessionUrl(id), app, apps);
       for (const part of parts) await reply(part);
     } catch (err) {
       await reply(`⚠️ Could not list active ${cmd.command === 'list-terminals' ? 'terminals' : 'sessions'}: ${escapeMrkdwn(safeMessage(err))}`);

@@ -20,7 +20,7 @@ process.
 | `@amirobot [infra]` | Connected infrastructure (this server, machines, harnesses, sprites) with state, load and the `[infra:…]` option. Never creates a session |
 | `@amirobot [terminal]` | Open a plain shell and reply with its session link |
 | `@amirobot [infra:macbook terminal]` | Open a shell on that machine and reply with its session link |
-| `@amirobot [sessions]` | List all active agent sessions with clickable links |
+| `@amirobot [sessions]` | List all active agent sessions with clickable links, grouped beneath their app names |
 | `@amirobot [app:propanes sessions]` | List active agent sessions for the matching application |
 | `@amirobot [terminals]` | List all active plain terminals with clickable links |
 | `@amirobot [help]` | Threaded help: commands, defaults, output modes, examples. Never creates a session |
