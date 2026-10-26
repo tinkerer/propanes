@@ -3,6 +3,7 @@
  * written atomically (tmp + rename) so a crash never leaves a torn file. */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import type { ModelOption } from './models';
 import type { OutputMode, Runtime } from './options';
 
 export type SessionStatus = 'pending' | 'running' | 'completed' | 'failed' | 'killed' | 'cancelled' | string;
@@ -54,6 +55,7 @@ export interface ThreadRecord {
   launcherId?: string;
   infraName?: string;
   runtime: Runtime;
+  model?: string;
   agentEndpointId: string;
   agentName: string;
   mode: OutputMode;
@@ -77,11 +79,14 @@ export interface BotState {
   /** Conversations addressed to the bot before an agent session exists. */
   engagedThreads: Record<string, true>;
   runtimePrefs: Record<string, Runtime>;
+  /** Workspace + user + provider defaults; providers remain independent. */
+  modelPrefs: Record<string, string>;
+  modelMenus: Record<string, { options: ModelOption[]; expiresAt: number }>;
   seenEvents: string[];
 }
 
 export function emptyState(): BotState {
-  return { version: 1, threads: {}, engagedThreads: {}, runtimePrefs: {}, seenEvents: [] };
+  return { version: 1, threads: {}, engagedThreads: {}, runtimePrefs: {}, modelPrefs: {}, modelMenus: {}, seenEvents: [] };
 }
 
 export function freshCheckpoint(now = Date.now(), since?: number): DeliveryCheckpoint {
@@ -158,6 +163,24 @@ export class StateRepo {
   }
   setRuntimePref(teamId: string, userId: string, runtime: Runtime): void {
     this.state.runtimePrefs[`${teamId}:${userId}`] = runtime;
+    this.store.save(this.state);
+  }
+
+  getModelPref(teamId: string, userId: string | undefined, provider: string): string | undefined {
+    return userId ? this.state.modelPrefs[JSON.stringify([teamId, userId, provider])] : undefined;
+  }
+  setModelPref(teamId: string, userId: string, provider: string, model: string): void {
+    this.state.modelPrefs[JSON.stringify([teamId, userId, provider])] = model;
+    this.store.save(this.state);
+  }
+  private menuKey(thread: string, userId: string): string { return JSON.stringify([thread, userId]); }
+  getModelMenu(thread: string, userId: string) { return this.state.modelMenus[this.menuKey(thread, userId)]; }
+  setModelMenu(thread: string, userId: string, options: ModelOption[], expiresAt: number): void {
+    this.state.modelMenus[this.menuKey(thread, userId)] = { options, expiresAt };
+    this.store.save(this.state);
+  }
+  clearModelMenu(thread: string, userId: string): void {
+    delete this.state.modelMenus[this.menuKey(thread, userId)];
     this.store.save(this.state);
   }
 

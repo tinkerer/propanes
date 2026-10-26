@@ -746,8 +746,11 @@ agentSessionRoutes.post('/:id/resume', async (c) => {
   const permissionProfile = body.permissionProfile || undefined;
   const runtime = body.runtime || undefined;
   const additionalPrompt = typeof body.additionalPrompt === 'string' ? body.additionalPrompt : undefined;
+  if (body.model !== undefined && (typeof body.model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/.test(body.model))) {
+    return c.json({ error: 'Invalid model identifier' }, 400);
+  }
   try {
-    const { sessionId } = await resumeAgentSession(id, targetLauncherId, permissionProfile, additionalPrompt, runtime);
+    const { sessionId } = await resumeAgentSession(id, targetLauncherId, permissionProfile, additionalPrompt, runtime, body.model);
     return c.json({ sessionId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Resume failed';

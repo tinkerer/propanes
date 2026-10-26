@@ -1,3 +1,4 @@
+import { modelCatalog } from './models';
 import { join } from 'node:path';
 import { App, LogLevel } from '@slack/bolt';
 import { downloaderFromToken } from './attachments';
@@ -49,6 +50,7 @@ const bridge = new SlackBridge({
   files: downloaderFromToken(process.env.SLACK_BOT_TOKEN!),
   state,
   config: {
+    models: modelCatalog(process.env.AMIROBOT_MODELS_JSON),
     appId: APP_ID,
     defaultApp: DEFAULT_APP,
     publicUrl: PROPANES_PUBLIC_URL,

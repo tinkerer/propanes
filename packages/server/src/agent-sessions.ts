@@ -121,6 +121,7 @@ export async function spawnAgentSession(params: {
   cwd: string;
   runtime?: AgentRuntime;
   permissionProfile: PermissionProfile;
+  model?: string;
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;

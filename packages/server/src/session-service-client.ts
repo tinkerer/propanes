@@ -8,6 +8,7 @@ export interface SpawnParams {
   cwd: string;
   runtime?: AgentRuntime;
   permissionProfile: PermissionProfile;
+  model?: string;
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
