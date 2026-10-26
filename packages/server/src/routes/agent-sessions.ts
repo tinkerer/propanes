@@ -1,4 +1,7 @@
 import { Hono, type Context } from 'hono';
+import { getConnInfo } from '@hono/node-server/conninfo';
+import { resumeRequestContext, requiresResumeClientRefresh } from '../resume-audit.js';
+import { ResumeConflictError } from '../resume-conflicts.js';
 import { eq, desc, ne, and, inArray, or, sql } from 'drizzle-orm';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { hostname as osHostname } from 'node:os';
@@ -750,11 +753,18 @@ agentSessionRoutes.post('/:id/resume', async (c) => {
     return c.json({ error: 'Invalid model identifier' }, 400);
   }
   try {
-    const { sessionId } = await resumeAgentSession(id, targetLauncherId, permissionProfile, additionalPrompt, runtime, body.model);
+    let peerAddress: string | null = null;
+    try { peerAddress = getConnInfo(c).remote.address ?? null; } catch { /* non-Node test adapter */ }
+    const context = resumeRequestContext(c.req.raw.headers, user, peerAddress);
+    if (requiresResumeClientRefresh(context.source)) {
+      console.log(`[resume-audit] ${JSON.stringify({ timestamp: new Date().toISOString(), event: 'blocked_stale_client', parentSessionId: id, request: context })}`);
+      return c.json({ error: 'Refresh this ProPanes page before resuming. Its composer needs the explicit-resume update.' }, 409);
+    }
+    const { sessionId } = await resumeAgentSession(id, targetLauncherId, permissionProfile, additionalPrompt, runtime, body.model, context);
     return c.json({ sessionId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Resume failed';
-    return c.json({ error: msg }, 400);
+    return c.json({ error: msg }, err instanceof ResumeConflictError ? 409 : 400);
   }
 });
 

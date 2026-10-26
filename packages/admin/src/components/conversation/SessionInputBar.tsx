@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'preact/hooks';
 import { api } from '../../lib/api.js';
 import { resumeSession, lastResumeError, lastTerminalInput } from '../../lib/sessions.js';
 import { shouldYieldAutoFocus } from '../../lib/focus-guard.js';
+import { composerEnterAction, canExplicitlyResume } from '../../lib/composer-submit.js';
 import { sendKeysReliable, queuedSends, outboxErrors, dismissOutboxError } from '../../lib/send-outbox.js';
 import type { ParsedMessage } from '../../lib/output-parser.js';
 
@@ -187,15 +188,12 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
       if (result.ok || result.queued) {
         setText('');
       } else {
-        // Direct-inject only works against a live PTY. If the session exited
-        // between our last poll and this send, relaunch it with the text as
-        // the resume prompt instead of surfacing a dead-session error.
-        const relaunched = await relaunchIfExited(value);
-        if (relaunched) {
-          setText('');
-        } else {
-          throw new Error(result.error || 'send-keys failed');
+        // Sending to a process that exited must never silently start another.
+        const session = await api.getAgentSession(sessionId);
+        if (session?.status && !['running', 'pending'].includes(session.status)) {
+          throw new Error('This session has stopped. Use Resume to start it again.');
         }
+        throw new Error(result.error || 'send-keys failed');
       }
     } catch (err: any) {
       setError(err.message || String(err));
@@ -204,28 +202,14 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
     }
   }
 
-  // Send-keys failed — check whether that's because the session already
-  // reached a terminal status, and if so resume it carrying the operator's
-  // text as the follow-up prompt (same path as the Resume button).
-  async function relaunchIfExited(additionalPrompt: string): Promise<boolean> {
-    try {
-      const session = await api.getAgentSession(sessionId);
-      const status = session?.status;
-      if (!status || status === 'running' || status === 'pending') return false;
-      const newId = await resumeSession(sessionId, { additionalPrompt });
-      return !!newId;
-    } catch {
-      return false;
-    }
-  }
-
-  async function submitPrompt(value: string) {
+  async function submitPrompt(value: string, event: MouseEvent) {
+    if (!canExplicitlyResume(event)) return;
     const additionalPrompt = value.trim();
     if (!additionalPrompt || submitting || stopping) return;
     setSubmitting(true);
     setError(null);
     try {
-      const newId = await resumeSession(sessionId, { additionalPrompt });
+      const newId = await resumeSession(sessionId, { additionalPrompt, source: 'conversation.submit-prompt.click.trusted' });
       if (!newId) {
         const real = lastResumeError.value;
         const realMsg = real && real.sessionId === sessionId ? real.message : null;
@@ -276,7 +260,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
     setStopping(true);
     setError(null);
     try {
-      const newId = await resumeSession(sessionId, { additionalPrompt });
+      const newId = await resumeSession(sessionId, { additionalPrompt, source: 'conversation.interrupt' });
       if (!newId) {
         const real = lastResumeError.value;
         const realMsg = real && real.sessionId === sessionId ? real.message : null;
@@ -298,13 +282,14 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
   }
 
   function onGeneralInputKeyDown(ev: KeyboardEvent) {
-    if (ev.key === 'Enter' && !ev.shiftKey) {
-      ev.preventDefault();
-      if (isRunning) {
-        sendTerminalText(text);
-      } else {
-        submitPrompt(text);
-      }
+    const action = composerEnterAction(ev, isRunning);
+    if (!action) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (action === 'send') {
+      sendTerminalText(text);
+    } else if (text.trim()) {
+      setError('This session has stopped. Use Resume to start it again.');
     }
   }
 
@@ -512,7 +497,7 @@ export function SessionInputBar({ sessionId, lastMessage, inputState, isRunning 
           type="button"
           class="conv-input-bar-send"
           disabled={!text.trim() || submitting || stopping}
-          onClick={() => isRunning ? sendTerminalText(text) : submitPrompt(text)}
+          onClick={(event) => isRunning ? sendTerminalText(text) : submitPrompt(text, event)}
           title={isRunning ? 'Send this text and press Enter in the running session' : 'Resume with this prompt'}
         >
           {isRunning ? 'Send' : 'Resume'}

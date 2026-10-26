@@ -424,7 +424,7 @@ export function markSessionExited(sessionId: string, exitCode?: number, terminal
   }
 }
 
-export async function resumeSession(sessionId: string, opts?: { permissionProfile?: string; runtime?: 'claude' | 'codex'; additionalPrompt?: string }): Promise<string | null> {
+export async function resumeSession(sessionId: string, opts?: { permissionProfile?: string; runtime?: 'claude' | 'codex'; additionalPrompt?: string; source?: string }): Promise<string | null> {
   try {
     lastResumeError.value = null;
     // Kill running session first before resuming with new profile

@@ -44,8 +44,8 @@ export function InterruptBar({ sessionId, permissionProfile }: Props) {
 
   const placeholder = mode === 'interrupt' ? 'Interrupt with new prompt…' : 'Resume with new prompt…';
   const submitTitle = mode === 'interrupt'
-    ? 'Kill the current session and restart with this additional prompt (Enter to send, Shift+Enter for newline)'
-    : 'Resume this session with full context plus the new prompt appended (Enter to send, Shift+Enter for newline)';
+    ? 'Kill the current session and restart with this additional prompt (use Interrupt to restart; Shift+Enter for newline)'
+    : 'Resume this session with full context plus the new prompt appended (use Resume to restart; Shift+Enter for newline)';
 
   async function handleSubmit(data: UnifiedComposerData) {
     setError(null);
@@ -150,7 +150,7 @@ export function InterruptBar({ sessionId, permissionProfile }: Props) {
       : text;
 
     try {
-      const newId = await resumeSession(sessionId, { additionalPrompt: enriched });
+      const newId = await resumeSession(sessionId, { additionalPrompt: enriched, source: `terminal.${mode}.click.trusted` });
       if (!newId) {
         const real = lastResumeError.value;
         const fallback = mode === 'interrupt' ? 'Restart failed' : 'Resume failed';
@@ -174,6 +174,7 @@ export function InterruptBar({ sessionId, permissionProfile }: Props) {
       submitTitle={submitTitle}
       submitIcon={mode === 'interrupt' ? 'interrupt' : 'send'}
       submitAriaLabel={mode === 'interrupt' ? 'Interrupt' : 'Resume'}
+      requireExplicitSubmit
       draftKey={`interrupt:${sessionId}`}
       uploadMeta={{ sessionId, appId: sess?.appId || undefined }}
       error={error}

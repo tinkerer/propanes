@@ -1,4 +1,6 @@
 import { ulid } from 'ulidx';
+import { auditResume, type ResumeAuditContext } from './resume-audit.js';
+import { assertResumeAvailable } from './resume-conflicts.js';
 import { eq, and, sql } from 'drizzle-orm';
 import { homedir } from 'node:os';
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
@@ -1185,6 +1187,19 @@ export async function resumeAgentSession(
   additionalPrompt?: string | null,
   overrideRuntime?: AgentRuntime | null,
   model?: string,
+  auditContext?: ResumeAuditContext,
+): Promise<{ sessionId: string }> {
+  return auditResume(parentSessionId, overrideRuntime, !!additionalPrompt?.trim(), auditContext,
+    () => resumeAgentSessionImpl(parentSessionId, targetLauncherId, overridePermissionProfile, additionalPrompt, overrideRuntime, model));
+}
+
+async function resumeAgentSessionImpl(
+  parentSessionId: string,
+  targetLauncherId?: string | null,
+  overridePermissionProfile?: PermissionProfile | null,
+  additionalPrompt?: string | null,
+  overrideRuntime?: AgentRuntime | null,
+  model?: string,
 ): Promise<{ sessionId: string }> {
   const parent = db
     .select()
@@ -1199,6 +1214,7 @@ export async function resumeAgentSession(
   if (parent.status === 'running' || parent.status === 'pending') {
     throw new Error('Session is still active');
   }
+  assertResumeAvailable(parent);
 
   // Plain terminal sessions just spawn a new shell
   if (parent.permissionProfile === 'plain') {
