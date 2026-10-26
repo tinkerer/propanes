@@ -9,18 +9,8 @@ export interface ModelOption {
   aliases?: string[];
 }
 
-export const DEFAULT_MODELS: ModelOption[] = [
-  { provider: 'Anthropic', runtime: 'claude', id: 'opus', label: 'Opus' },
-  { provider: 'Anthropic', runtime: 'claude', id: 'sonnet', label: 'Sonnet' },
-  { provider: 'Anthropic', runtime: 'claude', id: 'haiku', label: 'Haiku' },
-  { provider: 'OpenAI', runtime: 'codex', id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' },
-  { provider: 'OpenAI', runtime: 'codex', id: 'gpt-6-astra', label: 'GPT-6-Astra', aliases: ['astra'] },
-  { provider: 'OpenAI', runtime: 'codex', id: 'gpt-6-sol', label: 'GPT-6-Sol' },
-  { provider: 'OpenAI', runtime: 'codex', id: 'gpt-6-luna', label: 'GPT-6-Luna', aliases: ['luna'] },
-];
-
 export function modelCatalog(json?: string): ModelOption[] {
-  if (!json) return DEFAULT_MODELS;
+  if (!json) return [];
   const value: unknown = JSON.parse(json);
   if (!Array.isArray(value) || !value.length || value.some((m) => !m ||
     typeof m.provider !== 'string' || !m.provider.trim() ||

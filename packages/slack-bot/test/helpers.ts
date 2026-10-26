@@ -1,4 +1,5 @@
 /** Mocked Slack + ProPanes for bridge tests: no network, no real sessions. */
+import type { ModelOption } from '../src/models';
 import { SlackBridge, type BridgeConfig, type IncomingSlackMessage } from '../src/bridge';
 import type { AgentEndpointInfo } from '../src/agents';
 import type { AppInfo } from '../src/apps';
@@ -7,6 +8,16 @@ import { SlackFileAccessError, type DownloadedFile, type SlackFileDownloader, ty
 import type { JsonlDelta, PropanesClient, SessionInfo } from '../src/propanes';
 import type { SlackPoster, UploadArgs, PostArgs } from '../src/slack';
 import { MemoryStateStore, StateRepo, type StateStore } from '../src/state';
+
+export const TEST_MODELS: ModelOption[] = [
+  { provider: 'Anthropic', runtime: 'claude', id: 'opus', label: 'Opus' },
+  { provider: 'Anthropic', runtime: 'claude', id: 'sonnet', label: 'Sonnet' },
+  { provider: 'Anthropic', runtime: 'claude', id: 'haiku', label: 'Haiku' },
+  { provider: 'OpenAI', runtime: 'codex', id: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' },
+  { provider: 'OpenAI', runtime: 'codex', id: 'gpt-6-astra', label: 'GPT-6-Astra' },
+  { provider: 'OpenAI', runtime: 'codex', id: 'gpt-6-sol', label: 'GPT-6-Sol' },
+  { provider: 'OpenAI', runtime: 'codex', id: 'gpt-6-luna', label: 'GPT-6-Luna' },
+];
 
 export const APP = 'app-1';
 export const PUBLIC = 'https://propanes.example.test';
@@ -171,6 +182,7 @@ export function fixture(opts: { store?: StateStore; config?: Partial<BridgeConfi
   const clock = { now: 1_000_000 };
   const bridge = new SlackBridge({
     propanes: world.propanes,
+    models: { list: async () => ({ models: opts.config?.models ?? TEST_MODELS, warnings: [] }), providerForRuntime: (runtime) => runtime === 'claude' ? 'Anthropic' : 'OpenAI' },
     slack,
     files: opts.noDownloader ? undefined : world.downloader,
     state: new StateRepo(store),
