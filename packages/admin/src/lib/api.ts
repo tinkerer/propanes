@@ -1,4 +1,6 @@
 import { isMissingRouteResponse, jsonlDeltaQuery } from './jsonl-route.js';
+// Diagnostic page-instance ID, not an authentication credential.
+const resumeClientId = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const BASE = '/api/v1';
 
 // Set once the server has shown it has no POST /jsonl route (older image).
@@ -540,10 +542,15 @@ export const api = {
       method: 'POST',
     }),
 
-  resumeAgentSession: (id: string, opts?: { permissionProfile?: string; runtime?: 'claude' | 'codex'; additionalPrompt?: string }) =>
+  resumeAgentSession: (id: string, opts?: { permissionProfile?: string; runtime?: 'claude' | 'codex'; additionalPrompt?: string; source?: string }) =>
     request<{ sessionId: string }>(`/admin/agent-sessions/${id}/resume`, {
       method: 'POST',
       body: opts ? JSON.stringify(opts) : undefined,
+      headers: {
+        'x-propanes-resume-source': opts?.source || 'admin.resume-action',
+        'x-propanes-client-id': resumeClientId,
+        'x-propanes-resume-page': location.hash.slice(1).split('?')[0].split('/').slice(0, 2).join('/') || '/',
+      },
     }),
 
   // Promote a CoS thread to a live interactive (TTY + interactive-yolo) session.

@@ -28,6 +28,7 @@ export async function branchSession(
 ): Promise<string | null> {
   return resumeSession(sessionId, {
     additionalPrompt: prompt,
+    source: 'admin.branch-session',
     runtime: opts?.runtime,
     permissionProfile: opts?.permissionProfile,
   });

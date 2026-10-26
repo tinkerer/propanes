@@ -1,3 +1,4 @@
+import { canExplicitlyResume } from '../../lib/composer-submit.js';
 import { useEffect, useRef, useState, useLayoutEffect } from 'preact/hooks';
 import { createPortal } from 'preact/compat';
 import { captureScreenshot, type ScreenshotMethod } from '@propanes/widget/screenshot';
@@ -52,6 +53,8 @@ export type UnifiedComposerProps = {
   submitTitle: string;
   submitIcon?: SubmitIcon;
   submitAriaLabel?: string;
+  /** Restart actions require an explicit trusted button activation. */
+  requireExplicitSubmit?: boolean;
   disabled?: boolean;
   draftKey?: string;
   initialText?: string;
@@ -196,6 +199,7 @@ export function UnifiedComposer({
   submitTitle,
   submitIcon = 'send',
   submitAriaLabel,
+  requireExplicitSubmit = false,
   disabled,
   draftKey,
   initialText,
@@ -484,7 +488,8 @@ export function UnifiedComposer({
   // hasContent includes voice result which the core hook doesn't know about
   const hasContent = core.hasContent || !!voiceResult;
 
-  async function submit() {
+  async function submit(event?: MouseEvent) {
+    if (requireExplicitSubmit && (!event || !canExplicitlyResume(event))) return;
     if (!hasContent) return;
     if (core.submittingRef.current) return;
     core.submittingRef.current = true;
@@ -544,6 +549,15 @@ export function UnifiedComposer({
   }
 
   function onKeyDown(ev: KeyboardEvent) {
+    if (requireExplicitSubmit && ev.key === 'Enter' && !ev.shiftKey) {
+      if (ev.isComposing) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!ev.repeat && hasContent) {
+        setInternalError(`Use ${submitAriaLabel || 'the submit button'} to restart this session.`);
+      }
+      return;
+    }
     core.onKeyDown(ev, { submit: () => void submit() });
   }
 
@@ -759,7 +773,7 @@ export function UnifiedComposer({
             type="button"
             class="interrupt-bar-submit"
             disabled={disabled || core.submitting || !hasContent}
-            onClick={() => void submit()}
+            onClick={(event) => void submit(event)}
             title={submitTitle}
             aria-label={submitAriaLabel || (submitIcon === 'interrupt' ? 'Interrupt' : 'Send')}
           >
