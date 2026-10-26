@@ -204,6 +204,7 @@ function buildAgentCommand(
   claudeSessionId?: string,
   resumeSessionId?: string,
   forkSessionId?: string,
+  model?: string,
 ): { command: string; args: string[] } {
   if (runtime === 'codex') {
     const command = resolveCodexCommand();
@@ -217,6 +218,7 @@ function buildAgentCommand(
       skip: SKIP_PROFILES.has(permissionProfile),
       prompt,
       resumeSessionId,
+      model,
     });
     return { command, args };
   }
@@ -314,6 +316,7 @@ function spawnSession(params: {
   cwd: string;
   runtime?: AgentRuntime;
   permissionProfile: string;
+  model?: string;
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
@@ -343,7 +346,9 @@ function spawnSession(params: {
   const claudeSessionId = forkId || requestedNativeId;
   const resumeSessionId = forkId || requestedResumeId;
 
-  const { command, args } = buildAgentCommand(runtime, prompt, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, forkSessionId);
+  const { command, args } = buildAgentCommand(runtime, prompt, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, forkSessionId, params.model);
+
+  if (params.model && runtime !== 'codex' && permissionProfile !== 'plain') args.unshift('--model', params.model);
 
   console.log(`[launcher] Spawning session ${sessionId}: runtime=${runtime}, command=${command}, profile=${permissionProfile}, cwd=${cwd}`);
 
@@ -795,6 +800,7 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
           cwd: msg.cwd,
           runtime: msg.runtime || 'claude',
           permissionProfile: msg.permissionProfile,
+          model: msg.model,
           allowedTools: msg.allowedTools,
           claudeSessionId: msg.claudeSessionId,
           resumeSessionId: msg.resumeSessionId,
@@ -1128,7 +1134,8 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
         break;
       }
 
-      const { command: innerCmd, args: innerArgs } = buildAgentCommand(runtime || 'claude', prompt, permissionProfile, undefined, claudeSessionId);
+      const { command: innerCmd, args: innerArgs } = buildAgentCommand(runtime || 'claude', prompt, permissionProfile, undefined, claudeSessionId, undefined, undefined, msg.model);
+      if (msg.model && runtime !== 'codex' && permissionProfile !== 'plain') innerArgs.unshift('--model', msg.model);
       const execFlags: string[] = [];
       if (containerCwd) execFlags.push('-w', containerCwd);
       if (anthropicApiKey) execFlags.push('-e', `ANTHROPIC_API_KEY=${anthropicApiKey}`);

@@ -3,8 +3,9 @@ export type Runtime = 'claude' | 'codex';
 export type OutputMode = 'default' | 'verbose' | 'quiet';
 
 export interface ParsedCommand {
-  command: 'help' | 'status' | 'list-apps' | 'list-infra' | 'list-sessions' | 'list-terminals' | 'prompt';
+  command: 'models' | 'help' | 'status' | 'list-apps' | 'list-infra' | 'list-sessions' | 'list-terminals' | 'prompt';
   runtime?: Runtime;
+  modelQuery?: string;
   terminal?: boolean;
   session?: boolean;
   mode?: OutputMode;
@@ -19,7 +20,7 @@ export interface ParsedCommand {
   error?: string;
 }
 
-export const KNOWN_OPTIONS = ['claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'terminal', 'session', 'help', 'status', 'list-apps', 'app:<name>', 'list-infra', 'infra:<name>', 'list-sessions', 'list-terminals', 'apps', 'infra', 'sessions', 'terminals'] as const;
+export const KNOWN_OPTIONS = ['models', 'models:<name>', 'claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'terminal', 'session', 'help', 'status', 'list-apps', 'app:<name>', 'list-infra', 'infra:<name>', 'list-sessions', 'list-terminals', 'apps', 'infra', 'sessions', 'terminals'] as const;
 const STANDALONE = ['help', 'status', 'list-apps', 'list-infra'] as const;
 const VALUE_TOKEN = /^(app|infra)\s*[:=]\s*(.*)$/;
 
@@ -53,13 +54,25 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   const bracket = /^\[([^\]]*)\]\s*/;
   let m: RegExpExecArray | null;
   while ((m = bracket.exec(text)) !== null) {
-    for (const part of m[1].split(/,|\s+(?=(?:(?:app|infra)\s*[:=]|claude\b|codex\b|verbose\b|quiet\b|default\b|images\b|terminal\b|session\b|help\b|status\b|list-apps\b|list-infra\b|list-sessions\b|list-terminals\b|apps\b|infra\b|sessions\b|terminals\b))/i)) {
+    for (const part of m[1].split(/,|\s+(?=(?:(?:app|infra|models)\s*[:=]|models\b|claude\b|codex\b|verbose\b|quiet\b|default\b|images\b|terminal\b|session\b|help\b|status\b|list-apps\b|list-infra\b|list-sessions\b|list-terminals\b|apps\b|infra\b|sessions\b|terminals\b))/i)) {
       const t = part.trim().toLowerCase();
       if (t) tokens.push(t);
     }
     text = text.slice(m[0].length);
   }
   text = text.trim();
+
+  const modelTokens = tokens.filter((t) => /^models(?:\s*[:=]|$)/.test(t));
+  if (modelTokens.length) {
+    if (modelTokens.length !== 1 || tokens.length !== 1 || text) {
+      return { command: 'models', text, error: 'Use `[models]` or `[models:name]` alone, with no prompt or other options.' };
+    }
+    const token = modelTokens[0];
+    if (token === 'models') return { command: 'models', text };
+    const query = token.replace(/^models\s*[:=]\s*/, '').trim();
+    return query ? { command: 'models', text, modelQuery: query }
+      : { command: 'models', text, error: 'Choose a model name, e.g. `[models:opus]`, or send `[models]` to list models.' };
+  }
 
   const values: Record<'app' | 'infra', string[]> = { app: [], infra: [] };
   const plain: string[] = [];

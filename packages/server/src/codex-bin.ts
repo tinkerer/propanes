@@ -65,6 +65,7 @@ export function resolveCodexCommand(
 export interface CodexArgsInput {
   /** `exec` (one-shot, pipe profiles) instead of the interactive TUI. */
   pipe: boolean;
+  model?: string;
   /** Pass --dangerously-bypass-approvals-and-sandbox (the *-yolo profiles). */
   skip: boolean;
   prompt?: string | null;
@@ -78,10 +79,11 @@ export interface CodexArgsInput {
  * TUI, `codex exec resume <id> [prompt]` for pipe profiles) so the agent gets
  * its full prior context back instead of a re-typed task summary.
  */
-export function buildCodexArgs({ pipe, skip, prompt, resumeSessionId }: CodexArgsInput): string[] {
+export function buildCodexArgs({ pipe, skip, prompt, resumeSessionId, model }: CodexArgsInput): string[] {
   const args: string[] = [];
   if (pipe) args.push('exec');
   if (resumeSessionId) args.push('resume');
+  if (model) args.push('--model', model);
   if (!pipe) {
     // The codex TUI runs tool calls in a shared, long-lived app-server
     // daemon, so shell commands inherit the daemon's environment instead of

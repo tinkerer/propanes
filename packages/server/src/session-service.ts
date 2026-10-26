@@ -232,6 +232,7 @@ function buildAgentCommand(
   resumeSessionId?: string,
   appendSystemPrompt?: string,
   forkSessionId?: string,
+  model?: string,
 ): { command: string; args: string[] } {
   if (runtime === 'codex') {
     const command = resolveCodexCommand();
@@ -245,6 +246,7 @@ function buildAgentCommand(
       skip: SKIP_PROFILES.has(permissionProfile),
       prompt,
       resumeSessionId,
+      model,
     });
     return { command, args };
   }
@@ -485,6 +487,7 @@ function spawnSession(params: {
   cwd: string;
   runtime?: AgentRuntime;
   permissionProfile: PermissionProfile;
+  model?: string;
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
@@ -518,7 +521,10 @@ function spawnSession(params: {
     resumeSessionId,
     appendSystemPrompt,
     forkSessionId,
+    params.model,
   );
+
+  if (params.model && runtime !== 'codex' && permissionProfile !== 'plain') args.unshift('--model', params.model);
 
   console.log(`[session-service] Spawning session ${sessionId}: runtime=${runtime}, command=${command}, profile=${permissionProfile}, cwd=${cwd}, tmux=${isTmuxAvailable()}`);
 
@@ -1250,7 +1256,7 @@ app.get('/waiting', (c) => {
 
 app.post('/spawn', async (c) => {
   const body = await c.req.json();
-  const { sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, forkSessionId, forkStartedAt, appendSystemPrompt } = body;
+  const { sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, forkSessionId, forkStartedAt, appendSystemPrompt, model } = body;
 
   if (!sessionId || !cwd || !permissionProfile) {
     return c.json({ error: 'Missing required fields' }, 400);
@@ -1267,7 +1273,7 @@ app.post('/spawn', async (c) => {
   }
 
   try {
-    spawnSession({ sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, forkSessionId, forkStartedAt, appendSystemPrompt, env });
+    spawnSession({ sessionId, prompt, cwd, runtime, permissionProfile, allowedTools, claudeSessionId, resumeSessionId, forkSessionId, forkStartedAt, appendSystemPrompt, model, env });
     return c.json({ ok: true, sessionId });
   } catch (err) {
     const pending = pendingConnections.get(sessionId);

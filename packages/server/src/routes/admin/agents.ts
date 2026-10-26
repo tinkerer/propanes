@@ -384,7 +384,7 @@ async function handleDispatch(c: any, payload: unknown) {
     return c.json({ error: 'Validation failed', details: parsed.error.flatten() }, 400);
   }
 
-  const { feedbackId, agentEndpointId, instructions, harnessConfigId, permissionProfile, channelId } = parsed.data;
+  const { feedbackId, agentEndpointId, instructions, harnessConfigId, permissionProfile, channelId, model } = parsed.data;
   const user = getAdminUser(c);
   const launcherId = user.role === 'member' && user.launcherId ? user.launcherId : parsed.data.launcherId;
   const feedback = db.select({
@@ -505,6 +505,7 @@ async function handleDispatch(c: any, payload: unknown) {
       launcherId,
       harnessConfigId,
       permissionProfile,
+      model,
       ownerUserId: user.id,
       orgId: user.orgId,
     });

@@ -97,7 +97,7 @@ export interface PropanesClient {
   /** POST /api/v1/uploads — the composer's non-image file attachments. */
   uploadFiles(sessionId: string | undefined, files: DownloadedFile[], appId: string): Promise<{ files: { id: string; filename: string; originalName: string; path: string }[] }>;
   /** POST /api/v1/admin/dispatch — what the admin dispatch popup calls. */
-  dispatch(input: { feedbackId: string; agentEndpointId: string; instructions: string; permissionProfile: string; launcherId?: string }): Promise<{ sessionId: string }>;
+  dispatch(input: { feedbackId: string; agentEndpointId: string; model?: string; instructions: string; permissionProfile: string; launcherId?: string }): Promise<{ sessionId: string }>;
   getSession(id: string): Promise<SessionInfo>;
   /** Active sessions visible to the bot's bearer token; no recent-row limit. */
   listActiveSessions(): Promise<SessionInfo[]>;
@@ -106,7 +106,7 @@ export interface PropanesClient {
   /** POST /:id/send-keys — SessionInputBar.sendTerminalText for a running session. */
   sendKeys(id: string, keys: string): Promise<{ ok: boolean; error?: string }>;
   /** POST /:id/resume — SessionInputBar.submitPrompt for a stopped session. */
-  resume(id: string, input: { additionalPrompt: string; runtime?: Runtime; permissionProfile?: string }): Promise<{ sessionId: string }>;
+  resume(id: string, input: { additionalPrompt: string; model?: string; runtime?: Runtime; permissionProfile?: string }): Promise<{ sessionId: string }>;
   fork(id: string, input: { additionalPrompt?: string }): Promise<{ sessionId: string }>;
   kill(id: string): Promise<void>;
   /** POST /:id/jsonl — the structured view's differential transcript poll. */

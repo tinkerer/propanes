@@ -9,6 +9,7 @@
 import { AgentUnavailableError, configuredDefaultRuntime, resolveAgentEndpoint, runtimeLabel, type AgentEndpointInfo } from './agents';
 import { ambiguousAppText, defaultApp, listAppsText, resolveApp, unknownAppText, type AppInfo } from './apps';
 import { attachmentBlock, classifyAttachment, displayName, SlackFileAccessError, type DownloadedFile, type ForwardedAttachment, type SlackFileDownloader, type SlackFileInfo } from './attachments';
+import { DEFAULT_MODELS, matchModels, type ModelOption } from './models';
 import { extractFinalCosReply } from './cos-reply';
 import { coalesce, escapeMrkdwn, feedbackTitle, renderEvent, summarizeToolInput, toMrkdwn } from './format';
 import { ambiguousInfraText, canOpenTerminal, listInfraMessages, localAsTarget, LOCAL_LAUNCHER_ID, offlineInfraText, resolveInfra, unknownInfraText, type InfraTarget } from './infra';
@@ -46,6 +47,7 @@ export interface IncomingSlackMessage {
 const HUMAN_SUBTYPES = new Set(['file_share', 'thread_broadcast']);
 
 export interface BridgeConfig {
+  models?: ModelOption[];
   /** Legacy default application id (fallback when `defaultApp` does not resolve). */
   appId: string;
   /** Default application by name or id (`PROPANES_DEFAULT_APP`); `[app:<name>]` overrides per thread. */
@@ -176,6 +178,27 @@ export class SlackBridge {
         return;
       }
       await this.react(ev);
+      if (cmd.command === 'models') {
+        if (attachments) { await reply('Use model commands without attachments.'); return; }
+        await this.handleModels(ev, key, cmd.modelQuery, reply);
+        return;
+      }
+      if (ev.user) {
+        const menu = this.d.state.getModelMenu(key, ev.user);
+        if (menu && cmd.command === 'prompt' && !hasOptions && !attachments && /^\d+$/.test(cmd.text)) {
+          if (menu.expiresAt <= this.now()) {
+            this.d.state.clearModelMenu(key, ev.user);
+            await reply('That model menu expired. Send `[models]` for a fresh list.');
+          } else {
+            const model = menu.options[Number(cmd.text) - 1];
+            if (model) await this.selectModel(ev, key, model, reply);
+            else await reply(`Choose a number from 1 to ${menu.options.length}, or send \`[models]\` again.`);
+          }
+          return;
+        }
+        // A normal reply ends menu selection, preserving numeric agent answers.
+        if (menu) this.d.state.clearModelMenu(key, ev.user);
+      }
       if (cmd.command === 'help') { await reply(helpText(await this.defaultAppName())); return; }
       if (cmd.command === 'status') { await reply(await this.statusText(record)); return; }
       if (cmd.command === 'list-sessions' || cmd.command === 'list-terminals') {
@@ -203,6 +226,43 @@ export class SlackBridge {
       if (!cmd.text && !hasOptions) return; // nothing usable arrived (every attachment was rejected)
       await this.handlePrompt(ev, key, threadTs, cmd, reply, staged);
     });
+  }
+
+  private catalog(): ModelOption[] { return this.d.config.models ?? DEFAULT_MODELS; }
+
+  private defaultModel(teamId: string, userId: string | undefined, runtime: Runtime): string | undefined {
+    const provider = this.catalog().find((m) => m.runtime === runtime)?.provider;
+    return provider ? this.d.state.getModelPref(teamId, userId, provider) : undefined;
+  }
+
+  private async handleModels(ev: IncomingSlackMessage, key: string, query: string | undefined, reply: (t: string) => Promise<unknown>): Promise<void> {
+    if (!ev.user) { await reply('A Slack user is required to save a model preference.'); return; }
+    this.d.state.clearModelMenu(key, ev.user);
+    const models = this.catalog();
+    const matches = query === undefined ? models : matchModels(models, query);
+    if (query !== undefined && matches.length === 1) {
+      await this.selectModel(ev, key, matches[0], reply);
+      return;
+    }
+    if (!matches.length) {
+      await reply(`No model matches \`${escapeMrkdwn(query ?? '')}\`. Send \`[models]\` for available models.`);
+      return;
+    }
+    this.d.state.setModelMenu(key, ev.user, matches, this.now() + 10 * 60_000);
+    const lines = matches.map((m, i) => {
+      const selected = this.d.state.getModelPref(ev.teamId, ev.user, m.provider) === m.id ? ' (your default)' : '';
+      return `${i + 1}. ${escapeMrkdwn(m.label)} — ${escapeMrkdwn(m.provider)} (\`${escapeMrkdwn(m.id)}\`)${selected}`;
+    });
+    await reply([query ? 'Several models match; choose one:' : '*Available models*', ...lines,
+      `Reply with a number (e.g. 1 to select ${escapeMrkdwn(matches[0].label)}) within 10 minutes, or use \`[models:opus]\`, \`[models:sonnet]\` or \`[models:astra]\`.`,
+      'Choices are saved for you in this workspace, separately for each provider.'].join('\n'));
+  }
+
+  private async selectModel(ev: IncomingSlackMessage, key: string, model: ModelOption, reply: (t: string) => Promise<unknown>): Promise<void> {
+    this.d.state.setModelPref(ev.teamId, ev.user!, model.provider, model.id);
+    this.d.state.setRuntimePref(ev.teamId, ev.user!, model.runtime);
+    this.d.state.clearModelMenu(key, ev.user!);
+    await reply(`Selected *${escapeMrkdwn(model.label)}* (\`${escapeMrkdwn(model.id)}\`) as your *${escapeMrkdwn(model.provider)}* default. New ${runtimeLabel(model.runtime)} sessions and your next message in a ${runtimeLabel(model.runtime)} thread will use it (resuming the conversation if needed).`);
   }
 
   /** Slack cannot nest threads. A new bot message in the channel/DM is the
@@ -437,9 +497,11 @@ export class SlackBridge {
     });
     const forwarded = await this.stageForSession(undefined, { images: [], files: staged.files }, reply);
     const extra = forwarded.length ? `\n\n${attachmentBlock(forwarded, false)}` : '';
+    const model = this.defaultModel(ev.teamId, ev.user, runtime);
     const { sessionId } = await this.d.propanes.dispatch({
       feedbackId: feedback.id,
       agentEndpointId: endpoint.id,
+      model,
       instructions: slackInstructions(mode) + extra,
       permissionProfile: PERMISSION_PROFILE,
       ...(infra ? { launcherId: infra.launcherId } : {}),
@@ -449,7 +511,7 @@ export class SlackBridge {
       key, teamId: ev.teamId, channel: ev.channel, threadTs,
       sessionId, feedbackId: feedback.id, appId, appName: app.name, runtime,
       ...(infra ? { launcherId: infra.launcherId, infraName: infra.name } : {}), agentEndpointId: endpoint.id, agentName: endpoint.name || endpoint.id,
-      mode, images,
+      mode, images, model,
       history: [{ sessionId, runtime, agentName: endpoint.name || endpoint.id, createdAt: nowIso }],
       delivery: freshCheckpoint(this.now(), this.now() - FRESH_SESSION_GRACE_MS), watching: true, createdAt: nowIso, updatedAt: nowIso,
     };
@@ -591,7 +653,9 @@ export class SlackBridge {
     const forwarded = (staged.images.length || staged.files.length) ? await this.stageForSession(record, staged, reply) : [];
     const oneLineText = forwarded.length ? `${cmd.text} ${attachmentBlock(forwarded, true)}` : cmd.text;
     const multiLineText = forwarded.length ? `${cmd.text}\n\n${attachmentBlock(forwarded, false)}` : cmd.text;
-    if (switching) return this.switchRuntime(ev, record, cmd.runtime!, multiLineText, reply);
+    const selectedModel = this.defaultModel(ev.teamId, ev.user, cmd.runtime ?? record.runtime);
+    const changingModel = selectedModel !== undefined && selectedModel !== record.model;
+    if (switching || changingModel) return this.switchRuntime(ev, record, cmd.runtime ?? record.runtime, multiLineText, reply);
 
     let session = await this.currentSession(record);
     if (isLive(session.status)) {
@@ -613,7 +677,7 @@ export class SlackBridge {
         return;
       }
     }
-    await this.resumeInto(record, multiLineText, undefined, reply, this.resumeReason(record, session));
+    await this.resumeInto(record, multiLineText, undefined, reply, this.resumeReason(record, session), ev.user);
   }
 
   private resumeReason(record: ThreadRecord, session: SessionInfo): string {
@@ -642,25 +706,30 @@ export class SlackBridge {
       throw err;
     }
     const session = await this.currentSession(record);
-    let reason = `Switching this thread from ${runtimeLabel(record.runtime)} to ${runtimeLabel(runtime)}`;
+    let reason = runtime === record.runtime
+      ? `Applying your selected ${runtimeLabel(runtime)} model`
+      : `Switching this thread from ${runtimeLabel(record.runtime)} to ${runtimeLabel(runtime)}`;
     if (isLive(session.status)) {
       // Mirrors the admin's "Resume as…": an explicit profile/runtime change stops the live run first.
       await this.d.propanes.kill(record.sessionId).catch(() => undefined);
       await this.awaitStopped(record.sessionId);
       reason += ` (stopped the running ${runtimeLabel(record.runtime)} session)`;
     }
-    const ok = await this.resumeInto(record, text, runtime, reply, reason);
+    const ok = await this.resumeInto(record, text, runtime, reply, reason, ev.user);
     if (ok && ev.user) this.d.state.setRuntimePref(ev.teamId, ev.user, runtime);
   }
 
-  private async resumeInto(record: ThreadRecord, text: string, runtime: Runtime | undefined, reply: (t: string) => Promise<unknown>, reason: string): Promise<boolean> {
+  private async resumeInto(record: ThreadRecord, text: string, runtime: Runtime | undefined, reply: (t: string) => Promise<unknown>, reason: string, userId?: string): Promise<boolean> {
     const parentId = record.sessionId;
+    const model = this.defaultModel(record.teamId, userId, runtime ?? record.runtime)
+      ?? (runtime === undefined || runtime === record.runtime ? record.model : undefined);
     try {
       // The agent's own resume (claude --resume / codex resume) restores the
       // conversation; the thread's TTY profile is pinned so a drifted row never
       // turns the continuation into a headless stream.
       const { sessionId } = await this.d.propanes.resume(parentId, {
         additionalPrompt: promptForResume(text, record.mode),
+        model,
         permissionProfile: PERMISSION_PROFILE,
         ...(runtime ? { runtime } : {}),
       });
@@ -668,6 +737,7 @@ export class SlackBridge {
       const agentName = runtime && runtime !== record.runtime ? `${record.agentName} → ${runtime}` : record.agentName;
       record.sessionId = sessionId;
       record.runtime = nextRuntime;
+      record.model = model;
       record.agentName = agentName;
       record.history.push({ sessionId, runtime: nextRuntime, agentName, createdAt: new Date(this.now()).toISOString() });
       record.delivery = freshCheckpoint(this.now(), this.now() - RESUME_GRACE_MS);
@@ -1050,6 +1120,7 @@ export function helpText(defaultAppName?: string): string {
     'Mention me with a request to start an agent session; every reply in the thread is sent to that session (no mention needed). Leading `[options]` are case-insensitive and may be comma-separated.',
     '',
     '*Commands*',
+    '• `[models]` — list numbered model choices; reply with a number or use `[models:opus]`, `[models:sonnet]`, `[models:astra]`. Saves your provider default for new sessions and your next thread message.',
     `• \`@amirobot review PR 2013\` — new session in the default application${def} with your remembered agent (ProPanes default the first time)`,
     '• `@amirobot [app:<name>] …` / `[claude, app:storefront] …` — run in that application (project); partial names work when they match exactly one app, otherwise I list the candidates. Fixed per thread.',
     '• `@amirobot [apps]` — the registered applications and their `[app:…]` option',

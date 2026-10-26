@@ -233,6 +233,7 @@ export interface LaunchSession {
   cwd: string;
   runtime?: AgentRuntime;
   permissionProfile: PermissionProfile;
+  model?: string;
   allowedTools?: string | null;
   claudeSessionId?: string;
   resumeSessionId?: string;
@@ -282,6 +283,7 @@ export interface StopHarness {
 }
 
 export interface LaunchHarnessSession {
+  model?: string;
   type: 'launch_harness_session';
   sessionId: string;
   harnessConfigId: string;

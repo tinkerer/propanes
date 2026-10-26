@@ -197,6 +197,36 @@ listener restarts without starting a transcript watcher.
   and the reply shows both the new and the previous link; `[status]` lists them.
   The user's remembered agent is updated to the new choice.
 
+### Model selection
+
+Send `[models]` to see a numbered catalog, then reply with a number in the same
+thread or DM within ten minutes (no new mention needed). Menus belong to the
+requesting user; other users' numeric replies keep reaching their agent. A
+normal non-selection reply closes your menu. `[models:opus]`, `[models:sonnet]`
+and `[models:astra]` select directly, ignoring case and punctuation; exact names
+and aliases win over partial names. Ambiguous queries show a numbered shortlist;
+unknown names and invalid numbers never dispatch a task or change a preference.
+
+Each choice confirms the model and saves a default per workspace, user and
+provider, surviving listener restarts. It also remembers that model's runtime
+for new tasks. Anthropic and OpenAI defaults remain independent. Explicit
+`[claude]` and `[codex]` use their provider's saved default. New dispatches and
+resumes pass the model to the CLI through `--model`, locally or on a launcher,
+harness or sprite. Selecting a default does not interrupt ongoing work. Your next message in a
+thread for that provider resumes the conversation with the selected model if
+it differs from the running model. Use `[claude]` or `[codex]` with a task to
+switch an existing thread to the other provider. Selection commands accept no prompt
+or other bracket options.
+
+The built-in catalog offers Claude's `opus`, `sonnet`, `haiku` aliases and
+OpenAI's GPT-6.1-Sol, GPT-6-Astra, GPT-6-Sol and GPT-6-Luna. To use other models,
+set `AMIROBOT_MODELS_JSON` to a non-empty JSON array of objects, e.g.
+`[{"provider":"Anthropic","runtime":"claude","id":"opus","label":"Opus","aliases":["best"]}]`.
+This replaces the catalog, so configure all choices to expose. Provider names
+are extensible; every runtime maps to one provider. Adding a new CLI runtime
+requires its launch adapter as well. CLI authentication and account access
+still determine which configured models can run.
+
 ### Thread / session behaviour
 
 1. Every accepted human request gets an 👀 reaction before work starts.

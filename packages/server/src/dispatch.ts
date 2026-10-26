@@ -369,6 +369,7 @@ export function renderPromptTemplate(
 }
 
 export async function dispatchFeedbackToAgent(params: {
+  model?: string;
   feedbackId: string;
   agentEndpointId: string;
   instructions?: string;
@@ -492,6 +493,7 @@ export async function dispatchFeedbackToAgent(params: {
       cwd,
       runtime,
       permissionProfile,
+      model: params.model,
       allowedTools: agent.allowedTools || (app as any)?.defaultAllowedTools || null,
       launcherId: launcherId || undefined,
       ownerUserId: params.ownerUserId ?? feedback.ownerUserId ?? null,
@@ -719,6 +721,7 @@ async function shipAttachmentsToLauncher(
 }
 
 export async function dispatchAgentSession(params: {
+  model?: string;
   feedbackId: string;
   agentEndpointId: string;
   prompt: string;
@@ -759,6 +762,7 @@ export async function dispatchAgentSession(params: {
         prompt: params.prompt,
         cwd: spriteConfig.defaultCwd || params.cwd,
         runtime: params.runtime || 'claude',
+        model: params.model,
         permissionProfile: params.permissionProfile,
         allowedTools: params.allowedTools,
         claudeSessionId,
@@ -815,6 +819,7 @@ export async function dispatchAgentSession(params: {
           cwd: spriteConfig.defaultCwd || params.cwd,
           runtime,
           permissionProfile: params.permissionProfile,
+          model: params.model,
           allowedTools: params.allowedTools,
           claudeSessionId,
           ownerUserId: params.ownerUserId ?? null,
@@ -840,6 +845,7 @@ export async function dispatchAgentSession(params: {
         prompt: params.prompt,
         composeDir: harnessConfig.composeDir || undefined,
         runtime,
+        model: params.model,
         permissionProfile: params.permissionProfile,
         feedbackId: params.feedbackId,
         agentEndpointId: params.agentEndpointId,
@@ -933,7 +939,8 @@ export async function dispatchAgentSession(params: {
         sessionId,
         prompt,
         cwd: params.cwd,
-          runtime,
+        runtime,
+        model: params.model,
         permissionProfile: params.permissionProfile,
         allowedTools: params.allowedTools,
         claudeSessionId,
@@ -964,6 +971,7 @@ export async function dispatchAgentSession(params: {
 }
 
 async function spawnLocal(sessionId: string, params: {
+  model?: string;
   prompt?: string;
   cwd: string;
   runtime?: AgentRuntime;
@@ -982,6 +990,7 @@ async function spawnLocal(sessionId: string, params: {
       cwd: params.cwd,
       runtime,
       permissionProfile: params.permissionProfile,
+      model: params.model,
       allowedTools: params.allowedTools,
       claudeSessionId: params.claudeSessionId,
       resumeSessionId: params.resumeSessionId,
@@ -1175,6 +1184,7 @@ export async function resumeAgentSession(
   overridePermissionProfile?: PermissionProfile | null,
   additionalPrompt?: string | null,
   overrideRuntime?: AgentRuntime | null,
+  model?: string,
 ): Promise<{ sessionId: string }> {
   const parent = db
     .select()
@@ -1346,6 +1356,7 @@ export async function resumeAgentSession(
       const msg: LaunchSession = {
         type: 'launch_session',
         sessionId,
+        model,
         prompt: resumePrompt,
         cwd,
         runtime,
@@ -1362,6 +1373,7 @@ export async function resumeAgentSession(
       } catch (err) {
         console.error(`[dispatch] Failed to send resume to launcher, falling back to local:`, err);
         spawnLocal(sessionId, {
+          model,
           prompt: resumePrompt,
           cwd,
           runtime,
@@ -1372,6 +1384,7 @@ export async function resumeAgentSession(
       }
     } else {
       spawnLocal(sessionId, {
+        model,
         prompt: resumePrompt,
         cwd,
         runtime,
@@ -1412,7 +1425,7 @@ export async function resumeAgentSession(
       })
       .run();
     const resumePrompt = additionalPrompt ? additionalPrompt.trim() : '';
-    const params = { prompt: resumePrompt, cwd, runtime, permissionProfile, resumeSessionId: codexResumeId };
+    const params = { model, prompt: resumePrompt, cwd, runtime, permissionProfile, resumeSessionId: codexResumeId };
     if (launcher && launcher.ws.readyState === 1) {
       const msg: LaunchSession = { type: 'launch_session', sessionId, ...params, cols: ptyColsForProfile(permissionProfile), rows: 40 };
       try {
@@ -1485,6 +1498,7 @@ IMPORTANT: The previous session may have made partial progress. Check the curren
     const msg: LaunchSession = {
       type: 'launch_session',
       sessionId,
+      model,
       prompt: resumePrompt,
       cwd,
       runtime,
@@ -1498,16 +1512,17 @@ IMPORTANT: The previous session may have made partial progress. Check the curren
       addSessionToLauncher(launcher.id, sessionId);
     } catch (err) {
       console.error(`[dispatch] Failed to send to launcher, falling back to local:`, err);
-      spawnLocal(sessionId, { prompt: resumePrompt, cwd, runtime, permissionProfile, claudeSessionId: claudeSessionId || undefined }).catch(() => {});
+      spawnLocal(sessionId, { model, prompt: resumePrompt, cwd, runtime, permissionProfile, claudeSessionId: claudeSessionId || undefined }).catch(() => {});
     }
   } else {
-    spawnLocal(sessionId, { prompt: resumePrompt, cwd, runtime, permissionProfile, claudeSessionId: claudeSessionId || undefined }).catch(() => {});
+    spawnLocal(sessionId, { model, prompt: resumePrompt, cwd, runtime, permissionProfile, claudeSessionId: claudeSessionId || undefined }).catch(() => {});
   }
 
   return { sessionId };
 }
 
 export async function dispatchHarnessSession(params: {
+  model?: string;
   harnessConfigId: string;
   launcherId: string;
   prompt: string;
@@ -1589,6 +1604,7 @@ export async function dispatchHarnessSession(params: {
 
     const msg: LaunchHarnessSession = {
       type: 'launch_harness_session',
+      model: params.model,
       sessionId,
       harnessConfigId: params.harnessConfigId,
       prompt: params.prompt,
@@ -1866,6 +1882,7 @@ async function doTransfer(transfer: TransferState, targetCwd?: string): Promise<
 // --- Sprite dispatch ---
 
 function buildSpriteCommandArgs(params: {
+  model?: string;
   runtime?: AgentRuntime;
   prompt?: string;
   cwd?: string;
@@ -1879,6 +1896,7 @@ function buildSpriteCommandArgs(params: {
 
   if (runtime === 'codex') {
     const cmdArgs = ['codex'];
+    if (params.model) cmdArgs.push('--model', params.model);
     if (skipPerms) {
       cmdArgs.push('--dangerously-bypass-approvals-and-sandbox');
     }
@@ -1892,6 +1910,7 @@ function buildSpriteCommandArgs(params: {
   }
 
   const cmdArgs = ['claude'];
+  if (params.model) cmdArgs.push('--model', params.model);
   if (skipPerms) {
     cmdArgs.push('--dangerously-skip-permissions');
   }
@@ -1908,6 +1927,7 @@ function buildSpriteCommandArgs(params: {
 }
 
 async function dispatchSpriteSession(params: {
+  model?: string;
   sessionId: string;
   feedbackId: string;
   agentEndpointId: string;

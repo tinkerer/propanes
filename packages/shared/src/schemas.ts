@@ -242,6 +242,7 @@ export const agentEndpointSchema = z.object({
 });
 
 export const dispatchSchema = z.object({
+  model: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/).optional(),
   feedbackId: z.string(),
   agentEndpointId: z.string(),
   instructions: z.string().max(100000).optional(),
