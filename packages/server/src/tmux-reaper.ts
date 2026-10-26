@@ -21,7 +21,7 @@
  *   - it is older than TMUX_REAP_MIN_AGE_MS, so a session whose row is
  *     being written right now is never raced;
  *   - its DB row is missing or already terminal (killed / completed /
- *     failed). `running`, `pending` and `idle` rows are left alone.
+ *     failed / deleted). `running`, `pending` and `idle` rows are left alone.
  */
 
 function envInt(name: string, fallback: number): number {
@@ -34,8 +34,10 @@ export const TMUX_REAP_MIN_AGE_MS = envInt('TMUX_REAP_MIN_AGE_MS', 10 * 60_000);
 /** How often the sweep runs after the one at startup (ms). */
 export const TMUX_REAP_INTERVAL_MS = envInt('TMUX_REAP_INTERVAL_MS', 5 * 60_000);
 
-/** DB statuses whose tmux session has no business staying alive. */
-export const TERMINAL_SESSION_STATUSES: ReadonlySet<string> = new Set(['killed', 'completed', 'failed']);
+/** DB statuses whose tmux session has no business staying alive. `deleted`
+ * is the soft delete (feedback routes, metering): the row stays for history
+ * but the session is as finished as a killed one. */
+export const TERMINAL_SESSION_STATUSES: ReadonlySet<string> = new Set(['killed', 'completed', 'failed', 'deleted']);
 
 export interface TmuxSessionFact {
   sessionId: string;
