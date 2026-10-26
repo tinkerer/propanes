@@ -21,6 +21,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
+# Model discovery uses the signed-in CLIs; allow their auth/cache refreshes.
+# Keep the checkout and the rest of the home directory read-only.
+ReadWritePaths=-/home/azureuser/.codex -/home/azureuser/.claude
 
 [Install]
 WantedBy=multi-user.target

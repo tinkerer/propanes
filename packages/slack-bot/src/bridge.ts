@@ -9,9 +9,10 @@
 import { AgentUnavailableError, configuredDefaultRuntime, resolveAgentEndpoint, runtimeLabel, type AgentEndpointInfo } from './agents';
 import { ambiguousAppText, defaultApp, listAppsText, resolveApp, unknownAppText, type AppInfo } from './apps';
 import { attachmentBlock, classifyAttachment, displayName, SlackFileAccessError, type DownloadedFile, type ForwardedAttachment, type SlackFileDownloader, type SlackFileInfo } from './attachments';
-import { DEFAULT_MODELS, matchModels, type ModelOption } from './models';
+import { matchModels, type ModelOption } from './models';
+import { createModelCatalog, type ModelCatalogSource } from './model-discovery';
 import { extractFinalCosReply } from './cos-reply';
-import { coalesce, escapeMrkdwn, feedbackTitle, renderEvent, summarizeToolInput, toMrkdwn } from './format';
+import { coalesce, chunkText, escapeMrkdwn, feedbackTitle, renderEvent, summarizeToolInput, toMrkdwn } from './format';
 import { ambiguousInfraText, canOpenTerminal, listInfraMessages, localAsTarget, LOCAL_LAUNCHER_ID, offlineInfraText, resolveInfra, unknownInfraText, type InfraTarget } from './infra';
 import { extractImageRefs, filenameFor, IMAGE_MAX_BYTES, IMAGE_MIMES, type ImageRef } from './images';
 import { isStopKeyword, parseCommand, type OutputMode, type ParsedCommand, type Runtime } from './options';
@@ -73,6 +74,7 @@ export interface StagedAttachments {
 }
 
 export interface BridgeDeps {
+  models?: ModelCatalogSource;
   propanes: PropanesClient;
   slack: SlackPoster;
   /** Reads Slack files with the bot token; absent = attachments are not forwarded. */
@@ -127,10 +129,12 @@ export class SlackBridge {
   private watchers = new Map<string, Promise<void>>();
   private followers = new Map<string, { sessionId: string; follower: TranscriptFollower }>();
   private stopped = false;
+  private readonly models: ModelCatalogSource;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly now: () => number;
 
   constructor(private readonly d: BridgeDeps) {
+    this.models = d.models ?? createModelCatalog({ extra: d.config.models });
     this.sleep = d.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.now = d.now ?? (() => Date.now());
   }
@@ -228,23 +232,23 @@ export class SlackBridge {
     });
   }
 
-  private catalog(): ModelOption[] { return this.d.config.models ?? DEFAULT_MODELS; }
-
   private defaultModel(teamId: string, userId: string | undefined, runtime: Runtime): string | undefined {
-    const provider = this.catalog().find((m) => m.runtime === runtime)?.provider;
+    const provider = this.models.providerForRuntime(runtime);
     return provider ? this.d.state.getModelPref(teamId, userId, provider) : undefined;
   }
 
   private async handleModels(ev: IncomingSlackMessage, key: string, query: string | undefined, reply: (t: string) => Promise<unknown>): Promise<void> {
     if (!ev.user) { await reply('A Slack user is required to save a model preference.'); return; }
     this.d.state.clearModelMenu(key, ev.user);
-    const models = this.catalog();
+    const { models, warnings } = await this.models.list();
+    for (const warning of warnings) await reply(`⚠️ ${escapeMrkdwn(warning)}`);
     const matches = query === undefined ? models : matchModels(models, query);
     if (query !== undefined && matches.length === 1) {
       await this.selectModel(ev, key, matches[0], reply);
       return;
     }
     if (!matches.length) {
+      if (query === undefined) { await reply('No models could be discovered. Check the provider CLI sign-in and try `[models]` again.'); return; }
       await reply(`No model matches \`${escapeMrkdwn(query ?? '')}\`. Send \`[models]\` for available models.`);
       return;
     }
@@ -253,9 +257,10 @@ export class SlackBridge {
       const selected = this.d.state.getModelPref(ev.teamId, ev.user, m.provider) === m.id ? ' (your default)' : '';
       return `${i + 1}. ${escapeMrkdwn(m.label)} — ${escapeMrkdwn(m.provider)} (\`${escapeMrkdwn(m.id)}\`)${selected}`;
     });
-    await reply([query ? 'Several models match; choose one:' : '*Available models*', ...lines,
+    const menu = [query ? 'Several models match; choose one:' : '*Available models*', ...lines,
       `Reply with a number (e.g. 1 to select ${escapeMrkdwn(matches[0].label)}) within 10 minutes, or use \`[models:opus]\`, \`[models:sonnet]\` or \`[models:astra]\`.`,
-      'Choices are saved for you in this workspace, separately for each provider.'].join('\n'));
+      'Choices are saved for you in this workspace, separately for each provider.'].join('\n');
+    for (const part of chunkText(menu)) await reply(part);
   }
 
   private async selectModel(ev: IncomingSlackMessage, key: string, model: ModelOption, reply: (t: string) => Promise<unknown>): Promise<void> {

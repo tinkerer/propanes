@@ -218,14 +218,37 @@ it differs from the running model. Use `[claude]` or `[codex]` with a task to
 switch an existing thread to the other provider. Selection commands accept no prompt
 or other bracket options.
 
-The built-in catalog offers Claude's `opus`, `sonnet`, `haiku` aliases and
-OpenAI's GPT-6.1-Sol, GPT-6-Astra, GPT-6-Sol and GPT-6-Luna. To use other models,
-set `AMIROBOT_MODELS_JSON` to a non-empty JSON array of objects, e.g.
-`[{"provider":"Anthropic","runtime":"claude","id":"opus","label":"Opus","aliases":["best"]}]`.
-This replaces the catalog, so configure all choices to expose. Provider names
-are extensible; every runtime maps to one provider. Adding a new CLI runtime
-requires its launch adapter as well. CLI authentication and account access
-still determine which configured models can run.
+The catalog is discovered from the signed-in CLIs on the bot host: Claude's
+SDK initialization returns its model picker entries (including model versions
+and resolved IDs), and Codex's app-server `model/list` returns its selectable
+models. Every page is fetched; provider-hidden internal entries stay hidden,
+matching the CLI picker. No user prompt, inference request or task session is
+submitted. New releases and account-specific choices appear without editing a
+model list in the bot.
+
+Discovery is shared across concurrent requests and cached for 60 seconds.
+Failures are reported per provider; healthy providers remain available. If a
+previous successful list exists, it is shown with an explicit stale-list warning;
+there is no fallback to a handpicked catalog. Large lists span multiple Slack
+messages while retaining one stable numbered menu for selection. Models shown
+are those of the bot host's CLI accounts; remote launchers use their own installed
+CLI versions and credentials when a session is dispatched there.
+
+`CLAUDE_BIN` and `CODEX_BIN` may select CLI executables. Native installations in
+`~/.local/bin` are also found when systemd's PATH omits that directory. Both
+commands are bounded by a 30-second discovery timeout; their subprocesses are
+terminated after discovery. Claude initializes without session persistence or
+project MCP servers. The systemd unit permits auth/cache refreshes only in
+`/home/azureuser/.claude` and `/home/azureuser/.codex`; reinstall the unit and run
+`systemctl daemon-reload` when deploying this change.
+
+To add explicitly configured model options, set `AMIROBOT_MODELS_JSON` to a
+non-empty JSON array, e.g.
+`[{"provider":"Anthropic","runtime":"claude","id":"custom-model","label":"Custom model","aliases":["custom"]}]`.
+These options supplement discovery; they no longer replace or hide discovered
+models. New provider adapters register a provider label, runtime and discovery
+function; a new CLI runtime still requires its launch adapter. Existing defaults
+and remembered menu choices survive the discovery change.
 
 ### Thread / session behaviour
 

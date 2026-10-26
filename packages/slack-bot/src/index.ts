@@ -1,4 +1,5 @@
 import { modelCatalog } from './models';
+import { createModelCatalog } from './model-discovery';
 import { join } from 'node:path';
 import { App, LogLevel } from '@slack/bolt';
 import { downloaderFromToken } from './attachments';
@@ -46,11 +47,11 @@ const log = (message: string) => console.warn(`[amirobot] ${message}`);
 
 const bridge = new SlackBridge({
   propanes,
+  models: createModelCatalog({ extra: modelCatalog(process.env.AMIROBOT_MODELS_JSON) }),
   slack: new PacedPoster(posterFromClient(app.client as any)),
   files: downloaderFromToken(process.env.SLACK_BOT_TOKEN!),
   state,
   config: {
-    models: modelCatalog(process.env.AMIROBOT_MODELS_JSON),
     appId: APP_ID,
     defaultApp: DEFAULT_APP,
     publicUrl: PROPANES_PUBLIC_URL,

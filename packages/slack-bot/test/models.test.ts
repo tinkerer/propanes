@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { DEFAULT_MODELS, matchModels, modelCatalog } from '../src/models';
+import { matchModels, modelCatalog } from '../src/models';
 import { parseCommand } from '../src/options';
 import { StateRepo } from '../src/state';
-import { fixture, mention, threadReply } from './helpers';
+import { TEST_MODELS, fixture, mention, threadReply } from './helpers';
 import { createPropanesClient, createPropanesFetch } from '../src/propanes';
 
 test('model commands parse case-insensitively and reject combined commands and prompts', () => {
@@ -15,12 +15,12 @@ test('model commands parse case-insensitively and reject combined commands and p
 });
 
 test('model matching prefers exact names and aliases, supports partial punctuation-insensitive names and keeps ambiguities', () => {
-  assert.equal(matchModels(DEFAULT_MODELS, 'OPU')[0].id, 'opus');
-  assert.equal(matchModels(DEFAULT_MODELS, 'astra')[0].id, 'gpt-6-astra');
-  assert.equal(matchModels(DEFAULT_MODELS, 'gpt 6 astra')[0].id, 'gpt-6-astra');
-  assert.equal(matchModels(DEFAULT_MODELS, 'sol').length, 2);
-  assert.deepEqual(matchModels(DEFAULT_MODELS, 'unknown'), []);
-  assert.deepEqual(matchModels(DEFAULT_MODELS, '!!!'), []);
+  assert.equal(matchModels(TEST_MODELS, 'OPU')[0].id, 'opus');
+  assert.equal(matchModels(TEST_MODELS, 'astra')[0].id, 'gpt-6-astra');
+  assert.equal(matchModels(TEST_MODELS, 'gpt 6 astra')[0].id, 'gpt-6-astra');
+  assert.equal(matchModels(TEST_MODELS, 'sol').length, 2);
+  assert.deepEqual(matchModels(TEST_MODELS, 'unknown'), []);
+  assert.deepEqual(matchModels(TEST_MODELS, '!!!'), []);
 });
 
 test('catalog accepts additional provider labels and aliases and rejects invalid model configuration', () => {
