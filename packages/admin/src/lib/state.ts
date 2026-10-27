@@ -37,6 +37,8 @@ if (isolatedComponent.value) {
 export const isAuthenticated = signal(!!localStorage.getItem('pw-admin-token'));
 export const currentUser = signal<any | null>(null);
 export const isAdminUser = computed(() => currentUser.value?.role === 'admin');
+/** The org-less operator — the only account whose sessions may move to the amirobot Slack bot. */
+export const isGlobalAdminUser = computed(() => currentUser.value?.role === 'admin' && !currentUser.value?.orgId);
 // api.ts dispatches `pw-admin-401` on any 401 response. Flip the signal here
 // so the App shell re-renders LoginPage immediately (no manual refresh).
 window.addEventListener('pw-admin-401', () => {

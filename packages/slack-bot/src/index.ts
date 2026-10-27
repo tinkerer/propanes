@@ -30,6 +30,12 @@ const IDLE_POLL_MS = parseInt(process.env.IDLE_POLL_MS ?? '30000', 10) || 30000;
 // An hour without session activity stops the agent (its transcript stays
 // resumable); the next Slack reply resumes it natively (--resume / codex resume).
 const IDLE_STOP_MS = parseInt(process.env.IDLE_STOP_MS ?? String(60 * 60 * 1000), 10) || 60 * 60 * 1000;
+// Admin "Continue in Slack" requests open their thread here (a channel id, or
+// a user id for a DM); unset = the conversation of the most recent thread.
+const HANDOFF_CHANNEL = process.env.AMIROBOT_HANDOFF_CHANNEL || undefined;
+// The server queue is polled (Socket Mode leaves the listener no inbound HTTP);
+// the admin treats a listener silent for 30 s as disconnected.
+const HANDOFF_POLL_MS = parseInt(process.env.AMIROBOT_HANDOFF_POLL_MS ?? '3000', 10) || 3000;
 // systemd's StateDirectory= exports STATE_DIRECTORY; dev runs keep state next to the package.
 const STATE_FILE = process.env.AMIROBOT_STATE_FILE
   ?? join(process.env.STATE_DIRECTORY ?? join(__dirname, '..', 'state'), 'amirobot-state.json');
@@ -61,6 +67,7 @@ const bridge = new SlackBridge({
     idlePollMs: IDLE_POLL_MS,
     idleStopMs: IDLE_STOP_MS,
     transcriptTail: 2000,
+    handoffChannel: HANDOFF_CHANNEL,
   },
   log,
 });
@@ -147,15 +154,33 @@ app.message(async ({ message, body }) => {
   bridge.setBotUserId(botUserId);
   await app.start();
   const rearmed = bridge.recover();
+  pollHandoffs();
   console.log(`${BOT_NAME} connected via Socket Mode${rearmed ? ` (re-armed ${rearmed} thread watcher${rearmed === 1 ? '' : 's'})` : ''}`);
 })().catch((err) => {
   log(`startup failed: ${err instanceof Error ? err.message : 'error'}`);
   process.exit(1);
 });
 
+let handoffTimer: NodeJS.Timeout | undefined;
+let handoffFailures = 0;
+function pollHandoffs(): void {
+  propanes.claimHandoffs()
+    .then(async (requests) => {
+      if (handoffFailures) log('handoff queue reachable again');
+      handoffFailures = 0;
+      for (const req of requests) await bridge.handleHandoff(req);
+    })
+    .catch((err) => {
+      // Log the first failure of a streak only; the poll runs every few seconds.
+      if (handoffFailures++ === 0) log(`handoff poll failed: ${err instanceof Error ? err.message : 'error'}`);
+    })
+    .finally(() => { handoffTimer = setTimeout(pollHandoffs, HANDOFF_POLL_MS); });
+}
+
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
     bridge.stop();
+    if (handoffTimer) clearTimeout(handoffTimer);
     app.stop().catch(() => undefined).finally(() => process.exit(0));
   });
 }

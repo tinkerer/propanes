@@ -357,10 +357,10 @@ export const cachedAgents = signal<any[]>([]);
 export const actionToast = signal<{ key: string; label: string; color: string } | null>(null);
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-export function showActionToast(key: string, label: string, color = 'var(--pw-primary)') {
+export function showActionToast(key: string, label: string, color = 'var(--pw-primary)', durationMs = 1500) {
   if (toastTimer) clearTimeout(toastTimer);
   actionToast.value = { key, label, color };
-  toastTimer = setTimeout(() => { actionToast.value = null; }, 1500);
+  toastTimer = setTimeout(() => { actionToast.value = null; }, durationMs);
 }
 
 // --- Input States ---

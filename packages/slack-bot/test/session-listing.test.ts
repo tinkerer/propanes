@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { sessionListing } from '../src/session-listing';
+import { listedSessions, sessionListing } from '../src/session-listing';
 import { SLACK_CHUNK } from '../src/format';
 import type { SessionInfo } from '../src/propanes';
 
@@ -75,7 +75,15 @@ test('app headings escape Slack syntax and distinguish unknown and unassigned ap
     { id: 'unknown', appId: 'deleted-app', status: 'running' },
     { id: 'unassigned', status: 'running' },
   ], false, url, undefined, [{ id: 'known-app', name: 'R&D <@EVERYONE>\nSuite' }]).join('\n');
-  assert.ok(result.includes('*R&amp;D &lt;@EVERYONE&gt; Suite*\n•'));
-  assert.ok(result.includes('*Unknown app (deleted-app)*\n•'));
-  assert.ok(result.includes('*No app*\n•'));
+  assert.ok(result.includes('*R&amp;D &lt;@EVERYONE&gt; Suite*\n1. '));
+  assert.ok(result.includes('*Unknown app (deleted-app)*\n2. '));
+  assert.ok(result.includes('*No app*\n3. '));
+});
+
+test('agent sessions are numbered across app groups in listedSessions order', () => {
+  const result = sessionListing(sessions, false, url).join('\n');
+  const order = listedSessions(sessions, false).flat().map(s => s.id);
+  assert.deepEqual(order, ['agent-running', 'agent-dispatching', 'agent-pending']);
+  order.forEach((id, i) => assert.ok(result.includes(`${i + 1}. <${url(id)}|`)));
+  assert.match(result, /_Reply with the number to continue the session in Slack\._$/);
 });

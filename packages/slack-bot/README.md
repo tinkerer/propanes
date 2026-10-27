@@ -20,7 +20,7 @@ process.
 | `@amirobot [infra]` | Connected infrastructure (this server, machines, harnesses, sprites) with state, load and the `[infra:…]` option. Never creates a session |
 | `@amirobot [terminal]` | Open a plain shell and reply with its session link |
 | `@amirobot [infra:macbook terminal]` | Open a shell on that machine and reply with its session link |
-| `@amirobot [sessions]` | List all active agent sessions with clickable links, grouped beneath their app names |
+| `@amirobot [sessions]` | Numbered list of all active agent sessions with clickable links, grouped beneath their app names. Reply with a number to continue that session in Slack |
 | `@amirobot [app:propanes sessions]` | List active agent sessions for the matching application |
 | `@amirobot [terminals]` | List all active plain terminals with clickable links |
 | `@amirobot [help]` | Threaded help: commands, defaults, output modes, examples. Never creates a session |
@@ -148,6 +148,36 @@ lists, including sessions launched outside Slack.
 Each entry links to the public admin session page and includes its title (or
 feedback title/ID), ID, runtime or shell, status, and machine name when available.
 Long lists are split into Slack-sized messages without truncating the result set.
+
+### Continuing a ProPanes session in Slack
+
+Agent sessions in `[sessions]` are numbered across app groups, and the list ends
+with "Reply with the number to continue the session in Slack". For ten minutes
+the requester's numeric reply in that conversation picks a session (any other
+reply cancels the selection, so numeric answers to an agent still work). The
+chosen session, started from Slack or not, gets its own bot-rooted thread:
+
+- nothing is dispatched, resumed or forked; the thread is bound to the existing
+  session, its app, machine, runtime and **its own permission profile** (a later
+  resume keeps that profile instead of the bot's `interactive-yolo`);
+- the transcript so far is read but not re-posted; the intro shows the latest
+  assistant reply, and only output written after the move reaches Slack;
+- replies send keys to a live session or resume a stopped one, exactly as in a
+  Slack-started thread, including the one-hour idle pause;
+- a session already bound to a thread is not moved twice: the reply links the
+  existing thread.
+
+The admin session menus (the sidebar status-dot menu and the session-ID menu in
+the session header, which is the one used on mobile) have **Move to Slack** for
+the global operator account. The server keeps an in-memory queue
+(`/api/v1/admin/slack-handoffs`); the listener claims it every
+`AMIROBOT_HANDOFF_POLL_MS` (default 3000) and reports each outcome, which the
+admin shows as a toast. The thread opens in `AMIROBOT_HANDOFF_CHANNEL` (a
+channel id, or a user id for a DM) and falls back to the conversation of the
+most recent bot thread. If the listener has not polled for 30 s, the admin
+request is refused with "listener is not connected". Queued requests do not
+survive a server restart. Org admins and members do not get the item: the bot
+posts in the operator's workspace.
 An empty list explicitly says there are no active items. Listing is read-only:
 it never creates, interrupts or resumes sessions, forwards text to them, changes
 user preferences, or replaces the thread's current session mapping.
@@ -414,7 +444,8 @@ the id fallback), and `PROPANES_TOKEN` (an authorized ProPanes bearer token;
 track its expiry). Optional: `SLACK_BOT_NAME` (the handle used in help text,
 hints, feedback tags and logs; default `amirobot` — set it when running another
 user's bot, see `docs/multi-user-vm.md`), `AGENT_ENDPOINT_ID`, `POLL_MS`, `IDLE_POLL_MS`,
-`IDLE_STOP_MS`, `AMIROBOT_STATE_FILE`. The bot token also downloads Slack
+`IDLE_STOP_MS`, `AMIROBOT_STATE_FILE`, `AMIROBOT_HANDOFF_CHANNEL`,
+`AMIROBOT_HANDOFF_POLL_MS`. The bot token also downloads Slack
 attachments. The listener verifies API authentication
 and lists which runtimes resolve before opening its socket.
 
