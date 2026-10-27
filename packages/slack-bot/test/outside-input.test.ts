@@ -47,3 +47,9 @@ test('remembered prompts are capped', () => {
   assert.equal(list!.length, SENT_PROMPTS_CAP);
   assert.equal(list![0], 'p5');
 });
+
+test('Claude Code image-dimension notes are harness text, not outside input', () => {
+  const note = '[Image: original 1206x2622, displayed at 920x2000. Multiply coordinates by 1.31 to map to original image.]';
+  assert.ok(isHarnessInjected(note));
+  assert.ok(!isOutsideInput(note, ['start']));
+});
