@@ -17,6 +17,7 @@ import { ambiguousInfraText, canOpenTerminal, listInfraMessages, localAsTarget, 
 import { extractImageRefs, filenameFor, IMAGE_MAX_BYTES, IMAGE_MIMES, type ImageRef } from './images';
 import { isStopKeyword, parseCommand, type OutputMode, type ParsedCommand, type Runtime } from './options';
 import { isLive, PropanesApiError, TERMINAL_STATUSES, type JsonlDelta, type PropanesClient, type SessionInfo } from './propanes';
+import { BOT_NAME } from './name';
 import { slackErrorCode, type SlackPoster } from './slack';
 import type { InfraTerminalAction } from './infra-actions';
 import { sessionListing } from './session-listing';
@@ -469,7 +470,7 @@ export class SlackBridge {
 
   private async startSession(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>, staged: StagedAttachments): Promise<void> {
     if (!cmd.text) {
-      await reply('Tell me what to do, e.g. `@amirobot review PR 2013`. Send `[help]` for options.');
+      await reply(`Tell me what to do, e.g. \`@${BOT_NAME} review PR 2013\`. Send \`[help]\` for options.`);
       return;
     }
     const target = await this.resolveTargets(cmd, reply);
@@ -497,7 +498,7 @@ export class SlackBridge {
       title: feedbackTitle(cmd.text),
       description: cmd.text,
       appId,
-      tags: ['slack', 'amirobot'],
+      tags: ['slack', BOT_NAME],
       screenshots: staged.images,
     });
     const forwarded = await this.stageForSession(undefined, { images: [], files: staged.files }, reply);
@@ -1160,5 +1161,6 @@ export function helpText(defaultAppName?: string): string {
     '• `@amirobot [codex, app:storefront, infra:laptop] build the app and screenshot it`',
     '• `@amirobot [quiet, images] screenshot the dashboard and describe it`',
     '• in a thread: `[verbose]` switches that thread to verbose for later replies',
-  ].join('\n');
+  // The lines above are written for the original bot; each instance names itself.
+  ].join('\n').replace(/\bamirobot\b/g, BOT_NAME);
 }

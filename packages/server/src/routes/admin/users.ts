@@ -11,6 +11,7 @@ import {
   getUserPodStatus,
   launcherIdFor,
 } from '../../k8s-provision.js';
+import { AGENT_PRESETS, OnboardError, onboardUser, parseOnboardPlan } from '../../onboarding.js';
 
 export const userRoutes = new Hono();
 
@@ -122,6 +123,50 @@ userRoutes.delete('/users/:id', async (c) => {
   const id = c.req.param('id');
   db.delete(schema.users).where(eq(schema.users.id, id)).run();
   return c.json({ ok: true });
+});
+
+// --- Onboarding: per-member workspace (apps, agents, machine, launcher pin) ---
+
+// What the onboarding dialog/script offers: the admin's apps as suggestions
+// and the agent presets. Suggestions are only metadata — the member gets their
+// own copy pointing at their own checkout, never the source app's directory.
+userRoutes.get('/users/:id/onboarding', async (c) => {
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
+  const user = db.select().from(schema.users).where(eq(schema.users.id, c.req.param('id'))).get();
+  if (!user) return c.json({ error: 'User not found' }, 404);
+  const apps = db.select().from(schema.applications).all();
+  return c.json({
+    user: publicUser(user),
+    agentPresets: AGENT_PRESETS,
+    owned: apps.filter((a) => a.ownerUserId === user.id).map((a) => ({ id: a.id, name: a.name, projectDir: a.projectDir })),
+    suggestions: apps
+      .filter((a) => a.ownerUserId !== user.id)
+      .map((a) => ({ id: a.id, name: a.name, description: a.description, projectDir: a.projectDir })),
+  });
+});
+
+userRoutes.post('/users/:id/onboard', async (c) => {
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
+  const id = c.req.param('id');
+  const body = await c.req.json().catch(() => ({}));
+  try {
+    const result = onboardUser(id, parseOnboardPlan(body));
+    // The Slack bot (and any other unattended client) acts as this member, so
+    // it gets a token with the member's own scope — never an admin token.
+    let token: string | undefined;
+    if (body.mintToken === true) {
+      const user = db.select().from(schema.users).where(eq(schema.users.id, id)).get()!;
+      token = await mintUserToken(user, 365);
+    }
+    return c.json({ ...result, ...(token ? { token } : {}) });
+  } catch (err) {
+    if (err instanceof OnboardError) {
+      return c.json({ error: err.message }, err.message === 'User not found' ? 404 : 400);
+    }
+    throw err;
+  }
 });
 
 // --- Phase 4: self-service per-user pod provisioning (Kubernetes) ---

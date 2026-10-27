@@ -1,0 +1,25 @@
+# One private launcher per onboarded member on a shared VM (instance = ProPanes
+# username). It runs as that member's own Linux account, so their Claude/Codex
+# logins, git credentials and checkouts live in their home and nobody else's
+# agents can read them. Installed and configured by scripts/onboard-user.sh.
+[Unit]
+Description=ProPanes launcher for %i
+After=network-online.target propanes.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pp-%i
+Group=pp-%i
+WorkingDirectory=~
+# SERVER_WS_URL, LAUNCHER_ID, MACHINE_ID, CLAUDE_BIN, PROPANES_TOKEN, … —
+# readable by root and the member only (agent sessions inherit this env).
+EnvironmentFile=/etc/propanes/users/%i/launcher.env
+ExecStart=/usr/bin/node /opt/propanes/launcher/launcher-bundle.mjs
+Restart=always
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

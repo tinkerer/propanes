@@ -221,6 +221,10 @@ The launcher gets an extra guard because it is the entrypoint's foreground proce
 
 **Remote agent pods** (launcher ids like `agent-<user>`) are separate deployments with their own baked image and their own `/data` volume. Changes to `launcher-daemon.ts` or anything it bundles (`jsonl-utils`, `tmux-pty`, …) reach them only after an image build/push plus a deployment update — and the marker must exist on *that* pod's volume for it to run from NFS thereafter.
 
+### Multiple users on one VM
+
+A member account alone only scopes what they *see*; unpinned sessions still run as the server's Linux user with its CLI logins. `scripts/onboard-user.sh --user <name> --app <APP_ID>… [--slack-bot <handle>]` gives a member a `pp-<name>` Linux account, a private launcher (`propanes-launcher@<name>`, pinned via `users.launcher_id`), their own app copies + Claude/Codex × interactive/YOLO agents (`POST /admin/users/:id/onboard`, `src/onboarding.ts`) and optionally their own Slack bot (`propanes-slackbot@<name>`, `SLACK_BOT_NAME`). Dispatch for a pinned member never falls back to a local run. Details: `docs/multi-user-vm.md`.
+
 ## Permission Profiles
 
 Agent sessions are spawned with a `permissionProfile` that encodes **two orthogonal axes** — I/O mode × permissions. Profile names follow the `<mode>-<perms>` format so both axes are legible at a glance.

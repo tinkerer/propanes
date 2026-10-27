@@ -25,6 +25,7 @@ import type {
 } from '@propanes/shared';
 import { ptyColsForProfile } from '@propanes/shared';
 import { db, schema } from './db/index.js';
+import { pinnedLauncherFor } from './onboarding.js';
 import { spawnAgentSession } from './agent-sessions.js';
 import { getLauncher, addSessionToLauncher, sendAndWait } from './launcher-registry.js';
 import { feedbackEvents } from './events.js';
@@ -782,8 +783,12 @@ export async function dispatchAgentSession(params: {
     .get();
   const runtime: AgentRuntime = params.runtime || (agent?.runtime as AgentRuntime | undefined) || 'claude';
 
-  // Resolve launcher: explicit param > agent endpoint preference > harnessConfigId > local
-  let targetLauncherId = params.launcherId || null;
+  // Resolve launcher: explicit param > owner's pinned launcher > agent endpoint
+  // preference > harnessConfigId > local. The owner pin is what keeps a
+  // member isolated: widget auto-dispatch, aggregate/flatter runs etc. carry
+  // no launcherId, and without it they would run on this server's account.
+  const pinnedLauncherId = params.launcherId ? null : pinnedLauncherFor(params.ownerUserId);
+  let targetLauncherId = params.launcherId || pinnedLauncherId || null;
   let harnessConfig: typeof schema.harnessConfigs.$inferSelect | undefined;
 
   if (!targetLauncherId) {
@@ -860,6 +865,11 @@ export async function dispatchAgentSession(params: {
   }
 
   const launcher = targetLauncherId ? getLauncher(targetLauncherId) : undefined;
+  // Falling back to a local run would execute the member's agent as this
+  // server's own user, with its credentials — refuse instead.
+  if (pinnedLauncherId && targetLauncherId === pinnedLauncherId && launcher?.ws?.readyState !== 1) {
+    throw new Error(`Launcher ${pinnedLauncherId} for this user is not connected`);
+  }
 
   // Phase 5 — per-session isolation. When the agent type declares
   // isolation='per_session' and the session runs locally (the worktree

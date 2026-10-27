@@ -9,6 +9,7 @@ import { defaultApp } from './apps';
 import { createPropanesClient, createPropanesFetch } from './propanes';
 import { PacedPoster, posterFromClient } from './slack';
 import { infraTerminalAction, OPEN_INFRA_TERMINAL_ACTION } from './infra-actions';
+import { BOT_NAME } from './name';
 import { FileStateStore, StateRepo } from './state';
 
 const PROPANES_URL = process.env.PROPANES_URL ?? 'http://localhost:3001';
@@ -43,7 +44,7 @@ const app = new App({
 const propanesFetch = createPropanesFetch(PROPANES_URL, process.env.PROPANES_TOKEN);
 const propanes = createPropanesClient(propanesFetch);
 const state = new StateRepo(new FileStateStore(STATE_FILE));
-const log = (message: string) => console.warn(`[amirobot] ${message}`);
+const log = (message: string) => console.warn(`[${BOT_NAME}] ${message}`);
 
 const bridge = new SlackBridge({
   propanes,
@@ -130,13 +131,13 @@ app.message(async ({ message, body }) => {
   const apps = await propanes.listApplications();
   const defApp = defaultApp(apps, DEFAULT_APP, APP_ID);
   const unmatched = DEFAULT_APP && defApp.id === APP_ID && defApp.name.toLowerCase() !== DEFAULT_APP.toLowerCase();
-  console.log(`[amirobot] default application: ${defApp.name} (${defApp.id})${unmatched ? ` — PROPANES_DEFAULT_APP=${DEFAULT_APP} did not match, using PROPANES_APP_ID` : ''}; ${apps.length} registered`);
+  console.log(`[${BOT_NAME}] default application: ${defApp.name} (${defApp.id})${unmatched ? ` — PROPANES_DEFAULT_APP=${DEFAULT_APP} did not match, using PROPANES_APP_ID` : ''}; ${apps.length} registered`);
   const agents = await propanes.listAgents(defApp.id);
   const defaultRuntime = configuredDefaultRuntime(agents, defApp.id);
   for (const runtime of ['claude', 'codex'] as const) {
     try {
       const ep = resolveAgentEndpoint(agents, runtime, defApp.id, runtime === defaultRuntime ? AGENT_ENDPOINT_ID_OVERRIDE : undefined);
-      console.log(`[amirobot] ${runtimeLabel(runtime)} → ${ep.name || ep.id} (${ep.permissionProfile})${runtime === defaultRuntime ? ' [default]' : ''}`);
+      console.log(`[${BOT_NAME}] ${runtimeLabel(runtime)} → ${ep.name || ep.id} (${ep.permissionProfile})${runtime === defaultRuntime ? ' [default]' : ''}`);
     } catch (err) {
       log(`${runtimeLabel(runtime)} is not available: ${err instanceof Error ? err.message : 'error'}`);
     }
@@ -146,7 +147,7 @@ app.message(async ({ message, body }) => {
   bridge.setBotUserId(botUserId);
   await app.start();
   const rearmed = bridge.recover();
-  console.log(`amirobot connected via Socket Mode${rearmed ? ` (re-armed ${rearmed} thread watcher${rearmed === 1 ? '' : 's'})` : ''}`);
+  console.log(`${BOT_NAME} connected via Socket Mode${rearmed ? ` (re-armed ${rearmed} thread watcher${rearmed === 1 ? '' : 's'})` : ''}`);
 })().catch((err) => {
   log(`startup failed: ${err instanceof Error ? err.message : 'error'}`);
   process.exit(1);
