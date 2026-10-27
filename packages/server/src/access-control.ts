@@ -1,7 +1,7 @@
 // access-control.ts — env-driven network access control.
 //
 // Why this exists: when propanes is reverse-proxied UNDER a path prefix next to
-// another app (e.g. https://host/propanes alongside Workbench at https://host/),
+// another app (e.g. https://host/propanes alongside an application at https://host/),
 // the host deployment often puts a browser-SSO proxy in front of the whole
 // prefix. That proxy 302s any non-browser client, and its session cookie is
 // HttpOnly on a different origin from the CLI's localhost callback — so no
@@ -25,6 +25,8 @@
 //   PROPANES_GUARDED_PATHS    CSV of path prefixes the allowlist applies to.
 //                             Default "/api,/ws".
 import type { Context, Next } from 'hono';
+import { readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 
 type Net = { base: bigint; bits: number; v6: boolean };
 
@@ -97,6 +99,34 @@ if (BROKEN) {
 }
 export const accessControlEnabled = ALLOWED.nets.length > 0 || BROKEN;
 
+// The host helper writes this atomically on the persistent /data volume.
+// Expiry is evaluated on every request, so restoration needs no timer, browser,
+// process restart, or host scheduler. Missing files keep the env-only behavior.
+export function loadAccessPolicy() {
+  try {
+    const raw = readFileSync(process.env.PROPANES_ACCESS_POLICY_FILE || '/data/propanes-ip-access.json', 'utf8');
+    if (raw.length > 8192) throw new Error('policy too large');
+    const policy = JSON.parse(raw);
+    if (policy.version !== 1 || !Array.isArray(policy.allowed_ips) ||
+        !policy.allowed_ips.length || policy.allowed_ips.length > 16 ||
+        !policy.allowed_ips.every((ip: unknown) => typeof ip === 'string' &&
+          ip.split('/').length <= 2 && isIP(unmap(ip.split('/')[0]!)))) {
+      throw new Error('invalid allowlist');
+    }
+    const allowed = parseNets(policy.allowed_ips.join(','), 'access policy');
+    if (allowed.bad || !allowed.nets.length ||
+        typeof policy.disabled_until !== 'number' || !Number.isFinite(policy.disabled_until) ||
+        policy.disabled_until < 0) throw new Error('invalid policy');
+    return { allowed, disabledUntil: policy.disabled_until, broken: false };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { allowed: ALLOWED, disabledUntil: 0, broken: BROKEN };
+    }
+    // An unreadable or corrupt configured policy must never open the API.
+    return { allowed: ALLOWED, disabledUntil: 0, broken: true };
+  }
+}
+
 /** The peer address of the TCP connection, i.e. the proxy when behind one. */
 function socketAddr(c: Context): string {
   const env = c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined;
@@ -119,12 +149,13 @@ export function clientIp(c: Context): string {
 }
 
 export async function enforceIpAllowlist(c: Context, next: Next) {
-  if (!accessControlEnabled) return next();
   const path = c.req.path;
   if (!GUARDED.some((p) => path === p || path.startsWith(p.endsWith('/') ? p : `${p}/`))) {
     return next();
   }
-  if (BROKEN) return c.json({ error: 'Forbidden' }, 403);
+  const policy = loadAccessPolicy();
+  if (policy.broken) return c.json({ error: 'Forbidden' }, 403);
+  if (policy.disabledUntil > Date.now() / 1000 || !policy.allowed.nets.length) return next();
   // Local agent sessions call the API directly and still need bearer auth.
   // A forwarded request must never qualify: nginx may connect over loopback
   // on behalf of a remote client outside the allowlist.
@@ -133,7 +164,7 @@ export async function enforceIpAllowlist(c: Context, next: Next) {
     return next();
   }
   const ip = clientIp(c);
-  if (!ip || !inNets(ip, ALLOWED.nets)) {
+  if (!ip || !inNets(ip, policy.allowed.nets)) {
     console.warn(`[access-control] denied ${ip || '<unknown>'} -> ${path}`);
     return c.json({ error: 'Forbidden' }, 403);
   }
