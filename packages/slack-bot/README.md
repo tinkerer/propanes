@@ -411,7 +411,9 @@ never in the unit, repository or logs. Configure `PROPANES_URL` for the local
 API, `PROPANES_PUBLIC_URL` for operator-visible session links,
 `PROPANES_DEFAULT_APP` for the default application by name (`PROPANES_APP_ID` is
 the id fallback), and `PROPANES_TOKEN` (an authorized ProPanes bearer token;
-track its expiry). Optional: `AGENT_ENDPOINT_ID`, `POLL_MS`, `IDLE_POLL_MS`,
+track its expiry). Optional: `SLACK_BOT_NAME` (the handle used in help text,
+hints, feedback tags and logs; default `amirobot` — set it when running another
+user's bot, see `docs/multi-user-vm.md`), `AGENT_ENDPOINT_ID`, `POLL_MS`, `IDLE_POLL_MS`,
 `IDLE_STOP_MS`, `AMIROBOT_STATE_FILE`. The bot token also downloads Slack
 attachments. The listener verifies API authentication
 and lists which runtimes resolve before opening its socket.

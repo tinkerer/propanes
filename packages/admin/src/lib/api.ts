@@ -193,6 +193,17 @@ export const api = {
       body: JSON.stringify({ newPassword }),
     }),
 
+  getUserOnboarding: (id: string) =>
+    request<{ owned: Array<{ id: string; name: string; projectDir: string }>; suggestions: any[]; agentPresets: any[] }>(
+      `/admin/users/${id}/onboarding`,
+    ),
+
+  resetUserOnboarding: (id: string) =>
+    request<{ apps: Array<{ id: string; name: string }>; agentsRemoved: number; machineRemoved: boolean; launcherCleared: string | null }>(
+      `/admin/users/${id}/reset-onboarding`,
+      { method: 'POST' },
+    ),
+
   // Phase 4 — per-user pod provisioning (Kubernetes).
   provisionUserPod: (id: string) =>
     request<{ ok: boolean; launcherId: string; resources: any[] }>(`/admin/users/${id}/provision`, {
