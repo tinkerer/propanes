@@ -115,3 +115,12 @@ test('result event with cost/duration emits a system summary', () => {
   assert.ok(msgs.length >= 1);
   assert.ok(msgs.every((m) => m.role === 'system' || m.role === 'assistant'));
 });
+
+test('isMeta user envelopes (harness notes such as image dimensions) are system, not "You"', () => {
+  const msgs = feed([
+    { type: 'user', isMeta: true, message: { role: 'user', content: '[Image: original 1206x2622, displayed at 920x2000. Multiply coordinates by 1.31 to map to original image.]' } },
+    { type: 'user', isMeta: true, message: { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: /x' }] } },
+    { type: 'user', message: { role: 'user', content: 'real prompt' } },
+  ]);
+  assert.deepEqual(roles(msgs), ['system', 'system', 'user_input']);
+});

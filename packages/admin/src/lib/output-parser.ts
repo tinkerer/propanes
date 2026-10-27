@@ -192,8 +192,10 @@ export class JsonOutputParser {
       // the outer event's toolUseResult — capture it so the renderer can
       // attach the subagent's transcript inline at this Task call.
       const subagentLink: string | undefined = obj.toolUseResult?.agentId || undefined;
+      // isMeta envelopes are written by the harness (image-read dimensions,
+      // skill bodies, caveats), never typed by the operator.
       if (typeof content === 'string') {
-        if (content) results.push({ id: this.genId(), role: 'user_input', timestamp: Date.now(), content });
+        if (content) results.push({ id: this.genId(), role: obj.isMeta ? 'system' : 'user_input', timestamp: Date.now(), content });
       } else if (Array.isArray(content)) {
         // Classify tool results before human input: a user envelope that
         // carries tool_result blocks is the harness returning tool output,
@@ -206,7 +208,7 @@ export class JsonOutputParser {
         if (text) {
           results.push({
             id: this.genId(),
-            role: hasToolResult ? 'system' : 'user_input',
+            role: hasToolResult || obj.isMeta ? 'system' : 'user_input',
             timestamp: Date.now(),
             content: text,
           });
