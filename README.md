@@ -557,3 +557,24 @@ packages/
 ```
 
 See [CLAUDE.md](CLAUDE.md) for the working notes used by Claude Code sessions in this repo.
+
+### Runtime IP access policy
+
+Single-box operators can manage IP restrictions through Workbench Dashboard
+Settings without recreating ProPanes or terminating agent sessions. The optional
+`PROPANES_ACCESS_POLICY_FILE` defaults to `/data/propanes-ip-access.json` on the
+persistent data volume. The host helper writes it atomically:
+
+```json
+{"version":1,"allowed_ips":["203.0.113.10","2001:db8::/64"],"disabled_until":0}
+```
+
+`disabled_until` is a Unix timestamp in seconds; a future timestamp temporarily
+pauses only the IP check. Authentication still applies. At expiry, enforcement
+resumes on the next request without a scheduler or process restart. A missing
+file preserves `PROPANES_ALLOWED_IPS` behavior; an invalid or unreadable policy
+fails closed. Runtime policies require a nonempty list. The dashboard helper
+limits pauses to 30 minutes, 1, 2, 6 or 24 hours and validates CIDR scope. It does
+not change trusted-proxy configuration. When downgrading to an older ProPanes
+image, reconcile the runtime list with `PROPANES_ALLOWED_IPS` first: older
+versions ignore the policy file.
