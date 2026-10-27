@@ -560,8 +560,8 @@ See [CLAUDE.md](CLAUDE.md) for the working notes used by Claude Code sessions in
 
 ### Runtime IP access policy
 
-Single-box operators can manage IP restrictions through Workbench Dashboard
-Settings without recreating ProPanes or terminating agent sessions. The optional
+Operators can manage IP restrictions through a deployment dashboard or host
+helper without recreating ProPanes or terminating agent sessions. The optional
 `PROPANES_ACCESS_POLICY_FILE` defaults to `/data/propanes-ip-access.json` on the
 persistent data volume. The host helper writes it atomically:
 

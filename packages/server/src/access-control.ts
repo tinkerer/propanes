@@ -1,7 +1,7 @@
 // access-control.ts — env-driven network access control.
 //
 // Why this exists: when propanes is reverse-proxied UNDER a path prefix next to
-// another app (e.g. https://host/propanes alongside Workbench at https://host/),
+// another app (e.g. https://host/propanes alongside an application at https://host/),
 // the host deployment often puts a browser-SSO proxy in front of the whole
 // prefix. That proxy 302s any non-browser client, and its session cookie is
 // HttpOnly on a different origin from the CLI's localhost callback — so no
