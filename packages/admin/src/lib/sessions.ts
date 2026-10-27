@@ -403,6 +403,32 @@ export async function permanentlyDeleteSession(sessionId: string) {
   }
 }
 
+/** "Move to Slack": queue the session for the amirobot Slack listener, which
+ * opens a thread for it, then report the outcome as a toast. The listener
+ * polls the server every few seconds, so the result normally lands quickly. */
+export async function moveSessionToSlack(sessionId: string) {
+  showActionToast('\u2192', 'Moving to Slack\u2026', 'var(--pw-accent, var(--pw-primary))', 30_000);
+  try {
+    let h = await api.requestSlackHandoff(sessionId);
+    const deadline = Date.now() + 30_000;
+    while ((h.status === 'queued' || h.status === 'claimed') && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1500));
+      h = await api.getSlackHandoff(h.id);
+    }
+    if (h.status === 'done') {
+      showActionToast('\u2713', h.message || 'Moved to Slack', 'var(--pw-success, var(--pw-primary))', 4000);
+    } else if (h.status === 'failed') {
+      showActionToast('\u2715', h.message || 'Could not move the session to Slack', 'var(--pw-error)', 6000);
+    } else {
+      showActionToast('\u2715', 'Slack has not confirmed the move yet; check the Slack bot', 'var(--pw-error)', 6000);
+    }
+  } catch (err: any) {
+    // A server restart drops queued requests; the poll then 404s.
+    const message = err?.message === 'Not found' ? 'The Slack request expired; try again' : err?.message || 'Could not move the session to Slack';
+    showActionToast('\u2715', message, 'var(--pw-error)', 6000);
+  }
+}
+
 export async function killSession(sessionId: string) {
   setLocalStatus(sessionId, 'killed');
   markSessionExited(sessionId);

@@ -5,7 +5,7 @@ import type { AgentEndpointInfo } from '../src/agents';
 import type { AppInfo } from '../src/apps';
 import type { InfraList } from '../src/infra';
 import { SlackFileAccessError, type DownloadedFile, type SlackFileDownloader, type SlackFileInfo } from '../src/attachments';
-import type { JsonlDelta, PropanesClient, SessionInfo } from '../src/propanes';
+import type { JsonlDelta, PropanesClient, SessionInfo, SlackHandoffRequest } from '../src/propanes';
 import type { SlackPoster, UploadArgs, PostArgs } from '../src/slack';
 import { MemoryStateStore, StateRepo, type StateStore } from '../src/state';
 
@@ -52,6 +52,8 @@ export const line = {
 export class World {
   sessions = new Map<string, FakeSession>();
   calls: string[] = [];
+  handoffs: SlackHandoffRequest[] = [];
+  handoffResults: { id: string; ok: boolean; message: string; permalink?: string }[] = [];
   images = new Map<string, { bytes: Buffer; mime: string }>();
   agents = agents.slice();
   apps = apps.slice();
@@ -150,6 +152,8 @@ export class World {
       const chunk = s.lines.slice(from);
       return { cursor: `c:${s.lines.length}`, reset: cursor === 'init', order: ['main.jsonl'], files: chunk.length ? [{ key: 'main.jsonl', lines: chunk.join('\n') }] : [] };
     },
+    claimHandoffs: async () => this.handoffs.splice(0),
+    reportHandoff: async (id, result) => { this.handoffResults.push({ id, ...result }); },
     fetchImage: async (path) => {
       const img = this.images.get(path);
       if (!img) throw new Error(`Propanes ${path} → 404`);

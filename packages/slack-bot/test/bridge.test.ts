@@ -872,7 +872,9 @@ test('session and terminal list commands link all active items without creating 
   await f.bridge.handleEvent(mention('[sessions]'));
   await f.bridge.handleEvent(mention('[list-terminals]', { ts: '101.000' }));
   await f.bridge.drain();
-  assert.match(f.slack.texts()[0], /\*Admin Console\*\n•/);
+  assert.match(f.slack.texts()[0], /\*Admin Console\*\n1\. /);
+  assert.match(f.slack.texts()[0], /Reply with the number to continue the session in Slack/);
+  assert.doesNotMatch(f.slack.texts()[1], /Reply with the number/);
   assert.ok(f.slack.texts()[0].includes(sessionUrl(agent.id)));
   assert.ok(!f.slack.texts()[0].includes(sessionUrl(terminal.id)));
   assert.ok(f.slack.texts()[1].includes(sessionUrl(terminal.id)));

@@ -65,7 +65,12 @@ export interface SessionInfo {
   feedbackTitle?: string | null;
   launcherName?: string | null;
   machineName?: string | null;
+  agentEndpointId?: string | null;
+  launcherId?: string | null;
 }
+
+/** An admin "Continue in Slack" request (server: slack-handoffs.ts). */
+export interface SlackHandoffRequest { id: string; sessionId: string; requestedBy: string; }
 
 export interface JsonlDelta {
   cursor: string;
@@ -111,6 +116,10 @@ export interface PropanesClient {
   kill(id: string): Promise<void>;
   /** POST /:id/jsonl — the structured view's differential transcript poll. */
   jsonlDelta(id: string, cursor: string, tail: number): Promise<JsonlDelta>;
+  /** POST /slack-handoffs/claim — the admin's queued "Continue in Slack" requests. */
+  claimHandoffs(): Promise<SlackHandoffRequest[]>;
+  /** POST /slack-handoffs/:id/result — what the admin toast shows. */
+  reportHandoff(id: string, result: { ok: boolean; message: string; permalink?: string }): Promise<void>;
   /** GET an image the transcript elided (jsonl-image URL from the server). */
   fetchImage(path: string): Promise<{ bytes: Buffer; mime: string }>;
 }
@@ -193,6 +202,11 @@ export function createPropanesClient(api: PropanesFetch): PropanesClient {
     },
     kill: async (id) => { await post(`/api/v1/admin/agent-sessions/${encodeURIComponent(id)}/kill`, {}); },
     jsonlDelta: (id, cursor, tail) => post(`/api/v1/admin/agent-sessions/${encodeURIComponent(id)}/jsonl`, { cursor, tail }),
+    claimHandoffs: async () => {
+      const r = await post('/api/v1/admin/slack-handoffs/claim', {});
+      return Array.isArray(r?.handoffs) ? r.handoffs : [];
+    },
+    reportHandoff: async (id, result) => { await post(`/api/v1/admin/slack-handoffs/${encodeURIComponent(id)}/result`, result); },
     fetchImage: async (path) => {
       const res = await api.raw(path, { method: 'GET' });
       const mime = res.headers.get('content-type') || 'application/octet-stream';

@@ -12,6 +12,7 @@ import {
   resumeSession,
   killSession,
   resolveSession,
+  moveSessionToSlack,
   openLocalTerminal,
   openUrlCompanion,
   termPickerOpen,
@@ -19,6 +20,7 @@ import {
   type PopoutPanelState,
 } from '../../lib/sessions.js';
 import { branchPickerOpen, distillPickerOpen } from '../../lib/agent-actions.js';
+import { isGlobalAdminUser } from '../../lib/state.js';
 
 const RUNTIME_OPTIONS = ['claude', 'codex'] as const;
 
@@ -210,6 +212,11 @@ export function SessionIdMenu({
       }}>
         Distill to Agent...
       </button>
+      {isGlobalAdminUser.value && sess && sess.permissionProfile !== 'plain' && (
+        <button class="popup-menu-item" onClick={() => { onClose(); moveSessionToSlack(sessionId); }}>
+          Move to Slack
+        </button>
+      )}
       {/* Resolve/Kill — the standalone header (mobile + popped-out windows) has
           no dedicated kill/resolve buttons the way tab/popout pane headers do,
           so surface them here. */}

@@ -11,16 +11,16 @@ import { ambiguousAppText, defaultApp, listAppsText, resolveApp, unknownAppText,
 import { attachmentBlock, classifyAttachment, displayName, SlackFileAccessError, type DownloadedFile, type ForwardedAttachment, type SlackFileDownloader, type SlackFileInfo } from './attachments';
 import { matchModels, type ModelOption } from './models';
 import { createModelCatalog, type ModelCatalogSource } from './model-discovery';
-import { extractFinalCosReply } from './cos-reply';
+import { extractFinalCosReply, stripCosReplyTags } from './cos-reply';
 import { coalesce, chunkText, escapeMrkdwn, feedbackTitle, renderEvent, summarizeToolInput, toMrkdwn } from './format';
 import { ambiguousInfraText, canOpenTerminal, listInfraMessages, localAsTarget, LOCAL_LAUNCHER_ID, offlineInfraText, resolveInfra, unknownInfraText, type InfraTarget } from './infra';
 import { extractImageRefs, filenameFor, IMAGE_MAX_BYTES, IMAGE_MIMES, type ImageRef } from './images';
 import { isStopKeyword, parseCommand, type OutputMode, type ParsedCommand, type Runtime } from './options';
-import { isLive, PropanesApiError, TERMINAL_STATUSES, type JsonlDelta, type PropanesClient, type SessionInfo } from './propanes';
+import { isLive, PropanesApiError, TERMINAL_STATUSES, type JsonlDelta, type PropanesClient, type SessionInfo, type SlackHandoffRequest } from './propanes';
 import { BOT_NAME } from './name';
 import { slackErrorCode, type SlackPoster } from './slack';
 import type { InfraTerminalAction } from './infra-actions';
-import { sessionListing } from './session-listing';
+import { listedSessions, sessionListing } from './session-listing';
 import { isOutsideInput, rememberSentPrompt, renderOutsideInput } from './outside-input';
 import { freshCheckpoint, threadKey, type StateRepo, type ThreadRecord } from './state';
 
@@ -66,6 +66,9 @@ export interface BridgeConfig {
   idleStopMs: number;
   /** Transcript lines requested on the first poll (also enables image elision). */
   transcriptTail: number;
+  /** Slack channel or user id that admin "Continue in Slack" requests open
+   * their thread in; unset = the conversation of the most recent thread. */
+  handoffChannel?: string;
 }
 
 /** Attachments downloaded from Slack for one request. */
@@ -100,6 +103,12 @@ const FRESH_SESSION_GRACE_MS = 60_000;
 /** A continuation appends to the transcript the thread already followed; only
  * what is written after the resume request is news. */
 const RESUME_GRACE_MS = 10_000;
+/** A `[sessions]` listing accepts a number reply for this long. */
+const SESSION_MENU_TTL_MS = 10 * 60_000;
+
+function truncateText(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max).trimEnd()}…`;
+}
 
 export function slackInstructions(mode: OutputMode): string {
   const lines = [
@@ -203,11 +212,27 @@ export class SlackBridge {
         }
         // A normal reply ends menu selection, preserving numeric agent answers.
         if (menu) this.d.state.clearModelMenu(key, ev.user);
+        const sessionMenu = this.d.state.getSessionMenu(key, ev.user);
+        if (sessionMenu && cmd.command === 'prompt' && !hasOptions && !attachments && /^\d+$/.test(cmd.text)) {
+          if (sessionMenu.expiresAt <= this.now()) {
+            this.d.state.clearSessionMenu(key, ev.user);
+            await reply('That session list expired. Send `[sessions]` for a fresh list.');
+          } else {
+            const sessionId = sessionMenu.sessionIds[Number(cmd.text) - 1];
+            if (!sessionId) await reply(`Choose a number from 1 to ${sessionMenu.sessionIds.length}, or send \`[sessions]\` again.`);
+            else {
+              this.d.state.clearSessionMenu(key, ev.user);
+              await this.continueInSlack(ev, sessionId, reply);
+            }
+          }
+          return;
+        }
+        if (sessionMenu) this.d.state.clearSessionMenu(key, ev.user);
       }
       if (cmd.command === 'help') { await reply(helpText(await this.defaultAppName())); return; }
       if (cmd.command === 'status') { await reply(await this.statusText(record)); return; }
       if (cmd.command === 'list-sessions' || cmd.command === 'list-terminals') {
-        await this.listActiveSessions(cmd, reply);
+        await this.listActiveSessions(ev, key, cmd, reply);
         return;
       }
       if (cmd.command === 'list-infra') {
@@ -241,6 +266,7 @@ export class SlackBridge {
   private async handleModels(ev: IncomingSlackMessage, key: string, query: string | undefined, reply: (t: string) => Promise<unknown>): Promise<void> {
     if (!ev.user) { await reply('A Slack user is required to save a model preference.'); return; }
     this.d.state.clearModelMenu(key, ev.user);
+    this.d.state.clearSessionMenu(key, ev.user);
     const { models, warnings } = await this.models.list();
     for (const warning of warnings) await reply(`⚠️ ${escapeMrkdwn(warning)}`);
     const matches = query === undefined ? models : matchModels(models, query);
@@ -275,7 +301,7 @@ export class SlackBridge {
    * root for every additional session; keep creation and early replies locked. */
   private async newThread(ev: Pick<IncomingSlackMessage, 'teamId' | 'channel'>, title: string,
     sourceReply: (text: string) => Promise<unknown>,
-    start: (key: string, ts: string, reply: (text: string) => Promise<unknown>) => Promise<void>): Promise<void> {
+    start: (key: string, ts: string, reply: (text: string) => Promise<unknown>) => Promise<void>): Promise<string | undefined> {
     const result = await this.d.slack.postMessage({ channel: ev.channel, text: title }) as { ok?: boolean; ts?: string };
     if (!result?.ts || result.ok === false) throw new Error('Slack did not return a new thread timestamp; no session was started');
     const ts = result.ts;
@@ -290,13 +316,15 @@ export class SlackBridge {
     try {
       const link = await this.d.slack.permalink(ev.channel, ts);
       await sourceReply(`New thread: <${link}|${title}>`);
+      return link;
     } catch {
       await sourceReply(`Opened a new thread in this conversation: ${title}.`);
+      return undefined;
     }
   }
 
   private async branchSession(ev: IncomingSlackMessage, record: ThreadRecord | undefined, cmd: ParsedCommand,
-    reply: (text: string) => Promise<unknown>, staged: StagedAttachments): Promise<void> {
+    reply: (text: string) => Promise<unknown>, staged: StagedAttachments): Promise<unknown> {
     if (!record || record.kind === 'terminal') {
       if (!cmd.text) { await reply('Add a task after `[session]` to start a new conversation.'); return; }
       return this.newThread(ev, `Session: ${escapeMrkdwn(cmd.text.slice(0, 120))}`, reply,
@@ -328,6 +356,112 @@ export class SlackBridge {
         await post(`Branched from ${this.link(record.sessionId)}.\n${this.initialReply(branch, files.length)}`);
         this.watch(key);
       });
+  }
+
+  /** Move an existing ProPanes session — started anywhere — into a new Slack
+   * thread: later replies there drive it like a Slack-started session
+   * (send-keys while live, native resume once stopped). Only output written
+   * after the move is posted; the latest assistant message is shown for context. */
+  async continueInSlack(target: Pick<IncomingSlackMessage, 'teamId' | 'channel'>, sessionId: string,
+    sourceReply: (text: string) => Promise<unknown>): Promise<{ ok: boolean; message: string; permalink?: string }> {
+    const existing = this.d.state.threads().find(t => t.kind !== 'terminal' && t.sessionId === sessionId);
+    if (existing) {
+      let permalink: string | undefined;
+      try { permalink = existing.threadTs ? await this.d.slack.permalink(existing.channel, existing.threadTs) : undefined; } catch { /* plain text below */ }
+      const message = `Session ${sessionId} already continues in a Slack thread`;
+      await sourceReply(`${this.link(sessionId)} already continues in ${permalink ? `<${permalink}|this thread>` : 'another Slack conversation'}; reply there.`);
+      return { ok: true, message, permalink };
+    }
+    let session: SessionInfo;
+    try {
+      session = await this.d.propanes.getSession(sessionId);
+    } catch (err) {
+      const message = `Could not load session ${sessionId}: ${safeMessage(err)}`;
+      await sourceReply(`⚠️ ${escapeMrkdwn(message)}`);
+      return { ok: false, message };
+    }
+    if (session.permissionProfile === 'plain' || session.status === 'deleted') {
+      const message = session.status === 'deleted' ? 'That session was archived' : 'Plain terminals cannot be continued in Slack';
+      await sourceReply(`⚠️ ${message}. Nothing was moved.`);
+      return { ok: false, message };
+    }
+    const apps = await this.d.propanes.listApplications().catch(() => [] as AppInfo[]);
+    const app = apps.find(a => a.id === session.appId);
+    const runtime: Runtime = session.runtime === 'codex' ? 'codex' : 'claude';
+    let agentName = `${runtimeLabel(runtime)} session`;
+    if (session.agentEndpointId) {
+      const agents = await this.d.propanes.listAgents(session.appId || this.d.config.appId).catch(() => [] as AgentEndpointInfo[]);
+      agentName = agents.find(a => a.id === session.agentEndpointId)?.name || agentName;
+    }
+    const title = (session.title || session.feedbackTitle || sessionId).replace(/\s+/g, ' ').trim().slice(0, 100);
+    let result: { ok: boolean; message: string } = { ok: false, message: 'The Slack thread could not be prepared' };
+    const permalink = await this.newThread(target, `Continuing session: ${escapeMrkdwn(title)}`, sourceReply, async (key, ts, post) => {
+      const now = this.now();
+      const nowIso = new Date(now).toISOString();
+      const live = isLive(session.status);
+      const record: ThreadRecord = {
+        key, teamId: target.teamId, channel: target.channel, threadTs: ts,
+        sessionId, feedbackId: session.feedbackId || '',
+        ...(session.appId ? { appId: session.appId, appName: app?.name ?? session.appId } : {}),
+        ...(session.launcherId ? { launcherId: session.launcherId, infraName: session.machineName || session.launcherName || session.launcherId } : {}),
+        runtime, agentEndpointId: session.agentEndpointId || '', agentName,
+        permissionProfile: session.permissionProfile || undefined,
+        mode: 'default', images: false,
+        history: [{ sessionId, runtime, agentName, createdAt: nowIso }],
+        delivery: freshCheckpoint(now, now), watching: live, createdAt: nowIso, updatedAt: nowIso,
+      };
+      record.delivery.turnOpen = false;
+      record.delivery.sentPrompts = [];
+      // Read the transcript so far without posting it: the watcher continues
+      // from this cursor with the same parser state.
+      const follower = new TranscriptFollower(runtime);
+      let lastReply: string | undefined;
+      try {
+        const delta = await this.d.propanes.jsonlDelta(sessionId, 'init', this.d.config.transcriptTail);
+        const events = follower.ingest(delta);
+        if (!delta.pending) record.delivery.cursor = delta.cursor;
+        record.delivery.delivered = events.map(e => e.key);
+        lastReply = events.filter(e => e.msg.role === 'assistant' && !e.msg.subagentId && e.msg.content.trim()).pop()?.msg.content;
+      } catch (err) {
+        this.d.log(`Could not read the transcript of ${sessionId} (${err instanceof Error ? err.name : 'error'}); following new output only`);
+      }
+      this.followers.set(key, { sessionId, follower });
+      this.d.state.putThread(record);
+      const state = !live ? `${session.status} — your next reply resumes it with its conversation restored`
+        : session.inputState === 'waiting' ? 'running — waiting for input'
+        : session.inputState === 'idle' ? 'running — idle' : 'running — working';
+      const lines = [
+        `🔀 Continuing ${this.link(sessionId)} in Slack`,
+        `*app* ${escapeMrkdwn(this.appLabel(record))}${this.infraLabel(record)} · *agent* ${runtimeLabel(runtime)} (${escapeMrkdwn(agentName)}) · *state* ${escapeMrkdwn(state)}`,
+      ];
+      if (lastReply) lines.push(`*Latest reply*\n${toMrkdwn(truncateText(stripCosReplyTags(lastReply), 1500))}`);
+      lines.push('Reply in this thread to continue the conversation · `stop` cancels · `[status]` · `[help]`');
+      for (const part of coalesce([lines.join('\n')])) await post(part);
+      if (live) this.watch(key);
+      result = { ok: true, message: `Session ${sessionId} continues in Slack` };
+    });
+    return permalink ? { ...result, permalink } : result;
+  }
+
+  /** Admin "Continue in Slack" requests, claimed from the server queue. */
+  async handleHandoff(req: SlackHandoffRequest): Promise<void> {
+    const report = (r: { ok: boolean; message: string; permalink?: string }) =>
+      this.d.propanes.reportHandoff(req.id, r).catch(err => this.d.log(`Could not report handoff ${req.id}: ${err instanceof Error ? err.name : 'error'}`));
+    const latest = this.d.state.latestThread();
+    const channel = this.d.config.handoffChannel || latest?.channel;
+    if (!channel) {
+      await report({ ok: false, message: `${BOT_NAME} has no Slack conversation to post in yet: set AMIROBOT_HANDOFF_CHANNEL or mention the bot once` });
+      return;
+    }
+    const teamId = latest?.teamId ?? 'team';
+    // The source "conversation" is the server's toast, not Slack.
+    const notes: string[] = [];
+    try {
+      const result = await this.continueInSlack({ teamId, channel }, req.sessionId, async (text) => { notes.push(text); });
+      await report(result);
+    } catch (err) {
+      await report({ ok: false, message: safeMessage(err) });
+    }
   }
 
   /** Button clicks use exact launcher IDs and the same per-thread lock as messages. */
@@ -385,12 +519,15 @@ export class SlackBridge {
     const hasOptions = cmd.runtime !== undefined || cmd.mode !== undefined || cmd.images !== undefined || cmd.app !== undefined || cmd.infra !== undefined || cmd.terminal !== undefined || cmd.session !== undefined;
     try {
       if (isStopKeyword(cmd.text) && !hasOptions) return await this.stopSession(record, reply);
-      if (cmd.session) return await this.branchSession(ev, record, cmd, reply, staged);
+      if (cmd.session) { await this.branchSession(ev, record, cmd, reply, staged); return; }
       if (cmd.terminal) {
         return await this.startTerminal(ev, key, threadTs, cmd, reply);
       }
-      if (!record && ev.threadTs && cmd.text) return await this.newThread(ev, `Session: ${escapeMrkdwn(cmd.text.slice(0, 120))}`, reply,
-        (nextKey, ts, post) => this.startSession(ev, nextKey, ts, cmd, post, staged));
+      if (!record && ev.threadTs && cmd.text) {
+        await this.newThread(ev, `Session: ${escapeMrkdwn(cmd.text.slice(0, 120))}`, reply,
+          (nextKey, ts, post) => this.startSession(ev, nextKey, ts, cmd, post, staged));
+        return;
+      }
       if (record?.kind === 'terminal') return await this.continueTerminal(record, cmd, staged, reply);
       if (!record) return await this.startSession(ev, key, threadTs, cmd, reply, staged);
       return await this.continueThread(ev, record, cmd, reply, staged);
@@ -528,7 +665,7 @@ export class SlackBridge {
     this.watch(key);
   }
 
-  private async listActiveSessions(cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<void> {
+  private async listActiveSessions(ev: IncomingSlackMessage, key: string, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<void> {
     try {
       let app: AppInfo | undefined;
       const apps = cmd.command === 'list-sessions' || cmd.app !== undefined
@@ -540,7 +677,14 @@ export class SlackBridge {
         app = match.app;
       }
       const sessions = await this.d.propanes.listActiveSessions();
-      const parts = sessionListing(sessions, cmd.command === 'list-terminals', id => this.sessionUrl(id), app, apps);
+      const terminals = cmd.command === 'list-terminals';
+      const parts = sessionListing(sessions, terminals, id => this.sessionUrl(id), app, apps);
+      // The numbers in the listing select a session to continue in Slack.
+      const ids = terminals ? [] : listedSessions(sessions, false, app).flat().map(s => s.id);
+      if (ev.user && ids.length) {
+        this.d.state.clearModelMenu(key, ev.user);
+        this.d.state.setSessionMenu(key, ev.user, ids, this.now() + SESSION_MENU_TTL_MS);
+      }
       for (const part of parts) await reply(part);
     } catch (err) {
       await reply(`⚠️ Could not list active ${cmd.command === 'list-terminals' ? 'terminals' : 'sessions'}: ${escapeMrkdwn(safeMessage(err))}`);
@@ -736,7 +880,7 @@ export class SlackBridge {
       const { sessionId } = await this.d.propanes.resume(parentId, {
         additionalPrompt: promptForResume(text, record.mode),
         model,
-        permissionProfile: PERMISSION_PROFILE,
+        permissionProfile: record.permissionProfile ?? PERMISSION_PROFILE,
         ...(runtime ? { runtime } : {}),
       });
       const nextRuntime = runtime ?? record.runtime;
@@ -1140,7 +1284,7 @@ export function helpText(defaultAppName?: string): string {
     '• prompts typed in the ProPanes terminal or structured view are echoed here as `👤 User asked outside Slack`, so the replies that follow are attributable',
     '',
     '*Session lists*',
-    '• `[sessions]` — all active agent sessions with clickable links',
+    '• `[sessions]` — all active agent sessions, numbered, with clickable links; reply with a number to continue that session in its own Slack thread',
     '• `[app:propanes sessions]` — active agent sessions for that app (approximate app matching supported)',
     '• `[terminals]` — all active plain terminals with clickable links',
     '',

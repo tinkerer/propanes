@@ -56,6 +56,9 @@ export interface ThreadRecord {
   infraName?: string;
   runtime: Runtime;
   model?: string;
+  /** Resume profile for sessions moved in from ProPanes (keeps their own
+   * permissions); unset = the listener's interactive-yolo profile. */
+  permissionProfile?: string;
   agentEndpointId: string;
   agentName: string;
   mode: OutputMode;
@@ -82,11 +85,13 @@ export interface BotState {
   /** Workspace + user + provider defaults; providers remain independent. */
   modelPrefs: Record<string, string>;
   modelMenus: Record<string, { options: ModelOption[]; expiresAt: number }>;
+  /** Numbered `[sessions]` listings awaiting a number reply (thread + user). */
+  sessionMenus: Record<string, { sessionIds: string[]; expiresAt: number }>;
   seenEvents: string[];
 }
 
 export function emptyState(): BotState {
-  return { version: 1, threads: {}, engagedThreads: {}, runtimePrefs: {}, modelPrefs: {}, modelMenus: {}, seenEvents: [] };
+  return { version: 1, threads: {}, engagedThreads: {}, runtimePrefs: {}, modelPrefs: {}, modelMenus: {}, sessionMenus: {}, seenEvents: [] };
 }
 
 export function freshCheckpoint(now = Date.now(), since?: number): DeliveryCheckpoint {
@@ -182,6 +187,21 @@ export class StateRepo {
   clearModelMenu(thread: string, userId: string): void {
     delete this.state.modelMenus[this.menuKey(thread, userId)];
     this.store.save(this.state);
+  }
+
+  getSessionMenu(thread: string, userId: string) { return this.state.sessionMenus[this.menuKey(thread, userId)]; }
+  setSessionMenu(thread: string, userId: string, sessionIds: string[], expiresAt: number): void {
+    this.state.sessionMenus[this.menuKey(thread, userId)] = { sessionIds, expiresAt };
+    this.store.save(this.state);
+  }
+  clearSessionMenu(thread: string, userId: string): void {
+    if (!this.state.sessionMenus[this.menuKey(thread, userId)]) return;
+    delete this.state.sessionMenus[this.menuKey(thread, userId)];
+    this.store.save(this.state);
+  }
+  /** The newest thread record, for messages that have no Slack conversation of their own. */
+  latestThread(): ThreadRecord | undefined {
+    return this.threads().reduce<ThreadRecord | undefined>((best, t) => (!best || t.updatedAt > best.updatedAt ? t : best), undefined);
   }
 
   /** Returns false when the event was already processed (Slack retry / duplicate delivery). */

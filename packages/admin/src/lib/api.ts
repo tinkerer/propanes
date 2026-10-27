@@ -1,4 +1,14 @@
 import { isMissingRouteResponse, jsonlDeltaQuery } from './jsonl-route.js';
+
+/** A "Move to Slack" request (server: slack-handoffs.ts). */
+export interface SlackHandoff {
+  id: string;
+  sessionId: string;
+  status: 'queued' | 'claimed' | 'done' | 'failed';
+  message: string | null;
+  permalink: string | null;
+}
+
 // Diagnostic page-instance ID, not an authentication credential.
 const resumeClientId = globalThis.crypto?.randomUUID?.() ?? `page-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const BASE = '/api/v1';
@@ -547,6 +557,11 @@ export const api = {
     request<{ kubernetes: { namespace: string; pod: string; container: string | null; command: string } | null }>(
       `/admin/agent-sessions/${id}/terminal-target`,
     ),
+
+  requestSlackHandoff: (sessionId: string) =>
+    request<SlackHandoff>('/admin/slack-handoffs', { method: 'POST', body: JSON.stringify({ sessionId }) }),
+
+  getSlackHandoff: (id: string) => request<SlackHandoff>(`/admin/slack-handoffs/${id}`),
 
   killAgentSession: (id: string) =>
     request<{ id: string; killed: boolean }>(`/admin/agent-sessions/${id}/kill`, {
