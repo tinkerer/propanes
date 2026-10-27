@@ -1180,6 +1180,24 @@ export async function forkAgentSession(parentSessionId: string, prompt = ''): Pr
   return { sessionId };
 }
 
+/** The codex thread a session continues. A resume that died before its first
+ * turn (e.g. the codex CLI failed to start) never wrote a rollout of its own,
+ * and a rollout recorded before it started is never attributed to it — so
+ * walk up to the ancestor whose thread it was resuming rather than dropping
+ * the conversation for a context rebuild. */
+function resolveCodexResumeIdThroughAncestors(session: typeof schema.agentSessions.$inferSelect): string | null {
+  const seen = new Set<string>();
+  let current: typeof schema.agentSessions.$inferSelect | undefined = session;
+  while (current && current.runtime === 'codex' && !seen.has(current.id)) {
+    seen.add(current.id);
+    const id = resolveCodexResumeId(current.cwd, current.claudeSessionId, current.startedAt);
+    if (id) return id;
+    if (!current.parentSessionId) return null;
+    current = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, current.parentSessionId)).get();
+  }
+  return null;
+}
+
 export async function resumeAgentSession(
   parentSessionId: string,
   targetLauncherId?: string | null,
@@ -1418,7 +1436,7 @@ async function resumeAgentSessionImpl(
   // `codex resume <id>` (same context restoration as claude's --resume). The
   // new row records the rollout id so transcript lookups hit it directly.
   const codexResumeId = runtime === 'codex' && parent.runtime === 'codex'
-    ? resolveCodexResumeId(parent.cwd, parent.claudeSessionId, parent.startedAt)
+    ? resolveCodexResumeIdThroughAncestors(parent)
     : null;
   if (codexResumeId) {
     db.insert(schema.agentSessions)
