@@ -419,6 +419,13 @@ html[data-theme="dark"] {
   background: #334155;
 }
 
+.users-row-menu { min-width: 180px; max-width: 300px; }
+.users-row-menu button { font-family: inherit; font-size: 13px; }
+.users-row-menu button:disabled { color: #64748b; cursor: default; background: none; }
+.users-row-menu button.danger { color: #f87171; }
+.users-row-menu-confirm { padding: 8px 12px; font-size: 12px; line-height: 1.5; color: #cbd5e1; white-space: normal; }
+.users-row-menu-btn { min-width: 32px; font-size: 16px; line-height: 1; }
+
 .pty-ctx-menu button + button {
   border-top: 1px solid #334155;
 }

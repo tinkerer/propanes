@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { api } from '../lib/api.js';
 
 type UserRow = {
@@ -10,6 +10,9 @@ type UserRow = {
   launcherId: string | null;
 };
 
+type MenuConfirm = 'delete' | 'reset' | 'deprovision';
+type MenuState = { userId: string; top?: number; bottom?: number; right: number; confirm?: MenuConfirm; ownedApps?: string[] };
+
 export function UsersPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
   const [orgs, setOrgs] = useState<any[]>([]);
@@ -20,6 +23,82 @@ export function UsersPage() {
   const [podStatus, setPodStatus] = useState<Record<string, { exists: boolean; replicas: number; readyReplicas: number; available: boolean; message?: string }>>({});
   const [podBusy, setPodBusy] = useState<Record<string, boolean>>({});
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // One menu for the whole page; click-away and Escape (capture phase, so
+  // pane-level key handlers can't swallow it) close it.
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); setMenu(null); }
+    };
+    const onScroll = () => setMenu(null);
+    document.addEventListener('mousedown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', onScroll);
+    document.addEventListener('scroll', onScroll, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('resize', onScroll);
+      document.removeEventListener('scroll', onScroll, true);
+    };
+  }, [menu?.userId]);
+
+  function openMenu(userId: string, e: MouseEvent) {
+    if (menu?.userId === userId) { setMenu(null); return; }
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const right = Math.max(8, window.innerWidth - r.right);
+    // Open upward near the bottom edge; the confirm step is taller than the list.
+    const flip = window.innerHeight - r.bottom < 200 && r.top > window.innerHeight - r.bottom;
+    setMenu(flip ? { userId, bottom: window.innerHeight - r.top + 4, right } : { userId, top: r.bottom + 4, right });
+  }
+
+  async function askConfirm(confirm: MenuConfirm) {
+    if (!menu) return;
+    setMenu({ ...menu, confirm });
+    if (confirm === 'reset') {
+      try {
+        const info = await api.getUserOnboarding(menu.userId);
+        setMenu((m) => (m && m.userId === menu.userId ? { ...m, ownedApps: info.owned.map((a) => a.name) } : m));
+      } catch {
+        /* the confirm text falls back to a generic description */
+      }
+    }
+  }
+
+  async function deleteUser(id: string) {
+    setMenu(null);
+    setError('');
+    try {
+      await api.deleteUser(id);
+      await load();
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete user');
+    }
+  }
+
+  async function resetOnboarding(id: string) {
+    setMenu(null);
+    setError('');
+    setNotice('');
+    try {
+      const res = await api.resetUserOnboarding(id);
+      const name = users.find((u) => u.id === id)?.username || id;
+      setNotice(
+        `Reset onboarding for ${name}: removed ${res.apps.length} app${res.apps.length === 1 ? '' : 's'} and ${res.agentsRemoved} agent${res.agentsRemoved === 1 ? '' : 's'}` +
+        `${res.machineRemoved ? ', the launcher machine' : ''}${res.launcherCleared ? `, unpinned ${res.launcherCleared}` : ''}.`,
+      );
+      await load();
+    } catch (err: any) {
+      setError(err.message || 'Failed to reset onboarding');
+    }
+  }
 
   async function load() {
     const [u, o, t] = await Promise.all([
@@ -107,6 +186,7 @@ export function UsersPage() {
   }
 
   async function provisionPod(id: string) {
+    setMenu(null);
     setError('');
     setPodBusy((prev) => ({ ...prev, [id]: true }));
     try {
@@ -125,7 +205,7 @@ export function UsersPage() {
   }
 
   async function deprovisionPod(id: string) {
-    if (!confirm('Tear down this user’s launcher pod? Their private credential disk is kept unless you delete it separately.')) return;
+    setMenu(null);
     setError('');
     setPodBusy((prev) => ({ ...prev, [id]: true }));
     try {
@@ -166,6 +246,7 @@ export function UsersPage() {
       </div>
 
       {error && <div class="error-msg" style="margin-bottom:12px">{error}</div>}
+      {notice && <div style="margin-bottom:12px;font-size:12px;color:var(--pw-text-muted)">{notice}</div>}
 
       <form class="settings-section" onSubmit={createUser}>
         <h3>Create User</h3>
@@ -245,17 +326,56 @@ export function UsersPage() {
                 style="width:130px"
               />
               <button class="btn btn-sm" onClick={() => resetPassword(u.id)}>Reset</button>
-              {u.role === 'member' && (
-                podStatus[u.id]?.exists
-                  ? <button class="btn btn-sm" disabled={podBusy[u.id]} onClick={() => deprovisionPod(u.id)}>{podBusy[u.id] ? '…' : 'Tear down pod'}</button>
-                  : <button class="btn btn-sm" disabled={podBusy[u.id] || podStatus[u.id]?.available === false} onClick={() => provisionPod(u.id)}>{podBusy[u.id] ? '…' : 'Provision pod'}</button>
-              )}
-              <button class="btn btn-sm btn-danger" onClick={async () => { await api.deleteUser(u.id); await load(); }}>Delete</button>
+              <button
+                class="btn btn-sm users-row-menu-btn"
+                aria-label={`Actions for ${u.username}`}
+                aria-haspopup="menu"
+                aria-expanded={menu?.userId === u.id}
+                onClick={(e) => openMenu(u.id, e as unknown as MouseEvent)}
+              >⋯</button>
             </div>
           ))}
           {users.length === 0 && <div style="font-size:12px;color:var(--pw-text-muted)">No database users yet.</div>}
         </div>
       </div>
+      {menu && renderMenu(menu)}
     </div>
   );
+
+  function renderMenu(m: MenuState) {
+    const u = users.find((x) => x.id === m.userId);
+    if (!u) return null;
+    const pod = podStatus[u.id];
+    const busy = !!podBusy[u.id];
+    const style = `${m.top !== undefined ? `top:${m.top}px` : `bottom:${m.bottom}px`};right:${m.right}px`;
+    if (m.confirm) {
+      const text = {
+        delete: `Delete ${u.username}? Their apps, sessions and feedback stay, but they can no longer sign in.`,
+        reset: m.ownedApps
+          ? `Reset onboarding for ${u.username}? Deletes ${m.ownedApps.length ? m.ownedApps.join(', ') : 'no apps'} with their agents, the launcher machine row and the launcher pin. The Linux account and checkouts are untouched.`
+          : `Reset onboarding for ${u.username}? Deletes their apps with their agents, the launcher machine row and the launcher pin.`,
+        deprovision: `Tear down ${u.username}'s launcher pod? Their private credential disk is kept.`,
+      }[m.confirm];
+      const act = { delete: () => deleteUser(u.id), reset: () => resetOnboarding(u.id), deprovision: () => deprovisionPod(u.id) }[m.confirm];
+      const label = { delete: 'Delete user', reset: 'Reset onboarding', deprovision: 'Tear down pod' }[m.confirm];
+      return (
+        <div ref={menuRef} class="pty-ctx-menu users-row-menu" role="menu" style={style}>
+          <div class="users-row-menu-confirm">{text}</div>
+          <button role="menuitem" class="danger" onClick={act}>{label}</button>
+          <button role="menuitem" onClick={() => setMenu({ ...m, confirm: undefined })}>Cancel</button>
+        </div>
+      );
+    }
+    return (
+      <div ref={menuRef} class="pty-ctx-menu users-row-menu" role="menu" style={style}>
+        {u.role === 'member' && (
+          pod?.exists
+            ? <button role="menuitem" disabled={busy} onClick={() => askConfirm('deprovision')}>Tear down pod</button>
+            : <button role="menuitem" disabled={busy || pod?.available === false} title={pod?.available === false ? 'Kubernetes provisioning is not available on this server' : undefined} onClick={() => provisionPod(u.id)}>Provision pod</button>
+        )}
+        {u.role === 'member' && <button role="menuitem" onClick={() => askConfirm('reset')}>Reset onboarding</button>}
+        <button role="menuitem" class="danger" onClick={() => askConfirm('delete')}>Delete user</button>
+      </div>
+    );
+  }
 }

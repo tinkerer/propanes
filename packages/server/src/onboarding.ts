@@ -233,3 +233,41 @@ export function pinnedLauncherFor(ownerUserId: string | null | undefined): strin
     .from(schema.users).where(eq(schema.users.id, ownerUserId)).get();
   return row?.role === 'member' && row.launcherId ? row.launcherId : null;
 }
+
+export type ResetOnboardingResult = {
+  userId: string;
+  apps: Array<{ id: string; name: string }>;
+  agentsRemoved: number;
+  machineRemoved: boolean;
+  launcherCleared: string | null;
+};
+
+/** Undo onboarding's data-plane half so it can be re-run from scratch: the
+ *  member's apps and their agents, the launcher's machine row and the pin.
+ *  Feedback and sessions stay (like deleting an app by hand); the Linux
+ *  account, services and checkouts are untouched — those belong to the script. */
+export function resetOnboarding(userId: string): ResetOnboardingResult {
+  const user = db.select().from(schema.users).where(eq(schema.users.id, userId)).get();
+  if (!user) throw new OnboardError('User not found');
+  const apps = db.select({ id: schema.applications.id, name: schema.applications.name })
+    .from(schema.applications).where(eq(schema.applications.ownerUserId, userId)).all();
+  const result: ResetOnboardingResult = {
+    userId, apps, agentsRemoved: 0, machineRemoved: false, launcherCleared: user.launcherId ?? null,
+  };
+  const machineTags = JSON.stringify(['user-launcher', user.username]);
+
+  db.transaction((tx) => {
+    for (const app of apps) {
+      // Agents are deleted explicitly: the FK is ON DELETE SET NULL, which
+      // would otherwise turn the member's agents into global ones.
+      result.agentsRemoved += tx.delete(schema.agentEndpoints)
+        .where(eq(schema.agentEndpoints.appId, app.id)).run().changes;
+      tx.delete(schema.applications).where(eq(schema.applications.id, app.id)).run();
+    }
+    result.machineRemoved = tx.delete(schema.machines)
+      .where(eq(schema.machines.tags, machineTags)).run().changes > 0;
+    tx.update(schema.users).set({ launcherId: null, updatedAt: new Date().toISOString() })
+      .where(eq(schema.users.id, userId)).run();
+  });
+  return result;
+}

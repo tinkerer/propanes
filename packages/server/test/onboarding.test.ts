@@ -125,3 +125,28 @@ test('onboard route is admin-only and mints a member-scoped token on request', a
   assert.deepEqual(data.suggestions.map((a: any) => a.name), ['Storefront']);
   assert.deepEqual(data.owned.map((a: any) => a.projectDir), ['/home/pp-alice/storefront']);
 });
+
+test('reset-onboarding removes the member workspace and unpins, leaving others alone', async () => {
+  const admin = await mintUserToken({ id: 'env-admin', username: 'admin', role: 'admin', orgId: null });
+  const before = sqlite.prepare("SELECT count(*) n FROM agent_endpoints WHERE app_id IS NULL").get() as any;
+  const res = await userRoutes.request('/users/u1/reset-onboarding', {
+    method: 'POST', headers: { Authorization: `Bearer ${admin}` },
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json() as any;
+  assert.deepEqual(body.apps.map((a: any) => a.name), ['Storefront']);
+  assert.equal(body.agentsRemoved, 4);
+  assert.equal(body.machineRemoved, true);
+  assert.equal(body.launcherCleared, 'vm-alice');
+
+  assert.equal((sqlite.prepare("SELECT count(*) n FROM applications WHERE owner_user_id = 'u1'").get() as any).n, 0);
+  assert.ok(sqlite.prepare("SELECT id FROM applications WHERE id = 'src1'").get(), 'suggested source app survives');
+  assert.equal((sqlite.prepare("SELECT count(*) n FROM agent_endpoints WHERE app_id IS NULL").get() as any).n, before.n,
+    'member agents are deleted, not orphaned into global ones');
+  assert.equal((sqlite.prepare('SELECT count(*) n FROM machines').get() as any).n, 0);
+  assert.equal(pinnedLauncherFor('u1'), null);
+
+  // Onboarding again starts from scratch.
+  const again = onboardUser('u1', parseOnboardPlan({ apps: [{ fromAppId: 'src1', projectDir: '/home/pp-alice/storefront' }] }));
+  assert.equal(again.apps[0].created, true);
+});

@@ -11,7 +11,7 @@ import {
   getUserPodStatus,
   launcherIdFor,
 } from '../../k8s-provision.js';
-import { AGENT_PRESETS, OnboardError, onboardUser, parseOnboardPlan } from '../../onboarding.js';
+import { AGENT_PRESETS, OnboardError, onboardUser, parseOnboardPlan, resetOnboarding } from '../../onboarding.js';
 
 export const userRoutes = new Hono();
 
@@ -165,6 +165,17 @@ userRoutes.post('/users/:id/onboard', async (c) => {
     if (err instanceof OnboardError) {
       return c.json({ error: err.message }, err.message === 'User not found' ? 404 : 400);
     }
+    throw err;
+  }
+});
+
+userRoutes.post('/users/:id/reset-onboarding', async (c) => {
+  const denied = await requireAdmin(c);
+  if (denied) return denied;
+  try {
+    return c.json(resetOnboarding(c.req.param('id')));
+  } catch (err) {
+    if (err instanceof OnboardError) return c.json({ error: err.message }, 404);
     throw err;
   }
 });
