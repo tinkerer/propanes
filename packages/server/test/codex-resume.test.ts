@@ -117,3 +117,21 @@ test('a codex session with no rollout and no feedback reports why it cannot resu
   seed({ runtime: 'codex', claudeSessionId: null, cwd: '/no/rollout/here', startedAt: '2026-10-22T18:52:42.000Z' });
   await assert.rejects(resumeAgentSession('parent-1'), /no claudeSessionId stored and no original feedback/);
 });
+
+test('resuming a codex resume that died before writing a rollout continues its ancestor thread', async () => {
+  writeRollout(fakeHome, ROLLOUT_ID, CWD, '2026-10-22T18:52:41.000Z');
+  seed({ runtime: 'codex', claudeSessionId: 'stashed-random-uuid', cwd: CWD, startedAt: '2026-10-22T18:52:42.000Z', withFeedback: true });
+  // The first resume crashed at startup an hour later: no rollout of its own, and
+  // the parent's rollout predates it, so it can't be attributed directly.
+  db.insert(schema.agentSessions).values({
+    id: 'dead-child', parentSessionId: 'parent-1', feedbackId: 'fb-1', runtime: 'codex',
+    permissionProfile: 'interactive-yolo', status: 'completed', outputBytes: 0, claudeSessionId: null,
+    cwd: CWD, startedAt: '2026-10-22T19:52:42.000Z', createdAt: new Date().toISOString(),
+  }).run();
+
+  const { sessionId } = await resumeAgentSession('dead-child');
+  const child = db.select().from(schema.agentSessions).where(eq(schema.agentSessions.id, sessionId)).get();
+  assert.ok(child);
+  assert.equal(child.parentSessionId, 'dead-child');
+  assert.equal(child.claudeSessionId, ROLLOUT_ID);
+});
