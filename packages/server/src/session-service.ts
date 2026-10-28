@@ -13,7 +13,8 @@ import { db, schema, runMigrations } from './db/index.js';
 import type { AgentRuntime, PermissionProfile, SequencedOutput, SessionOutputData } from '@propanes/shared';
 import { STREAM_PROFILE_PTY_COLS } from '@propanes/shared';
 import { MessageBuffer } from './message-buffer.js';
-import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, SEND_KEYS_ENTER_DELAY_MS, listPwTmuxSessions, listPwTmuxSessionsDetailed, killTmuxSession, getTmuxPaneCommand, detachTmuxClients, getTmuxPanePid, refreshTmuxClient } from './tmux-pty.js';
+import { safeDir, isTmuxAvailable, spawnInTmux, reattachTmux, tmuxSessionExists, captureTmuxPane, sendKeysToTmux, SEND_KEYS_ENTER_DELAY_MS, listPwTmuxSessions, listPwTmuxSessionsDetailed, killTmuxSession, getTmuxPaneArgv, detachTmuxClients, getTmuxPanePid, refreshTmuxClient } from './tmux-pty.js';
+import { livePtyProfile } from './session-pty-profile.js';
 import { planTmuxReap, TMUX_REAP_INTERVAL_MS } from './tmux-reaper.js';
 import { detectClaudeAuthRequired, detectClaudeTrustPrompt, stripTerminalControl } from './claude-auth-detect.js';
 import { createRecoveryParking } from './session-recovery.js';
@@ -181,17 +182,9 @@ function ptyColsForSession(runtime: AgentRuntime, profile: PermissionProfile): n
   return needsWideStreamPty(runtime, profile) ? STREAM_PROFILE_COLS : DEFAULT_COLS;
 }
 
-// A live command "wants" the wide stream PTY only if it speaks stream-json
-// (stream profiles or headless `-p` with --output-format stream-json). Anything
-// else is an interactive TUI that must stay at a normal width, or tmux paints
-// full-window-width separator lines that wrap into dozens of rows.
-function commandSpeaksStreamJson(cmd: string): boolean {
-  return /--input-format\s+stream-json|--output-format\s+stream-json|(^|\s)-p(\s|$)/.test(cmd);
-}
-
 // Reconcile a stored permission profile against what the pane is really
 // running. Returns the profile that matches the live command so the PTY width
-// is derived from reality, not a stale DB row. See getTmuxPaneCommand and the
+// is derived from reality, not a stale DB row. See getTmuxPaneArgv and the
 // project-tmux-stream-pty-width memory note.
 function reconcileProfileWithLiveCommand(
   sessionId: string,
@@ -202,15 +195,12 @@ function reconcileProfileWithLiveCommand(
   if (!STREAM_PROFILES.has(storedProfile) && storedProfile !== 'headless-yolo') {
     return storedProfile;
   }
-  const liveCmd = getTmuxPaneCommand(sessionId);
-  if (!liveCmd || commandSpeaksStreamJson(liveCmd)) return storedProfile;
+  const corrected = livePtyProfile(storedProfile, getTmuxPaneArgv(sessionId));
+  if (corrected === storedProfile) return storedProfile;
 
   // DB says stream/headless but the pane is an interactive TUI — the source of
   // the 10000-col wrapped-line corruption. Correct to the matching interactive
   // profile and persist it so future recoveries stay healthy.
-  const corrected: PermissionProfile = liveCmd.includes('--dangerously-skip-permissions')
-    ? 'interactive-yolo'
-    : 'interactive-require';
   console.warn(`[session-service] Profile drift on ${sessionId}: DB=${storedProfile} but live pane is an interactive TUI; correcting to ${corrected} (was painting wide-window separator lines)`);
   try {
     db.update(schema.agentSessions)
@@ -1008,6 +998,16 @@ function tryRecoverSession(session: typeof schema.agentSessions.$inferSelect): b
 }
 
 function sendLiveHistory(proc: AgentProcess, ws: WebSocket): void {
+  // A pane can be replaced with an interactive resume while the service stays
+  // alive. Repair its profile before publishing a wide grid to a new viewer;
+  // startup recovery alone leaves these sessions scaled almost to nothing.
+  if (proc.tmuxSessionName && needsWideStreamPty(proc.runtime, proc.permissionProfile)) {
+    const profile = reconcileProfileWithLiveCommand(proc.sessionId, proc.permissionProfile);
+    if (profile !== proc.permissionProfile) {
+      proc.permissionProfile = profile;
+      applyPtySize(proc, proc.clientSizes.latest() ?? { cols: DEFAULT_COLS, rows: proc.ptyProcess.rows });
+    }
+  }
   try {
     ws.send(JSON.stringify({
       type: 'history',
