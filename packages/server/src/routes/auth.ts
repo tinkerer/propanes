@@ -51,7 +51,7 @@ authRoutes.post('/login', async (c) => {
     return c.json({
       token,
       expiresAt: expiresAt.toISOString(),
-      user: { id: user.id, username: user.username, role: user.role, orgId: user.orgId ?? null },
+      user: { id: user.id, username: user.username, role: user.role, orgId: user.orgId ?? null, slackLinked: !!user.slackUserId },
     });
   }
 
@@ -82,6 +82,9 @@ authRoutes.get('/me', async (c) => {
       username: payload.username,
       role: payload.role,
       orgId: (payload as { orgId?: string | null }).orgId ?? null,
+      // Linked users can move their sessions to the shared Slack bot.
+      slackLinked: !!db.select({ slackUserId: schema.users.slackUserId }).from(schema.users)
+        .where(eq(schema.users.id, String(payload.sub))).get()?.slackUserId,
     },
   });
 });

@@ -48,6 +48,17 @@ export interface IncomingSlackMessage {
  * deletions, joins, bot posts…) is noise. */
 const HUMAN_SUBTYPES = new Set(['file_share', 'thread_broadcast']);
 
+/** False for bot echoes, edits, deletions, joins… — everything but a human request. */
+export function isHumanMessage(ev: Pick<IncomingSlackMessage, 'botId' | 'subtype'>): boolean {
+  return !ev.botId && !(ev.subtype && !HUMAN_SUBTYPES.has(ev.subtype));
+}
+
+/** The conversation a message belongs to: its thread, a new thread rooted at
+ * a top-level channel message, or the flat DM. */
+export function eventThreadKey(ev: Pick<IncomingSlackMessage, 'teamId' | 'channel' | 'channelType' | 'ts' | 'threadTs'>): string {
+  return threadKey(ev.teamId, ev.channel, ev.threadTs ?? (ev.channelType === 'im' ? null : ev.ts));
+}
+
 export interface BridgeConfig {
   models?: ModelOption[];
   /** Legacy default application id (fallback when `defaultApp` does not resolve). */
@@ -69,6 +80,8 @@ export interface BridgeConfig {
   /** Slack channel or user id that admin "Continue in Slack" requests open
    * their thread in; unset = the conversation of the most recent thread. */
   handoffChannel?: string;
+  /** The Slack workspace (auth.test team_id), for threads opened without an incoming event. */
+  teamId?: string;
 }
 
 /** Attachments downloaded from Slack for one request. */
@@ -166,7 +179,7 @@ export class SlackBridge {
   // ---------------------------------------------------------------- inbound
 
   async handleEvent(ev: IncomingSlackMessage): Promise<void> {
-    if (ev.botId || (ev.subtype && !HUMAN_SUBTYPES.has(ev.subtype))) return; // bot echoes, edits, deletions, joins…
+    if (!isHumanMessage(ev)) return;
     if (!this.d.state.markEvent(ev.eventId ?? `${ev.channel}:${ev.ts}`)) return; // retry / duplicate delivery
     const isDm = ev.channelType === 'im';
     const threadTs = ev.threadTs ?? (isDm ? null : ev.ts);
@@ -448,12 +461,23 @@ export class SlackBridge {
     const report = (r: { ok: boolean; message: string; permalink?: string }) =>
       this.d.propanes.reportHandoff(req.id, r).catch(err => this.d.log(`Could not report handoff ${req.id}: ${err instanceof Error ? err.name : 'error'}`));
     const latest = this.d.state.latestThread();
-    const channel = this.d.config.handoffChannel || latest?.channel;
+    let channel = this.d.config.handoffChannel || latest?.channel;
     if (!channel) {
       await report({ ok: false, message: `${BOT_NAME} has no Slack conversation to post in yet: set AMIROBOT_HANDOFF_CHANNEL or mention the bot once` });
       return;
     }
-    const teamId = latest?.teamId ?? 'team';
+    const teamId = latest?.teamId ?? this.d.config.teamId ?? 'team';
+    // A user id means "their DM with the bot". Replies there arrive under the
+    // DM's own channel id, which Slack returns for the first post.
+    if (/^[UW]/.test(channel)) {
+      try {
+        const intro = await this.d.slack.postMessage({ channel, text: 'Moving a session here from ProPanes…' }) as { channel?: string };
+        if (intro?.channel) channel = intro.channel;
+      } catch (err) {
+        await report({ ok: false, message: `Could not message you in Slack: ${safeMessage(err)}` });
+        return;
+      }
+    }
     // The source "conversation" is the server's toast, not Slack.
     const notes: string[] = [];
     try {
@@ -487,9 +511,18 @@ export class SlackBridge {
     });
   }
 
+  /** Whether this bridge drives (or was addressed in) the conversation. */
+  owns(key: string): boolean {
+    return !!this.d.state.getThread(key) || this.d.state.isEngagedThread(key);
+  }
+
   /** The bot's own user id, learned from auth.test after construction. */
   setBotUserId(id: string | undefined): void {
     this.d.config.botUserId = id;
+  }
+
+  setTeamId(id: string | undefined): void {
+    this.d.config.teamId = id;
   }
 
   /** Stop re-arming watchers (shutdown); state already on disk re-arms on the next start. */

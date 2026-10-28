@@ -55,6 +55,7 @@ import { newTranscriptCursor, scanTranscriptForPrUrls, type TranscriptScanCursor
 import { buildCodexArgs, resolveCodexCommand } from './codex-bin.js';
 import { createPortalSession, resolvePortalConfig } from './auth-portal.js';
 import { mapMessagePaths, parsePathMap } from './launcher-paths.js';
+import { discoverClaudeModels, discoverCodexModels } from './model-discovery.js';
 
 const SERVER_WS_URL = process.env.SERVER_WS_URL || 'ws://localhost:3001/ws/launcher';
 const LAUNCHER_ID = process.env.LAUNCHER_ID || `launcher-${os.hostname()}`;
@@ -979,6 +980,15 @@ function handleServerMessage(msg: ServerToLauncherMessage): void {
         result.error = err.message;
       }
       sendToServer(result);
+      break;
+    }
+
+    case 'discover_models': {
+      // Runs as this launcher's account, so the list reflects its own logins.
+      const discover = msg.runtime === 'codex' ? discoverCodexModels : discoverClaudeModels;
+      discover({ timeoutMs: 20_000 })
+        .then((models) => sendToServer({ type: 'discover_models_result', sessionId: msg.sessionId, models }))
+        .catch((err: Error) => sendToServer({ type: 'discover_models_result', sessionId: msg.sessionId, error: err.message }));
       break;
     }
 

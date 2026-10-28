@@ -34,6 +34,8 @@ function publicUser(u: typeof schema.users.$inferSelect) {
     status: u.status,
     orgId: u.orgId ?? null,
     launcherId: u.launcherId ?? null,
+    slackUserId: u.slackUserId ?? null,
+    slackPersona: u.slackPersona ?? null,
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
   };
@@ -112,9 +114,72 @@ userRoutes.patch('/users/:id', async (c) => {
     patch.launcherId = body.launcherId;
   }
   if (typeof body.orgId === 'string' || body.orgId === null) patch.orgId = body.orgId;
+  if (body.slackUserId !== undefined) {
+    const slackUserId = typeof body.slackUserId === 'string' ? body.slackUserId.trim().toUpperCase() : '';
+    if (slackUserId && !SLACK_USER_ID.test(slackUserId)) {
+      return c.json({ error: 'slackUserId must be a Slack member id such as U012AB3CD' }, 400);
+    }
+    if (slackUserId) {
+      const taken = db.select({ id: schema.users.id, username: schema.users.username }).from(schema.users)
+        .where(eq(schema.users.slackUserId, slackUserId)).get();
+      if (taken && taken.id !== id) return c.json({ error: `That Slack account is already linked to ${taken.username}` }, 409);
+    }
+    patch.slackUserId = slackUserId || null;
+  }
+  if (body.slackPersona !== undefined) {
+    const persona = typeof body.slackPersona === 'string' ? body.slackPersona.trim() : '';
+    if (persona.length > 80) return c.json({ error: 'slackPersona must be at most 80 characters' }, 400);
+    patch.slackPersona = persona || null;
+  }
   db.update(schema.users).set(patch).where(eq(schema.users.id, id)).run();
   const updated = db.select().from(schema.users).where(eq(schema.users.id, id)).get()!;
   return c.json({ user: publicUser(updated) });
+});
+
+// --- Shared Slack bot: which ProPanes user each Slack member acts as ---
+
+const SLACK_USER_ID = /^[UW][A-Z0-9]{2,20}$/;
+// The bot re-mints well before expiry; a leaked token is short-lived.
+const SLACK_TOKEN_TTL_DAYS = 2;
+
+// Only the server operator (org-less admin) runs the shared bot. An org admin
+// must not be able to mint tokens for users outside their org.
+async function requireGlobalAdmin(c: Context): Promise<Response | null> {
+  const token = c.req.header('Authorization')?.replace('Bearer ', '');
+  const payload = token ? await verifyToken(token) : null;
+  if (!payload) return c.json({ error: 'Unauthorized' }, 401);
+  if (payload.role !== 'admin' || payload.orgId) return c.json({ error: 'Forbidden' }, 403);
+  return null;
+}
+
+userRoutes.get('/slack-identities', async (c) => {
+  const denied = await requireGlobalAdmin(c);
+  if (denied) return denied;
+  const rows = db.select().from(schema.users).all()
+    .filter((u) => u.slackUserId && u.status === 'active');
+  return c.json({
+    identities: rows.map((u) => ({
+      userId: u.id,
+      username: u.username,
+      role: u.role,
+      slackUserId: u.slackUserId,
+      persona: u.slackPersona ?? null,
+    })),
+  });
+});
+
+// A short-lived token for the bot to act as one linked user. Dispatches made
+// with it are owned by that user, so a member's sessions run on their pinned
+// launcher with their own agent logins.
+userRoutes.post('/slack-identities/:userId/token', async (c) => {
+  const denied = await requireGlobalAdmin(c);
+  if (denied) return denied;
+  const user = db.select().from(schema.users).where(eq(schema.users.id, c.req.param('userId'))).get();
+  if (!user || !user.slackUserId || user.status !== 'active') {
+    return c.json({ error: 'No active user is linked to Slack with that id' }, 404);
+  }
+  const token = await mintUserToken({ id: user.id, username: user.username, role: user.role, orgId: user.orgId }, SLACK_TOKEN_TTL_DAYS);
+  return c.json({ token, expiresAt: new Date(Date.now() + SLACK_TOKEN_TTL_DAYS * 86_400_000).toISOString() });
 });
 
 userRoutes.delete('/users/:id', async (c) => {

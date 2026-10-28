@@ -2,7 +2,11 @@
  * (Slack's chat.postMessage guidance is ~1 message/second/channel). */
 import type { KnownBlock } from '@slack/bolt';
 
-export interface PostArgs { channel: string; thread_ts?: string; text: string; blocks?: KnownBlock[]; }
+export interface PostArgs {
+  channel: string; thread_ts?: string; text: string; blocks?: KnownBlock[];
+  /** Display name for this message (Slack's chat:write.customize scope). */
+  username?: string;
+}
 export interface UploadArgs { channel: string; thread_ts?: string; filename: string; title: string; bytes: Buffer; comment?: string; }
 
 export interface SlackPoster {
@@ -78,4 +82,28 @@ export class PacedPoster implements SlackPoster {
   permalink(channel: string, ts: string) { return this.inner.permalink(channel, ts); }
   addReaction(args: { channel: string; timestamp: string; name: string }) { return this.inner.addReaction(args); }
   uploadFile(args: UploadArgs) { return this.run(args.channel, () => this.inner.uploadFile(args)); }
+}
+
+/** Posts under a per-user display name. Without the chat:write.customize
+ * scope Slack rejects the name; the persona is then dropped (once, logged)
+ * and the message goes out under the bot's own name. */
+export function personaPoster(inner: SlackPoster, persona: string | null | undefined, log: (message: string) => void): SlackPoster {
+  if (!persona) return inner;
+  let enabled = true;
+  return {
+    postMessage: async (args) => {
+      if (!enabled) return inner.postMessage(args);
+      try {
+        return await inner.postMessage({ ...args, username: persona });
+      } catch (error) {
+        if (slackErrorCode(error) !== 'missing_scope') throw error;
+        enabled = false;
+        log(`posting as "${persona}" needs the chat:write.customize scope; using the bot's own name`);
+        return inner.postMessage(args);
+      }
+    },
+    permalink: (channel, ts) => inner.permalink(channel, ts),
+    addReaction: (args) => inner.addReaction(args),
+    uploadFile: (args) => inner.uploadFile(args),
+  };
 }

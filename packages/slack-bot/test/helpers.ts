@@ -154,6 +154,7 @@ export class World {
     },
     claimHandoffs: async () => this.handoffs.splice(0),
     reportHandoff: async (id, result) => { this.handoffResults.push({ id, ...result }); },
+    discoverModels: async (runtime) => TEST_MODELS.filter((m) => m.runtime === runtime),
     fetchImage: async (path) => {
       const img = this.images.get(path);
       if (!img) throw new Error(`Propanes ${path} → 404`);
@@ -169,7 +170,7 @@ export class FakeSlack implements SlackPoster {
   uploads: UploadArgs[] = [];
   order: string[] = [];
   uploadError: unknown = null;
-  async postMessage(args: PostArgs) { this.posts.push(args); this.order.push(`post:${args.text.slice(0, 30)}`); return { ok: true, ts: `900.${this.posts.length}` }; }
+  async postMessage(args: PostArgs): Promise<{ ok: boolean; ts: string; channel?: string }> { this.posts.push(args); this.order.push(`post:${args.text.slice(0, 30)}`); return { ok: true, ts: `900.${this.posts.length}`, channel: /^U/.test(args.channel) ? `D${args.channel}` : args.channel }; }
   async permalink(channel: string, ts: string) { return `https://slack.example.test/archives/${channel}/p${ts.replace('.', '')}`; }
   async addReaction(args: { channel: string; timestamp: string; name: string }) { this.reactions.push(args); this.order.push(`react:${args.name}`); return { ok: true }; }
   async uploadFile(args: UploadArgs) { if (this.uploadError) throw this.uploadError; this.uploads.push(args); this.order.push(`upload:${args.filename}`); return { ok: true }; }

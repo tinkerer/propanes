@@ -169,15 +169,16 @@ chosen session, started from Slack or not, gets its own bot-rooted thread:
 
 The admin session menus (the sidebar status-dot menu and the session-ID menu in
 the session header, which is the one used on mobile) have **Move to Slack** for
-the global operator account. The server keeps an in-memory queue
+the global operator account and for every user whose Slack account is linked. The server keeps an in-memory queue
 (`/api/v1/admin/slack-handoffs`); the listener claims it every
 `AMIROBOT_HANDOFF_POLL_MS` (default 3000) and reports each outcome, which the
-admin shows as a toast. The thread opens in `AMIROBOT_HANDOFF_CHANNEL` (a
+admin shows as a toast. The operator's thread opens in `AMIROBOT_HANDOFF_CHANNEL` (a
 channel id, or a user id for a DM) and falls back to the conversation of the
-most recent bot thread. If the listener has not polled for 30 s, the admin
+most recent bot thread; a linked user's opens in their DM with the bot, through
+their own bridge (acting as them). If the listener has not polled for 30 s, the admin
 request is refused with "listener is not connected". Queued requests do not
-survive a server restart. Org admins and members do not get the item: the bot
-posts in the operator's workspace.
+survive a server restart. Unlinked org admins and members do not get the item,
+and nobody can move a session they cannot see.
 An empty list explicitly says there are no active items. Listing is read-only:
 it never creates, interrupts or resumes sessions, forwards text to them, changes
 user preferences, or replaces the thread's current session mapping.
@@ -248,7 +249,10 @@ it differs from the running model. Use `[claude]` or `[codex]` with a task to
 switch an existing thread to the other provider. Selection commands accept no prompt
 or other bracket options.
 
-The catalog is discovered from the signed-in CLIs on the bot host: Claude's
+The catalog comes from `GET /api/v1/admin/models?runtime=…`, asked with the
+requesting user's token. The server reads it from the signed-in CLIs where that
+user's agents run: their pinned launcher (as their Linux account, through the
+launcher's `discover_models` message), otherwise the server host. Claude's
 SDK initialization returns its model picker entries (including model versions
 and resolved IDs), and Codex's app-server `model/list` returns its selectable
 models. Every page is fetched; provider-hidden internal entries stay hidden,
@@ -420,16 +424,33 @@ exactly as it would from the UI:
 - Slack requests never bypass ProPanes access control: every call carries the
   listener's bearer token, so the bot sees and drives exactly what that user may.
 
+## Several users, one bot
+
+The operator links Slack members to ProPanes users (Users page → ⋯ → **Link
+Slack…**). Each linked user gets their own bridge: requests run with a
+short-lived token minted for them (`POST /api/v1/admin/slack-identities/:id/token`),
+so sessions are theirs and run on their pinned launcher; their threads live in
+`users/<userId>.json` next to the main state file. A thread belongs to whoever
+started it; replies from anyone else are not forwarded to that person's agent.
+Unlinked members act as the operator, unless `SLACK_REQUIRE_LINK=1`. Links
+are re-read every minute, and immediately (at most every 15 s) when an unknown
+member writes. This needs the operator's `PROPANES_TOKEN`; see
+`docs/multi-user-vm.md`.
+
 ## Slack app configuration
+
+`slack-app-manifest.yml` in this package creates the app with everything below.
 
 Socket Mode and **Interactivity & Shortcuts** on (button actions arrive through
 Socket Mode; no public interactivity request URL is needed); event subscriptions: `app_mention`, `message.channels`,
 `message.groups`, `message.im`, `message.mpim` (thread replies without a
 mention arrive as `message` events). Bot token scopes: `app_mentions:read`,
 `chat:write`, `reactions:write`, `channels:history`, `groups:history`,
-`im:history`, `mpim:history`, `files:write` for image uploads and
+`im:history`, `mpim:history`, `files:write` for image uploads,
 `files:read` to download attachments people share with the bot (all but
-`files:read` installed on the deployed workspace as of 2026-10-22). Adding a scope later
+`files:read` installed on the deployed workspace as of 2026-10-22), and
+optionally `chat:write.customize` so replies to linked users carry their
+display name. Adding a scope later
 requires reinstalling/reauthorizing the app in Slack, which only a workspace
 admin can do. Invite the bot to the channels where it should answer; channel
 membership decides who can launch work.
@@ -442,10 +463,9 @@ API, `PROPANES_PUBLIC_URL` for operator-visible session links,
 `PROPANES_DEFAULT_APP` for the default application by name (`PROPANES_APP_ID` is
 the id fallback), and `PROPANES_TOKEN` (an authorized ProPanes bearer token;
 track its expiry). Optional: `SLACK_BOT_NAME` (the handle used in help text,
-hints, feedback tags and logs; default `amirobot` — set it when running another
-user's bot, see `docs/multi-user-vm.md`), `AGENT_ENDPOINT_ID`, `POLL_MS`, `IDLE_POLL_MS`,
+hints, feedback tags and logs; default `amirobot`), `AGENT_ENDPOINT_ID`, `POLL_MS`, `IDLE_POLL_MS`,
 `IDLE_STOP_MS`, `AMIROBOT_STATE_FILE`, `AMIROBOT_HANDOFF_CHANNEL`,
-`AMIROBOT_HANDOFF_POLL_MS`. The bot token also downloads Slack
+`AMIROBOT_HANDOFF_POLL_MS`, `SLACK_REQUIRE_LINK`. The bot token also downloads Slack
 attachments. The listener verifies API authentication
 and lists which runtimes resolve before opening its socket.
 

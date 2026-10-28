@@ -33,7 +33,7 @@ back to a local run.
    ```bash
    sudo -E scripts/onboard-user.sh --user alice \
      --app <APP_ID> --app <OTHER_APP_ID> \
-     --slack-bot alicebot
+     --slack-user U012AB3CD --slack-persona alicebot
    ```
 
    `--dry-run` prints every step without changing anything.
@@ -54,31 +54,50 @@ What it does, idempotently:
   apps, an agent set on each one, a machine row for the launcher, and the
   launcher pin. The agent set is Claude, Claude YOLO, Codex and Codex YOLO,
   all interactive, with Claude as the default;
-- with `--slack-bot`, installs the bot to `/opt/propanes/slack-bot` and writes a
-  Slack app manifest and `slackbot.env`. The `propanes-slackbot@<user>` service
-  starts once the Slack tokens are filled in.
+- with `--slack-user`, links their Slack account to the shared Slack bot (see
+  below).
 
 The member then opens a terminal in ProPanes. It now runs as `pp-<user>`, on
 their launcher. From it they run `claude` to log in, then `codex login`,
 `gh auth login`, and any clone the script reported.
 
-### Their Slack bot
+### Slack
 
-Each bot is its own Slack app running the same code. Set it up like this:
+One Slack app serves everyone. Link a member's Slack account to their ProPanes
+user (Users page → ⋯ → **Link Slack…**, or `--slack-user`), and the bot then
+works for them as that user:
 
-1. Go to api.slack.com/apps → **Create New App** → **From a manifest**, and
-   paste `/etc/propanes/users/<user>/slack-app-manifest.yml`. A workspace admin
-   may need to approve the install.
-2. Under **Basic Information → App-Level Tokens**, create a token with
-   `connections:write`. This is `SLACK_APP_TOKEN` (`xapp-…`).
-3. Under **Install App**, install it and copy the bot token. This is
-   `SLACK_BOT_TOKEN` (`xoxb-…`).
-4. Put both tokens in `/etc/propanes/users/<user>/slackbot.env` and re-run the
-   script, or run `systemctl enable --now propanes-slackbot@<user>`.
-5. Invite the bot to the channels where it should answer.
+- it acts with a short-lived token minted for them (2 days, renewed in the
+  background), so it sees only what they can see, and their sessions run on
+  their pinned launcher with their own agent logins;
+- their threads and preferences live in their own state file;
+- its replies to them can carry a display name ("Reply as", `--slack-persona`).
+  That needs the `chat:write.customize` scope; without it, replies use the
+  bot's own name;
+- a thread belongs to whoever started it. Replies from anyone else are not
+  forwarded to that person's agent. Mentioning the bot there gets a one-time
+  explanation.
 
-The bot's ProPanes token is the member's own, so it sees and launches exactly
-what they can. `SLACK_BOT_NAME` makes help text and hints use its handle.
+Slack members who are not linked act as the operator (the owner of the bot's
+`PROPANES_TOKEN`), as before. Set `SLACK_REQUIRE_LINK=1` on the bot to refuse
+them instead. Linking needs the bot's `PROPANES_TOKEN` to belong to the server
+operator (an admin with no org); with any other token everyone acts as that
+token's user.
+
+`[models]` lists what the member's own CLI logins offer: the server asks their
+pinned launcher (which runs as them) to read the Claude and Codex model lists.
+A launcher older than this feature doesn't answer, and `[models]` says so.
+
+"Continue in Slack" (the session menu in the admin UI) is available to every
+linked user. The bot opens the session in their DM with it, acting as them;
+the operator's own requests still go to `AMIROBOT_HANDOFF_CHANNEL`.
+
+#### People in another Slack workspace
+
+There is one bot in one workspace. Someone from another organisation can still
+use it from a Slack Connect channel shared with your workspace (with the bot in
+that channel): link their member id as usual. DMs and "Continue in Slack" need
+them to be able to DM the bot, which a Slack Connect partner may not allow.
 
 ## What is and isn't isolated
 

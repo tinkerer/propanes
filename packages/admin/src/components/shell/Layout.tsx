@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
-import { currentRoute, navigate, selectedAppId, applications, addAppModalOpen, spotlightOpen, closeSpotlight, toggleSpotlight, isGlobalAdminUser } from '../../lib/state.js';
+import { currentRoute, navigate, selectedAppId, applications, addAppModalOpen, spotlightOpen, closeSpotlight, toggleSpotlight, canMoveToSlack } from '../../lib/state.js';
 import { parsePrUrls, prNumberFromUrl } from '../PrBadges.js';
 import { SessionPrMenu, prMenuRowCount } from '../sessions/SessionPrMenu.js';
 import { QuickDispatchPopup } from '../dispatch/QuickDispatchPopup.js';
@@ -695,7 +695,7 @@ export function Layout() {
             {menuExited && (
               <button onClick={() => { sidebarStatusMenu.value = null; resumeSession(menuSid); }}>Resume</button>
             )}
-            {isGlobalAdminUser.value && menuSess && menuSess.permissionProfile !== 'plain' && (
+            {canMoveToSlack.value && menuSess && menuSess.permissionProfile !== 'plain' && (
               <button onClick={() => { sidebarStatusMenu.value = null; moveSessionToSlack(menuSid); }}>Move to Slack</button>
             )}
             <button onClick={() => { closeTab(menuSid); sidebarStatusMenu.value = null; }}>Close tab {showHotkeyHints.value && <kbd>⌃⇧W</kbd>}</button>

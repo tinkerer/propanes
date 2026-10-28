@@ -889,6 +889,13 @@ export function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_session_usage_open ON session_usage(ended_at);
   `);
 
+  for (const sql of [
+    `ALTER TABLE users ADD COLUMN slack_user_id TEXT`,
+    `ALTER TABLE users ADD COLUMN slack_persona TEXT`,
+  ]) {
+    try { sqlite.exec(sql); } catch { /* column exists */ }
+  }
+
   // The env-credential admin (ADMIN_USER/ADMIN_PASS login) authenticates
   // without a users row (admin-auth special-cases sub === 'env-admin'), but
   // tenancy scoping stamps user.id into owner_user_id columns that carry a

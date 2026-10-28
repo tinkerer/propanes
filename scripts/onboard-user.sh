@@ -4,7 +4,7 @@
 #
 #   sudo -E scripts/onboard-user.sh --user alice \
 #        --app <APP_ID> [--app <APP_ID>=<git-url>] ... \
-#        [--slack-bot alicebot] [--dry-run]
+#        [--slack-user U012AB3CD [--slack-persona alicebot]] [--dry-run]
 #
 # Create the ProPanes user first (Users page or POST /admin/users). Run with an
 # admin PROPANES_TOKEN in the environment (sudo -E keeps it). Re-running is safe:
@@ -19,9 +19,9 @@
 #      they start — and every widget auto-dispatch on their apps — runs there.
 #   3. Their own copies of the suggested apps (--app), checked out under their
 #      home, each with Claude / Claude YOLO / Codex / Codex YOLO agents.
-#   4. Optionally (--slack-bot NAME) their own Slack bot: a manifest to create
-#      the Slack app, and a propanes-slackbot@<user> unit that starts once the
-#      Slack tokens are filled in.
+#   4. Optionally (--slack-user ID) a link from their Slack account to the
+#      shared Slack bot, which then works for them as this user. --slack-persona
+#      names its replies to them.
 #
 # The member then finishes in a ProPanes terminal (which now opens as
 # pp-<user>): `claude` to log in, `codex login`, `gh auth login`, and cloning
@@ -35,16 +35,17 @@ PUBLIC_URL="${PROPANES_PUBLIC_URL:-$PW}"
 OPT=/opt/propanes
 ETC=/etc/propanes/users
 
-USERNAME="" SLACK_BOT="" DRY=0 MAX_SESSIONS=5
+USERNAME="" SLACK_USER="" SLACK_PERSONA="" DRY=0 MAX_SESSIONS=5
 APPS=()
 
-usage() { sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --user)         USERNAME="$2"; shift ;;
     --app)          APPS+=("$2"); shift ;;
-    --slack-bot)    SLACK_BOT="$2"; shift ;;
+    --slack-user)   SLACK_USER="$2"; shift ;;
+    --slack-persona) SLACK_PERSONA="$2"; shift ;;
     --max-sessions) MAX_SESSIONS="$2"; shift ;;
     --dry-run)      DRY=1 ;;
     -h|--help)      usage 0 ;;
@@ -69,7 +70,8 @@ api() {
 [ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || die "run as root (sudo -E keeps PROPANES_TOKEN)"
 [ -n "${PROPANES_TOKEN:-}" ] || die "PROPANES_TOKEN (an admin token) is required"
 for bin in curl git node python3; do command -v "$bin" >/dev/null || die "$bin not found"; done
-[ -z "$SLACK_BOT" ] || [[ "$SLACK_BOT" =~ ^[a-z][a-z0-9_-]{0,30}$ ]] || die "--slack-bot must be a lowercase Slack handle"
+[ -z "$SLACK_USER" ] || [[ "$SLACK_USER" =~ ^[UW][A-Z0-9]{2,20}$ ]] || die "--slack-user must be a Slack member id (Profile → ⋯ → Copy member ID)"
+[ -z "$SLACK_PERSONA" ] || [[ "$SLACK_PERSONA" =~ ^[A-Za-z0-9][A-Za-z0-9\ ._-]{0,39}$ ]] || die "--slack-persona must be a short display name"
 
 LINUX_USER="pp-$USERNAME"
 HOME_DIR="/home/$LINUX_USER"
@@ -188,50 +190,14 @@ run systemctl daemon-reload
 run systemctl enable --now "propanes-launcher@$USERNAME.service"
 run systemctl restart "propanes-launcher@$USERNAME.service"
 
-# --- 6. Slack bot ----------------------------------------------------------
-if [ -n "$SLACK_BOT" ]; then
-  say "Slack bot @$SLACK_BOT (propanes-slackbot@$USERNAME)"
-  SB_SRC="$REPO_ROOT/packages/slack-bot"
-  [ -f "$SB_SRC/dist/index.js" ] || (cd "$SB_SRC" && run npx esbuild src/index.ts --bundle --platform=node --outfile=dist/index.js --external:@slack/bolt --external:node-fetch)
-  run install -d -m 0755 "$OPT/slack-bot/dist"
-  run install -m 0644 "$SB_SRC/dist/index.js" "$OPT/slack-bot/dist/index.js"
-  run install -m 0644 "$SB_SRC/package.json" "$OPT/slack-bot/package.json"
-  [ -d "$OPT/slack-bot/node_modules/@slack/bolt" ] || run npm install --prefix "$OPT/slack-bot" --omit=dev --no-audit --no-fund --ignore-scripts
-  run chmod -R a+rX "$OPT/slack-bot"
-
-  MANIFEST="$USER_ETC/slack-app-manifest.yml"
-  if [ "$DRY" = 0 ]; then
-    sed -e "s/__BOT_NAME__/$SLACK_BOT/g" -e "s/__OWNER__/$USERNAME/g" \
-      "$REPO_ROOT/ops/vm-user/slack-app-manifest.yml.tmpl" > "$MANIFEST"
-    chmod 0644 "$MANIFEST"
-  fi
-  DEFAULT_APP="$(echo "$RESULT" | json "print(d['apps'][0]['name'] if d['apps'] else '')")"
-  SB_ENV="$USER_ETC/slackbot.env"
-  # Keep tokens already filled in by a previous run.
-  OLD_BOT="$(sed -n 's/^SLACK_BOT_TOKEN=//p' "$SB_ENV" 2>/dev/null || true)"
-  OLD_APP="$(sed -n 's/^SLACK_APP_TOKEN=//p' "$SB_ENV" 2>/dev/null || true)"
-  write_env "$SB_ENV" 0640 "SLACK_BOT_NAME=$SLACK_BOT
-SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-$OLD_BOT}
-SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-$OLD_APP}
-PROPANES_URL=$PW
-PROPANES_PUBLIC_URL=$PUBLIC_URL
-PROPANES_TOKEN=$MEMBER_TOKEN
-PROPANES_DEFAULT_APP=$DEFAULT_APP
-CLAUDE_BIN=$CLAUDE_BIN
-CODEX_BIN=${CODEX_BIN:-codex}
-HOME=$HOME_DIR"
-  run install -m 0644 "$REPO_ROOT/ops/vm-user/propanes-slackbot@.service" /etc/systemd/system/propanes-slackbot@.service
-  run systemctl daemon-reload
-  if [ "$DRY" = 0 ] && grep -q '^SLACK_BOT_TOKEN=xoxb-' "$SB_ENV" && grep -q '^SLACK_APP_TOKEN=xapp-' "$SB_ENV"; then
-    run systemctl enable --now "propanes-slackbot@$USERNAME.service"
-    run systemctl restart "propanes-slackbot@$USERNAME.service"
-  else
-    note "Slack app not configured yet. In Slack: api.slack.com/apps → Create New App → From a manifest,"
-    note "paste $MANIFEST, add an app-level token (connections:write), install to the workspace, then"
-    note "put the xoxb-/xapp- tokens in $SB_ENV and re-run this script (or: systemctl enable --now propanes-slackbot@$USERNAME)."
-  fi
+# --- 6. Slack -------------------------------------------------------------
+if [ -n "$SLACK_USER" ]; then
+  say "Slack: link $SLACK_USER to $USERNAME on the shared bot"
+  BODY="{\"slackUserId\":\"$SLACK_USER\",\"slackPersona\":\"$SLACK_PERSONA\"}"
+  if [ "$DRY" = 1 ]; then note "[dry-run] PATCH /admin/users/$USER_ID $BODY"
+  else api PATCH "/admin/users/$USER_ID" "$BODY" >/dev/null; fi
+  note "The shared bot picks the link up within a minute. They mention it (or DM it) as usual."
 fi
-
 say "Done. $USERNAME's sessions now run as $LINUX_USER on launcher $LAUNCHER_ID."
 note "Their first steps, in a ProPanes terminal ($PUBLIC_URL/admin/ → New terminal):"
 note "  claude            # log in to their own Claude account"

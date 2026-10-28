@@ -1,20 +1,22 @@
-# Slack app manifest for a member's bot. In Slack: api.slack.com/apps →
-# Create New App → From a manifest → pick the workspace → paste this.
+# Manifest for the one shared Slack app. In Slack: api.slack.com/apps →
+# Create New App → From a manifest → pick the workspace → paste this (rename
+# it first if you like; SLACK_BOT_NAME should match the handle).
 # Then: Basic Information → App-Level Tokens → generate one with
 # connections:write (SLACK_APP_TOKEN, xapp-…); Install App → install to the
 # workspace and copy the Bot User OAuth Token (SLACK_BOT_TOKEN, xoxb-…).
 display_information:
-  name: __BOT_NAME__
-  description: __OWNER__'s ProPanes agent sessions from Slack
+  name: propanes
+  description: ProPanes agent sessions from Slack
 features:
   bot_user:
-    display_name: __BOT_NAME__
+    display_name: propanes
     always_online: true
 oauth_config:
   scopes:
     bot:
       - app_mentions:read
       - chat:write
+      - chat:write.customize
       - reactions:write
       - channels:history
       - groups:history

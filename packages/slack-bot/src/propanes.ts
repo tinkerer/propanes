@@ -4,6 +4,7 @@ import type { AppInfo } from './apps';
 import type { InfraList } from './infra';
 import type { DownloadedFile } from './attachments';
 import type { Runtime } from './options';
+import type { ModelOption } from './models';
 
 export class PropanesApiError extends Error {
   constructor(public readonly path: string, public readonly status: number, detail?: string) {
@@ -23,18 +24,23 @@ function sanitizeDetail(body: string): string | undefined {
   return undefined;
 }
 
+/** A fixed token, or a source that mints/refreshes one per request (the shared
+ * bot's per-user tokens). */
+export type TokenSource = string | undefined | (() => Promise<string>);
+
 export function createPropanesFetch(
   baseUrl: string,
-  token: string | undefined,
+  token: TokenSource,
   request: typeof fetch = fetch,
 ) {
-  if (!token?.trim()) throw new Error('Configure PROPANES_TOKEN for the Slack listener.');
+  if (typeof token !== 'function' && !token?.trim()) throw new Error('Configure PROPANES_TOKEN for the Slack listener.');
+  const bearer = typeof token === 'function' ? token : async () => token!;
   const base = baseUrl.replace(/\/$/, '');
   const raw = async (path: string, opts?: RequestInit): Promise<Response> => {
     const headers = new Headers(opts?.headers);
     // Multipart bodies set their own boundary; only JSON strings get the header.
     if (!headers.has('Content-Type') && typeof opts?.body === 'string') headers.set('Content-Type', 'application/json');
-    headers.set('Authorization', `Bearer ${token.trim()}`);
+    headers.set('Authorization', `Bearer ${(await bearer()).trim()}`);
     const response = await request(`${base}${path}`, {
       ...opts,
       headers,
@@ -120,6 +126,9 @@ export interface PropanesClient {
   claimHandoffs(): Promise<SlackHandoffRequest[]>;
   /** POST /slack-handoffs/:id/result — what the admin toast shows. */
   reportHandoff(id: string, result: { ok: boolean; message: string; permalink?: string }): Promise<void>;
+  /** GET /models — the runtime's models as this user's CLI logins see them
+   * (discovered on their pinned launcher, else the server host). */
+  discoverModels(runtime: Runtime): Promise<ModelOption[]>;
   /** GET an image the transcript elided (jsonl-image URL from the server). */
   fetchImage(path: string): Promise<{ bytes: Buffer; mime: string }>;
 }
@@ -207,6 +216,10 @@ export function createPropanesClient(api: PropanesFetch): PropanesClient {
       return Array.isArray(r?.handoffs) ? r.handoffs : [];
     },
     reportHandoff: async (id, result) => { await post(`/api/v1/admin/slack-handoffs/${encodeURIComponent(id)}/result`, result); },
+    discoverModels: async (runtime) => {
+      const r = await api(`/api/v1/admin/models?runtime=${runtime}`);
+      return Array.isArray(r?.models) ? r.models : [];
+    },
     fetchImage: async (path) => {
       const res = await api.raw(path, { method: 'GET' });
       const mime = res.headers.get('content-type') || 'application/octet-stream';
