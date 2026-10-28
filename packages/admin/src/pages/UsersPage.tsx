@@ -8,10 +8,13 @@ type UserRow = {
   status: 'active' | 'disabled';
   orgId: string | null;
   launcherId: string | null;
+  slackUserId: string | null;
+  slackPersona: string | null;
 };
 
 type MenuConfirm = 'delete' | 'reset' | 'deprovision';
-type MenuState = { userId: string; top?: number; bottom?: number; right: number; confirm?: MenuConfirm; ownedApps?: string[] };
+type SlackDraft = { slackUserId: string; slackPersona: string; error?: string };
+type MenuState = { userId: string; top?: number; bottom?: number; right: number; confirm?: MenuConfirm; ownedApps?: string[]; slack?: SlackDraft };
 
 export function UsersPage() {
   const [users, setUsers] = useState<UserRow[]>([]);
@@ -145,6 +148,17 @@ export function UsersPage() {
       await load();
     } catch (err: any) {
       setError(err.message || 'Failed to update user');
+    }
+  }
+
+  // Errors stay inside the menu so a duplicate link can be fixed in place.
+  async function saveSlackLink(id: string, draft: SlackDraft) {
+    try {
+      await api.updateUser(id, { slackUserId: draft.slackUserId.trim(), slackPersona: draft.slackPersona.trim() });
+      setMenu(null);
+      await load();
+    } catch (err: any) {
+      setMenu((m) => (m && m.userId === id && m.slack ? { ...m, slack: { ...m.slack, error: err.message || 'Failed to save' } } : m));
     }
   }
 
@@ -299,7 +313,10 @@ export function UsersPage() {
             <div key={u.id} class="preset-row" style="align-items:flex-start;gap:10px">
               <div style="flex:1;min-width:180px">
                 <div style="font-size:13px;font-weight:700">{u.username}</div>
-                <div style="font-size:11px;color:var(--pw-text-muted)">{u.id} · {orgName(u.orgId)}</div>
+                <div style="font-size:11px;color:var(--pw-text-muted)">
+                  {u.id} · {orgName(u.orgId)}
+                  {u.slackUserId && <> · Slack {u.slackUserId}{u.slackPersona ? ` as ${u.slackPersona}` : ''}</>}
+                </div>
                 {u.role === 'member' && <div style="margin-top:2px">{podBadge(u.id)}</div>}
               </div>
               <select value={u.role} onChange={(e) => patchUser(u.id, { role: (e.currentTarget as HTMLSelectElement).value })}>
@@ -348,6 +365,32 @@ export function UsersPage() {
     const pod = podStatus[u.id];
     const busy = !!podBusy[u.id];
     const style = `${m.top !== undefined ? `top:${m.top}px` : `bottom:${m.bottom}px`};right:${m.right}px`;
+    if (m.slack) {
+      const d = m.slack;
+      const set = (patch: Partial<SlackDraft>) => setMenu({ ...m, slack: { ...d, ...patch, error: undefined } });
+      const onKey = (e: KeyboardEvent) => { if (e.key === 'Enter') saveSlackLink(u.id, d); };
+      return (
+        <div ref={menuRef} class="pty-ctx-menu users-row-menu users-slack-link" role="menu" style={style}>
+          <div class="users-row-menu-confirm">
+            The shared Slack bot acts as {u.username} for this Slack member: their sessions, apps and launcher.
+          </div>
+          <label>
+            Slack member ID
+            <input autoFocus placeholder="U012AB3CD" value={d.slackUserId} onKeyDown={onKey}
+              onInput={(e) => set({ slackUserId: (e.currentTarget as HTMLInputElement).value })} />
+          </label>
+          <label>
+            Reply as (optional)
+            <input placeholder={`${u.username}bot`} value={d.slackPersona} onKeyDown={onKey}
+              onInput={(e) => set({ slackPersona: (e.currentTarget as HTMLInputElement).value })} />
+          </label>
+          {d.error && <div class="users-row-menu-confirm users-row-menu-error">{d.error}</div>}
+          <button role="menuitem" onClick={() => saveSlackLink(u.id, d)}>Save</button>
+          {u.slackUserId && <button role="menuitem" class="danger" onClick={() => saveSlackLink(u.id, { slackUserId: '', slackPersona: '' })}>Unlink Slack</button>}
+          <button role="menuitem" onClick={() => setMenu({ ...m, slack: undefined })}>Cancel</button>
+        </div>
+      );
+    }
     if (m.confirm) {
       const text = {
         delete: `Delete ${u.username}? Their apps, sessions and feedback stay, but they can no longer sign in.`,
@@ -373,6 +416,9 @@ export function UsersPage() {
             ? <button role="menuitem" disabled={busy} onClick={() => askConfirm('deprovision')}>Tear down pod</button>
             : <button role="menuitem" disabled={busy || pod?.available === false} title={pod?.available === false ? 'Kubernetes provisioning is not available on this server' : undefined} onClick={() => provisionPod(u.id)}>Provision pod</button>
         )}
+        <button role="menuitem" onClick={() => setMenu({ ...m, slack: { slackUserId: u.slackUserId || '', slackPersona: u.slackPersona || '' } })}>
+          {u.slackUserId ? 'Edit Slack link…' : 'Link Slack…'}
+        </button>
         {u.role === 'member' && <button role="menuitem" onClick={() => askConfirm('reset')}>Reset onboarding</button>}
         <button role="menuitem" class="danger" onClick={() => askConfirm('delete')}>Delete user</button>
       </div>

@@ -33,7 +33,7 @@ back to a local run.
    ```bash
    sudo -E scripts/onboard-user.sh --user alice \
      --app <APP_ID> --app <OTHER_APP_ID> \
-     --slack-bot alicebot
+     --slack-user U012AB3CD --slack-persona alicebot
    ```
 
    `--dry-run` prints every step without changing anything.
@@ -54,17 +54,46 @@ What it does, idempotently:
   apps, an agent set on each one, a machine row for the launcher, and the
   launcher pin. The agent set is Claude, Claude YOLO, Codex and Codex YOLO,
   all interactive, with Claude as the default;
-- with `--slack-bot`, installs the bot to `/opt/propanes/slack-bot` and writes a
-  Slack app manifest and `slackbot.env`. The `propanes-slackbot@<user>` service
-  starts once the Slack tokens are filled in.
+- with `--slack-user`, links their Slack account to the shared Slack bot (see
+  below).
 
 The member then opens a terminal in ProPanes. It now runs as `pp-<user>`, on
 their launcher. From it they run `claude` to log in, then `codex login`,
 `gh auth login`, and any clone the script reported.
 
-### Their Slack bot
+### Slack
 
-Each bot is its own Slack app running the same code. Set it up like this:
+One Slack app serves everyone. Link a member's Slack account to their ProPanes
+user (Users page → ⋯ → **Link Slack…**, or `--slack-user`), and the bot then
+works for them as that user:
+
+- it acts with a short-lived token minted for them (2 days, renewed in the
+  background), so it sees only what they can see, and their sessions run on
+  their pinned launcher with their own agent logins;
+- their threads and preferences live in their own state file;
+- its replies to them can carry a display name ("Reply as", `--slack-persona`).
+  That needs the `chat:write.customize` scope; without it, replies use the
+  bot's own name;
+- a thread belongs to whoever started it. Replies from anyone else are not
+  forwarded to that person's agent. Mentioning the bot there gets a one-time
+  explanation.
+
+Slack members who are not linked act as the operator (the owner of the bot's
+`PROPANES_TOKEN`), as before. Set `SLACK_REQUIRE_LINK=1` on the bot to refuse
+them instead. Linking needs the bot's `PROPANES_TOKEN` to belong to the server
+operator (an admin with no org); with any other token everyone acts as that
+token's user.
+
+Two things are still shared: the model list (`[models]`) comes from the CLIs
+signed in on the bot's host, and "Continue in Slack" from the admin UI stays
+operator-only.
+
+#### A separate Slack app (another workspace)
+
+To give a member a bot of their own instead, for example in a different Slack
+workspace, pass `--slack-bot <name>`. The script installs the bot to
+`/opt/propanes/slack-bot`, writes a Slack app manifest and `slackbot.env`, and
+starts `propanes-slackbot@<user>` once the Slack tokens are filled in:
 
 1. Go to api.slack.com/apps → **Create New App** → **From a manifest**, and
    paste `/etc/propanes/users/<user>/slack-app-manifest.yml`. A workspace admin

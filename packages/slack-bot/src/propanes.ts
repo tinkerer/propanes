@@ -23,18 +23,23 @@ function sanitizeDetail(body: string): string | undefined {
   return undefined;
 }
 
+/** A fixed token, or a source that mints/refreshes one per request (the shared
+ * bot's per-user tokens). */
+export type TokenSource = string | undefined | (() => Promise<string>);
+
 export function createPropanesFetch(
   baseUrl: string,
-  token: string | undefined,
+  token: TokenSource,
   request: typeof fetch = fetch,
 ) {
-  if (!token?.trim()) throw new Error('Configure PROPANES_TOKEN for the Slack listener.');
+  if (typeof token !== 'function' && !token?.trim()) throw new Error('Configure PROPANES_TOKEN for the Slack listener.');
+  const bearer = typeof token === 'function' ? token : async () => token!;
   const base = baseUrl.replace(/\/$/, '');
   const raw = async (path: string, opts?: RequestInit): Promise<Response> => {
     const headers = new Headers(opts?.headers);
     // Multipart bodies set their own boundary; only JSON strings get the header.
     if (!headers.has('Content-Type') && typeof opts?.body === 'string') headers.set('Content-Type', 'application/json');
-    headers.set('Authorization', `Bearer ${token.trim()}`);
+    headers.set('Authorization', `Bearer ${(await bearer()).trim()}`);
     const response = await request(`${base}${path}`, {
       ...opts,
       headers,

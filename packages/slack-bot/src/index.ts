@@ -1,16 +1,18 @@
 import { modelCatalog } from './models';
 import { createModelCatalog } from './model-discovery';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { App, LogLevel } from '@slack/bolt';
 import { downloaderFromToken } from './attachments';
 import { SlackBridge, type IncomingSlackMessage } from './bridge';
 import { configuredDefaultRuntime, resolveAgentEndpoint, runtimeLabel } from './agents';
 import { defaultApp } from './apps';
 import { createPropanesClient, createPropanesFetch } from './propanes';
-import { PacedPoster, posterFromClient } from './slack';
+import { PacedPoster, personaPoster, posterFromClient } from './slack';
 import { infraTerminalAction, OPEN_INFRA_TERMINAL_ACTION } from './infra-actions';
 import { BOT_NAME } from './name';
 import { FileStateStore, StateRepo } from './state';
+import { IdentityDirectory, type SlackIdentity } from './identities';
+import { SlackRouter } from './router';
 
 const PROPANES_URL = process.env.PROPANES_URL ?? 'http://localhost:3001';
 // Public-facing URL used in Slack messages. Defaults to PROPANES_URL but can
@@ -39,6 +41,11 @@ const HANDOFF_POLL_MS = parseInt(process.env.AMIROBOT_HANDOFF_POLL_MS ?? '3000',
 // systemd's StateDirectory= exports STATE_DIRECTORY; dev runs keep state next to the package.
 const STATE_FILE = process.env.AMIROBOT_STATE_FILE
   ?? join(process.env.STATE_DIRECTORY ?? join(__dirname, '..', 'state'), 'amirobot-state.json');
+// Linked users (Users page → Slack) each get their own state file here.
+const USER_STATE_DIR = join(dirname(STATE_FILE), 'users');
+// Unlinked Slack members act as the operator unless this is set; then they are refused.
+const REQUIRE_LINK = /^(1|true|yes)$/i.test(process.env.SLACK_REQUIRE_LINK ?? '');
+const IDENTITY_REFRESH_MS = 60_000;
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN!,
@@ -51,12 +58,18 @@ const propanesFetch = createPropanesFetch(PROPANES_URL, process.env.PROPANES_TOK
 const propanes = createPropanesClient(propanesFetch);
 const state = new StateRepo(new FileStateStore(STATE_FILE));
 const log = (message: string) => console.warn(`[${BOT_NAME}] ${message}`);
+// Shared by every user's bridge: one pacing queue per channel, one model list
+// (discovered from the operator's CLIs on this host).
+const slack = new PacedPoster(posterFromClient(app.client as any));
+const models = createModelCatalog({ extra: modelCatalog(process.env.AMIROBOT_MODELS_JSON) });
+const files = downloaderFromToken(process.env.SLACK_BOT_TOKEN!);
+const directory = new IdentityDirectory(propanesFetch, { log });
 
 const bridge = new SlackBridge({
   propanes,
-  models: createModelCatalog({ extra: modelCatalog(process.env.AMIROBOT_MODELS_JSON) }),
-  slack: new PacedPoster(posterFromClient(app.client as any)),
-  files: downloaderFromToken(process.env.SLACK_BOT_TOKEN!),
+  models,
+  slack,
+  files,
   state,
   config: {
     appId: APP_ID,
@@ -74,10 +87,35 @@ const bridge = new SlackBridge({
 
 let botUserId: string | undefined;
 
+/** A linked user's bridge: their token, their apps and defaults, their state. */
+function userBridge(identity: SlackIdentity): SlackBridge {
+  const userLog = (message: string) => log(`[${identity.username}] ${message}`);
+  return new SlackBridge({
+    propanes: createPropanesClient(createPropanesFetch(PROPANES_URL, () => directory.token(identity.userId))),
+    models,
+    slack: personaPoster(slack, identity.persona, userLog),
+    files,
+    state: new StateRepo(new FileStateStore(join(USER_STATE_DIR, `${identity.userId}.json`))),
+    config: {
+      // Empty = the user's first application; `[app:<name>]` picks another.
+      appId: '',
+      publicUrl: PROPANES_PUBLIC_URL,
+      botUserId,
+      pollMs: POLL_MS,
+      idlePollMs: IDLE_POLL_MS,
+      idleStopMs: IDLE_STOP_MS,
+      transcriptTail: 2000,
+    },
+    log: userLog,
+  });
+}
+
+let router: SlackRouter | undefined;
+
 // Handlers hand the event to the bridge and return at once, so Socket Mode
 // acknowledgements never wait on dispatch, polling or Slack posting.
 function enqueue(ev: IncomingSlackMessage): void {
-  bridge.handleEvent(ev).catch((err) => log(`event handling failed: ${err instanceof Error ? err.name : 'error'}`));
+  (router ?? bridge).handleEvent(ev).catch((err) => log(`event handling failed: ${err instanceof Error ? err.name : 'error'}`));
 }
 
 app.action(OPEN_INFRA_TERMINAL_ACTION, async ({ ack, body }) => {
@@ -85,7 +123,7 @@ app.action(OPEN_INFRA_TERMINAL_ACTION, async ({ ack, body }) => {
   if (body.type !== 'block_actions') return;
   const action = infraTerminalAction(body);
   if (!action) return;
-  bridge.handleInfraTerminalAction(action).catch((err) => log(`terminal action failed: ${err instanceof Error ? err.name : 'error'}`));
+  (router ?? bridge).handleInfraTerminalAction(action).catch((err) => log(`terminal action failed: ${err instanceof Error ? err.name : 'error'}`));
 });
 
 app.event('app_mention', async ({ event, body }) => {
@@ -134,7 +172,7 @@ app.message(async ({ message, body }) => {
 
 (async () => {
   // Fail before receiving mentions if the API credential is invalid.
-  await propanes.me();
+  const me = await propanes.me();
   const apps = await propanes.listApplications();
   const defApp = defaultApp(apps, DEFAULT_APP, APP_ID);
   const unmatched = DEFAULT_APP && defApp.id === APP_ID && defApp.name.toLowerCase() !== DEFAULT_APP.toLowerCase();
@@ -151,9 +189,21 @@ app.message(async ({ message, body }) => {
   }
   const auth = await app.client.auth.test();
   botUserId = typeof auth.user_id === 'string' ? auth.user_id : undefined;
-  bridge.setBotUserId(botUserId);
+  await directory.refresh().catch((err) => log(`could not load Slack identity links: ${err instanceof Error ? err.message : 'error'}`));
+  router = new SlackRouter({
+    operator: bridge,
+    operatorUserId: me.user.id,
+    directory,
+    createBridge: userBridge,
+    slack,
+    requireLink: REQUIRE_LINK,
+  });
+  router.setBotUserId(botUserId);
+  const linked = directory.all().filter((i) => i.userId !== me.user.id);
+  console.log(`[${BOT_NAME}] ${linked.length} linked user${linked.length === 1 ? '' : 's'}${linked.length ? `: ${linked.map((i) => i.username).join(', ')}` : ''}; unlinked Slack members ${REQUIRE_LINK ? 'are refused' : 'act as the operator'}`);
   await app.start();
-  const rearmed = bridge.recover();
+  const rearmed = router.start();
+  setInterval(() => { directory.refresh().catch(() => undefined); }, IDENTITY_REFRESH_MS).unref();
   pollHandoffs();
   console.log(`${BOT_NAME} connected via Socket Mode${rearmed ? ` (re-armed ${rearmed} thread watcher${rearmed === 1 ? '' : 's'})` : ''}`);
 })().catch((err) => {
@@ -179,7 +229,7 @@ function pollHandoffs(): void {
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
-    bridge.stop();
+    (router ?? bridge).stop();
     if (handoffTimer) clearTimeout(handoffTimer);
     app.stop().catch(() => undefined).finally(() => process.exit(0));
   });

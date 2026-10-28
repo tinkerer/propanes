@@ -223,7 +223,7 @@ The launcher gets an extra guard because it is the entrypoint's foreground proce
 
 ### Multiple users on one VM
 
-A member account alone only scopes what they *see*; unpinned sessions still run as the server's Linux user with its CLI logins. `scripts/onboard-user.sh --user <name> --app <APP_ID>… [--slack-bot <handle>]` gives a member a `pp-<name>` Linux account, a private launcher (`propanes-launcher@<name>`, pinned via `users.launcher_id`), their own app copies + Claude/Codex × interactive/YOLO agents (`POST /admin/users/:id/onboard`, `src/onboarding.ts`) and optionally their own Slack bot (`propanes-slackbot@<name>`, `SLACK_BOT_NAME`). Dispatch for a pinned member never falls back to a local run. Details: `docs/multi-user-vm.md`.
+A member account alone only scopes what they *see*; unpinned sessions still run as the server's Linux user with its CLI logins. `scripts/onboard-user.sh --user <name> --app <APP_ID>… [--slack-user <U…>]` gives a member a `pp-<name>` Linux account, a private launcher (`propanes-launcher@<name>`, pinned via `users.launcher_id`), their own app copies + Claude/Codex × interactive/YOLO agents (`POST /admin/users/:id/onboard`, `src/onboarding.ts`) and optionally a Slack link: the one shared bot then acts for that Slack member as this user (`users.slack_user_id`, short-lived per-user tokens from `/admin/slack-identities`, `packages/slack-bot/src/router.ts`; threads are owned by whoever started them). Dispatch for a pinned member never falls back to a local run. Details: `docs/multi-user-vm.md`.
 
 ## Permission Profiles
 

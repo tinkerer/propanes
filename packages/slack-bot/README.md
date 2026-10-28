@@ -420,6 +420,19 @@ exactly as it would from the UI:
 - Slack requests never bypass ProPanes access control: every call carries the
   listener's bearer token, so the bot sees and drives exactly what that user may.
 
+## Several users, one bot
+
+The operator links Slack members to ProPanes users (Users page → ⋯ → **Link
+Slack…**). Each linked user gets their own bridge: requests run with a
+short-lived token minted for them (`POST /api/v1/admin/slack-identities/:id/token`),
+so sessions are theirs and run on their pinned launcher; their threads live in
+`users/<userId>.json` next to the main state file. A thread belongs to whoever
+started it; replies from anyone else are not forwarded to that person's agent.
+Unlinked members act as the operator, unless `SLACK_REQUIRE_LINK=1`. Links
+are re-read every minute, and immediately (at most every 15 s) when an unknown
+member writes. This needs the operator's `PROPANES_TOKEN`; see
+`docs/multi-user-vm.md`.
+
 ## Slack app configuration
 
 Socket Mode and **Interactivity & Shortcuts** on (button actions arrive through
@@ -427,9 +440,11 @@ Socket Mode; no public interactivity request URL is needed); event subscriptions
 `message.groups`, `message.im`, `message.mpim` (thread replies without a
 mention arrive as `message` events). Bot token scopes: `app_mentions:read`,
 `chat:write`, `reactions:write`, `channels:history`, `groups:history`,
-`im:history`, `mpim:history`, `files:write` for image uploads and
+`im:history`, `mpim:history`, `files:write` for image uploads,
 `files:read` to download attachments people share with the bot (all but
-`files:read` installed on the deployed workspace as of 2026-10-22). Adding a scope later
+`files:read` installed on the deployed workspace as of 2026-10-22), and
+optionally `chat:write.customize` so replies to linked users carry their
+display name. Adding a scope later
 requires reinstalling/reauthorizing the app in Slack, which only a workspace
 admin can do. Invite the bot to the channels where it should answer; channel
 membership decides who can launch work.
@@ -445,7 +460,7 @@ track its expiry). Optional: `SLACK_BOT_NAME` (the handle used in help text,
 hints, feedback tags and logs; default `amirobot` — set it when running another
 user's bot, see `docs/multi-user-vm.md`), `AGENT_ENDPOINT_ID`, `POLL_MS`, `IDLE_POLL_MS`,
 `IDLE_STOP_MS`, `AMIROBOT_STATE_FILE`, `AMIROBOT_HANDOFF_CHANNEL`,
-`AMIROBOT_HANDOFF_POLL_MS`. The bot token also downloads Slack
+`AMIROBOT_HANDOFF_POLL_MS`, `SLACK_REQUIRE_LINK`. The bot token also downloads Slack
 attachments. The listener verifies API authentication
 and lists which runtimes resolve before opening its socket.
 

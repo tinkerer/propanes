@@ -150,3 +150,48 @@ test('reset-onboarding removes the member workspace and unpins, leaving others a
   const again = onboardUser('u1', parseOnboardPlan({ apps: [{ fromAppId: 'src1', projectDir: '/home/pp-alice/storefront' }] }));
   assert.equal(again.apps[0].created, true);
 });
+
+test('slack link: validated, unique, listed and token-minted for the global admin only', async () => {
+  const admin = await mintUserToken({ id: 'env-admin', username: 'admin', role: 'admin', orgId: null });
+  const orgAdmin = await mintUserToken({ id: 'oa', username: 'oa', role: 'admin', orgId: 'org-1' });
+  const patch = (body: unknown) => userRoutes.request('/users/u1', {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${admin}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  assert.equal((await patch({ slackUserId: 'not an id' })).status, 400);
+  const linked = await (await patch({ slackUserId: 'u0alice1', slackPersona: ' alicebot ' })).json() as any;
+  assert.equal(linked.user.slackUserId, 'U0ALICE1');
+  assert.equal(linked.user.slackPersona, 'alicebot');
+
+  sqlite.prepare(`INSERT INTO users (id, username, password_hash, role, status, created_at, updated_at)
+    VALUES ('u2', 'bob', 'x', 'member', 'active', ?, ?)`).run(now, now);
+  const dup = await userRoutes.request('/users/u2', {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${admin}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slackUserId: 'U0ALICE1' }),
+  });
+  assert.equal(dup.status, 409);
+
+  const list = (token: string) => userRoutes.request('/slack-identities', { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal((await list(orgAdmin)).status, 403);
+  const ids = await (await list(admin)).json() as any;
+  assert.deepEqual(ids.identities, [{ userId: 'u1', username: 'alice', role: 'member', slackUserId: 'U0ALICE1', persona: 'alicebot' }]);
+
+  const mint = (token: string, userId: string) => userRoutes.request(`/slack-identities/${userId}/token`, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal((await mint(orgAdmin, 'u1')).status, 403);
+  assert.equal((await mint(admin, 'u2')).status, 404, 'unlinked users get no token');
+  const minted = await (await mint(admin, 'u1')).json() as any;
+  const payload = await verifyToken(minted.token);
+  assert.equal(payload?.sub, 'u1');
+  assert.equal(payload?.role, 'member');
+  assert.ok((payload!.exp! - payload!.iat!) <= 2 * 86_400);
+
+  // Unlinking (empty string) clears both the listing and minting.
+  await patch({ slackUserId: '' });
+  assert.deepEqual(((await (await list(admin)).json()) as any).identities, []);
+  assert.equal((await mint(admin, 'u1')).status, 404);
+});

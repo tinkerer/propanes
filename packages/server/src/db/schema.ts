@@ -775,6 +775,10 @@ export const users = sqliteTable('users', {
   role: text('role').notNull().default('member'),
   status: text('status').notNull().default('active'),
   launcherId: text('launcher_id'),
+  // Slack member id (U…/W…) the shared Slack bot acts for as this user, and
+  // the display name its replies to them post under (needs chat:write.customize).
+  slackUserId: text('slack_user_id'),
+  slackPersona: text('slack_persona'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });

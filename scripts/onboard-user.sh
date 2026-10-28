@@ -4,7 +4,7 @@
 #
 #   sudo -E scripts/onboard-user.sh --user alice \
 #        --app <APP_ID> [--app <APP_ID>=<git-url>] ... \
-#        [--slack-bot alicebot] [--dry-run]
+#        [--slack-user U012AB3CD [--slack-persona alicebot]] [--dry-run]
 #
 # Create the ProPanes user first (Users page or POST /admin/users). Run with an
 # admin PROPANES_TOKEN in the environment (sudo -E keeps it). Re-running is safe:
@@ -19,9 +19,11 @@
 #      they start — and every widget auto-dispatch on their apps — runs there.
 #   3. Their own copies of the suggested apps (--app), checked out under their
 #      home, each with Claude / Claude YOLO / Codex / Codex YOLO agents.
-#   4. Optionally (--slack-bot NAME) their own Slack bot: a manifest to create
-#      the Slack app, and a propanes-slackbot@<user> unit that starts once the
-#      Slack tokens are filled in.
+#   4. Optionally (--slack-user ID) a link from their Slack account to the
+#      shared Slack bot, which then works for them as this user. --slack-persona
+#      names its replies to them. (--slack-bot NAME instead sets up a separate
+#      Slack app for them, e.g. in another workspace: a manifest plus a
+#      propanes-slackbot@<user> unit that starts once its tokens are filled in.)
 #
 # The member then finishes in a ProPanes terminal (which now opens as
 # pp-<user>): `claude` to log in, `codex login`, `gh auth login`, and cloning
@@ -35,16 +37,18 @@ PUBLIC_URL="${PROPANES_PUBLIC_URL:-$PW}"
 OPT=/opt/propanes
 ETC=/etc/propanes/users
 
-USERNAME="" SLACK_BOT="" DRY=0 MAX_SESSIONS=5
+USERNAME="" SLACK_BOT="" SLACK_USER="" SLACK_PERSONA="" DRY=0 MAX_SESSIONS=5
 APPS=()
 
-usage() { sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --user)         USERNAME="$2"; shift ;;
     --app)          APPS+=("$2"); shift ;;
     --slack-bot)    SLACK_BOT="$2"; shift ;;
+    --slack-user)   SLACK_USER="$2"; shift ;;
+    --slack-persona) SLACK_PERSONA="$2"; shift ;;
     --max-sessions) MAX_SESSIONS="$2"; shift ;;
     --dry-run)      DRY=1 ;;
     -h|--help)      usage 0 ;;
@@ -70,6 +74,8 @@ api() {
 [ -n "${PROPANES_TOKEN:-}" ] || die "PROPANES_TOKEN (an admin token) is required"
 for bin in curl git node python3; do command -v "$bin" >/dev/null || die "$bin not found"; done
 [ -z "$SLACK_BOT" ] || [[ "$SLACK_BOT" =~ ^[a-z][a-z0-9_-]{0,30}$ ]] || die "--slack-bot must be a lowercase Slack handle"
+[ -z "$SLACK_USER" ] || [[ "$SLACK_USER" =~ ^[UW][A-Z0-9]{2,20}$ ]] || die "--slack-user must be a Slack member id (Profile → ⋯ → Copy member ID)"
+[ -z "$SLACK_PERSONA" ] || [[ "$SLACK_PERSONA" =~ ^[A-Za-z0-9][A-Za-z0-9\ ._-]{0,39}$ ]] || die "--slack-persona must be a short display name"
 
 LINUX_USER="pp-$USERNAME"
 HOME_DIR="/home/$LINUX_USER"
@@ -188,7 +194,14 @@ run systemctl daemon-reload
 run systemctl enable --now "propanes-launcher@$USERNAME.service"
 run systemctl restart "propanes-launcher@$USERNAME.service"
 
-# --- 6. Slack bot ----------------------------------------------------------
+# --- 6. Slack -------------------------------------------------------------
+if [ -n "$SLACK_USER" ]; then
+  say "Slack: link $SLACK_USER to $USERNAME on the shared bot"
+  BODY="{\"slackUserId\":\"$SLACK_USER\",\"slackPersona\":\"$SLACK_PERSONA\"}"
+  if [ "$DRY" = 1 ]; then note "[dry-run] PATCH /admin/users/$USER_ID $BODY"
+  else api PATCH "/admin/users/$USER_ID" "$BODY" >/dev/null; fi
+  note "The shared bot picks the link up within a minute. They mention it (or DM it) as usual."
+fi
 if [ -n "$SLACK_BOT" ]; then
   say "Slack bot @$SLACK_BOT (propanes-slackbot@$USERNAME)"
   SB_SRC="$REPO_ROOT/packages/slack-bot"

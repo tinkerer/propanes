@@ -48,6 +48,17 @@ export interface IncomingSlackMessage {
  * deletions, joins, bot posts…) is noise. */
 const HUMAN_SUBTYPES = new Set(['file_share', 'thread_broadcast']);
 
+/** False for bot echoes, edits, deletions, joins… — everything but a human request. */
+export function isHumanMessage(ev: Pick<IncomingSlackMessage, 'botId' | 'subtype'>): boolean {
+  return !ev.botId && !(ev.subtype && !HUMAN_SUBTYPES.has(ev.subtype));
+}
+
+/** The conversation a message belongs to: its thread, a new thread rooted at
+ * a top-level channel message, or the flat DM. */
+export function eventThreadKey(ev: Pick<IncomingSlackMessage, 'teamId' | 'channel' | 'channelType' | 'ts' | 'threadTs'>): string {
+  return threadKey(ev.teamId, ev.channel, ev.threadTs ?? (ev.channelType === 'im' ? null : ev.ts));
+}
+
 export interface BridgeConfig {
   models?: ModelOption[];
   /** Legacy default application id (fallback when `defaultApp` does not resolve). */
@@ -166,7 +177,7 @@ export class SlackBridge {
   // ---------------------------------------------------------------- inbound
 
   async handleEvent(ev: IncomingSlackMessage): Promise<void> {
-    if (ev.botId || (ev.subtype && !HUMAN_SUBTYPES.has(ev.subtype))) return; // bot echoes, edits, deletions, joins…
+    if (!isHumanMessage(ev)) return;
     if (!this.d.state.markEvent(ev.eventId ?? `${ev.channel}:${ev.ts}`)) return; // retry / duplicate delivery
     const isDm = ev.channelType === 'im';
     const threadTs = ev.threadTs ?? (isDm ? null : ev.ts);
@@ -485,6 +496,11 @@ export class SlackBridge {
         await reply(`⚠️ Could not open terminal: ${escapeMrkdwn(safeMessage(err))}`);
       }
     });
+  }
+
+  /** Whether this bridge drives (or was addressed in) the conversation. */
+  owns(key: string): boolean {
+    return !!this.d.state.getThread(key) || this.d.state.isEngagedThread(key);
   }
 
   /** The bot's own user id, learned from auth.test after construction. */
