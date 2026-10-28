@@ -1,5 +1,5 @@
 import { execSync, execFile, execFileSync, spawnSync } from 'node:child_process';
-import { writeFileSync, unlinkSync, chmodSync, existsSync } from 'node:fs';
+import { writeFileSync, unlinkSync, chmodSync, existsSync, readFileSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { promisify } from 'node:util';
@@ -276,28 +276,36 @@ export function sendKeysToTmux(sessionId: string, keys: string, enter = true): b
   }
 }
 
-// Return the full command line of the process actually running in the pane.
+// Return argv for the process actually running in the pane and direct children.
 // Used to detect "profile drift": a DB row whose stored permission profile no
 // longer matches the live command (e.g. a row marked headless-stream-yolo
 // that's actually running an interactive `claude --resume` TUI). The stored
 // profile drives PTY width, so trusting it blindly hands an interactive TUI a
 // 10000-col window and produces the wrapped-separator-line corruption. Reading
-// the live command lets recovery size the PTY for what's really running.
-export function getTmuxPaneCommand(sessionId: string): string {
+// argv from /proc preserves the boundary between flags and prompt text. If
+// unavailable, callers leave the profile unchanged rather than guessing.
+export function getTmuxPaneArgv(sessionId: string): string[][] {
   const name = tmuxName(sessionId);
   try {
     const pid = execFileSync('tmux', [
       ...TMUX_SOCKET, 'list-panes', '-t', name, '-F', '#{pane_pid}',
     ], { stdio: 'pipe', encoding: 'utf-8' }).trim().split('\n')[0];
-    if (!pid) return '';
+    if (!pid) return [];
     // The pane's own process (claude/codex is exec'd, so pane_pid IS the agent)
     // plus any direct children, in case a launcher script wraps the agent.
-    let out = '';
-    try { out += execFileSync('ps', ['-o', 'args=', '-p', pid], { stdio: 'pipe', encoding: 'utf-8' }); } catch {}
-    try { out += '\n' + execFileSync('ps', ['-o', 'args=', '--ppid', pid], { stdio: 'pipe', encoding: 'utf-8' }); } catch {}
-    return out;
+    const pids = [pid];
+    try {
+      pids.push(...execFileSync('ps', ['-o', 'pid=', '--ppid', pid], {
+        stdio: 'pipe', encoding: 'utf-8',
+      }).trim().split(/\s+/).filter(Boolean));
+    } catch { /* no children */ }
+    return pids.flatMap((processId) => {
+      try {
+        return [readFileSync(`/proc/${processId}/cmdline`, 'utf8').split('\0').filter(Boolean)];
+      } catch { return []; /* exited or inaccessible */ }
+    });
   } catch {
-    return '';
+    return [];
   }
 }
 
