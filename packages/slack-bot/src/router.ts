@@ -9,6 +9,7 @@ import { threadKey } from './state';
 import type { SlackPoster } from './slack';
 import type { SlackHandoffRequest } from './propanes';
 import { escapeMrkdwn } from './format';
+import { takeOperatorOption } from './options';
 
 export const OPERATOR = 'operator';
 
@@ -25,13 +26,16 @@ export interface RouterDeps {
   slack: SlackPoster;
   /** Unlinked Slack members are refused instead of acting as the operator. */
   requireLink: boolean;
+  log?: (message: string) => void;
 }
 
-interface Owner { id: string; label: string; bridge: SlackBridge; }
+interface Owner { id: string; label: string; bridge: SlackBridge; operatorAccess?: boolean; }
 
 export class SlackRouter {
   private bridges = new Map<string, { identity: SlackIdentity; bridge: SlackBridge }>();
   private noticed = new Set<string>();
+  /** Users whose setup guide failed to send; logged once per failure streak. */
+  private welcomeFailing = new Set<string>();
 
   constructor(private readonly d: RouterDeps) {}
 
@@ -69,19 +73,49 @@ export class SlackRouter {
     return bridge.handleHandoff(req);
   }
 
+  /** DM each newly linked user who has their own launcher the setup guide
+   * (once; a failure, such as an offline launcher, is retried next time).
+   * Users without a launcher pin would get a terminal on the server's own
+   * account, so they are skipped. */
+  async welcomeNew(): Promise<number> {
+    let sent = 0;
+    for (const identity of this.d.directory.all()) {
+      if (identity.userId === this.d.operatorUserId || !identity.launcherId) continue;
+      try {
+        if (await this.bridgeFor(identity).welcome(identity.slackUserId)) {
+          sent++;
+          this.d.log?.(`sent the setup guide to ${identity.username}`);
+        }
+        this.welcomeFailing.delete(identity.userId);
+      } catch (err) {
+        if (!this.welcomeFailing.has(identity.userId)) {
+          this.welcomeFailing.add(identity.userId);
+          this.d.log?.(`could not send the setup guide to ${identity.username}: ${err instanceof Error ? err.message : 'error'}`);
+        }
+      }
+    }
+    return sent;
+  }
+
   private bridgeFor(identity: SlackIdentity): SlackBridge {
     const existing = this.bridges.get(identity.userId);
     if (existing) {
       existing.identity = identity;
+      existing.bridge.setOperatorAccess(!!identity.operatorAccess);
       return existing.bridge;
     }
     const bridge = this.d.createBridge(identity);
+    bridge.setOperatorAccess(!!identity.operatorAccess);
     this.bridges.set(identity.userId, { identity, bridge });
     return bridge;
   }
 
+  private operatorOwner(): Owner {
+    return { id: OPERATOR, label: 'the operator', bridge: this.d.operator };
+  }
+
   private owner(key: string): Owner | undefined {
-    if (this.d.operator.owns(key)) return { id: OPERATOR, label: 'the operator', bridge: this.d.operator };
+    if (this.d.operator.owns(key)) return this.operatorOwner();
     for (const [id, { identity, bridge }] of this.bridges) {
       if (bridge.owns(key)) return { id, label: identity.username, bridge };
     }
@@ -92,9 +126,9 @@ export class SlackRouter {
   private async actor(slackUserId: string | undefined): Promise<Owner | undefined> {
     const identity = await this.d.directory.lookup(slackUserId);
     if (identity && identity.userId !== this.d.operatorUserId) {
-      return { id: identity.userId, label: identity.username, bridge: this.bridgeFor(identity) };
+      return { id: identity.userId, label: identity.username, bridge: this.bridgeFor(identity), operatorAccess: !!identity.operatorAccess };
     }
-    if (identity || !this.d.requireLink) return { id: OPERATOR, label: 'the operator', bridge: this.d.operator };
+    if (identity || !this.d.requireLink) return this.operatorOwner();
     return undefined;
   }
 
@@ -106,19 +140,25 @@ export class SlackRouter {
     await this.d.slack.postMessage({ channel, thread_ts: threadTs ?? undefined, text });
   }
 
-  async handleEvent(ev: IncomingSlackMessage): Promise<void> {
-    if (!isHumanMessage(ev)) return;
-    const key = eventThreadKey(ev);
-    const threadTs = ev.threadTs ?? (ev.channelType === 'im' ? null : ev.ts);
+  async handleEvent(incoming: IncomingSlackMessage): Promise<void> {
+    if (!isHumanMessage(incoming)) return;
+    const key = eventThreadKey(incoming);
+    const threadTs = incoming.threadTs ?? (incoming.channelType === 'im' ? null : incoming.ts);
+    const { text, operator: asOperator } = takeOperatorOption(incoming.text);
+    const ev = asOperator ? { ...incoming, text } : incoming;
+    const actor = await this.actor(ev.user);
+    // A thread a linked user started as the operator stays theirs to drive.
+    if (actor && actor.id !== OPERATOR && this.d.operator.delegateOf(key) === actor.id) {
+      return this.d.operator.handleEvent(ev);
+    }
     // A DM is one person's own conversation, so it always follows the sender —
     // including one they had with the bot before their account was linked.
     const owner = ev.channelType === 'im' ? undefined : this.owner(key);
-    const actor = await this.actor(ev.user);
     if (owner) {
       if (actor?.id === owner.id) return owner.bridge.handleEvent(ev);
       // Plain chatter between people in someone's thread stays unanswered;
       // addressing the bot there gets one explanation.
-      if (ev.mentionsBot) {
+      if (ev.mentionsBot || asOperator) {
         await this.notice(ev.channel, threadTs, key, ev.user,
           `This thread runs as *${escapeMrkdwn(owner.label)}*, so I only take instructions here from them. Mention me in a new message to start your own.`);
       }
@@ -131,13 +171,26 @@ export class SlackRouter {
       }
       return;
     }
+    if (asOperator && actor.id !== OPERATOR) {
+      if (!actor.operatorAccess) {
+        await this.notice(ev.channel, threadTs, key, ev.user,
+          '`[operator]` runs a request as the operator, and your account is not allowed to. Ask an admin to allow it on the ProPanes Users page (Slack link). Nothing was started.');
+        return;
+      }
+      await this.d.operator.handleEvent(ev);
+      // Follow-ups in the thread (not the DM as a whole) keep running as the operator.
+      if (threadTs !== null && this.d.operator.owns(key)) this.d.operator.delegate(key, actor.id);
+      return;
+    }
     return actor.bridge.handleEvent(ev);
   }
 
   async handleInfraTerminalAction(action: InfraTerminalAction): Promise<void> {
     const key = threadKey(action.teamId, action.channel, action.threadTs);
-    const owner = this.owner(key);
     const actor = await this.actor(action.user);
+    const delegated = !!actor && actor.id !== OPERATOR && this.d.operator.delegateOf(key) === actor.id;
+    const owner = this.owner(key);
+    if (delegated) return this.d.operator.handleInfraTerminalAction(action);
     if (!actor || (owner && owner.id !== actor.id)) {
       await this.notice(action.channel, action.threadTs, key, action.user,
         owner ? `This thread runs as *${escapeMrkdwn(owner.label)}*; only they can open terminals from it.`

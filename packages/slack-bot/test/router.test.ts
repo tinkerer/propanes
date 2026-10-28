@@ -146,3 +146,64 @@ test("the operator's own requests keep using the operator bridge", async () => {
   await router.handleHandoff({ id: 'h2', sessionId: 'nope', requestedBy: 'env-admin' });
   assert.equal(operator.world.handoffResults.length, 1);
 });
+
+test('[operator] needs permission; with it the thread runs as the operator and stays the requester\'s to drive', async () => {
+  const refused = setup();
+  await refused.router.handleEvent(mention('[operator] check the staging deploy', { user: 'UALICE' }));
+  await refused.router.drain();
+  assert.equal(refused.operator.world.sessions.size + refused.member.world.sessions.size, 0, 'nothing started');
+  assert.ok(refused.operator.slack.texts().some((t) => /not allowed/.test(t)));
+
+  const { operator, member, router } = setup({ linked: [{ ...ALICE, operatorAccess: true }] });
+  await router.handleEvent(mention('[operator, codex] check the staging deploy', { user: 'UALICE' }));
+  await router.drain();
+  assert.equal(member.world.sessions.size, 0, "alice's own account is not used");
+  assert.equal(operator.world.sessions.size, 1);
+  const feedback = operator.world.calls.find((c) => c.startsWith('feedback:'))!;
+  assert.match(feedback, /check the staging deploy/);
+  assert.doesNotMatch(feedback, /operator/);
+
+  const sends = () => operator.world.calls.filter((c) => c.startsWith('send-keys') || c.startsWith('resume:')).length;
+  const before = sends();
+  await router.handleEvent(threadReply('and the canary too', { user: 'UALICE' }));
+  await router.drain();
+  assert.equal(sends(), before + 1, 'her follow-up reaches the operator session without repeating [operator]');
+
+  await router.handleEvent(threadReply('<@UBOT> stop', { user: 'UBOB', mentionsBot: true }));
+  await router.drain();
+  assert.equal(sends(), before + 1, 'other members still cannot drive it');
+  assert.ok(!operator.world.calls.some((c) => c.startsWith('kill:')));
+});
+
+test('[operator] from someone acting as the operator is simply dropped', async () => {
+  const { operator, router } = setup({ linked: [] });
+  await router.handleEvent(mention('[operator] review the deploy', { user: 'USOMEONE' }));
+  await router.drain();
+  assert.equal(operator.world.sessions.size, 1);
+  assert.ok(operator.slack.texts().every((t) => !/Unknown option/.test(t)));
+});
+
+test('linked users with their own launcher get the setup guide in a DM once', async () => {
+  const pinned = { ...ALICE, launcherId: 'vm-alice' };
+  const unpinned: SlackIdentity = { userId: 'u-bob', username: 'bob', role: 'member', slackUserId: 'UBOB', persona: null };
+  const { operator, member, router, created } = setup({ linked: [pinned, unpinned] });
+  assert.equal(await router.welcomeNew(), 1);
+  assert.deepEqual(created, ['u-alice'], 'no bridge (and no terminal on the server account) for an unpinned user');
+  assert.ok(member.world.calls.some((c) => c.startsWith('terminal:')));
+  const dm = member.slack.posts.find((p) => p.channel === 'UALICE');
+  assert.ok(dm, 'posted to her DM');
+  assert.match(dm!.text, /codex login/);
+  assert.match(dm!.text, /gh auth login/);
+  assert.match(dm!.text, /setup-apps\.sh/);
+  assert.equal(await router.welcomeNew(), 0, 'sent once');
+  assert.equal(operator.world.calls.filter((c) => c.startsWith('terminal:')).length, 0);
+});
+
+test('a failed setup guide is retried on the next pass', async () => {
+  const { member, router } = setup({ linked: [{ ...ALICE, launcherId: 'vm-alice' }] });
+  const create = member.world.propanes.createTerminal;
+  member.world.propanes.createTerminal = async () => { throw new Error('Launcher vm-alice is not connected'); };
+  assert.equal(await router.welcomeNew(), 0);
+  member.world.propanes.createTerminal = create;
+  assert.equal(await router.welcomeNew(), 1);
+});

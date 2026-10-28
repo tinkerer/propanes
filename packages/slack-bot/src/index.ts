@@ -105,6 +105,8 @@ function userBridge(identity: SlackIdentity): SlackBridge {
       appId: '',
       // Their "Continue in Slack" requests open in their DM with the bot.
       handoffChannel: identity.slackUserId,
+      // `[setup]` terminals open in their home on their own launcher.
+      setupCwd: identity.launcherId ? '~' : undefined,
       teamId,
       publicUrl: PROPANES_PUBLIC_URL,
       botUserId,
@@ -204,6 +206,7 @@ app.message(async ({ message, body }) => {
     createBridge: userBridge,
     slack,
     requireLink: REQUIRE_LINK,
+    log,
   });
   teamId = typeof auth.team_id === 'string' ? auth.team_id : undefined;
   router.setWorkspace(botUserId, teamId);
@@ -211,7 +214,10 @@ app.message(async ({ message, body }) => {
   console.log(`[${BOT_NAME}] ${linked.length} linked user${linked.length === 1 ? '' : 's'}${linked.length ? `: ${linked.map((i) => i.username).join(', ')}` : ''}; unlinked Slack members ${REQUIRE_LINK ? 'are refused' : 'act as the operator'}`);
   await app.start();
   const rearmed = router.start();
-  setInterval(() => { directory.refresh().catch(() => undefined); }, IDENTITY_REFRESH_MS).unref();
+  // Newly linked users with their own launcher get the setup guide in a DM.
+  const welcome = () => { router?.welcomeNew().catch(() => undefined); };
+  welcome();
+  setInterval(() => { directory.refresh().then(welcome, () => undefined); }, IDENTITY_REFRESH_MS).unref();
   pollHandoffs();
   console.log(`${BOT_NAME} connected via Socket Mode${rearmed ? ` (re-armed ${rearmed} thread watcher${rearmed === 1 ? '' : 's'})` : ''}`);
 })().catch((err) => {

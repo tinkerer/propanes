@@ -10,10 +10,11 @@ type UserRow = {
   launcherId: string | null;
   slackUserId: string | null;
   slackPersona: string | null;
+  slackOperatorAccess?: boolean;
 };
 
 type MenuConfirm = 'delete' | 'reset' | 'deprovision';
-type SlackDraft = { slackUserId: string; slackPersona: string; error?: string };
+type SlackDraft = { slackUserId: string; slackPersona: string; operatorAccess: boolean; error?: string };
 type MenuState = { userId: string; top?: number; bottom?: number; right: number; confirm?: MenuConfirm; ownedApps?: string[]; slack?: SlackDraft };
 
 export function UsersPage() {
@@ -154,7 +155,7 @@ export function UsersPage() {
   // Errors stay inside the menu so a duplicate link can be fixed in place.
   async function saveSlackLink(id: string, draft: SlackDraft) {
     try {
-      await api.updateUser(id, { slackUserId: draft.slackUserId.trim(), slackPersona: draft.slackPersona.trim() });
+      await api.updateUser(id, { slackUserId: draft.slackUserId.trim(), slackPersona: draft.slackPersona.trim(), slackOperatorAccess: draft.operatorAccess });
       setMenu(null);
       await load();
     } catch (err: any) {
@@ -315,7 +316,7 @@ export function UsersPage() {
                 <div style="font-size:13px;font-weight:700">{u.username}</div>
                 <div style="font-size:11px;color:var(--pw-text-muted)">
                   {u.id} · {orgName(u.orgId)}
-                  {u.slackUserId && <> · Slack {u.slackUserId}{u.slackPersona ? ` as ${u.slackPersona}` : ''}</>}
+                  {u.slackUserId && <> · Slack {u.slackUserId}{u.slackPersona ? ` as ${u.slackPersona}` : ''}{u.slackOperatorAccess ? ' · may act as operator' : ''}</>}
                 </div>
                 {u.role === 'member' && <div style="margin-top:2px">{podBadge(u.id)}</div>}
               </div>
@@ -384,9 +385,14 @@ export function UsersPage() {
             <input placeholder={`${u.username}bot`} value={d.slackPersona} onKeyDown={onKey}
               onInput={(e) => set({ slackPersona: (e.currentTarget as HTMLInputElement).value })} />
           </label>
+          <label class="users-slack-check">
+            <input type="checkbox" checked={d.operatorAccess}
+              onChange={(e) => set({ operatorAccess: (e.currentTarget as HTMLInputElement).checked })} />
+            <span>May also run requests as you with <code>[operator]</code>: your apps, machines and agent subscriptions</span>
+          </label>
           {d.error && <div class="users-row-menu-confirm users-row-menu-error">{d.error}</div>}
           <button role="menuitem" onClick={() => saveSlackLink(u.id, d)}>Save</button>
-          {u.slackUserId && <button role="menuitem" class="danger" onClick={() => saveSlackLink(u.id, { slackUserId: '', slackPersona: '' })}>Unlink Slack</button>}
+          {u.slackUserId && <button role="menuitem" class="danger" onClick={() => saveSlackLink(u.id, { slackUserId: '', slackPersona: '', operatorAccess: false })}>Unlink Slack</button>}
           <button role="menuitem" onClick={() => setMenu({ ...m, slack: undefined })}>Cancel</button>
         </div>
       );
@@ -416,7 +422,7 @@ export function UsersPage() {
             ? <button role="menuitem" disabled={busy} onClick={() => askConfirm('deprovision')}>Tear down pod</button>
             : <button role="menuitem" disabled={busy || pod?.available === false} title={pod?.available === false ? 'Kubernetes provisioning is not available on this server' : undefined} onClick={() => provisionPod(u.id)}>Provision pod</button>
         )}
-        <button role="menuitem" onClick={() => setMenu({ ...m, slack: { slackUserId: u.slackUserId || '', slackPersona: u.slackPersona || '' } })}>
+        <button role="menuitem" onClick={() => setMenu({ ...m, slack: { slackUserId: u.slackUserId || '', slackPersona: u.slackPersona || '', operatorAccess: !!u.slackOperatorAccess } })}>
           {u.slackUserId ? 'Edit Slack link…' : 'Link Slack…'}
         </button>
         {u.role === 'member' && <button role="menuitem" onClick={() => askConfirm('reset')}>Reset onboarding</button>}

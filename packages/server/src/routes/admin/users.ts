@@ -36,6 +36,7 @@ function publicUser(u: typeof schema.users.$inferSelect) {
     launcherId: u.launcherId ?? null,
     slackUserId: u.slackUserId ?? null,
     slackPersona: u.slackPersona ?? null,
+    slackOperatorAccess: !!u.slackOperatorAccess,
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
   };
@@ -131,6 +132,7 @@ userRoutes.patch('/users/:id', async (c) => {
     if (persona.length > 80) return c.json({ error: 'slackPersona must be at most 80 characters' }, 400);
     patch.slackPersona = persona || null;
   }
+  if (typeof body.slackOperatorAccess === 'boolean') patch.slackOperatorAccess = body.slackOperatorAccess;
   db.update(schema.users).set(patch).where(eq(schema.users.id, id)).run();
   const updated = db.select().from(schema.users).where(eq(schema.users.id, id)).get()!;
   return c.json({ user: publicUser(updated) });
@@ -164,6 +166,8 @@ userRoutes.get('/slack-identities', async (c) => {
       role: u.role,
       slackUserId: u.slackUserId,
       persona: u.slackPersona ?? null,
+      operatorAccess: !!u.slackOperatorAccess,
+      launcherId: u.launcherId ?? null,
     })),
   });
 });

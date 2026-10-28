@@ -892,6 +892,7 @@ export function runMigrations() {
   for (const sql of [
     `ALTER TABLE users ADD COLUMN slack_user_id TEXT`,
     `ALTER TABLE users ADD COLUMN slack_persona TEXT`,
+    `ALTER TABLE users ADD COLUMN slack_operator_access INTEGER NOT NULL DEFAULT 0`,
   ]) {
     try { sqlite.exec(sql); } catch { /* column exists */ }
   }

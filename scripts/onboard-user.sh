@@ -126,6 +126,7 @@ fi
 
 # --- 3. Checkouts of the suggested apps ------------------------------------
 APPS_JSON="["
+CLONES=""
 for spec in "${APPS[@]+"${APPS[@]}"}"; do
   APP_ID="${spec%%=*}"
   REMOTE=""; [ "$spec" != "$APP_ID" ] && REMOTE="${spec#*=}"
@@ -146,9 +147,31 @@ for spec in "${APPS[@]+"${APPS[@]}"}"; do
     note "could not clone $REMOTE without the member's credentials; they run in their terminal:"
     note "  gh auth login && git clone $REMOTE $DEST"
   fi
+  [ -n "$REMOTE" ] && CLONES+="clone_app $(printf '%q %q' "$REMOTE" "$DEST")"$'\n'
   APPS_JSON+="{\"fromAppId\":\"$APP_ID\",\"projectDir\":\"$DEST\"},"
 done
 APPS_JSON="${APPS_JSON%,}]"
+
+# ~/setup-apps.sh: the member re-runs the clones after `gh auth login` (the
+# Slack bot's setup guide points at it). Safe to run again: it skips checkouts.
+SETUP_SCRIPT="$HOME_DIR/setup-apps.sh"
+if [ "$DRY" = 1 ]; then
+  note "[dry-run] write $SETUP_SCRIPT"
+else
+  cat > "$SETUP_SCRIPT" <<SETUP
+#!/usr/bin/env bash
+# Clones your ProPanes apps that are not checked out yet. Run after: gh auth login
+set -u
+clone_app() {
+  if [ -d "\$2/.git" ]; then echo "✓ \$2"; return; fi
+  if [ -d "\$2" ] && [ -n "\$(ls -A "\$2")" ]; then echo "! \$2 exists and is not a git checkout; move it aside and re-run"; return; fi
+  echo "→ cloning \$1 into \$2"
+  git clone "\$1" "\$2" || echo "! could not clone \$1 — did gh auth login succeed, and can your GitHub account read the repo?"
+}
+${CLONES}
+SETUP
+  chown "$LINUX_USER":"$LINUX_USER" "$SETUP_SCRIPT"; chmod 0755 "$SETUP_SCRIPT"
+fi
 
 # --- 4. ProPanes workspace (apps, agents, machine, launcher pin) -----------
 say "ProPanes workspace for $USERNAME"
@@ -203,3 +226,5 @@ note "Their first steps, in a ProPanes terminal ($PUBLIC_URL/admin/ → New term
 note "  claude            # log in to their own Claude account"
 note "  codex login       # their own Codex/ChatGPT account"
 note "  gh auth login     # git credentials for their checkouts"
+note "  bash ~/setup-apps.sh  # clone any app checkout that needed their credentials"
+note "With --slack-user, the Slack bot DMs them these steps with a link to the terminal."

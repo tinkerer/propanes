@@ -3,7 +3,7 @@ export type Runtime = 'claude' | 'codex';
 export type OutputMode = 'default' | 'verbose' | 'quiet';
 
 export interface ParsedCommand {
-  command: 'models' | 'help' | 'status' | 'list-apps' | 'list-infra' | 'list-sessions' | 'list-terminals' | 'prompt';
+  command: 'models' | 'help' | 'setup' | 'status' | 'list-apps' | 'list-infra' | 'list-sessions' | 'list-terminals' | 'prompt';
   runtime?: Runtime;
   modelQuery?: string;
   terminal?: boolean;
@@ -20,8 +20,8 @@ export interface ParsedCommand {
   error?: string;
 }
 
-export const KNOWN_OPTIONS = ['models', 'models:<name>', 'claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'terminal', 'session', 'help', 'status', 'list-apps', 'app:<name>', 'list-infra', 'infra:<name>', 'list-sessions', 'list-terminals', 'apps', 'infra', 'sessions', 'terminals'] as const;
-const STANDALONE = ['help', 'status', 'list-apps', 'list-infra'] as const;
+export const KNOWN_OPTIONS = ['models', 'models:<name>', 'claude', 'codex', 'verbose', 'quiet', 'default', 'images', 'terminal', 'session', 'help', 'setup', 'status', 'list-apps', 'app:<name>', 'list-infra', 'infra:<name>', 'list-sessions', 'list-terminals', 'apps', 'infra', 'sessions', 'terminals'] as const;
+const STANDALONE = ['help', 'setup', 'status', 'list-apps', 'list-infra'] as const;
 const VALUE_TOKEN = /^(app|infra)\s*[:=]\s*(.*)$/;
 
 const MENTION_RE = /<@[A-Z0-9]+(?:\|[^>]*)?>/g;
@@ -54,7 +54,7 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
   const bracket = /^\[([^\]]*)\]\s*/;
   let m: RegExpExecArray | null;
   while ((m = bracket.exec(text)) !== null) {
-    for (const part of m[1].split(/,|\s+(?=(?:(?:app|infra|models)\s*[:=]|models\b|claude\b|codex\b|verbose\b|quiet\b|default\b|images\b|terminal\b|session\b|help\b|status\b|list-apps\b|list-infra\b|list-sessions\b|list-terminals\b|apps\b|infra\b|sessions\b|terminals\b))/i)) {
+    for (const part of m[1].split(/,|\s+(?=(?:(?:app|infra|models)\s*[:=]|models\b|claude\b|codex\b|verbose\b|quiet\b|default\b|images\b|terminal\b|session\b|help\b|setup\b|status\b|list-apps\b|list-infra\b|list-sessions\b|list-terminals\b|apps\b|infra\b|sessions\b|terminals\b))/i)) {
       const t = part.trim().toLowerCase();
       if (t) tokens.push(t);
     }
@@ -141,4 +141,21 @@ export function parseCommand(raw: string, botUserId?: string): ParsedCommand {
 
 export function isStopKeyword(text: string): boolean {
   return /^\s*(stop|halt|cancel|kill)\s*[.!]?\s*$/i.test(text);
+}
+
+/** Remove an `[operator]` option from the leading option groups (after any
+ * mentions), so the router can decide who the request runs as and the bridge
+ * parses the rest as usual. `[operator, codex] …` → `[codex] …`. */
+export function takeOperatorOption(raw: string): { text: string; operator: boolean } {
+  const lead = /^((?:\s*<@[A-Z0-9]+(?:\|[^>]*)?>)*\s*)((?:\[[^\]]*\]\s*)*)/.exec(raw ?? '');
+  if (!lead || !lead[2]) return { text: raw, operator: false };
+  let operator = false;
+  const groups = lead[2].replace(/\[([^\]]*)\]\s*/g, (whole: string, inner: string) => {
+    // Only a standalone token counts (not part of a value such as `app:operator-tools`).
+    const kept = inner.replace(/(^|[,\s])\s*operator\s*(?=$|[,\s])/gi, (_m, sep: string) => { operator = true; return sep === ',' ? ',' : ' '; })
+      .replace(/\s*,(\s*,)+/g, ',').replace(/^[\s,]+|[\s,]+$/g, '');
+    return kept === inner.trim() ? whole : kept ? `[${kept}] ` : '';
+  });
+  if (!operator) return { text: raw, operator: false };
+  return { text: `${lead[1]}${groups}${raw.slice(lead[0].length)}`.replace(/\s+$/, ''), operator };
 }

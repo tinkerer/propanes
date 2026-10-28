@@ -779,6 +779,9 @@ export const users = sqliteTable('users', {
   // the display name its replies to them post under (needs chat:write.customize).
   slackUserId: text('slack_user_id'),
   slackPersona: text('slack_persona'),
+  // Lets this user also start Slack requests as the operator (`[operator]`),
+  // on the operator's apps, machines and agent subscriptions.
+  slackOperatorAccess: integer('slack_operator_access', { mode: 'boolean' }).notNull().default(false),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
