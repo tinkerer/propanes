@@ -136,6 +136,14 @@ export interface CheckClaudeAuthResult {
   error?: string;
 }
 
+/** Models the launcher's own Claude/Codex logins can use (the `[models]` picker). */
+export interface DiscoverModelsResult {
+  type: 'discover_models_result';
+  sessionId: string;
+  models?: { provider: string; runtime: 'claude' | 'codex'; id: string; label: string; aliases?: string[] }[];
+  error?: string;
+}
+
 export interface CheckContainerClaudeResult {
   type: 'check_container_claude_result';
   sessionId: string;
@@ -211,6 +219,7 @@ export type LauncherToServerMessage =
   | SyncCodebaseResult
   | SyncCodebaseToContainerResult
   | CheckClaudeAuthResult
+  | DiscoverModelsResult
   | CheckContainerClaudeResult
   | LauncherHealthCheckResult
   | SendKeysResult
@@ -381,6 +390,13 @@ export interface CheckClaudeAuth {
   claudeHomePath?: string;
 }
 
+export interface DiscoverModels {
+  type: 'discover_models';
+  /** Request id (pairs the reply in sendAndWait). */
+  sessionId: string;
+  runtime: 'claude' | 'codex';
+}
+
 export interface CheckContainerClaude {
   type: 'check_container_claude';
   sessionId: string;
@@ -447,6 +463,7 @@ export type ServerToLauncherMessage =
   | SyncCodebaseToContainer
   | RestartLauncher
   | CheckClaudeAuth
+  | DiscoverModels
   | CheckContainerClaude
   | LauncherHealthCheck
   | SendKeys

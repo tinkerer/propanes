@@ -20,7 +20,7 @@ import {
   type PopoutPanelState,
 } from '../../lib/sessions.js';
 import { branchPickerOpen, distillPickerOpen } from '../../lib/agent-actions.js';
-import { isGlobalAdminUser } from '../../lib/state.js';
+import { canMoveToSlack } from '../../lib/state.js';
 
 const RUNTIME_OPTIONS = ['claude', 'codex'] as const;
 
@@ -212,7 +212,7 @@ export function SessionIdMenu({
       }}>
         Distill to Agent...
       </button>
-      {isGlobalAdminUser.value && sess && sess.permissionProfile !== 'plain' && (
+      {canMoveToSlack.value && sess && sess.permissionProfile !== 'plain' && (
         <button class="popup-menu-item" onClick={() => { onClose(); moveSessionToSlack(sessionId); }}>
           Move to Slack
         </button>

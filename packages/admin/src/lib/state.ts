@@ -39,6 +39,8 @@ export const currentUser = signal<any | null>(null);
 export const isAdminUser = computed(() => currentUser.value?.role === 'admin');
 /** The org-less operator — the only account whose sessions may move to the amirobot Slack bot. */
 export const isGlobalAdminUser = computed(() => currentUser.value?.role === 'admin' && !currentUser.value?.orgId);
+// The operator, or a user whose Slack account is linked to the shared Slack bot.
+export const canMoveToSlack = computed(() => isGlobalAdminUser.value || !!currentUser.value?.slackLinked);
 // api.ts dispatches `pw-admin-401` on any 401 response. Flip the signal here
 // so the App shell re-renders LoginPage immediately (no manual refresh).
 window.addEventListener('pw-admin-401', () => {

@@ -4,6 +4,7 @@ import type { AppInfo } from './apps';
 import type { InfraList } from './infra';
 import type { DownloadedFile } from './attachments';
 import type { Runtime } from './options';
+import type { ModelOption } from './models';
 
 export class PropanesApiError extends Error {
   constructor(public readonly path: string, public readonly status: number, detail?: string) {
@@ -125,6 +126,9 @@ export interface PropanesClient {
   claimHandoffs(): Promise<SlackHandoffRequest[]>;
   /** POST /slack-handoffs/:id/result — what the admin toast shows. */
   reportHandoff(id: string, result: { ok: boolean; message: string; permalink?: string }): Promise<void>;
+  /** GET /models — the runtime's models as this user's CLI logins see them
+   * (discovered on their pinned launcher, else the server host). */
+  discoverModels(runtime: Runtime): Promise<ModelOption[]>;
   /** GET an image the transcript elided (jsonl-image URL from the server). */
   fetchImage(path: string): Promise<{ bytes: Buffer; mime: string }>;
 }
@@ -212,6 +216,10 @@ export function createPropanesClient(api: PropanesFetch): PropanesClient {
       return Array.isArray(r?.handoffs) ? r.handoffs : [];
     },
     reportHandoff: async (id, result) => { await post(`/api/v1/admin/slack-handoffs/${encodeURIComponent(id)}/result`, result); },
+    discoverModels: async (runtime) => {
+      const r = await api(`/api/v1/admin/models?runtime=${runtime}`);
+      return Array.isArray(r?.models) ? r.models : [];
+    },
     fetchImage: async (path) => {
       const res = await api.raw(path, { method: 'GET' });
       const mime = res.headers.get('content-type') || 'application/octet-stream';

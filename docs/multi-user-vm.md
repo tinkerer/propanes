@@ -84,30 +84,20 @@ them instead. Linking needs the bot's `PROPANES_TOKEN` to belong to the server
 operator (an admin with no org); with any other token everyone acts as that
 token's user.
 
-Two things are still shared: the model list (`[models]`) comes from the CLIs
-signed in on the bot's host, and "Continue in Slack" from the admin UI stays
-operator-only.
+`[models]` lists what the member's own CLI logins offer: the server asks their
+pinned launcher (which runs as them) to read the Claude and Codex model lists.
+A launcher older than this feature doesn't answer, and `[models]` says so.
 
-#### A separate Slack app (another workspace)
+"Continue in Slack" (the session menu in the admin UI) is available to every
+linked user. The bot opens the session in their DM with it, acting as them;
+the operator's own requests still go to `AMIROBOT_HANDOFF_CHANNEL`.
 
-To give a member a bot of their own instead, for example in a different Slack
-workspace, pass `--slack-bot <name>`. The script installs the bot to
-`/opt/propanes/slack-bot`, writes a Slack app manifest and `slackbot.env`, and
-starts `propanes-slackbot@<user>` once the Slack tokens are filled in:
+#### People in another Slack workspace
 
-1. Go to api.slack.com/apps → **Create New App** → **From a manifest**, and
-   paste `/etc/propanes/users/<user>/slack-app-manifest.yml`. A workspace admin
-   may need to approve the install.
-2. Under **Basic Information → App-Level Tokens**, create a token with
-   `connections:write`. This is `SLACK_APP_TOKEN` (`xapp-…`).
-3. Under **Install App**, install it and copy the bot token. This is
-   `SLACK_BOT_TOKEN` (`xoxb-…`).
-4. Put both tokens in `/etc/propanes/users/<user>/slackbot.env` and re-run the
-   script, or run `systemctl enable --now propanes-slackbot@<user>`.
-5. Invite the bot to the channels where it should answer.
-
-The bot's ProPanes token is the member's own, so it sees and launches exactly
-what they can. `SLACK_BOT_NAME` makes help text and hints use its handle.
+There is one bot in one workspace. Someone from another organisation can still
+use it from a Slack Connect channel shared with your workspace (with the bot in
+that channel): link their member id as usual. DMs and "Continue in Slack" need
+them to be able to DM the bot, which a Slack Connect partner may not allow.
 
 ## What is and isn't isolated
 

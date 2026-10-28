@@ -12,11 +12,13 @@ import { sessionFollowupRoutes } from './session-followups.js';
 import { composerDraftsRoutes } from './composer-drafts.js';
 import { flatterRoutes } from './flatter.js';
 import { userRoutes } from './users.js';
+import { modelRoutes } from './models.js';
 import { usageRoutes } from './usage.js';
 
 export const adminRoutes = new Hono();
 
 adminRoutes.route('/', userRoutes);
+adminRoutes.route('/', modelRoutes);
 adminRoutes.route('/', usageRoutes);
 adminRoutes.route('/', feedbackRoutes);
 adminRoutes.route('/', agentRoutes);

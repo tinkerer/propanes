@@ -7,6 +7,7 @@ import type { SlackIdentity } from './identities';
 import type { InfraTerminalAction } from './infra-actions';
 import { threadKey } from './state';
 import type { SlackPoster } from './slack';
+import type { SlackHandoffRequest } from './propanes';
 import { escapeMrkdwn } from './format';
 
 export const OPERATOR = 'operator';
@@ -15,7 +16,11 @@ export interface RouterDeps {
   operator: SlackBridge;
   /** ProPanes user id behind PROPANES_TOKEN; linking it maps to the operator bridge. */
   operatorUserId: string;
-  directory: { lookup(slackUserId: string | undefined): Promise<SlackIdentity | undefined>; all(): SlackIdentity[] };
+  directory: {
+    lookup(slackUserId: string | undefined): Promise<SlackIdentity | undefined>;
+    all(): SlackIdentity[];
+    refresh?(): Promise<void>;
+  };
   createBridge(identity: SlackIdentity): SlackBridge;
   slack: SlackPoster;
   /** Unlinked Slack members are refused instead of acting as the operator. */
@@ -43,9 +48,25 @@ export class SlackRouter {
     for (const { bridge } of this.bridges.values()) bridge.stop();
   }
 
-  setBotUserId(id: string | undefined): void {
-    this.d.operator.setBotUserId(id);
-    for (const { bridge } of this.bridges.values()) bridge.setBotUserId(id);
+  /** The bot's Slack user and workspace, learned from auth.test. */
+  setWorkspace(botUserId: string | undefined, teamId: string | undefined): void {
+    for (const bridge of [this.d.operator, ...[...this.bridges.values()].map((b) => b.bridge)]) {
+      bridge.setBotUserId(botUserId);
+      bridge.setTeamId(teamId);
+    }
+  }
+
+  /** "Continue in Slack" from the admin UI: the requester's own bridge posts it
+   * (in their DM) and acts as them; the operator's requests keep using the
+   * operator's handoff channel. */
+  async handleHandoff(req: SlackHandoffRequest): Promise<void> {
+    let identity = this.d.directory.all().find((i) => i.userId === req.requestedBy);
+    if (!identity && req.requestedBy !== this.d.operatorUserId && this.d.directory.refresh) {
+      await this.d.directory.refresh().catch(() => undefined); // linked moments ago
+      identity = this.d.directory.all().find((i) => i.userId === req.requestedBy);
+    }
+    const bridge = identity && identity.userId !== this.d.operatorUserId ? this.bridgeFor(identity) : this.d.operator;
+    return bridge.handleHandoff(req);
   }
 
   private bridgeFor(identity: SlackIdentity): SlackBridge {

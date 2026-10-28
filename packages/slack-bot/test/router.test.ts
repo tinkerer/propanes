@@ -9,7 +9,7 @@ const ALICE: SlackIdentity = { userId: 'u-alice', username: 'alice', role: 'memb
 
 function setup(opts: { requireLink?: boolean; linked?: SlackIdentity[] } = {}) {
   const operator = fixture();
-  const member = fixture();
+  const member = fixture({ config: { handoffChannel: 'UALICE', teamId: 'T1' } });
   const linked = opts.linked ?? [ALICE];
   const created: string[] = [];
   const router = new SlackRouter({
@@ -120,4 +120,29 @@ test('a DM follows the sender even if the operator bridge talked to them before 
   await router.drain();
   assert.equal(member.world.sessions.size, 1);
   assert.ok(!operator.slack.texts().some((t) => /runs as/.test(t)));
+});
+
+test("a member's Continue in Slack opens in their DM through their own bridge", async () => {
+  const { operator, member, router } = setup();
+  const session = member.world.newSession('F1', 'claude');
+  session.status = 'completed';
+  await router.handleHandoff({ id: 'h1', sessionId: session.id, requestedBy: 'u-alice' });
+  await router.drain();
+  assert.deepEqual(member.world.handoffResults.map((r) => r.ok), [true], 'reported with her client');
+  assert.equal(operator.world.handoffResults.length, 0);
+  assert.equal(member.slack.posts[0].channel, 'UALICE');
+  assert.match(member.slack.posts[0].text, /Moving a session here/);
+  const root = member.slack.posts[1];
+  assert.equal(root.channel, 'DUALICE', 'the thread lives in the DM channel Slack returned');
+
+  // Her reply in that DM thread resumes the session in her bridge.
+  await router.handleEvent(threadReply('carry on', { channel: 'DUALICE', channelType: 'im', user: 'UALICE', threadTs: '900.2' }));
+  await router.drain();
+  assert.ok(member.world.calls.some((c) => c.startsWith(`resume:${session.id}`)));
+});
+
+test("the operator's own requests keep using the operator bridge", async () => {
+  const { operator, router } = setup();
+  await router.handleHandoff({ id: 'h2', sessionId: 'nope', requestedBy: 'env-admin' });
+  assert.equal(operator.world.handoffResults.length, 1);
 });

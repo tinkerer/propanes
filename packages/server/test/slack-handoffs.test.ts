@@ -88,3 +88,33 @@ test('the listener counts as disconnected once its polls stop', async () => {
   assert.equal(slackListenerConnected(1_000 + LISTENER_STALE_MS), true);
   assert.equal(slackListenerConnected(1_000 + LISTENER_STALE_MS + 1), false);
 });
+
+test('a Slack-linked member hands off only their own sessions and follows only their own requests', async () => {
+  resetSlackHandoffs();
+  const now = new Date().toISOString();
+  sqlite.prepare(`INSERT INTO users (id, username, password_hash, role, status, slack_user_id, created_at, updated_at)
+    VALUES ('m1', 'alice', 'x', 'member', 'active', 'UALICE', ?, ?), ('m2', 'bob', 'x', 'member', 'active', NULL, ?, ?)`).run(now, now, now, now);
+  insertSession('mine');
+  insertSession('theirs');
+  sqlite.prepare(`UPDATE agent_sessions SET owner_user_id = 'm1' WHERE id = 'mine'`).run();
+  sqlite.prepare(`UPDATE agent_sessions SET owner_user_id = 'm2' WHERE id = 'theirs'`).run();
+  const alice = appAs({ id: 'm1', role: 'member', orgId: null });
+  const bob = appAs({ id: 'm2', role: 'member', orgId: null });
+  await call(admin, '/claim', {}); // the listener is alive
+
+  assert.equal((await call(bob, '/', { sessionId: 'theirs' })).status, 403, 'not linked to Slack');
+  assert.equal((await call(alice, '/', { sessionId: 'theirs' })).status, 404, "someone else's session");
+  const queued = await call(alice, '/', { sessionId: 'mine' });
+  assert.equal(queued.status, 202);
+  assert.equal(queued.body.requestedBy, 'm1');
+
+  assert.equal((await call(alice, '/claim', {})).status, 403, 'only the operator drains the queue');
+  const [claimed] = (await call(admin, '/claim', {})).body.handoffs;
+  assert.equal(claimed.requestedBy, 'm1');
+
+  // The bot reports with alice's token; bob can neither report nor read it.
+  assert.equal((await call(bob, `/${queued.body.id}/result`, { ok: true, message: 'x' })).status, 403);
+  assert.equal((await call(alice, `/${queued.body.id}/result`, { ok: true, message: 'Moved' })).status, 200);
+  assert.equal((await call(bob, `/${queued.body.id}`)).status, 404);
+  assert.equal((await call(alice, `/${queued.body.id}`)).body.status, 'done');
+});

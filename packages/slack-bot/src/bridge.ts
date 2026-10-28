@@ -80,6 +80,8 @@ export interface BridgeConfig {
   /** Slack channel or user id that admin "Continue in Slack" requests open
    * their thread in; unset = the conversation of the most recent thread. */
   handoffChannel?: string;
+  /** The Slack workspace (auth.test team_id), for threads opened without an incoming event. */
+  teamId?: string;
 }
 
 /** Attachments downloaded from Slack for one request. */
@@ -459,12 +461,23 @@ export class SlackBridge {
     const report = (r: { ok: boolean; message: string; permalink?: string }) =>
       this.d.propanes.reportHandoff(req.id, r).catch(err => this.d.log(`Could not report handoff ${req.id}: ${err instanceof Error ? err.name : 'error'}`));
     const latest = this.d.state.latestThread();
-    const channel = this.d.config.handoffChannel || latest?.channel;
+    let channel = this.d.config.handoffChannel || latest?.channel;
     if (!channel) {
       await report({ ok: false, message: `${BOT_NAME} has no Slack conversation to post in yet: set AMIROBOT_HANDOFF_CHANNEL or mention the bot once` });
       return;
     }
-    const teamId = latest?.teamId ?? 'team';
+    const teamId = latest?.teamId ?? this.d.config.teamId ?? 'team';
+    // A user id means "their DM with the bot". Replies there arrive under the
+    // DM's own channel id, which Slack returns for the first post.
+    if (/^[UW]/.test(channel)) {
+      try {
+        const intro = await this.d.slack.postMessage({ channel, text: 'Moving a session here from ProPanes…' }) as { channel?: string };
+        if (intro?.channel) channel = intro.channel;
+      } catch (err) {
+        await report({ ok: false, message: `Could not message you in Slack: ${safeMessage(err)}` });
+        return;
+      }
+    }
     // The source "conversation" is the server's toast, not Slack.
     const notes: string[] = [];
     try {
@@ -506,6 +519,10 @@ export class SlackBridge {
   /** The bot's own user id, learned from auth.test after construction. */
   setBotUserId(id: string | undefined): void {
     this.d.config.botUserId = id;
+  }
+
+  setTeamId(id: string | undefined): void {
+    this.d.config.teamId = id;
   }
 
   /** Stop re-arming watchers (shutdown); state already on disk re-arms on the next start. */

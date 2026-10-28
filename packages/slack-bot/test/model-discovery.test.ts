@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createModelCatalog, discoverClaudeModels, discoverCodexModels, type ModelProvider } from '../src/model-discovery';
+import { apiModelProviders, createModelCatalog, type ModelProvider } from '../src/model-discovery';
 import { matchModels, modelCatalog, type ModelOption } from '../src/models';
 import { fixture, mention, threadReply } from './helpers';
 import { SlackBridge } from '../src/bridge';
@@ -14,49 +14,6 @@ const future: ModelOption = { provider: 'OpenAI', runtime: 'codex', id: 'gpt-fut
 const fake = (code: string, timeoutMs = 3000) => ({ command: process.execPath, args: ['-e', code], timeoutMs });
 const readLines = `require('node:readline').createInterface({input:process.stdin}).on('line',line=>{const m=JSON.parse(line);`;
 const emit = (message: unknown) => `console.log(JSON.stringify(${JSON.stringify(message)}));`;
-
-test('Claude discovery reads every picker entry, aliases and versions without submitting a user turn', async () => {
-  const temp = mkdtempSync(join(tmpdir(), 'models-protocol-'));
-  try {
-    const log = join(temp, 'requests.jsonl');
-    const models = await discoverClaudeModels(fake(readLines + `require('node:fs').appendFileSync(${JSON.stringify(log)},line+'\\n');` +
-      `if(m.type!=='control_request'||m.request.subtype!=='initialize')process.exit(1);` +
-      `console.log(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:m.request_id,response:{models:[
-        {value:'default',displayName:'Default',resolvedModel:'claude-opus-future'},
-        {value:'opus',displayName:'Opus future',resolvedModel:'claude-opus-future'},
-        {value:'fable',displayName:'Fable 5.1',resolvedModel:'claude-fable-5-1'},
-        {value:'claude-fable-5',displayName:'Fable 5'}]}}}));});`));
-    assert.deepEqual(models.map((m) => m.id), ['default', 'opus', 'fable', 'claude-fable-5']);
-    assert.equal(matchModels(models, 'fable 5.1')[0].id, 'fable');
-    assert.equal(matchModels(models, 'claude-fable-5-1')[0].id, 'fable');
-    assert.equal(matchModels(models, 'claude-opus-future').length, 1);
-    const requests = readFileSync(log, 'utf8').trim().split('\n').map((s) => JSON.parse(s));
-    assert.deepEqual(requests, [{ type: 'control_request', request_id: 'model-init', request: { subtype: 'initialize' } }]);
-  } finally { rmSync(temp, { recursive: true, force: true }); }
-});
-
-test('Codex discovery initializes, follows every page and uses wire model IDs', async () => {
-  const models = await discoverCodexModels(fake(readLines + `
-    if(m.method==='initialize')console.log(JSON.stringify({id:m.id,result:{serverInfo:'test'}}));
-    else if(m.method==='initialized'){}
-    else if(m.method==='model/list'){
-      if(m.params.includeHidden!==false||m.params.limit!==100)process.exit(1);
-      const result=m.params.cursor ? {data:[{id:'picker-id',model:'gpt-future',displayName:'New version'}],nextCursor:null}
-        : {data:[{model:'gpt-first',displayName:'First'},{model:'internal',displayName:'Internal',hidden:true}],nextCursor:'next'};
-      console.log(JSON.stringify({id:m.id,result}));
-    }else process.exit(1);
-  });`));
-  assert.deepEqual(models.map((m) => m.id), ['gpt-first', 'gpt-future']);
-});
-
-test('CLI errors, invalid metadata, repeated cursors and timeouts fail without leaking raw diagnostics', async () => {
-  await assert.rejects(discoverClaudeModels(fake(`console.error('secret-token');process.exit(2);`)), /exited before replying/);
-  await assert.rejects(discoverClaudeModels(fake('setInterval(()=>{},1000)', 50)), /timed out/);
-  await assert.rejects(discoverClaudeModels(fake(readLines + `console.log(JSON.stringify({type:'control_response',response:{subtype:'error',request_id:m.request_id,error:'secret-token'}}));});`)), /invalid response/);
-  await assert.rejects(discoverClaudeModels(fake(readLines + `console.log(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:m.request_id,response:{models:[{value:'--flag',displayName:'Bad'}]}}}));});`)), /invalid model metadata/);
-  await assert.rejects(discoverCodexModels(fake(readLines + `console.log(JSON.stringify({id:m.id,result:m.method==='initialize'?{}:{data:[{model:'valid',displayName:'Valid'}],nextCursor:'repeat'}}));});`)), /repeated a cursor/);
-  await assert.rejects(discoverCodexModels(fake(readLines + `console.log(JSON.stringify({id:m.id,error:{message:'secret-token'}}));});`)), /initialization failed/);
-});
 
 test('discovery caches briefly, shares concurrent requests, and refreshes to include newly released models', async () => {
   let now = 0, calls = 0;
@@ -139,4 +96,16 @@ test('Slack explains missing and stale providers instead of claiming an incomple
   const empty = dynamicBridge([], ['No provider responded']);
   await empty.bridge.handleEvent(mention('[models]'));
   assert.match(empty.slack.texts().at(-1)!, /No models could be discovered/);
+});
+
+test('the API providers ask the server for each runtime with the bridge user\'s client', async () => {
+  const asked: string[] = [];
+  const catalog = createModelCatalog({ providers: apiModelProviders({
+    discoverModels: async (runtime) => { asked.push(runtime); return [runtime === 'claude' ? fable : future]; },
+  }) });
+  const { models, warnings } = await catalog.list();
+  assert.deepEqual(asked.sort(), ['claude', 'codex']);
+  assert.deepEqual(models.map((m) => m.id).sort(), ['fable', 'gpt-future']);
+  assert.deepEqual(warnings, []);
+  assert.equal(catalog.providerForRuntime('codex'), 'OpenAI');
 });

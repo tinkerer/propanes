@@ -1,12 +1,12 @@
 import { modelCatalog } from './models';
-import { createModelCatalog } from './model-discovery';
+import { apiModelProviders, createModelCatalog } from './model-discovery';
 import { dirname, join } from 'node:path';
 import { App, LogLevel } from '@slack/bolt';
 import { downloaderFromToken } from './attachments';
 import { SlackBridge, type IncomingSlackMessage } from './bridge';
 import { configuredDefaultRuntime, resolveAgentEndpoint, runtimeLabel } from './agents';
 import { defaultApp } from './apps';
-import { createPropanesClient, createPropanesFetch } from './propanes';
+import { createPropanesClient, createPropanesFetch, type PropanesClient } from './propanes';
 import { PacedPoster, personaPoster, posterFromClient } from './slack';
 import { infraTerminalAction, OPEN_INFRA_TERMINAL_ACTION } from './infra-actions';
 import { BOT_NAME } from './name';
@@ -58,16 +58,18 @@ const propanesFetch = createPropanesFetch(PROPANES_URL, process.env.PROPANES_TOK
 const propanes = createPropanesClient(propanesFetch);
 const state = new StateRepo(new FileStateStore(STATE_FILE));
 const log = (message: string) => console.warn(`[${BOT_NAME}] ${message}`);
-// Shared by every user's bridge: one pacing queue per channel, one model list
-// (discovered from the operator's CLIs on this host).
+// One pacing queue per channel, shared by every user's bridge.
 const slack = new PacedPoster(posterFromClient(app.client as any));
-const models = createModelCatalog({ extra: modelCatalog(process.env.AMIROBOT_MODELS_JSON) });
+const extraModels = modelCatalog(process.env.AMIROBOT_MODELS_JSON);
+// `[models]` lists what each user's own CLI logins offer: the server discovers
+// them where that user's agents run.
+const modelsFor = (client: PropanesClient) => createModelCatalog({ providers: apiModelProviders(client), extra: extraModels });
 const files = downloaderFromToken(process.env.SLACK_BOT_TOKEN!);
 const directory = new IdentityDirectory(propanesFetch, { log });
 
 const bridge = new SlackBridge({
   propanes,
-  models,
+  models: modelsFor(propanes),
   slack,
   files,
   state,
@@ -86,19 +88,24 @@ const bridge = new SlackBridge({
 });
 
 let botUserId: string | undefined;
+let teamId: string | undefined;
 
 /** A linked user's bridge: their token, their apps and defaults, their state. */
 function userBridge(identity: SlackIdentity): SlackBridge {
   const userLog = (message: string) => log(`[${identity.username}] ${message}`);
+  const client = createPropanesClient(createPropanesFetch(PROPANES_URL, () => directory.token(identity.userId)));
   return new SlackBridge({
-    propanes: createPropanesClient(createPropanesFetch(PROPANES_URL, () => directory.token(identity.userId))),
-    models,
+    propanes: client,
+    models: modelsFor(client),
     slack: personaPoster(slack, identity.persona, userLog),
     files,
     state: new StateRepo(new FileStateStore(join(USER_STATE_DIR, `${identity.userId}.json`))),
     config: {
       // Empty = the user's first application; `[app:<name>]` picks another.
       appId: '',
+      // Their "Continue in Slack" requests open in their DM with the bot.
+      handoffChannel: identity.slackUserId,
+      teamId,
       publicUrl: PROPANES_PUBLIC_URL,
       botUserId,
       pollMs: POLL_MS,
@@ -198,7 +205,8 @@ app.message(async ({ message, body }) => {
     slack,
     requireLink: REQUIRE_LINK,
   });
-  router.setBotUserId(botUserId);
+  teamId = typeof auth.team_id === 'string' ? auth.team_id : undefined;
+  router.setWorkspace(botUserId, teamId);
   const linked = directory.all().filter((i) => i.userId !== me.user.id);
   console.log(`[${BOT_NAME}] ${linked.length} linked user${linked.length === 1 ? '' : 's'}${linked.length ? `: ${linked.map((i) => i.username).join(', ')}` : ''}; unlinked Slack members ${REQUIRE_LINK ? 'are refused' : 'act as the operator'}`);
   await app.start();
@@ -218,7 +226,7 @@ function pollHandoffs(): void {
     .then(async (requests) => {
       if (handoffFailures) log('handoff queue reachable again');
       handoffFailures = 0;
-      for (const req of requests) await bridge.handleHandoff(req);
+      for (const req of requests) await (router ?? bridge).handleHandoff(req);
     })
     .catch((err) => {
       // Log the first failure of a streak only; the poll runs every few seconds.
