@@ -2,7 +2,7 @@
 
 ## Incident 2026-08-09
 
-`azstaging.myworkbench.ai` (`workbench-shared-vm`) filled its OS disk and wedged.
+A shared staging VM filled its OS disk and wedged.
 After the recovery power-cycle, every propanes session failed instantly in the UI
 with `--- Session exited (code: unknown) ---`.
 

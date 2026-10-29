@@ -16,8 +16,8 @@ test('resolves a Claude transcript by id when the recorded cwd changed', () => {
 
     assert.equal(
       resolveSessionJsonlPath(
-        '/mnt/stage-nfs-src/maksym/workbench',
-        '/mnt/stage-nfs-src/maksym/workbench',
+        '/srv/stage-src/alice/storefront',
+        '/srv/stage-src/alice/storefront',
         'claude',
         sessionId,
         null,

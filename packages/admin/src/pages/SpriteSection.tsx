@@ -6,6 +6,7 @@ import {
   applications, loading, error, loadAll, closeAllForms,
   spriteStatusColor, getRepoName, AppLink, SharedRepoBadge,
 } from '../pages/InfrastructurePage.js';
+import { appLabel } from '../lib/state.js';
 
 // Sprite form state
 export const showSpriteForm = signal(false);
@@ -121,7 +122,7 @@ export function SpriteForm() {
           <label>Application</label>
           <select class="form-input" value={sFormAppId.value} onChange={(e) => sFormAppId.value = (e.target as HTMLSelectElement).value}>
             <option value="">-- None --</option>
-            {applications.value.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+            {applications.value.map(a => <option key={a.id} value={a.id}>{appLabel(a)}</option>)}
           </select>
         </div>
       </div>

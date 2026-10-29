@@ -7,7 +7,7 @@ export type ArrangeMode = 'cascade' | 'center';
 const MOVE_MODE_TAPS = 3;
 const SHIFT_TAP_WINDOW_MS = 800;
 
-export type PanelType = 'feedback' | 'detail' | 'sessions' | 'files' | 'settings' | 'terminal' | 'workbench' | 'cos';
+export type PanelType = 'feedback' | 'detail' | 'sessions' | 'files' | 'settings' | 'terminal' | 'panes' | 'cos';
 
 export type DockedEdge = 'left' | 'right' | 'bottom' | null;
 
@@ -17,7 +17,7 @@ interface PanelConfig {
   path: (appId: string, param?: string) => string;
   width: number;
   height: number;
-  embedMode?: string; // 'true' | 'workbench'
+  embedMode?: string; // 'true' | 'panes'
 }
 
 const PANEL_CONFIGS: Record<PanelType, PanelConfig> = {
@@ -27,7 +27,7 @@ const PANEL_CONFIGS: Record<PanelType, PanelConfig> = {
   files: { icon: '\u{1F4C2}', title: 'Files', path: (a) => `/app/${a}/sessions`, width: 650, height: 500 },
   settings: { icon: '\u2699', title: 'Settings', path: () => '/settings/preferences', width: 550, height: 500 },
   terminal: { icon: '\u{1F4BB}', title: 'Terminal', path: (a) => `/app/${a}/sessions`, width: 750, height: 500 },
-  workbench: { icon: '\u2B1A', title: 'ProPanes Overlay', path: (a) => `/app/${a}/sessions`, width: 900, height: 600, embedMode: 'workbench' },
+  panes: { icon: '\u2B1A', title: 'ProPanes Overlay', path: (a) => `/app/${a}/sessions`, width: 900, height: 600, embedMode: 'panes' },
   cos: { icon: '★', title: 'Ops', path: () => '/', width: 480, height: 620, embedMode: 'cos' },
 };
 
@@ -66,7 +66,7 @@ interface PersistedLayout {
 const MIN_SCALE = 0.4;
 const MAX_SCALE = 2.5;
 
-const PERSIST_KEY = 'pw-workbench-layout';
+const PERSIST_KEY = 'pw-panes-layout';
 /** Every open overlay panel (type, route, rect) — rewritten on each change so a
  *  reload can offer to bring the previous windows back (Settings → Overlay windows). */
 const OPEN_PANELS_KEY = 'pw-overlay-open-panels';
@@ -123,7 +123,7 @@ export class OverlayPanelManager {
   private appId: string;
   private styleInjected = false;
   private messageHandler: (e: MessageEvent) => void;
-  private workbenchId: string | null = null;
+  private panesId: string | null = null;
   public onWaitingChange: ((sessionId: string, state: string, waitingCount: number) => void) | null = null;
 
   // --- Move mode (Ctrl+Shift ×3) ---
@@ -295,7 +295,7 @@ export class OverlayPanelManager {
         state.el.classList.remove('pw-minimized');
       }
       this.applyRect(state, laidOut[i]);
-      if (state.type === 'workbench') this.persistLayout(state);
+      if (state.type === 'panes') this.persistLayout(state);
     });
     this.persistOpenPanels();
   }
@@ -323,7 +323,7 @@ export class OverlayPanelManager {
     const iframeUrl = `${this.adminBaseUrl}?embed=${embedMode}&appId=${encodeURIComponent(appId)}${autoTerminal}${launcherParam}#${hashRoute}`;
     console.log('[pw] openPanel', type, 'url:', iframeUrl, 'appId:', appId);
 
-    // For workbench, restore persisted layout if available
+    // For the panes panel, restore persisted layout if available
     let width = config.width;
     let height = config.height;
     let x = Math.max(20, (window.innerWidth - width) / 2 + panelCounter * 30);
@@ -332,7 +332,7 @@ export class OverlayPanelManager {
     let dockedEdge: DockedEdge = null;
     let drawerCollapsed = false;
 
-    if (type === 'workbench') {
+    if (type === 'panes') {
       const persisted = this.loadPersistedLayout();
       if (persisted) {
         x = persisted.x;
@@ -359,7 +359,7 @@ export class OverlayPanelManager {
       ({ x, y } = clampRectToViewport({ x, y, width, height }, { width: window.innerWidth, height: window.innerHeight }));
     }
 
-    const panel = this.createPanelDOM(id, config, iframeUrl, x, y, width, height, type === 'workbench');
+    const panel = this.createPanelDOM(id, config, iframeUrl, x, y, width, height, type === 'panes');
     const iframe = panel.querySelector('.pw-overlay-iframe') as HTMLIFrameElement;
     const iframeScale = panel.querySelector('.pw-overlay-iframe-scale') as HTMLElement;
 
@@ -379,8 +379,8 @@ export class OverlayPanelManager {
       panel.classList.add('pw-drawer-collapsed');
     }
 
-    if (type === 'workbench') {
-      this.workbenchId = id;
+    if (type === 'panes') {
+      this.panesId = id;
     }
 
     this.persistOpenPanels();
@@ -408,8 +408,8 @@ export class OverlayPanelManager {
     this.restorable = [];
     for (const p of list) {
       if (!PANEL_CONFIGS[p.type]) continue;
-      if (p.type === 'workbench') {
-        this.openWorkbench();
+      if (p.type === 'panes') {
+        this.openPanes();
         continue;
       }
       const id = this.openPanel(p.type, {
@@ -523,48 +523,48 @@ export class OverlayPanelManager {
     (ribbon.querySelector('.pw-overlay-status-text') as HTMLElement).textContent = message;
   }
 
-  /** Open or focus the workbench panel */
-  openWorkbench(): string {
-    if (this.workbenchId && this.panels.has(this.workbenchId)) {
-      const state = this.panels.get(this.workbenchId)!;
+  /** Open or focus the panes panel */
+  openPanes(): string {
+    if (this.panesId && this.panels.has(this.panesId)) {
+      const state = this.panels.get(this.panesId)!;
       // If drawer-collapsed, expand it
       if (state.drawerCollapsed) {
-        this.toggleDrawer(this.workbenchId);
+        this.toggleDrawer(this.panesId);
       }
       // If minimized, restore
       if (state.minimized) {
-        this.minimizePanel(this.workbenchId);
+        this.minimizePanel(this.panesId);
       }
-      this.bringToFront(this.workbenchId);
-      return this.workbenchId;
+      this.bringToFront(this.panesId);
+      return this.panesId;
     }
-    return this.openPanel('workbench');
+    return this.openPanel('panes');
   }
 
-  /** Show the workbench if hidden (for auto-jump) */
-  revealWorkbench() {
-    if (!this.workbenchId) return;
-    const state = this.panels.get(this.workbenchId);
+  /** Show the panes panel if hidden (for auto-jump) */
+  revealPanes() {
+    if (!this.panesId) return;
+    const state = this.panels.get(this.panesId);
     if (!state) return;
     if (state.drawerCollapsed) {
-      this.toggleDrawer(this.workbenchId);
+      this.toggleDrawer(this.panesId);
     }
     if (state.minimized) {
-      this.minimizePanel(this.workbenchId);
+      this.minimizePanel(this.panesId);
     }
-    this.bringToFront(this.workbenchId);
+    this.bringToFront(this.panesId);
   }
 
-  get hasWorkbench(): boolean {
-    return !!this.workbenchId && this.panels.has(this.workbenchId);
+  get hasPanes(): boolean {
+    return !!this.panesId && this.panels.has(this.panesId);
   }
 
   closePanel(id: string) {
     const state = this.panels.get(id);
     if (!state) return;
-    if (state.type === 'workbench') {
+    if (state.type === 'panes') {
       this.persistLayout(state);
-      this.workbenchId = null;
+      this.panesId = null;
     }
     state.el.remove();
     this.panels.delete(id);
@@ -703,15 +703,15 @@ export class OverlayPanelManager {
     } else if (data.phase === 'end') {
       target.el.classList.remove('pw-gesturing');
       this.clampToViewport(target);
-      if (target.type === 'workbench') this.persistLayout(target);
+      if (target.type === 'panes') this.persistLayout(target);
       this.persistOpenPanels();
     }
   }
 
-  private createPanelDOM(id: string, config: PanelConfig, iframeUrl: string, x: number, y: number, width: number, height: number, isWorkbench = false): HTMLElement {
+  private createPanelDOM(id: string, config: PanelConfig, iframeUrl: string, x: number, y: number, width: number, height: number, isPanes = false): HTMLElement {
     const panel = document.createElement('div');
     panel.className = 'pw-overlay-panel';
-    if (isWorkbench) panel.classList.add('pw-workbench-panel');
+    if (isPanes) panel.classList.add('pw-panes-panel');
     panel.dataset.panelId = id;
     panel.style.left = `${x}px`;
     panel.style.top = `${y}px`;
@@ -740,8 +740,8 @@ export class OverlayPanelManager {
     const btns = document.createElement('div');
     btns.className = 'pw-overlay-header-btns';
 
-    if (isWorkbench) {
-      // Dock buttons for workbench
+    if (isPanes) {
+      // Dock buttons for the panes panel
       const dockLeftBtn = document.createElement('button');
       dockLeftBtn.className = 'pw-overlay-btn';
       dockLeftBtn.innerHTML = '\u25E7'; // left half
@@ -772,10 +772,10 @@ export class OverlayPanelManager {
     const minBtn = document.createElement('button');
     minBtn.className = 'pw-overlay-btn';
     minBtn.innerHTML = '\u2013';
-    minBtn.title = isWorkbench ? 'Hide to drawer' : 'Minimize';
+    minBtn.title = isPanes ? 'Hide to drawer' : 'Minimize';
     minBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (isWorkbench) {
+      if (isPanes) {
         this.toggleDrawer(id);
       } else {
         this.minimizePanel(id);
@@ -866,7 +866,7 @@ export class OverlayPanelManager {
       }
     }
 
-    if (state.type === 'workbench') this.persistLayout(state);
+    if (state.type === 'panes') this.persistLayout(state);
     this.persistOpenPanels();
   }
 
@@ -903,7 +903,7 @@ export class OverlayPanelManager {
     state.drawerCollapsed = !state.drawerCollapsed;
     state.el.classList.toggle('pw-drawer-collapsed', state.drawerCollapsed);
 
-    if (state.type === 'workbench') this.persistLayout(state);
+    if (state.type === 'panes') this.persistLayout(state);
   }
 
   // --- Persistence ---
@@ -968,7 +968,7 @@ export class OverlayPanelManager {
 
     // Edge snap preview
     let snapPreview = this.shadow.querySelector('.pw-snap-preview') as HTMLElement | null;
-    if (!snapPreview && state.type === 'workbench') {
+    if (!snapPreview && state.type === 'panes') {
       snapPreview = document.createElement('div');
       snapPreview.className = 'pw-snap-preview';
       this.shadow.appendChild(snapPreview);
@@ -985,8 +985,8 @@ export class OverlayPanelManager {
       state.el.style.left = `${state.x}px`;
       state.el.style.top = `${state.y}px`;
 
-      // Show snap preview for workbench
-      if (snapPreview && state.type === 'workbench') {
+      // Show snap preview for the panes panel
+      if (snapPreview && state.type === 'panes') {
         const edge = this.detectEdgeSnap(ev.clientX, ev.clientY, 0, 0);
         if (edge) {
           snapPreview.className = `pw-snap-preview pw-snap-${edge}`;
@@ -1003,7 +1003,7 @@ export class OverlayPanelManager {
       if (snapPreview) snapPreview.style.display = 'none';
 
       // Snap to edge if close enough
-      if (state.type === 'workbench') {
+      if (state.type === 'panes') {
         const edge = this.detectEdgeSnap(ev.clientX, ev.clientY, 0, 0);
         if (edge) {
           this.dockToEdge(id, edge);
@@ -1072,7 +1072,7 @@ export class OverlayPanelManager {
     const onUp = (ev: PointerEvent) => {
       if (ev.pointerId !== pointerId) return;
       state.el.classList.remove('pw-resizing');
-      if (state.type === 'workbench') this.persistLayout(state);
+      if (state.type === 'panes') this.persistLayout(state);
       this.persistOpenPanels();
       try { target.releasePointerCapture(pointerId); } catch { /* ignore */ }
       target.removeEventListener('pointermove', onMove);

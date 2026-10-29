@@ -37,7 +37,7 @@ function seedSession(overrides: Partial<typeof schema.agentSessions.$inferInsert
     permissionProfile: 'headless-stream-yolo',
     status: 'failed',
     outputBytes: 0,
-    cwd: '/home/azureuser/workbench',
+    cwd: '/home/dev/storefront',
     createdAt: now,
     lastActivityAt: now,
     completedAt: now,

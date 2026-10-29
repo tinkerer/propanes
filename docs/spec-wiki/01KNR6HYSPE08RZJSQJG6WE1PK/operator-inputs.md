@@ -24,7 +24,7 @@ Last regenerated 2026-10-19. The June–October 2026 inputs are almost entirely 
 | **the widget** | `prompt-widget.js`, the embeddable JS feedback overlay. Embedded on the admin page itself for dogfooding. |
 | **[Element N] / [Image N] / [Image 1]** | Placeholders in ticket bodies for attached DOM selections / pasted images. These are **part of the ticket data**, not noise to strip. In the dispatch prompt they are expanded to literal selectors and `/tmp/<ULID>.png` paths. |
 | **PR badge / PR tag** | The detected-PR chip on a session (sidebar, card, pane header, Cmd-K). "Badges" collapse behind the title; the operator wants the title visible and clickable first. |
-| **"review PR <n> [as <account>] and approve if all looks good"** | A reviewer dispatch, usually against the workbench repo. Expects the agent to read the PR, run checks, leave a review, and approve only when clean. Spawned from the session menu's "Review PR" (other runtime by default) or filed as a bead. |
+| **"review PR <n> [as <account>] and approve if all looks good"** | A reviewer dispatch, usually against the product repo. Expects the agent to read the PR, run checks, leave a review, and approve only when clean. Spawned from the session menu's "Review PR" (other runtime by default) or filed as a bead. |
 | **waiting for input** | A session blocked on a prompt (permission, trust-folder, AskUserQuestion). Pinned at the top of the sidebar; the indicator must clear when answered. "Claims it is waiting but it is not" = stale indicator bug. |
 | **restore / restore queue** | Sessions orphaned by a `propanes.service` restart. "My sessions all seemed to be ended" / "I have to refresh to type" are its symptoms. Resume uses `DEFAULT_RESTORE_PROMPT`. |
 | **struct view / structure view** | The structured (parsed JSONL) view. Default for thread companions; the PTY is in a dropdown next to it. |
@@ -109,7 +109,7 @@ Most submitted tickets fall into one of these shapes:
 2. **Image-attached visual bug.** Title has `[Image 1]`. Image at `/tmp/cos-attach-<ULID>/image.png` referenced in the JSONL preamble.
 3. **Recurring spec wish.** Operator restates an invariant — composer-must-persist, channel-list-as-companion, Ops-name-unification. Treat as confirmation of an existing spec line, not a new request.
 4. **Long-form direction.** Multi-paragraph thread input describing an architectural shift (e.g., "propanes needs to be a more unified system… jsonl/struct view are equivalent to CoS rendering"). These are the genuinely-new direction; quote them in the relevant `spec-backbone` section.
-5. **Status query from Slack.** "How many sessions are we running now," "what's the status of the workbench admin console." Route via `amirobot` → CoS Ops, which queries the API.
+5. **Status query from Slack.** "How many sessions are we running now," "what's the status of the product admin console." Route via `amirobot` → CoS Ops, which queries the API.
 6. **Programmatic error report.** From the widget or another app's instrumentation. Auto-dispatched per app's `autoDispatch` flag.
 7. **Voice-captured.** Tags include `voice-captured`. Text was transcribed from mic-bridge; expect missing punctuation and run-on phrasing.
 
@@ -180,7 +180,7 @@ These are signals that **a known invariant has regressed** — go check the rele
 - An `azstaging2` parallel staging VM exists for testing — see [[reference_azstaging2]] (ssh, tmux, tunnel ports).
 - A shared Playwright browser daemon on the VM is used for UI verification — see [[reference_vnc_browser]].
 - Since July 2026 the operator mostly drives propanes from a staging host behind SSO (ticket URLs are `https://<staging-host>/admin…`) and from per-user pods; ticket `source_url` tells you which. `PROPANES_API_URL` in a dispatched session points at the right API for that host.
-- The operator also uses propanes to drive work in sibling checkouts (`../workbench`, `~/dashboard`, `~/cost-tracking`) — beads about those are filed on this app when the widget is open on the admin page. Check the `cwd` of the linked session before assuming the work belongs in `propanes`.
+- The operator also uses propanes to drive work in sibling checkouts (`~/dashboard`, `~/cost-tracking`) — beads about those are filed on this app when the widget is open on the admin page. Check the `cwd` of the linked session before assuming the work belongs in `propanes`.
 
 ## Tone
 

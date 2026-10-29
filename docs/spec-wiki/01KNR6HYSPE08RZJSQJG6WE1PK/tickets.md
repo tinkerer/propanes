@@ -15,9 +15,9 @@ Legend: `[N]` new · `[D]` dispatched · `[R]` resolved · `[Rv]` reviewed · `[
 | [R] | `01KXFK5MBC` | 07-14 | "can we programmatically detect when a github pr is opened and add a tag to the sessions in the session list and in the session view and session header" → `2a72f6d`, `ae75035`, `800257e`. |
 | [R] | `01KXGPQ3CP` | 07-14 | runtime badge (claude / codex) + "review PR <n>" quick-dispatch defaulting to the other runtime, agent still selectable → `cd7c9b0`, `0c21673`, `4fee65a`. |
 | [R] | `01KY3BD6CD` | 07-21 | badges move on hover to make room for dropdown/kill → move to the thread divider, right side → `a458502`. |
-| [D] | `01M33RM8BJ` | 09-22 | "show a minimum truncated section of the session title and don't bury it behind tags" → `8336199` (PR #16). Session `01M33RM8BP…` also carried PRs #306/#1301/#1258 (workbench). |
+| [D] | `01M33RM8BJ` | 09-22 | "show a minimum truncated section of the session title and don't bury it behind tags" → `8336199` (PR #16). Session `01M33RM8BP…` also carried PRs #306/#1301/#1258 (product repo). |
 | [R] | `01M4CZ28P8` | 10-08 | collapse badges in the pane header like the sessions list so the title is clickable → `7d68020` (PR #24). |
-| [R] | `01KX6QCK0D` / `01KYRMVSSV` / [N] `01KZRCAVST` / [R] `01M15TZNGC` / [N] `01M3AW8254` / [N] `01M3G370P7` | 07-10 → 09-27 | "review PR 733 / 815 / 1024 / 1108 / 1466 / 1471 [as tinkerer / zzaacckk] and approve if all looks good" — PR-review dispatches against the workbench repo. The three still `new` were never dispatched; treat as stale unless the operator re-raises. |
+| [R] | `01KX6QCK0D` / `01KYRMVSSV` / [N] `01KZRCAVST` / [R] `01M15TZNGC` / [N] `01M3AW8254` / [N] `01M3G370P7` | 07-10 → 09-27 | "review PR 733 / 815 / 1024 / 1108 / 1466 / 1471 [as tinkerer / zzaacckk] and approve if all looks good" — PR-review dispatches against the product repo. The three still `new` were never dispatched; treat as stale unless the operator re-raises. |
 | meta | PRs #23, #21, #32 | 09-16 → 10-15 | "Require PR follow-through in initial dispatch prompts", "Require local quality checks before dispatch agents push", "Give locally spawned agent sessions an API token", codex `--no-daemon` — the contract in [[spec-backbone#6-development-contract-what-every-dispatched-agent-must-do]]. Smoke bead `01KXMNWGFX` (token-env). |
 
 ### Restart / restore and session liveness (spec §2.13, §2.2)
@@ -31,7 +31,7 @@ Legend: `[N]` new · `[D]` dispatched · `[R]` resolved · `[Rv]` reviewed · `[
 | [R] | `01KW0CEC6G` | 06-25 | first spin-up in an app asks for permissions (trust prompt) and should show as waiting-for-input → `bf9115d`, `d822751`. |
 | [R] | `01KYK9E700` | 07-28 | mobile "resume" spins up headless sessions; should default to yolo with a continue message → `cba4211`. |
 | [R] | `01KYR5HW1B` | 07-30 | resolve button slow / not resolving → optimistic resolve + bounded kill fetch (`8988909`, `e47f5f3`). Verification beads `01KYR60AZT`, `01KYR64Z2N`, `01KYTNADK9`. |
-| [R] | `01M3MV86GW` | 09-28 | all sessions unable to connect (WSS failing) → expired origin cert; alerting added via workbench PR #1491 ([[reference_wildcard_cert_renewal]]). Follow-on idle beads: six `cert-manager: …` programmatic rows on 09-30. |
+| [R] | `01M3MV86GW` | 09-28 | all sessions unable to connect (WSS failing) → expired origin cert; alerting added via product-repo PR #1491 ([[reference_wildcard_cert_renewal]]). Follow-on idle beads: six `cert-manager: …` programmatic rows on 09-30. |
 | [R] | `01KTVQCWXV` | 06-11 | `Failed to find wrapped line in text` from the claude TUI → upstream CLI bug; CLI upgraded + NFC-normalized injected input ([[project_wrapped_line_tui_crash]]). |
 
 ### PTY correctness (spec §2.4a)
@@ -93,12 +93,12 @@ Legend: `[N]` new · `[D]` dispatched · `[R]` resolved · `[Rv]` reviewed · `[
 | [R] | `01KX2E97BF` | 07-09 | "Use the shared NFS checkout. The Propanes next-phase prompts are here: /mnt/stage-nfs-src/propanes-plans/{README,phase-2-ui-data-scoping,per-user-aks-pod-manifests}.md" → tenancy scoping (`7919dd4`), per-user pods (`0551cf1`, `d1c1d6d`), isolates (`53993ba`). |
 | [D] | `01KXGY222N` | 07-14 | member user auto-logged-out on the per-user pod → `464f3fb`. |
 | [N] | `01KX9N2C1M` | 07-11 | new window on the staging host shows no apps or sessions → `cef82be` (re-hydrate user on bootstrap). Can be resolved. |
-| [R] | `01KV68F499` | 06-15 | sessions all land under CoS Inbox as Workbench sessions; organize by app → `b4139c1`, `2b2ef47` (PR #7). |
+| [R] | `01KV68F499` | 06-15 | sessions all land under CoS Inbox as sessions of one app; organize by app → `b4139c1`, `2b2ef47` (PR #7). |
 | [R] | `01KV9X9GZC` | 06-17 | open port 3443 with the az CLI for SSL access. |
 | [R] | `01KVSBTQFC` | 06-23 | `/` should redirect to `/admin` → `4dff9da`. |
 | [R] | `01KVBJVW4V` / `01KY5T8BJR` | 06-17 / 07-22 | document title should include the location host → `38abc93`, `19e8691`. |
 | [D] | `01KYB5RCRV` | 07-24 | container build failing on `linear-cli` (missing `xz`) → `d8e0fd0`. |
-| [R] | `01KX400NGX` / `01KX467ZCY` | 07-09 | build/deploy container images from the workbench dashboard; deploy `../workbench` main to a host — workbench-repo work driven from this app ([[reference_platform_deploy_flow]]). |
+| [R] | `01KX400NGX` / `01KX467ZCY` | 07-09 | build/deploy container images from the platform dashboard; deploy the product repo main to a host — product-repo work driven from this app ([[reference_platform_deploy_flow]]). |
 | [R] | `01M2PYR7VX` | 09-17 | "pull master and rebuild" (recurring operator dispatch). |
 | [R] | `01M387TG84` | 09-23 | Cloudflare DNS shows many CNAME records — investigation, no code change. |
 | [D] | `01KTTEQB2Z` | 06-11 | show all apps and sessions per machine on the Infrastructure page (like agent-portal); session list per machine as a pane option. Partially landed (`InfrastructurePage`, `bb3131b`); still open as a direction. |
@@ -131,7 +131,7 @@ Legend: `[N]` new · `[D]` dispatched · `[R]` resolved · `[Rv]` reviewed · `[
 
 ### Non-propanes beads filed on this app
 
-`01KXM580WQ` (Project Orion BOM-format decision, tags `WOR-133`, `needs-human`, still `new`), `01KX400NGX` / `01KX467ZCY` (workbench deploys), `01M4RFVMF3` ("set NSN required to false for flybrix", idle session), the six `cert-manager: …` programmatic rows (09-30). They belong to other apps or to the operator's platform work; leave them but don't derive Propanes Admin spec from them.
+`01KXM580WQ` (Project Orion BOM-format decision, tags `WOR-133`, `needs-human`, still `new`), `01KX400NGX` / `01KX467ZCY` (product deploys), `01M4RFVMF3` ("set NSN required to false for flybrix", idle session), the six `cert-manager: …` programmatic rows (09-30). They belong to other apps or to the operator's platform work; leave them but don't derive Propanes Admin spec from them.
 
 ### Noise rows to ignore
 

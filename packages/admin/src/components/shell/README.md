@@ -21,7 +21,7 @@ main.tsx → App → Layout → (Sidebar + PageView/MobilePageView)
 
 | Component | Responsibility |
 |-----------|-----------------|
-| **App** (`App.tsx:56`) | Root component. Handles authentication, isolate mode, embedded/companion/workbench routing, and conditional layout selection. Returns LoginPage if unauthenticated, or routes to Layout, StandaloneSessionPage, StandalonePanelPage, or StandaloneFeedbackPage based on route. |
+| **App** (`App.tsx:56`) | Root component. Handles authentication, isolate mode, embedded/companion/panes routing, and conditional layout selection. Returns LoginPage if unauthenticated, or routes to Layout, StandaloneSessionPage, StandalonePanelPage, or StandaloneFeedbackPage based on route. |
 | **Layout** (`Layout.tsx:83`) | Main layout chrome combining ControlBar, PaneTree (desktop), PopoutPanel (desktop), MobileNav/MobilePageView (mobile), and all modal/overlay components. Registers 40+ keyboard shortcuts and manages sidebar collapse state. |
 | **ControlBar** (`ControlBar.tsx:40`) | Top toolbar with app selector dropdown, app control actions, Terminal button, MRU (most-recently-used) pane history dropdown, search spotlight button, and notifications button. Responsive: collapses action buttons into "more" menu on mobile. |
 | **PageView** (`PageView.tsx:25`) | Companion-mode page router. Decodes routes like `/app/:appId/tickets/:fbId` and renders appropriate pages (FeedbackListPage, FeedbackDetailPage, SessionsPage, AggregatePage, AppSettingsPage, etc.). Handles root redirect and missing-app fallbacks. |
@@ -41,7 +41,7 @@ App (line:56)
 │     ├─ standalone panel (/panel/:...) → StandalonePanelPage
 │     ├─ companion mode → CompanionRoot
 │     │  └─ PageView
-│     ├─ workbench mode
+│     ├─ panes mode
 │     │  └─ Layout (line:83)
 │     │     ├─ ControlBar (line:40)
 │     │     ├─ PaneTree (desktop)

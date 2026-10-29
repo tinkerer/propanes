@@ -16,8 +16,8 @@ test.after(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-const A = 'https://github.com/workbenchai/workbench/pull/1468';
-const B = 'https://github.com/workbenchai/workbench/pull/1476';
+const A = 'https://github.com/examplecorp/widgets/pull/1468';
+const B = 'https://github.com/examplecorp/widgets/pull/1476';
 
 const app = new Hono();
 app.use('*', async (c, next) => {

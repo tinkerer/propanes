@@ -1,6 +1,7 @@
 import { useState } from 'preact/hooks';
 import { distillPickerOpen, distillToAgent } from '../../lib/agent-actions.js';
 import { api } from '../../lib/api.js';
+import { appLabel } from '../../lib/state.js';
 
 export function DistillModal() {
   const state = distillPickerOpen.value;
@@ -115,7 +116,7 @@ export function DistillModal() {
           >
             <option value="">Global (all apps)</option>
             {apps.map((app) => (
-              <option value={app.id} key={app.id}>{app.name}</option>
+              <option value={app.id} key={app.id}>{appLabel(app)}</option>
             ))}
           </select>
         </div>
