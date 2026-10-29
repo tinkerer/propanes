@@ -318,7 +318,7 @@ export function runMigrations() {
     `ALTER TABLE agent_endpoints ADD COLUMN source_session_ids TEXT`,
     // Monorepo sub-app support: a JSON registry of named subdirectories on the
     // application, and the sub-app each feedback item targets. Lets one app
-    // (e.g. "Workbench") route dispatch to platform/dashboard, platform/gateway,
+    // (e.g. a monorepo) route dispatch to packages/web, packages/api,
     // etc. instead of needing a separate app per package.
     `ALTER TABLE applications ADD COLUMN sub_apps TEXT NOT NULL DEFAULT '[]'`,
     `ALTER TABLE feedback_items ADD COLUMN sub_app TEXT`,
@@ -1182,7 +1182,7 @@ export function runMigrations() {
 
   // Agent endpoints are configuration presets for dispatch, not app-owned
   // resources. Keep the common local profiles shared so a fresh install — and
-  // any app added later — gets the useful Workbench/ticket launcher choices
+  // any app added later — gets the useful app/ticket launcher choices
   // without repeating agent setup. A user's existing global profile wins.
   const builtinAgents = [
     { name: 'Claude Interactive', runtime: 'claude', permissionProfile: 'interactive-require', isDefault: 1 },

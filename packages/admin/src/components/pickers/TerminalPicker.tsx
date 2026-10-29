@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { allSessions, paneMruHistory, spawnTerminal, setTerminalCompanionAndOpen, setTerminalCompanion, togglePanelCompanion, loadAllSessions, openSession, openIsolateCompanion, openUrlCompanion } from '../../lib/sessions.js';
-import { selectedAppId, applications } from '../../lib/state.js';
+import { selectedAppId, applications, appLabel } from '../../lib/state.js';
 import { getIsolateNames, getIsolateEntry } from '../../lib/isolate.js';
 import { cachedTargets, ensureTargetsLoaded, refreshTargets } from '../dispatch/DispatchTargetSelect.js';
 import { api } from '../../lib/api.js';
@@ -316,9 +316,9 @@ export function TerminalPicker({ mode, onClose }: Props) {
   ];
   // Add per-app file/git views
   for (const app of applications.value) {
-    viewItems.push({ id: `view:feedback:app:${app.id}`, label: `Tickets: ${app.name}`, icon: '\u{1F4AC}' });
-    viewItems.push({ id: `view:files:${app.id}`, label: `Files: ${app.name}`, icon: '\u{1F4C2}' });
-    viewItems.push({ id: `view:git:${app.id}`, label: `Git: ${app.name}`, icon: '\u{1F500}' });
+    viewItems.push({ id: `view:feedback:app:${app.id}`, label: `Tickets: ${appLabel(app)}`, icon: '\u{1F4AC}' });
+    viewItems.push({ id: `view:files:${app.id}`, label: `Files: ${appLabel(app)}`, icon: '\u{1F4C2}' });
+    viewItems.push({ id: `view:git:${app.id}`, label: `Git: ${appLabel(app)}`, icon: '\u{1F500}' });
   }
   {
     const seenMachineIds = new Set<string>();
@@ -339,7 +339,7 @@ export function TerminalPicker({ mode, onClose }: Props) {
         const app = applications.value.find((a: any) => a.id === appId);
         viewItems.push({
           id: `view:sessions-list:machine:${t.machineId}:app:${appId}`,
-          label: `Sessions: ${t.machineName || t.name} / ${app?.name || appId.slice(-8)}`,
+          label: `Sessions: ${t.machineName || t.name} / ${appLabel(app) || appId.slice(-8)}`,
           icon: '\u{1F5A5}\uFE0F',
         });
       }

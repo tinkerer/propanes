@@ -7,14 +7,14 @@ import {
   normalizePrInput,
 } from '../src/pr-overrides.ts';
 
-const A = 'https://github.com/workbenchai/workbench/pull/1468';
-const B = 'https://github.com/workbenchai/workbench/pull/1476';
+const A = 'https://github.com/examplecorp/widgets/pull/1468';
+const B = 'https://github.com/examplecorp/widgets/pull/1476';
 
 test('normalizePrInput reads URLs, owner/repo#n and bare numbers', () => {
   assert.equal(normalizePrInput(`${B}/files?w=1`, null), B);
-  assert.equal(normalizePrInput(' workbenchai/workbench#1476 ', null), B);
-  assert.equal(normalizePrInput('#1476', 'workbenchai/workbench'), B);
-  assert.equal(normalizePrInput('PR 1476', 'workbenchai/workbench'), B);
+  assert.equal(normalizePrInput(' examplecorp/widgets#1476 ', null), B);
+  assert.equal(normalizePrInput('#1476', 'examplecorp/widgets'), B);
+  assert.equal(normalizePrInput('PR 1476', 'examplecorp/widgets'), B);
   assert.equal(normalizePrInput('1476', null), null);
   assert.equal(normalizePrInput('https://example.com/x/y/pull/1', 'a/b'), null);
   assert.equal(normalizePrInput('not a pr', 'a/b'), null);
@@ -22,7 +22,7 @@ test('normalizePrInput reads URLs, owner/repo#n and bare numbers', () => {
 
 test('githubRepoFromRemote handles https and ssh remotes', () => {
   assert.equal(githubRepoFromRemote('https://github.com/tinkerer/propanes.git\n'), 'tinkerer/propanes');
-  assert.equal(githubRepoFromRemote('git@github.com:workbenchai/workbench.git'), 'workbenchai/workbench');
+  assert.equal(githubRepoFromRemote('git@github.com:examplecorp/widgets.git'), 'examplecorp/widgets');
   assert.equal(githubRepoFromRemote('https://gitlab.com/a/b.git'), null);
 });
 

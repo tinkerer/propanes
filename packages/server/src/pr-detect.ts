@@ -90,8 +90,8 @@ export function mergePrUrlList(existingJson: string | null | undefined, detected
  * Drop URLs that are a strict subsequence of another URL in the list.
  *
  * PTY-derived detections can lose characters (hazard 3 above, before it was
- * handled) or digits (a wrapped number): `workbenhai/workbench/pull/1356`
- * next to the real `workbenchai/workbench/pull/1356`, `pull/1` next to
+ * handled) or digits (a wrapped number): `examplecrp/widgets/pull/1356`
+ * next to the real `examplecorp/widgets/pull/1356`, `pull/1` next to
  * `pull/1356`. Both damaged forms are the intact URL with characters deleted,
  * so when the intact one is also present the damaged one goes. Order is kept.
  * The admin's PrBadges.tsx carries the same scrub for rows stored before this.

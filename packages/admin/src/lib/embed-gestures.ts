@@ -1,7 +1,7 @@
 /**
  * Two-finger pan + pinch-zoom relay.
  *
- * When the admin is embedded as a workbench popout (in the widget), iOS Safari
+ * When the admin is embedded as a panes popout (in the widget), iOS Safari
  * has no native way to move/zoom just the popout — pinch-zoom hits the host
  * page and one-finger drags scroll the iframe content. This module captures
  * touchstart/touchmove/touchend with 2 fingers, prevents default, and

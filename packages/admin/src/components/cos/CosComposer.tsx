@@ -6,7 +6,7 @@ import {
   type CosImageAttachment,
   type CosElementRef,
 } from '../../lib/chief-of-staff.js';
-import { activeChannel } from '../../lib/state.js';
+import { activeChannel, appLabel } from '../../lib/state.js';
 import { inlineElementChipsEnabled } from '../../lib/settings.js';
 import { api } from '../../lib/api.js';
 import { useCosVoice } from '../../lib/use-cos-voice.js';
@@ -503,7 +503,7 @@ export const CosComposer = forwardRef<CosComposerHandle, CosComposerProps>(funct
                       setFanOutSelected(next);
                     }}
                   />
-                  {a.name}
+                  {appLabel(a)}
                 </label>
               ))}
               <button type="button" class="cos-tool-menu-item cos-tool-menu-btn" onClick={saveDraftToFanOut} disabled={!canSend || disabled || fanOutSelected.size === 0} title="Save this draft to each selected agent's drafts list">

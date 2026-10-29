@@ -16,9 +16,9 @@ test.after(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-const PR = 'https://github.com/workbenchai/workbench/pull/1353';
+const PR = 'https://github.com/examplecorp/widgets/pull/1353';
 const home = join(tempDir, 'agent-home');
-const cwd = '/data/workspaces/workbench';
+const cwd = '/data/workspaces/widgets';
 
 function insert(id: string, claudeId: string | null, status: string, prUrls: string | null, createdAt: string) {
   sqlite.prepare(`
@@ -42,7 +42,7 @@ test('backfills ended sessions from their transcripts, once', () => {
 
   insert('S_HIT', 'aaaaaaaa-0000-0000-0000-000000000001', 'killed', null, recent);
   writeTranscript('aaaaaaaa-0000-0000-0000-000000000001',
-    JSON.stringify({ type: 'pr-link', prNumber: 1353, prUrl: PR, prRepository: 'workbenchai/workbench' }) + '\n');
+    JSON.stringify({ type: 'pr-link', prNumber: 1353, prUrl: PR, prRepository: 'examplecorp/widgets' }) + '\n');
 
   insert('S_NONE', 'aaaaaaaa-0000-0000-0000-000000000002', 'completed', null, recent);
   writeTranscript('aaaaaaaa-0000-0000-0000-000000000002', '{"type":"assistant","message":{"content":"no PRs here"}}\n');
@@ -55,10 +55,10 @@ test('backfills ended sessions from their transcripts, once', () => {
   writeTranscript('aaaaaaaa-0000-0000-0000-000000000006', JSON.stringify({ type: 'pr-link', prUrl: PR }) + '\n');
   insert('S_TERMINAL', null, 'killed', null, recent);
   insert('S_DAMAGED', 'aaaaaaaa-0000-0000-0000-000000000007', 'killed',
-    JSON.stringify(['https://github.com/workbenhai/workbench/pull/1356', PR, 'https://github.com/workbenchai/workbench/pull/1356', 'https://github.com/workbenchai/workbench/pull/1']), recent);
+    JSON.stringify(['https://github.com/examplecrp/widgets/pull/1356', PR, 'https://github.com/examplecorp/widgets/pull/1356', 'https://github.com/examplecorp/widgets/pull/1']), recent);
 
   assert.deepEqual(backfillTranscriptPrUrls(home), { scanned: 2, tagged: 1, missing: 1, scrubbed: 1 });
-  assert.equal(prUrlsOf('S_DAMAGED'), JSON.stringify([PR, 'https://github.com/workbenchai/workbench/pull/1356']));
+  assert.equal(prUrlsOf('S_DAMAGED'), JSON.stringify([PR, 'https://github.com/examplecorp/widgets/pull/1356']));
   assert.equal(prUrlsOf('S_HIT'), JSON.stringify([PR]));
   assert.equal(prUrlsOf('S_NONE'), '[]');
   assert.equal(prUrlsOf('S_MISSING'), null);

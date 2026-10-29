@@ -1,6 +1,6 @@
 import { useEffect } from 'preact/hooks';
 import { ComponentChildren } from 'preact';
-import { isAuthenticated, currentRoute, currentUser, loadApplications, loadCurrentUser, isEmbedded, isCompanion, isWorkbench, isCosEmbed, clearToken } from '../../lib/state.js';
+import { isAuthenticated, currentRoute, currentUser, loadApplications, loadCurrentUser, isEmbedded, isCompanion, isPanes, isCosEmbed, clearToken } from '../../lib/state.js';
 import { setChiefOfStaffOpen } from '../../lib/chief-of-staff.js';
 import { connectAdminWs } from '../../lib/admin-ws.js';
 import { initNotifications } from '../../lib/notifications.js';
@@ -131,7 +131,7 @@ export function App() {
     loadCurrentUser()
       .then((u) => {
         // Keep the URL on the operator's own workspace path (/<username>) on
-        // reload/bookmark. Skip when embedded (widget/workbench popout).
+        // reload/bookmark. Skip when embedded (widget/panes popout).
         if (u?.username && !isEmbedded.value) {
           // Compare against the path INSIDE the mount: under a prefix the
           // first segment is the prefix itself, so a raw split would never
@@ -182,8 +182,8 @@ export function App() {
     return <CompanionRoot><PageView /></CompanionRoot>;
   }
 
-  // Workbench mode: full pane-tree layout in iframe
-  if (isWorkbench.value) {
+  // Panes mode: full pane-tree layout in iframe
+  if (isPanes.value) {
     return (
       <>
         <Layout />

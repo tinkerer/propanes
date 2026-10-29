@@ -10,16 +10,16 @@ export { COS_WORKSPACE_ID } from './app-id.js';
 
 // Embed mode detection
 const params = new URLSearchParams(window.location.search);
-export const isWorkbench = signal(params.get('embed') === 'workbench');
+export const isPanes = signal(params.get('embed') === 'panes');
 export const isCosEmbed = signal(params.get('embed') === 'cos');
-export const isEmbedded = signal(params.get('embed') === 'true' || isWorkbench.value || isCosEmbed.value);
+export const isEmbedded = signal(params.get('embed') === 'true' || isPanes.value || isCosEmbed.value);
 export const isCompanion = signal(params.get('companion') === 'true');
 // Widget overlay panels (`?embed=true`): PageView only, no pane tree or Layout.
 export const isPlainEmbed = params.get('embed') === 'true' && !isCompanion.value;
 const embedAppId = params.get('appId');
 
-if (isWorkbench.value) {
-  document.body.classList.add('pw-workbench');
+if (isPanes.value) {
+  document.body.classList.add('pw-panes');
   // Two-finger pan + pinch-zoom relay so iOS Safari can move/zoom the popout
   initEmbedGestures();
 } else if (isCosEmbed.value) {
@@ -66,6 +66,13 @@ const initialAppId = embedAppId
   || localStorage.getItem('pw-selected-app-id');
 export const selectedAppId = signal<string | null>(initialAppId);
 export const applications = signal<any[]>([]);
+
+// Display name that keeps a member's copy of an app (ownerName is set by the
+// server only for rows another user owns) distinct from the operator's own.
+export function appLabel(app: { name?: string; ownerName?: string | null } | null | undefined): string {
+  if (!app?.name) return '';
+  return app.ownerName ? `${app.name} (${app.ownerName})` : app.name;
+}
 export const unlinkedCount = signal(0);
 export const appFeedbackCounts = signal<Record<string, { total: number; new: number; running: number }>>({});
 export const addAppModalOpen = signal(false);

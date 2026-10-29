@@ -543,7 +543,6 @@ function cmdLoginWeb(flags) {
 
 async function cmdLogin(flags) {
   if (flags.portal || flags["portal-url"]) return cmdLoginPortal(flags);
-  if (flags.workbench) die("--workbench was renamed: propanes login --portal https://<portal-host> --server <server>");
   if (flags.web) return cmdLoginWeb(flags);
 
   const cfg = loadConfig();

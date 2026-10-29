@@ -1,6 +1,7 @@
 import { useState } from 'preact/hooks';
 import { api } from '../../lib/api.js';
 import { DEFAULT_PROMPT_TEMPLATE, TOOL_PRESETS, PROFILE_DESCRIPTIONS, TEMPLATE_PRESETS } from '../../lib/agent-constants.js';
+import { appLabel } from '../../lib/state.js';
 
 interface AgentFormModalProps {
   visible: boolean;
@@ -122,7 +123,7 @@ export function AgentFormModal({ visible, onClose, onSaved, editAgent, applicati
             >
               <option value="">Global (all apps)</option>
               {applications.map((app) => (
-                <option value={app.id} key={app.id}>{app.name}</option>
+                <option value={app.id} key={app.id}>{appLabel(app)}</option>
               ))}
             </select>
           </div>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { signal } from '@preact/signals';
 import {
-  currentRoute, clearToken, navigate, selectedAppId, applications, unlinkedCount,
+  currentRoute, clearToken, navigate, selectedAppId, applications, appLabel, unlinkedCount,
   appFeedbackCounts, addAppModalOpen,
   channelsByApp, unsortedCountByApp, channelOrgProposalOpen, loadChannels,
   pendingApprovalCountByApp, loadApprovals, isAdminUser,
@@ -186,6 +186,10 @@ export function SidebarNavView() {
   const route = currentRoute.value;
   const collapsed = sidebarCollapsed.value;
   const apps = applications.value;
+  // A global admin also sees members' onboarded copies (same names as their
+  // own apps); list those after the operator's own, labelled with the owner.
+  const ownApps = apps.filter((app) => !app.ownerName);
+  const memberApps = apps.filter((app) => app.ownerName);
   const selAppId = selectedAppId.value;
   const hasUnlinked = unlinkedCount.value > 0;
   const fbCounts = appFeedbackCounts.value;
@@ -253,18 +257,24 @@ export function SidebarNavView() {
             >+</button>
           </div>
         )}
-        {apps.map((app) => {
+        {[...ownApps, ...memberApps].map((app) => {
           const isSelected = selAppId === app.id;
           return (
             <div key={app.id}>
+              {!collapsed && app.id === memberApps[0]?.id && (
+                <div class="sidebar-section-header">Member apps</div>
+              )}
               <a
                 href={`#/app/${app.id}/tickets`}
                 class={`sidebar-app-item ${isSelected ? 'active' : ''}`}
                 onClick={(e) => { e.preventDefault(); navigate(`/app/${app.id}/tickets`); }}
-                title={collapsed ? app.name : undefined}
+                title={collapsed ? appLabel(app) : app.ownerName ? `Owned by ${app.ownerName}` : undefined}
               >
                 <span class="nav-icon"><NavIcon name="app" /></span>
-                <span class="nav-label">{app.name}</span>
+                <span class="nav-label">
+                  {app.name}
+                  {app.ownerName && <span class="sidebar-app-owner"> · {app.ownerName}</span>}
+                </span>
               </a>
               {isSelected && !collapsed && (
                 <div class="sidebar-subnav">

@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo } from 'preact/hooks';
-import { selectedAppId, applications, navigate, addAppModalOpen, openSpotlight, isAdminUser } from '../../lib/state.js';
+import { selectedAppId, applications, navigate, addAppModalOpen, openSpotlight, isAdminUser, appLabel } from '../../lib/state.js';
 import { api } from '../../lib/api.js';
 import {
   focusOrDockSession,
@@ -95,7 +95,7 @@ export function ControlBar() {
         onClick={() => setAppDropdown(!appDropdown)}
       >
         <span class="control-bar-icon"><NavIcon name="app" /></span>
-        {app?.name || 'Select App'}
+        {appLabel(app) || 'Select App'}
         <span class="control-bar-caret">{'\u25BE'}</span>
       </button>
       {appDropdown && (
@@ -106,7 +106,7 @@ export function ControlBar() {
               class={`popup-menu-item ${a.id === appId ? 'active' : ''}`}
               onClick={() => selectApp(a.id)}
             >
-              {a.name}
+              {appLabel(a)}
             </button>
           ))}
           <div class="popup-menu-divider" />

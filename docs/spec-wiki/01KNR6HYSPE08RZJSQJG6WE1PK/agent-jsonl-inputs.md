@@ -16,7 +16,7 @@ Last regenerated 2026-10-19. Since the June regeneration the dispatch prompt cha
 
 Codex sessions write rollout JSONL under `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`. They have a different shape from Claude — line types include `session_meta` (with `payload.cwd`, `cli_version`, `base_instructions`), `event_msg`, `response_item`, `turn_context`, `token_count`. The first user prompt for a Codex session uses the same `do feedback item …` envelope as Claude (the dispatcher emits identical text; the legacy `[AGENT NOTE]` preamble was removed 2026-06-11 and the last rollouts carrying it are dated that day), but the surrounding system prompt embeds the Codex personality + the project's `AGENTS.md` instructions verbatim (palette rules, no `window.prompt`, lazy tab rendering, `pw screenshot` ground-truth).
 
-265 rollouts were written since 2026-06-11 (26 Jun / 137 Jul / 15 Aug / 41 Sep / 46 Oct); only **16** have `cwd=/home/azureuser/propanes` — the rest are workbench and dashboard work. The 16 propanes rollouts map to the `codex-yolo` dispatches in [[tickets#era-2-2026-06-11--2026-10-19]] (favicon, `/` → `/admin` redirect, agent-portal/Flatter, hostname scrub, review PR 815, structured view after `/clear`, stale waiting indicator). Codex TUI now runs with `--no-daemon` so `PROPANES_TOKEN` reaches it (PR #32).
+265 rollouts were written since 2026-06-11 (26 Jun / 137 Jul / 15 Aug / 41 Sep / 46 Oct); only **16** have `cwd=/home/azureuser/propanes` — the rest are work in other apps. The 16 propanes rollouts map to the `codex-yolo` dispatches in [[tickets#era-2-2026-06-11--2026-10-19]] (favicon, `/` → `/admin` redirect, agent-portal/Flatter, hostname scrub, review PR 815, structured view after `/clear`, stale waiting indicator). Codex TUI now runs with `--no-daemon` so `PROPANES_TOKEN` reaches it (PR #32).
 
 ### Other line types in Claude JSONL
 
@@ -152,7 +152,7 @@ From the 19 local JSONL files and the 16 propanes Codex rollouts. These arrive a
 | `i built admin and clicked on Flatter but nothing happened` / `now the dropdown doesn't work` | Regression report on your own change; reproduce with Playwright before answering. |
 | `set up alerting for cert-manager renewal failures, anyway to make this automatic?` | Scope expansion inside an incident; acceptable, deliver it in the same PR or a linked one and say which. |
 | `why " Greetings, fellow tinkerer."` | The operator noticed an odd greeting from the Codex personality; cosmetic, answer briefly. |
-| `<task-notification> … Monitor event: "CI checks on workbench PR #1491" … </task-notification>` | Harness-generated lines from `Monitor` / background tasks, not operator text. Act on them only if the event changes what you'd do next. |
+| `<task-notification> … Monitor event: "CI checks on product-repo PR #1491" … </task-notification>` | Harness-generated lines from `Monitor` / background tasks, not operator text. Act on them only if the event changes what you'd do next. |
 | `[Image: original 3024x1702, displayed at 2000x1126 …]` | The harness echo of an image you `Read`; not an instruction. |
 
 ## Slash commands seen in CoS turns

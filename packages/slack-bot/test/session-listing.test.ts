@@ -56,17 +56,17 @@ test('large listings include every active session in bounded messages with intac
 
 test('sessions from interleaved apps appear together beneath their app names', () => {
   const result = sessionListing(sessions, false, url, undefined, [
-    { id: 'app-1', name: 'Workbench' },
+    { id: 'app-1', name: 'Storefront' },
     { id: 'app-2', name: 'ProPanes' },
   ]).join('\n');
-  const first = result.indexOf('*Workbench*');
+  const first = result.indexOf('*Storefront*');
   const second = result.indexOf('*ProPanes*');
   assert.ok(first >= 0 && second > first);
   for (const id of ['agent-running', 'agent-dispatching']) {
     assert.ok(result.indexOf(url(id)) > first && result.indexOf(url(id)) < second);
   }
   assert.ok(result.indexOf(url('agent-pending')) > second);
-  assert.equal(result.split('*Workbench*').length, 2);
+  assert.equal(result.split('*Storefront*').length, 2);
 });
 
 test('app headings escape Slack syntax and distinguish unknown and unassigned apps', () => {

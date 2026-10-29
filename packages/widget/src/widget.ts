@@ -339,7 +339,7 @@ export class ProPanesElement {
     const script = (document.querySelector('script[data-endpoint]') ||
       document.currentScript) as HTMLScriptElement | null;
     // If no explicit endpoint, derive from the script's src origin so the widget
-    // works when embedded cross-origin (e.g. workbench loading widget from :3001)
+    // works when embedded cross-origin (e.g. a host app loading the widget from :3001)
     let endpoint = script?.dataset.endpoint || '/api/v1/feedback';
     if (!script?.dataset.endpoint && script?.src) {
       try {
@@ -400,14 +400,14 @@ export class ProPanesElement {
 
     this.overlayManager = new OverlayPanelManager(this.shadow, this.config.endpoint, this.appId);
 
-    // Auto-jump: when a session enters waiting state, reveal the workbench
+    // Auto-jump: when a session enters waiting state, reveal the panes panel
     this.overlayManager.onWaitingChange = (_sessionId, state, waitingCount) => {
-      if (state === 'waiting' && waitingCount > 0 && this.overlayManager.hasWorkbench) {
-        this.overlayManager.revealWorkbench();
+      if (state === 'waiting' && waitingCount > 0 && this.overlayManager.hasPanes) {
+        this.overlayManager.revealPanes();
         // Update drawer badge if collapsed
-        this.updateWorkbenchBadge(waitingCount);
+        this.updatePanesBadge(waitingCount);
       } else {
-        this.updateWorkbenchBadge(waitingCount);
+        this.updatePanesBadge(waitingCount);
       }
     };
 
@@ -417,7 +417,7 @@ export class ProPanesElement {
 
   }
 
-  private updateWorkbenchBadge(waitingCount: number) {
+  private updatePanesBadge(waitingCount: number) {
     const handles = this.shadow.querySelectorAll('.pw-drawer-handle');
     for (const handle of handles) {
       let badge = handle.querySelector('.pw-drawer-badge') as HTMLElement | null;
@@ -1385,8 +1385,8 @@ export class ProPanesElement {
     options.className = 'pw-admin-options';
 
     // Icon row — feedback / sessions / ProPanes overlay / Ops / terminal / settings.
-    // Workbench is a small icon, not a full-width row, so it sits next to the
-    // others. Opening it routes through openWorkbench() to focus the existing
+    // The panes panel is a small icon, not a full-width row, so it sits next to the
+    // others. Opening it routes through openPanes() to focus the existing
     // panel if one is already open.
     // Ops (CoS chat) is an alpha feature — only offered when the admin's
     // "Alpha test new features" preference is on.
@@ -1394,7 +1394,7 @@ export class ProPanesElement {
     const iconItems: IconItem[] = [
       { icon: '\u{1F4CB}', label: 'Feedback', onClick: () => this.overlayManager.openPanel('feedback') },
       { icon: '\u26A1', label: 'Sessions', onClick: () => this.overlayManager.openPanel('sessions') },
-      { icon: '\u2B1A', label: 'ProPanes Overlay', onClick: () => this.overlayManager.openWorkbench() },
+      { icon: '\u2B1A', label: 'ProPanes Overlay', onClick: () => this.overlayManager.openPanes() },
       { icon: '\u2605', label: 'Ops', alpha: true, onClick: () => this.overlayManager.openPanel('cos') },
       { icon: '\u{1F4BB}', label: 'Terminal', onClick: () => {
           const opts: { launcherId?: string } = {};

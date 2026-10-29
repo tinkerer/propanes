@@ -18,7 +18,7 @@ test.after(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-const workbench = { id: 'wb', name: 'Workbench', apiKey: 'pw_EGMXr', projectDir: '/data/workspaces/workbench' };
+const shop = { id: 'wb', name: 'Storefront', apiKey: 'pw_EGMXr', projectDir: '/data/workspaces/storefront' };
 const admin = { id: 'pp', name: 'ProPanes Admin', apiKey: 'pw_VYnZn', projectDir: '/data/workspaces/propanes' };
 
 test('isAdminApp matches the admin row regardless of name casing or where the server runs', () => {
@@ -27,24 +27,24 @@ test('isAdminApp matches the admin row regardless of name casing or where the se
   assert.equal(isAdminApp({ name: 'propanes', projectDir: '/srv/x' }), true);
   assert.equal(isAdminApp({ name: 'My App', projectDir: '/data/workspaces/propanes/' }), true);
   assert.equal(isAdminApp({ name: 'My App', projectDir: resolve(process.cwd(), '..', '..') }), true);
-  assert.equal(isAdminApp({ name: 'Workbench', projectDir: '/data/workspaces/workbench' }), false);
+  assert.equal(isAdminApp({ name: 'Storefront', projectDir: '/data/workspaces/storefront' }), false);
   assert.equal(isAdminApp({ name: 'Propanes Docs', projectDir: '/data/workspaces/propanes-docs' }), false);
 });
 
 test('pickAdminApp never guesses among several applications', () => {
-  assert.equal(pickAdminApp([workbench, admin])?.id, 'pp');
-  assert.equal(pickAdminApp([admin, workbench])?.id, 'pp');
-  assert.equal(pickAdminApp([workbench, { ...workbench, id: 'other', name: 'Other' }]), null);
+  assert.equal(pickAdminApp([shop, admin])?.id, 'pp');
+  assert.equal(pickAdminApp([admin, shop])?.id, 'pp');
+  assert.equal(pickAdminApp([shop, { ...shop, id: 'other', name: 'Other' }]), null);
   // A single-app install has nothing else the feedback could belong to.
-  assert.equal(pickAdminApp([workbench])?.id, 'wb');
+  assert.equal(pickAdminApp([shop])?.id, 'wb');
   assert.equal(pickAdminApp([]), null);
 });
 
 test('resolveAdminApp returns the ProPanes Admin key, not whichever row the index yields first', () => {
   const now = new Date().toISOString();
-  // Insert the admin app after Workbench and with the lexically larger key so
+  // Insert the admin app after Storefront and with the lexically larger key so
   // neither rowid order nor an api_key index scan would pick it by accident.
-  for (const app of [workbench, admin]) {
+  for (const app of [shop, admin]) {
     db.insert(schema.applications).values({ ...app, createdAt: now, updatedAt: now } as any).run();
   }
   assert.deepEqual(resolveAdminApp(), { id: 'pp', apiKey: 'pw_VYnZn' });

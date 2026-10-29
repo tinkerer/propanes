@@ -1,6 +1,6 @@
 import { signal } from '@preact/signals';
 import { api } from '../lib/api.js';
-import { loadApplications as refreshSidebarApps } from '../lib/state.js';
+import { loadApplications as refreshSidebarApps, appLabel } from '../lib/state.js';
 import { spawnTerminal } from '../lib/sessions.js';
 import { copyText, copyWithTooltip } from '../lib/clipboard.js';
 import { DeletedItemsPanel, trackDeletion } from '../components/ui/DeletedItemsPanel.js';
@@ -151,7 +151,7 @@ export function ApplicationsPage() {
         {apps.value.map((app) => (
           <div class="agent-card" key={app.id}>
             <div class="agent-info" style="flex:1;min-width:0">
-              <h4>{app.name}</h4>
+              <h4>{appLabel(app)}</h4>
               <p style="font-size:12px;color:var(--pw-text-faint);margin:2px 0">{app.projectDir}</p>
               {app.description && <p style="font-size:12px;color:var(--pw-text-muted);margin:2px 0">{app.description}</p>}
               <div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">

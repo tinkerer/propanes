@@ -7,7 +7,7 @@ import { openSession, spawnTerminal } from '../lib/sessions.js';
 import { openUrlCompanion } from '../lib/companion-state.js';
 import { openCosInPane } from '../lib/chief-of-staff.js';
 import { addTabToLeaf, findLeafWithTab, focusedLeafId } from '../lib/pane-tree.js';
-import { selectedAppId } from '../lib/state.js';
+import { selectedAppId, appLabel } from '../lib/state.js';
 import {
   machines, harnessConfigs, applications, launchers,
   loading, error, expandedMachines, loadAll, closeAllForms,
@@ -282,7 +282,7 @@ function getSessionTitle(s: any): string {
 
 function getSessionAppName(appId: string | null | undefined): string {
   if (!appId) return 'Unlinked';
-  return applications.value.find(a => a.id === appId)?.name || appId.slice(-8);
+  return appLabel(applications.value.find(a => a.id === appId)) || appId.slice(-8);
 }
 
 function openMachineSessionsPane(machineId: string) {

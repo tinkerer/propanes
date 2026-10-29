@@ -10,7 +10,7 @@ import {
 } from '../src/pr-transcript-scan.js';
 import { mergePrUrlList, mergePrUrls } from '../src/pr-detect.js';
 
-const PR = (n: number) => `https://github.com/workbenchai/workbench/pull/${n}`;
+const PR = (n: number) => `https://github.com/examplecorp/widgets/pull/${n}`;
 
 function assistant(text: string): string {
   return JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } });

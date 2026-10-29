@@ -8673,8 +8673,8 @@ body.pw-embed .global-terminal-panel {
   border-top: none;
 }
 
-/* Workbench mode — full pane-tree layout in iframe */
-body.pw-workbench {
+/* Panes mode — full pane-tree layout in iframe */
+body.pw-panes {
   margin: 0;
   padding: 0;
   background: var(--pw-bg-body);
@@ -8738,17 +8738,17 @@ body.pw-cos-embed .pw-cos-embed-root .cos-pane {
   background: rgba(255,255,255,0.08);
 }
 
-body.pw-workbench .layout {
+body.pw-panes .layout {
   height: 100vh;
   width: 100vw;
 }
 
-body.pw-workbench .login-page {
+body.pw-panes .login-page {
   min-height: 100vh;
   background: var(--pw-bg-body);
 }
 
-body.pw-workbench .login-card {
+body.pw-panes .login-card {
   box-shadow: none;
   border: 1px solid var(--pw-border);
 }
@@ -18665,4 +18665,9 @@ body.cos-channel-list-resizing {
 
 .standalone-session-close:hover {
   background: var(--pw-terminal-hover);
+}
+
+.sidebar-app-owner {
+  color: var(--pw-sidebar-muted);
+  font-size: 11px;
 }

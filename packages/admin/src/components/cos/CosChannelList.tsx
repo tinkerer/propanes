@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import {
   selectedAppId,
   applications,
+  appLabel,
   channelsByApp,
   unsortedCountByApp,
   loadChannels,
@@ -154,7 +155,7 @@ export function CosChannelList({
 
   const workspaceName = isCosWorkspace
     ? 'Chief of Staff'
-    : (currentApp?.name || 'App');
+    : (appLabel(currentApp) || 'App');
 
   function selectWorkspace(id: string) {
     selectedAppId.value = id;
@@ -220,7 +221,7 @@ export function CosChannelList({
               onClick={() => selectWorkspace(a.id)}
             >
               <span class="cos-workspace-item-icon">{'\u{1F4E6}'}</span>
-              {a.name}
+              {appLabel(a)}
             </button>
           ))}
         </div>

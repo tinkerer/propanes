@@ -23,7 +23,7 @@ via `propanes://` deep links:
 propanes install-protocol
 ```
 
-### Hosts behind a browser-SSO edge (e.g. workbench / Cloudflare Access)
+### Hosts behind a browser-SSO edge (e.g. Cloudflare Access)
 
 Some deployments front the HTTP/WS ingress with an SSO proxy that redirects
 every non-browser request to a login page — so direct `propanes login` and the
