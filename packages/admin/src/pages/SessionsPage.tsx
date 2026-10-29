@@ -1,7 +1,7 @@
 import { useSignal } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import { api } from '../lib/api.js';
-import { isEmbedded, isPanes, applications } from '../lib/state.js';
+import { isEmbedded, isPanes, applications, appLabel } from '../lib/state.js';
 import { allSessions, openSession, deleteSession, permanentlyDeleteSession, spawnTerminal, sessionInputStates, includeDeletedInPolling, termPickerOpen, openFeedbackItem, startSessionPolling } from '../lib/sessions.js';
 import { DeletedItemsPanel, trackDeletion } from '../components/ui/DeletedItemsPanel.js';
 import { cachedTargets, ensureTargetsLoaded } from '../components/dispatch/DispatchTargetSelect.js';
@@ -470,7 +470,7 @@ export function SessionsPage({ appId }: { appId?: string | null }) {
   // others alphabetically by name.
   const appNameByKey = (k: string): string => {
     if (k === UNLINKED_APP_KEY) return 'Unlinked';
-    return applications.value.find((a: any) => a.id === k)?.name || k.slice(-8);
+    return appLabel(applications.value.find((a: any) => a.id === k)) || k.slice(-8);
   };
   const orderedAppGroups = [...appGroups.values()].sort((a, b) => {
     if (a.appKey === appId) return -1;

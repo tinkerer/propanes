@@ -74,7 +74,7 @@ import {
 import { startTabDrag, startLeafDrag, dragOverLeafZone } from '../../lib/tab-drag.js';
 import { ctrlShiftHeld } from '../../lib/shortcuts.js';
 import { showHotkeyHints, popoutMode, type PopoutMode } from '../../lib/settings.js';
-import { selectedAppId, applications, appFeedbackCounts } from '../../lib/state.js';
+import { selectedAppId, applications, appFeedbackCounts, appLabel } from '../../lib/state.js';
 import { copyWithTooltip } from '../../lib/clipboard.js';
 import { cosArtifacts } from '../../lib/cos-artifacts.js';
 import { PrBadges, RuntimeBadge, SourceBadge } from '../PrBadges.js';
@@ -414,7 +414,7 @@ function getSingletonMeta(sid: string): SingletonMeta {
   if (sid.startsWith('view:feedback:app:')) {
     const appId = sid.slice('view:feedback:app:'.length);
     const app = applications.value.find((a: any) => a.id === appId);
-    return { label: `${app?.name || appId.slice(-8)} Tickets`, plusKind: 'new' };
+    return { label: `${appLabel(app) || appId.slice(-8)} Tickets`, plusKind: 'new' };
   }
 
   switch (sid) {
@@ -525,7 +525,7 @@ function getTabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (sid.startsWith('view:feedback:app:')) {
     const appId = sid.slice('view:feedback:app:'.length);
     const app = applications.value.find((a: any) => a.id === appId);
-    return `${app?.name || appId.slice(-8)} Tickets`;
+    return `${appLabel(app) || appId.slice(-8)} Tickets`;
   }
   if (sid === 'view:sessions-page') return 'Sessions';
   if (sid === 'view:live') return 'Live';

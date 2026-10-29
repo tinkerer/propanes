@@ -45,7 +45,7 @@ import {
   markSessionExited,
 } from '../../lib/sessions.js';
 import { sessionsInitialized } from '../../lib/session-state.js';
-import { applications, selectedAppId } from '../../lib/state.js';
+import { applications, selectedAppId, appLabel } from '../../lib/state.js';
 
 export function renderTabContent(
   sid: string,
@@ -97,7 +97,7 @@ export function renderTabContent(
             const [machineId, appId] = rest.split(':app:');
             const machine = machines.value.find(m => m.id === machineId);
             const app = appId ? applications.value.find(a => a.id === appId) : null;
-            return <SessionsListView machineId={machineId} machineName={machine?.name || null} appId={appId || null} appName={app?.name || null} />;
+            return <SessionsListView machineId={machineId} machineName={machine?.name || null} appId={appId || null} appName={appLabel(app) || null} />;
           })()
         ) : sid === 'view:terminals' ? (
           <TerminalsListView />

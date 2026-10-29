@@ -18,7 +18,7 @@ import {
 } from '../../lib/sessions.js';
 import { type PopoutMode } from '../../lib/settings.js';
 import { cosArtifacts } from '../../lib/cos-artifacts.js';
-import { applications } from '../../lib/state.js';
+import { applications, appLabel } from '../../lib/state.js';
 
 export function PanelTabBadge({ tabNum }: { tabNum: number }) {
   const pending = pendingFirstDigit.value;
@@ -55,7 +55,7 @@ export function tabLabel(sid: string, sessionMap: Map<string, any>): string {
   if (sid.startsWith('view:feedback:app:')) {
     const appId = sid.slice('view:feedback:app:'.length);
     const app = applications.value.find((a: any) => a.id === appId);
-    return `${app?.name || appId.slice(-8)} Tickets`;
+    return `${appLabel(app) || appId.slice(-8)} Tickets`;
   }
   if (sid === 'view:sessions-page') return 'Sessions';
   if (sid === 'view:live') return 'Live';

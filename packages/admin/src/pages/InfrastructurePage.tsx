@@ -1,3 +1,4 @@
+import { appLabel } from '../lib/state.js';
 import { signal } from '@preact/signals';
 import { useEffect } from 'preact/hooks';
 import { api } from '../lib/api.js';
@@ -79,7 +80,7 @@ export function spriteStatusColor(status: string): string {
 export function getAppName(appId: string | null): string {
   if (!appId) return '';
   const app = applications.value.find(a => a.id === appId);
-  return app?.name || appId.slice(0, 8);
+  return appLabel(app) || appId.slice(0, 8);
 }
 
 export function getMachineName(machineId: string | null): string {

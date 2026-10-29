@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
-import { applications, navigate } from '../../lib/state.js';
+import { applications, navigate, appLabel } from '../../lib/state.js';
 import { allSessions, openSession, getSessionLabel, loadAllSessions } from '../../lib/sessions.js';
 import { recentResults, alphaFeaturesEnabled, type RecentResult } from '../../lib/settings.js';
 import { api } from '../../lib/api.js';
@@ -104,7 +104,7 @@ export function SpotlightSearch({ onClose }: Props) {
         matched.push({
           type: 'application',
           id: app.id,
-          title: app.name,
+          title: appLabel(app),
           subtitle: app.projectDir || app.id.slice(0, 12),
           icon: '\u{1F4E6}',
           route: `/app/${app.id}/tickets`,

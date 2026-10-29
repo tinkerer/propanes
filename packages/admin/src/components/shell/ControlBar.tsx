@@ -95,7 +95,7 @@ export function ControlBar() {
         onClick={() => setAppDropdown(!appDropdown)}
       >
         <span class="control-bar-icon"><NavIcon name="app" /></span>
-        {app?.name || 'Select App'}
+        {appLabel(app) || 'Select App'}
         <span class="control-bar-caret">{'\u25BE'}</span>
       </button>
       {appDropdown && (

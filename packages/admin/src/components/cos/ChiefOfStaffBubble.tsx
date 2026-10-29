@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { marked } from 'marked';
-import { selectedAppId, isCosEmbed, applications } from '../../lib/state.js';
+import { selectedAppId, isCosEmbed, applications, appLabel } from '../../lib/state.js';
 import {
   chiefOfStaffOpen,
   chiefOfStaffAgents,
@@ -1872,7 +1872,7 @@ export function ChiefOfStaffBubble({
               const appId = selectedAppId.value;
               const isCosWorkspace = appId === COS_WORKSPACE_ID;
               const app = appId ? applications.value.find((a: any) => a.id === appId) : null;
-              const workspaceLabel = isCosWorkspace ? 'Chief of Staff' : (app?.name || '');
+              const workspaceLabel = isCosWorkspace ? 'Chief of Staff' : (appLabel(app) || '');
               // Scope: a channel (#slug) if one is active, otherwise the DM
               // (@agentName) for the currently focused agent thread.
               const ch = activeChannel.value;

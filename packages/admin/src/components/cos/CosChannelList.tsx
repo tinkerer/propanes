@@ -155,7 +155,7 @@ export function CosChannelList({
 
   const workspaceName = isCosWorkspace
     ? 'Chief of Staff'
-    : (currentApp?.name || 'App');
+    : (appLabel(currentApp) || 'App');
 
   function selectWorkspace(id: string) {
     selectedAppId.value = id;

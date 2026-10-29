@@ -339,7 +339,7 @@ export function TerminalPicker({ mode, onClose }: Props) {
         const app = applications.value.find((a: any) => a.id === appId);
         viewItems.push({
           id: `view:sessions-list:machine:${t.machineId}:app:${appId}`,
-          label: `Sessions: ${t.machineName || t.name} / ${app?.name || appId.slice(-8)}`,
+          label: `Sessions: ${t.machineName || t.name} / ${appLabel(app) || appId.slice(-8)}`,
           icon: '\u{1F5A5}\uFE0F',
         });
       }
