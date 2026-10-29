@@ -72,6 +72,18 @@ curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/aggregate/p
 curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/applications" | python3 -m json.tool
 ```
 
+### Dev URLs (public URLs for dev servers)
+
+Reserve a public URL for a dev server with your session's token. It is idempotent per app (or per `name`), and returns the URL and the local port to serve on:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $PROPANES_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"appId":"APP_ID"}' "$PW/api/v1/admin/dev-routes"      # or {"name":"storybook"}
+curl -s -H "Authorization: Bearer $PROPANES_TOKEN" "$PW/api/v1/admin/dev-routes"   # yours, with listening: true/false
+```
+
+The server proxies `https://<prefix>-<user>-<name>.<DEV_ROUTE_DOMAIN>` (HTTP and WebSocket/HMR, matched on `X-Forwarded-Host`, then `Host`) to `127.0.0.1:<port>`, and sends the dev server `Host: localhost:<port>`. Server config: `DEV_ROUTE_DOMAIN` (unset = off), `DEV_ROUTE_PREFIX`, `DEV_ROUTE_PORTS` (default `4100-4999`), and `DEV_ROUTE_HOOK`, a deployment-specific command run as `<hook> publish|unpublish <subdomain> <host> <port>` to create the hostname at the edge, pointing it at this server's port. Access control belongs to the edge in front of the hostname. See `packages/server/src/dev-routes.ts`.
+
 ## Admin UI
 
 The admin dashboard is at `http://localhost:3001/admin/`. The widget is embedded on the admin page itself.

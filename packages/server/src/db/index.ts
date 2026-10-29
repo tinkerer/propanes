@@ -889,6 +889,22 @@ export function runMigrations() {
     CREATE INDEX IF NOT EXISTS idx_session_usage_open ON session_usage(ended_at);
   `);
 
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS dev_routes (
+      id TEXT PRIMARY KEY,
+      owner_user_id TEXT NOT NULL,
+      app_id TEXT,
+      name TEXT NOT NULL,
+      subdomain TEXT NOT NULL,
+      host TEXT NOT NULL UNIQUE,
+      port INTEGER NOT NULL UNIQUE,
+      status TEXT NOT NULL,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+
   for (const sql of [
     `ALTER TABLE users ADD COLUMN slack_user_id TEXT`,
     `ALTER TABLE users ADD COLUMN slack_persona TEXT`,

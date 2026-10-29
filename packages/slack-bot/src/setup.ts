@@ -29,7 +29,7 @@ export function setupGuideText(input: SetupGuideInput): string {
     lines.push('');
     lines.push('*6. Set up each app* by asking me here; an agent does it as you, in your own checkout:');
     for (const app of input.apps) {
-      lines.push(`• \`[app:${escapeMrkdwn(app.name)}] set up this repo's development environment: follow its README and AGENTS.md, install the dependencies, and tell me anything you need from me\``);
+      lines.push(`• \`[app:${escapeMrkdwn(app.name)}] set up this repo's development environment: follow its README and AGENTS.md, install the dependencies, and get its dev server running at a public URL (${devUrlHint(app.id)}). Tell me the URL and anything you need from me.\``);
     }
     lines.push(`Your apps: ${input.apps.map((a) => `*${escapeMrkdwn(a.name)}*${a.projectDir ? ` (\`${escapeMrkdwn(a.projectDir)}\`)` : ''}`).join(', ')}.`);
   }
@@ -39,4 +39,10 @@ export function setupGuideText(input: SetupGuideInput): string {
   }
   lines.push('Send `[setup]` any time for a fresh terminal and these steps · `[help]` for everything else.');
   return lines.join('\n');
+}
+
+/** How an agent reserves a public dev URL: the session's own PROPANES_TOKEN,
+ * idempotent per app; it answers with the URL and the local port to serve on. */
+export function devUrlHint(appId: string): string {
+  return `reserve it with: curl -s -X POST -H "Authorization: Bearer $PROPANES_TOKEN" -H 'Content-Type: application/json' -d '{"appId":"${appId}"}' $PROPANES_API_URL/api/v1/admin/dev-routes — then serve on the returned port`;
 }
