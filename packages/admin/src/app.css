@@ -429,6 +429,8 @@ html[data-theme="dark"] {
 .users-slack-link label { display: flex; flex-direction: column; gap: 4px; padding: 4px 12px 8px; font-size: 11px; color: #94a3b8; }
 /* The global input rule outranks any class selector; steer its colour tokens instead. */
 .users-slack-link { --pw-bg-surface: #0f172a; --pw-text-primary: #e2e8f0; --pw-border: #334155; }
+.users-slack-link label.users-slack-check { flex-direction: row; align-items: flex-start; gap: 8px; max-width: 300px; line-height: 1.4; }
+.users-slack-check input { margin-top: 2px; flex: none; }
 .users-row-menu-error { color: #f87171; }
 
 .pty-ctx-menu button + button {

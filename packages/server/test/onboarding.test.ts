@@ -164,6 +164,7 @@ test('slack link: validated, unique, listed and token-minted for the global admi
   const linked = await (await patch({ slackUserId: 'u0alice1', slackPersona: ' alicebot ' })).json() as any;
   assert.equal(linked.user.slackUserId, 'U0ALICE1');
   assert.equal(linked.user.slackPersona, 'alicebot');
+  assert.equal(linked.user.slackOperatorAccess, false, 'acting as the operator is opt-in');
 
   sqlite.prepare(`INSERT INTO users (id, username, password_hash, role, status, created_at, updated_at)
     VALUES ('u2', 'bob', 'x', 'member', 'active', ?, ?)`).run(now, now);
@@ -177,7 +178,9 @@ test('slack link: validated, unique, listed and token-minted for the global admi
   const list = (token: string) => userRoutes.request('/slack-identities', { headers: { Authorization: `Bearer ${token}` } });
   assert.equal((await list(orgAdmin)).status, 403);
   const ids = await (await list(admin)).json() as any;
-  assert.deepEqual(ids.identities, [{ userId: 'u1', username: 'alice', role: 'member', slackUserId: 'U0ALICE1', persona: 'alicebot' }]);
+  assert.deepEqual(ids.identities, [{ userId: 'u1', username: 'alice', role: 'member', slackUserId: 'U0ALICE1', persona: 'alicebot', operatorAccess: false, launcherId: null }]);
+  await patch({ slackOperatorAccess: true });
+  assert.equal(((await (await list(admin)).json()) as any).identities[0].operatorAccess, true);
 
   const mint = (token: string, userId: string) => userRoutes.request(`/slack-identities/${userId}/token`, {
     method: 'POST', headers: { Authorization: `Bearer ${token}` },

@@ -88,6 +88,10 @@ export interface BotState {
   /** Numbered `[sessions]` listings awaiting a number reply (thread + user). */
   sessionMenus: Record<string, { sessionIds: string[]; expiresAt: number }>;
   seenEvents: string[];
+  /** Operator threads a linked user started with `[operator]` (thread key → ProPanes user id). */
+  delegatedThreads?: Record<string, string>;
+  /** When this user was sent their setup guide (linked users' state only). */
+  welcomedAt?: string;
 }
 
 export function emptyState(): BotState {
@@ -162,6 +166,18 @@ export class StateRepo {
     this.store.save(this.state);
   }
   threads(): ThreadRecord[] { return Object.values(this.state.threads); }
+
+  delegateOf(key: string): string | undefined { return this.state.delegatedThreads?.[key]; }
+  delegate(key: string, userId: string): void {
+    (this.state.delegatedThreads ??= {})[key] = userId;
+    this.store.save(this.state);
+  }
+
+  welcomedAt(): string | undefined { return this.state.welcomedAt; }
+  markWelcomed(at: string): void {
+    this.state.welcomedAt = at;
+    this.store.save(this.state);
+  }
 
   getRuntimePref(teamId: string, userId: string): Runtime | undefined {
     return this.state.runtimePrefs[`${teamId}:${userId}`];

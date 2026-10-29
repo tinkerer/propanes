@@ -13,6 +13,10 @@ export interface SlackIdentity {
   slackUserId: string;
   /** Display name for replies to this user; null = the bot's own name. */
   persona: string | null;
+  /** May also start requests as the operator with `[operator]`. */
+  operatorAccess?: boolean;
+  /** The launcher their sessions are pinned to; null = not onboarded onto their own machine account. */
+  launcherId?: string | null;
 }
 
 export interface IdentityDirectoryOptions {

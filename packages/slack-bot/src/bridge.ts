@@ -26,6 +26,7 @@ import { freshCheckpoint, threadKey, type StateRepo, type ThreadRecord } from '.
 
 export type { SlackFileInfo } from './attachments';
 import { TranscriptFollower } from './transcript';
+import { setupGuideText } from './setup';
 
 export interface IncomingSlackMessage {
   /** Slack's event_id when available; retries re-deliver the same id. */
@@ -82,6 +83,10 @@ export interface BridgeConfig {
   handoffChannel?: string;
   /** The Slack workspace (auth.test team_id), for threads opened without an incoming event. */
   teamId?: string;
+  /** Working directory for `[setup]` terminals (`~` on a member's own launcher); unset = the server default. */
+  setupCwd?: string;
+  /** The setup guide mentions `[operator]` (a linked user allowed to act as the operator). */
+  operatorAccess?: boolean;
 }
 
 /** Attachments downloaded from Slack for one request. */
@@ -243,6 +248,12 @@ export class SlackBridge {
         if (sessionMenu) this.d.state.clearSessionMenu(key, ev.user);
       }
       if (cmd.command === 'help') { await reply(helpText(await this.defaultAppName())); return; }
+      if (cmd.command === 'setup') {
+        try { await reply(await this.setupGuide(false)); } catch (err) {
+          await reply(`⚠️ Could not open a setup terminal: ${escapeMrkdwn(safeMessage(err))}`);
+        }
+        return;
+      }
       if (cmd.command === 'status') { await reply(await this.statusText(record)); return; }
       if (cmd.command === 'list-sessions' || cmd.command === 'list-terminals') {
         await this.listActiveSessions(ev, key, cmd, reply);
@@ -523,6 +534,35 @@ export class SlackBridge {
 
   setTeamId(id: string | undefined): void {
     this.d.config.teamId = id;
+  }
+
+  setOperatorAccess(allowed: boolean): void {
+    this.d.config.operatorAccess = allowed;
+  }
+
+  /** Which linked user started this operator thread with `[operator]`, if any. */
+  delegateOf(key: string): string | undefined { return this.d.state.delegateOf(key); }
+  delegate(key: string, userId: string): void { this.d.state.delegate(key, userId); }
+
+  /** Send a newly linked user their setup guide in a DM, once. Throws (and
+   * retries on the next call) when the terminal cannot be opened, e.g. while
+   * their launcher is offline. */
+  async welcome(slackUserId: string): Promise<boolean> {
+    if (this.d.state.welcomedAt()) return false;
+    const text = await this.setupGuide(true);
+    await this.d.slack.postMessage({ channel: slackUserId, text });
+    this.d.state.markWelcomed(new Date(this.now()).toISOString());
+    return true;
+  }
+
+  /** A fresh plain terminal plus the sign-in and app setup steps. */
+  private async setupGuide(welcome: boolean): Promise<string> {
+    const { sessionId } = await this.d.propanes.createTerminal({
+      permissionProfile: 'plain',
+      ...(this.d.config.setupCwd ? { cwd: this.d.config.setupCwd } : {}),
+    });
+    const apps = await this.d.propanes.listApplications().catch(() => []);
+    return setupGuideText({ terminal: this.link(sessionId), apps, operatorAccess: this.d.config.operatorAccess, welcome });
   }
 
   /** Stop re-arming watchers (shutdown); state already on disk re-arms on the next start. */
@@ -1314,6 +1354,7 @@ export function helpText(defaultAppName?: string): string {
     '• `[session] optional task` — branch this conversation into its own thread with full agent history; the original keeps running',
     '• reply `stop` (or `cancel`) — stop the thread\'s running session; a later reply resumes it',
     '• sessions idle for an hour are paused (agent stopped, conversation kept); any reply resumes them with their full context',
+    '• `[operator] …` — for linked users an admin allowed: run this new request as the operator (their apps, machines and agent subscriptions); the thread stays the operator\'s',
     '• prompts typed in the ProPanes terminal or structured view are echoed here as `👤 User asked outside Slack`, so the replies that follow are attributable',
     '',
     '*Session lists*',
@@ -1323,6 +1364,7 @@ export function helpText(defaultAppName?: string): string {
     '',
     '*Terminals*',
     '• `[terminal]` / `[infra:macbook terminal]` — open a plain shell and return its session link; optional `[app:name]` supplies app context',
+    '• `[setup]` — a fresh terminal plus the steps to sign in to Claude, Codex and GitHub and set up your apps',
     '• App/infra names accept partial matches and small typos; ambiguous matches list exact selectors to retry',
     '• A terminal opened in an agent thread is separate; replies keep reaching the agent',
     '',

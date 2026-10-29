@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { decodeSlackText, isStopKeyword, parseCommand, stripMentions } from '../src/options';
+import { decodeSlackText, isStopKeyword, parseCommand, stripMentions, takeOperatorOption } from '../src/options';
 
 test('plain request has no options and keeps the text', () => {
   assert.deepEqual(parseCommand('<@UBOT> review PR 2013'), { command: 'prompt', text: 'review PR 2013' });
@@ -114,4 +114,17 @@ test('short app/infra/session/terminal commands retain the list-* aliases', () =
   for (const input of ['[sessions terminals]', '[sessions infra]', '[apps sessions]', '[sessions codex]', '[terminals quiet]']) {
     assert.ok(parseCommand(input).error, input);
   }
+});
+
+test('takeOperatorOption removes only a standalone leading [operator] token', () => {
+  assert.deepEqual(takeOperatorOption('<@UBOT> [operator, codex] deploy'), { text: '<@UBOT> [codex] deploy', operator: true });
+  assert.deepEqual(takeOperatorOption('[operator] hi'), { text: 'hi', operator: true });
+  assert.deepEqual(takeOperatorOption('[app:Propanes Admin, operator] y'), { text: '[app:Propanes Admin] y', operator: true });
+  assert.deepEqual(takeOperatorOption('[app:operator-tools] z'), { text: '[app:operator-tools] z', operator: false });
+  assert.deepEqual(takeOperatorOption('please ask [operator]'), { text: 'please ask [operator]', operator: false });
+});
+
+test('[setup] is a standalone command', () => {
+  assert.equal(parseCommand('<@UBOT> [setup]', 'UBOT').command, 'setup');
+  assert.ok(parseCommand('[setup, codex]').error);
 });

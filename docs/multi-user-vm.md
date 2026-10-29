@@ -57,9 +57,15 @@ What it does, idempotently:
 - with `--slack-user`, links their Slack account to the shared Slack bot (see
   below).
 
+The script also writes `~/setup-apps.sh` in the member's home, which clones
+any app checkout that needed their credentials (it skips checkouts that
+exist, so it is safe to re-run).
+
 The member then opens a terminal in ProPanes. It now runs as `pp-<user>`, on
 their launcher. From it they run `claude` to log in, then `codex login`,
-`gh auth login`, and any clone the script reported.
+`gh auth login`, and `bash ~/setup-apps.sh`. If they are linked to Slack, the
+bot sends them these steps in a DM, with a link to a terminal already open on
+their launcher (see below).
 
 ### Slack
 
@@ -77,6 +83,21 @@ works for them as that user:
 - a thread belongs to whoever started it. Replies from anyone else are not
   forwarded to that person's agent. Mentioning the bot there gets a one-time
   explanation.
+
+Once a linked user has their own launcher, the bot DMs them a setup guide
+once: a link to a terminal opened in their home on that launcher, the sign-in
+steps above, and a suggested request per app (`[app:<name>] set up this repo's
+development environment…`) that an agent then carries out as them. If the
+launcher is offline, the bot retries on its next identity refresh (every
+minute). They can send `[setup]` any time for a fresh terminal and the steps.
+
+The operator can also let a linked user run requests as the operator: tick
+**May also run requests as you** in the Slack link form. That user then starts
+a request with `[operator]` (e.g. `[operator, codex] check the deploy`) to run
+it with the operator's apps, machines and agent subscriptions. The thread is
+the operator's, but follow-ups from the user who started it keep reaching it
+without repeating `[operator]`; nobody else's replies do. Without the
+permission, `[operator]` is refused and nothing starts.
 
 Slack members who are not linked act as the operator (the owner of the bot's
 `PROPANES_TOKEN`), as before. Set `SLACK_REQUIRE_LINK=1` on the bot to refuse
