@@ -159,6 +159,7 @@ export function UsersPage() {
       setMenu(null);
       await load();
     } catch (err: any) {
+      if (!menu?.slack) { setMenu(null); setError(err.message || 'Failed to save'); return; }
       setMenu((m) => (m && m.userId === id && m.slack ? { ...m, slack: { ...m.slack, error: err.message || 'Failed to save' } } : m));
     }
   }
@@ -425,6 +426,12 @@ export function UsersPage() {
         <button role="menuitem" onClick={() => setMenu({ ...m, slack: { slackUserId: u.slackUserId || '', slackPersona: u.slackPersona || '', operatorAccess: !!u.slackOperatorAccess } })}>
           {u.slackUserId ? 'Edit Slack link…' : 'Link Slack…'}
         </button>
+        {u.slackUserId && (
+          <button role="menuitem" title="Lets them start Slack requests with [operator]: your apps, machines and agent subscriptions"
+            onClick={() => saveSlackLink(u.id, { slackUserId: u.slackUserId!, slackPersona: u.slackPersona || '', operatorAccess: !u.slackOperatorAccess })}>
+            {u.slackOperatorAccess ? 'Stop [operator] requests' : 'Allow [operator] requests'}
+          </button>
+        )}
         {u.role === 'member' && <button role="menuitem" onClick={() => askConfirm('reset')}>Reset onboarding</button>}
         <button role="menuitem" class="danger" onClick={() => askConfirm('delete')}>Delete user</button>
       </div>

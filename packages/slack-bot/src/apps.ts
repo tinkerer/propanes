@@ -10,6 +10,9 @@ export interface AppInfo {
   name: string;
   projectDir?: string | null;
   description?: string | null;
+  /** Another user's copy (onboarded members get their own apps); names
+   * resolve to the requester's own apps first. */
+  othersApp?: boolean;
 }
 
 export type AppMatch =
@@ -26,10 +29,13 @@ function dirName(app: AppInfo): string {
   return dir.slice(dir.lastIndexOf('/') + 1);
 }
 
-/** Exact (id, name or project directory name) beats partial and typo matching; several
- * hits are reported, never picked from. */
+/** Exact (id, name or project directory name) beats partial and typo matching;
+ * the requester's own apps beat other users' copies; several hits are
+ * reported, never picked from. */
 export function resolveApp(apps: readonly AppInfo[], query: string): AppMatch {
-  const matches = matchTargets(apps, query, a => a.id, a => [a.name, dirName(a)]);
+  const all = matchTargets(apps, query, a => a.id, a => [a.name, dirName(a)]);
+  const own = all.filter(a => !a.othersApp);
+  const matches = own.length ? own : all;
   if (matches.length === 1) return { kind: 'one', app: matches[0] };
   if (matches.length > 1) return { kind: 'many', apps: matches };
   return { kind: 'none' };
@@ -51,9 +57,12 @@ function appLine(app: AppInfo, defaultId?: string, exactSelector = false): strin
 
 export function listAppsText(apps: readonly AppInfo[], defaultId?: string): string {
   if (!apps.length) return 'No applications are registered in ProPanes.';
+  const own = apps.filter((a) => !a.othersApp);
+  const others = apps.filter((a) => a.othersApp);
   return [
     `*Applications* (${apps.length}) — start a request with \`[app:<name>]\` to run it in that project; without it the default is used.`,
-    ...apps.map((a) => appLine(a, defaultId)),
+    ...own.map((a) => appLine(a, defaultId)),
+    ...(others.length ? ['_Other users\' apps (select by id; names prefer yours):_', ...others.map((a) => appLine(a, defaultId, true))] : []),
   ].join('\n');
 }
 

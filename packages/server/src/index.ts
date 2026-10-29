@@ -1,5 +1,5 @@
 import { serve } from '@hono/node-server';
-import type { Server } from 'node:http';
+import { createServer, type Server } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { and, eq, isNotNull, inArray, ne } from 'drizzle-orm';
 import { app } from './app.js';
@@ -8,6 +8,7 @@ import { reconcileUsage } from './metering.js';
 import { destroyWorktreeIsolate, branchForIsolatePath } from './isolates.js';
 import { registerSession } from './sessions.js';
 import { startWsHealthSweep } from './ws-backpressure.js';
+import { proxyDevRequest, proxyDevUpgrade } from './dev-routes.js';
 import { verifyToken } from './auth.js';
 import { isGlobalAdmin, resolveAdminUser, visibleToMember } from './admin-auth.js';
 import {
@@ -255,7 +256,13 @@ if (process.env.ADMIN_WATCH === '1') {
 // Native-terminal SSH access to agent sessions; no-op unless SSH_GATEWAY_PORT is set.
 startSshGateway();
 
-const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
+// Requests for a dev URL's hostname go to that dev server (dev-routes.ts); everything else is the API.
+const server = serve({
+  fetch: app.fetch,
+  port: PORT,
+  createServer: ((options: object, listener: (req: any, res: any) => void) =>
+    createServer(options, (req, res) => { if (!proxyDevRequest(req, res)) listener(req, res); })) as any,
+}, (info) => {
   const url = `http://localhost:${info.port}`;
   console.log(`Server running on ${url}`);
   console.log('');
@@ -667,6 +674,7 @@ startWsHealthSweep([
 ]);
 
 (server as unknown as Server).on('upgrade', (req, socket, head) => {
+  if (proxyDevUpgrade(req, socket, head)) return;
   const url = new URL(req.url || '/', `http://localhost:${PORT}`);
 
   if (url.pathname === '/ws/admin') {

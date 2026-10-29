@@ -785,3 +785,19 @@ export const users = sqliteTable('users', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
+
+// Public dev URLs: hostname → reserved local port, proxied by the server (dev-routes.ts).
+export const devRoutes = sqliteTable('dev_routes', {
+  id: text('id').primaryKey(),
+  ownerUserId: text('owner_user_id').notNull(),
+  appId: text('app_id'),
+  name: text('name').notNull(),
+  subdomain: text('subdomain').notNull(),
+  host: text('host').notNull().unique(),
+  port: integer('port').notNull().unique(),
+  // local (no publish hook) | pending | published | failed
+  status: text('status').notNull(),
+  error: text('error'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});

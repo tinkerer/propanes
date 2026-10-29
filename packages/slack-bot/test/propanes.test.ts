@@ -76,3 +76,14 @@ test('active session discovery fetches the complete authenticated list without a
   }));
   assert.deepEqual((await client.listActiveSessions()).map(s => s.id), ['live', 'pending', 'dispatching']);
 });
+
+test('applications owned by another user are marked, the caller\'s own and unowned ones are not', async () => {
+  const { createPropanesClient } = await import('../src/propanes');
+  const client = createPropanesClient(createPropanesFetch('https://propanes.example.test', 'fixture-token', async (url) => {
+    const path = new URL(String(url)).pathname;
+    const body = path.endsWith('/auth/me') ? { user: { id: 'u-me', username: 'me', role: 'admin' } }
+      : [{ id: 'A', name: 'Shared', ownerUserId: null }, { id: 'B', name: 'Mine', ownerUserId: 'u-me' }, { id: 'C', name: 'Theirs', ownerUserId: 'u-alice' }];
+    return new Response(JSON.stringify(body), { status: 200 });
+  }));
+  assert.deepEqual((await client.listApplications()).map((a) => [a.id, !!a.othersApp]), [['A', false], ['B', false], ['C', true]]);
+});

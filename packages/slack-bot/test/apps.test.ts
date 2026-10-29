@@ -41,3 +41,15 @@ test('app typos resolve conservatively and duplicate names offer exact IDs', () 
   assert.equal(duplicate.kind, 'many');
   if (duplicate.kind === 'many') assert.match(ambiguousAppText('storefront', duplicate.apps), /app:app-sc\][\s\S]*app:app-sc-2\]/);
 });
+
+test('names resolve to the requester\'s own app before another user\'s copy', () => {
+  const mine = { id: 'A1', name: 'Storefront', projectDir: '/srv/storefront' };
+  const theirs = { id: 'B1', name: 'Storefront', projectDir: '/home/pp-alice/storefront', othersApp: true };
+  assert.deepEqual(resolveApp([theirs, mine], 'storefront'), { kind: 'one', app: mine });
+  assert.deepEqual(resolveApp([theirs, mine], 'B1'), { kind: 'one', app: theirs }, 'an exact id still selects theirs');
+  assert.deepEqual(resolveApp([theirs], 'storefront'), { kind: 'one', app: theirs }, 'theirs when nothing of mine matches');
+  assert.equal(defaultApp([theirs, mine], 'Storefront', 'X').id, 'A1');
+  const listing = listAppsText([theirs, mine], 'A1');
+  assert.ok(listing.indexOf('[app:storefront]') < listing.indexOf("Other users' apps"));
+  assert.match(listing, /\[app:B1\]/);
+});

@@ -67,6 +67,17 @@ their launcher. From it they run `claude` to log in, then `codex login`,
 bot sends them these steps in a DM, with a link to a terminal already open on
 their launcher (see below).
 
+### Dev URLs
+
+Several members can run dev servers side by side. Each one reserves a port and
+a hostname with `POST /api/v1/admin/dev-routes` (agents can do it themselves
+with their session's `PROPANES_TOKEN`; the Slack setup guide's suggested
+request asks them to). The server proxies that hostname to the port, so the
+edge only ever needs to reach the server's own port. Set `DEV_ROUTE_DOMAIN`,
+and `DEV_ROUTE_HOOK` to a script that creates the hostname at your edge (see
+`CLAUDE.md` → Dev URLs). Members share localhost, so a dev server bound to a
+port outside its reservation can still collide with someone else's.
+
 ### Slack
 
 One Slack app serves everyone. Link a member's Slack account to their ProPanes

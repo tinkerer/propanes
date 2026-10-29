@@ -138,8 +138,10 @@ const toBlob = (f: DownloadedFile) => new Blob([f.bytes as unknown as Uint8Array
 
 export function createPropanesClient(api: PropanesFetch): PropanesClient {
   const post = (path: string, body: unknown) => api(path, { method: 'POST', body: JSON.stringify(body) });
+  let myId: Promise<string | undefined> | undefined;
+  const me = () => api('/api/v1/auth/me');
   return {
-    me: () => api('/api/v1/auth/me'),
+    me,
     createTerminal: async (input) => {
       const result = await post('/api/v1/admin/terminal', input);
       if (!result?.sessionId) throw new Error('terminal did not return a session id');
@@ -151,8 +153,15 @@ export function createPropanesClient(api: PropanesFetch): PropanesClient {
       return { targets: Array.isArray(r?.targets) ? r.targets : [], localTarget: r?.localTarget ?? null };
     },
     listApplications: async () => {
-      const rows = await api('/api/v1/admin/applications');
-      return (Array.isArray(rows) ? rows : rows?.applications ?? []).map((a: any) => ({ id: a.id, name: a.name ?? a.id, projectDir: a.projectDir ?? null, description: a.description ?? null }));
+      const raw = await api('/api/v1/admin/applications');
+      const rows: any[] = Array.isArray(raw) ? raw : raw?.applications ?? [];
+      // An admin also sees members' own copies; mark them so names resolve to ours.
+      if (rows.some((a) => a.ownerUserId)) myId ??= me().then((r: any) => r?.user?.id as string | undefined, () => { myId = undefined; return undefined; });
+      const self = await myId;
+      return rows.map((a: any) => ({
+        id: a.id, name: a.name ?? a.id, projectDir: a.projectDir ?? null, description: a.description ?? null,
+        ...(a.ownerUserId && self && a.ownerUserId !== self ? { othersApp: true } : {}),
+      }));
     },
     createFeedback: (input) => {
       const { screenshots, ...fields } = input;
