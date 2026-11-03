@@ -7,9 +7,9 @@ import { fixture, mention, threadReply } from './helpers';
 
 const ALICE: SlackIdentity = { userId: 'u-alice', username: 'alice', role: 'member', slackUserId: 'UALICE', persona: 'alicebot' };
 
-function setup(opts: { requireLink?: boolean; linked?: SlackIdentity[] } = {}) {
+function setup(opts: { requireLink?: boolean; linked?: SlackIdentity[]; appId?: string } = {}) {
   const operator = fixture();
-  const member = fixture({ config: { handoffChannel: 'UALICE', teamId: 'T1' } });
+  const member = fixture({ config: { handoffChannel: 'UALICE', teamId: 'T1', ...(opts.appId !== undefined ? { appId: opts.appId } : {}) } });
   const linked = opts.linked ?? [ALICE];
   const created: string[] = [];
   const router = new SlackRouter({
@@ -186,9 +186,8 @@ test('[operator] from someone acting as the operator is simply dropped', async (
 test('linked users with their own launcher get the setup guide in a DM once', async () => {
   const pinned = { ...ALICE, launcherId: 'vm-alice' };
   const unpinned: SlackIdentity = { userId: 'u-bob', username: 'bob', role: 'member', slackUserId: 'UBOB', persona: null };
-  const { operator, member, router, created } = setup({ linked: [pinned, unpinned] });
+  const { operator, member, router } = setup({ linked: [pinned, { ...unpinned, role: 'admin' }] });
   assert.equal(await router.welcomeNew(), 1);
-  assert.deepEqual(created, ['u-alice'], 'no bridge (and no terminal on the server account) for an unpinned user');
   assert.ok(member.world.calls.some((c) => c.startsWith('terminal:')));
   const dm = member.slack.posts.find((p) => p.channel === 'UALICE');
   assert.ok(dm, 'posted to her DM');
@@ -206,4 +205,59 @@ test('a failed setup guide is retried on the next pass', async () => {
   assert.equal(await router.welcomeNew(), 0);
   member.world.propanes.createTerminal = create;
   assert.equal(await router.welcomeNew(), 1);
+});
+
+const CAROL: SlackIdentity = { userId: 'u-carol', username: 'carol', role: 'member', slackUserId: 'UCAROL', persona: null, launcherId: null };
+
+test('a linked member without a launcher is told once, gets no terminal, then gets the guide once onboarded', async () => {
+  const linked = [{ ...CAROL }];
+  const { member, router } = setup({ linked });
+  assert.equal(await router.welcomeNew(), 0, 'the notice is not the setup guide');
+  await router.welcomeNew();
+  const notices = member.slack.posts.filter((p) => p.channel === 'UCAROL');
+  assert.equal(notices.length, 1, 'told once');
+  assert.match(notices[0].text, /finish onboarding/);
+  assert.ok(!member.world.calls.some((c) => c.startsWith('terminal:')), 'no terminal on the server account');
+
+  linked[0] = { ...CAROL, launcherId: 'vm-carol' };
+  assert.equal(await router.welcomeNew(), 1);
+  assert.match(member.slack.posts.filter((p) => p.channel === 'UCAROL')[1].text, /codex login/);
+  assert.equal(member.world.calls.filter((c) => c.startsWith('terminal:')).length, 1);
+  assert.match(member.world.calls.find((c) => c.startsWith('terminal:'))!, /~/, 'guide terminal opens in their home');
+});
+
+test('no unfinished-onboarding notice while the server is setting up their workspace', async () => {
+  const { member, router } = setup({ linked: [{ ...CAROL, onboarding: true }] });
+  await router.welcomeNew();
+  assert.equal(member.slack.posts.filter((p) => p.channel === 'UCAROL').length, 0);
+});
+
+test('a failed onboarding notice is retried', async () => {
+  const { member, router } = setup({ linked: [CAROL] });
+  const post = member.slack.postMessage;
+  member.slack.postMessage = async () => { throw new Error('ratelimited'); };
+  await router.welcomeNew();
+  member.slack.postMessage = post;
+  await router.welcomeNew();
+  assert.equal(member.slack.posts.filter((p) => p.channel === 'UCAROL').length, 1);
+});
+
+test('a request from a member with no apps explains onboarding instead of a feedback 400', async () => {
+  const { member, router } = setup({ linked: [{ ...CAROL, launcherId: 'vm-carol' }], appId: '' });
+  member.world.propanes.listApplications = async () => [];
+  await router.handleEvent(mention('fix the login bug', { user: 'UCAROL' }));
+  await router.drain();
+  assert.match(member.slack.texts().join('\n'), /do not have any applications.*Nothing was started/);
+  assert.ok(!member.world.calls.some((c) => c.startsWith('dispatch:')));
+});
+
+test('[setup] and [terminal] are refused without a launcher; [operator] is offered when allowed', async () => {
+  const { member, router } = setup({ linked: [{ ...CAROL, operatorAccess: true }] });
+  await router.handleEvent(mention('[setup]', { user: 'UCAROL' }));
+  await router.handleEvent(mention('[terminal]', { user: 'UCAROL', ts: '300.000' }));
+  await router.drain();
+  assert.ok(!member.world.calls.some((c) => c.startsWith('terminal:')));
+  const refusals = member.slack.texts().filter((t) => /do not have your own machine account/.test(t));
+  assert.equal(refusals.length, 2);
+  assert.match(refusals[0], /\[operator\]/);
 });

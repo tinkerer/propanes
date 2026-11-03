@@ -204,9 +204,15 @@ export const api = {
     }),
 
   getUserOnboarding: (id: string) =>
-    request<{ owned: Array<{ id: string; name: string; projectDir: string }>; suggestions: any[]; agentPresets: any[] }>(
+    request<{ owned: Array<{ id: string; name: string; projectDir: string }>; suggestions: any[]; agentPresets: any[]; vmOnboardAvailable?: boolean; vmOnboardJob?: { status: 'running' | 'succeeded' | 'failed'; log: string } | null }>(
       `/admin/users/${id}/onboarding`,
     ),
+
+  startVmOnboarding: (id: string, apps: string[]) =>
+    request<{ job: { status: string } }>(`/admin/users/${id}/onboard-vm`, {
+      method: 'POST',
+      body: JSON.stringify({ apps }),
+    }),
 
   resetUserOnboarding: (id: string) =>
     request<{ apps: Array<{ id: string; name: string }>; agentsRemoved: number; machineRemoved: boolean; launcherCleared: string | null }>(

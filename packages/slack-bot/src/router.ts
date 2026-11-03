@@ -75,12 +75,24 @@ export class SlackRouter {
 
   /** DM each newly linked user who has their own launcher the setup guide
    * (once; a failure, such as an offline launcher, is retried next time).
-   * Users without a launcher pin would get a terminal on the server's own
-   * account, so they are skipped. */
+   * Members without a launcher pin would get a terminal on the server's own
+   * account, so they are told once that onboarding is unfinished instead, and
+   * get the guide when it is done. Unpinned admins run locally by design. */
   async welcomeNew(): Promise<number> {
     let sent = 0;
     for (const identity of this.d.directory.all()) {
-      if (identity.userId === this.d.operatorUserId || !identity.launcherId) continue;
+      if (identity.userId === this.d.operatorUserId) continue;
+      if (!identity.launcherId) {
+        if (identity.role !== 'member' || identity.onboarding) continue;
+        try {
+          if (await this.bridgeFor(identity).noticeOnboardingPending(identity.slackUserId)) {
+            this.d.log?.(`${identity.username} is linked to Slack but not onboarded (no launcher); told them to ask an admin`);
+          }
+        } catch (err) {
+          this.d.log?.(`could not tell ${identity.username} their onboarding is unfinished: ${err instanceof Error ? err.message : 'error'}`);
+        }
+        continue;
+      }
       try {
         if (await this.bridgeFor(identity).welcome(identity.slackUserId)) {
           sent++;
@@ -101,13 +113,18 @@ export class SlackRouter {
     const existing = this.bridges.get(identity.userId);
     if (existing) {
       existing.identity = identity;
-      existing.bridge.setOperatorAccess(!!identity.operatorAccess);
+      this.syncBridge(existing.bridge, identity);
       return existing.bridge;
     }
     const bridge = this.d.createBridge(identity);
-    bridge.setOperatorAccess(!!identity.operatorAccess);
+    this.syncBridge(bridge, identity);
     this.bridges.set(identity.userId, { identity, bridge });
     return bridge;
+  }
+
+  private syncBridge(bridge: SlackBridge, identity: SlackIdentity): void {
+    bridge.setOperatorAccess(!!identity.operatorAccess);
+    bridge.setOnboarding({ pinned: !!identity.launcherId, pending: identity.role === 'member' && !identity.launcherId });
   }
 
   private operatorOwner(): Owner {

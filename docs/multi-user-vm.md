@@ -95,6 +95,18 @@ works for them as that user:
   forwarded to that person's agent. Mentioning the bot there gets a one-time
   explanation.
 
+Linking alone does not onboard anyone. To do both at once, set
+`PROPANES_VM_ONBOARD_SCRIPT` on the server to the absolute path of
+`scripts/onboard-user.sh`. The server's account needs passwordless sudo, since
+the script creates a Linux account and a service. The **Link Slack…** form then
+offers apps to set up; ticking at least one runs the script as you save. Only
+the server operator can start it. Leave the variable unset to keep it off.
+
+A linked member with no launcher gets a one-time DM saying an admin has to
+finish onboarding them, `[setup]` and terminals are refused (they would open on
+the server's account), and a request is refused if they have no apps. The Users
+page flags the unfinished link.
+
 Once a linked user has their own launcher, the bot DMs them a setup guide
 once: a link to a terminal opened in their home on that launcher, the sign-in
 steps above, and a suggested request per app (`[app:<name>] set up this repo's

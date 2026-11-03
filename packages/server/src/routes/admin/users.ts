@@ -12,6 +12,7 @@ import {
   launcherIdFor,
 } from '../../k8s-provision.js';
 import { AGENT_PRESETS, OnboardError, onboardUser, parseOnboardPlan, resetOnboarding } from '../../onboarding.js';
+import { getVmOnboardJob, isVmOnboarding, startVmOnboarding, vmOnboardScript } from '../../vm-onboarding.js';
 
 export const userRoutes = new Hono();
 
@@ -168,6 +169,8 @@ userRoutes.get('/slack-identities', async (c) => {
       persona: u.slackPersona ?? null,
       operatorAccess: !!u.slackOperatorAccess,
       launcherId: u.launcherId ?? null,
+      // Workspace setup is running: the bot holds its "not onboarded" notice.
+      onboarding: isVmOnboarding(u.id),
     })),
   });
 });
@@ -205,12 +208,16 @@ userRoutes.get('/users/:id/onboarding', async (c) => {
   const user = db.select().from(schema.users).where(eq(schema.users.id, c.req.param('id'))).get();
   if (!user) return c.json({ error: 'User not found' }, 404);
   const apps = db.select().from(schema.applications).all();
+  const memberIds = new Set(db.select().from(schema.users).all().filter((u) => u.role === 'member').map((u) => u.id));
   return c.json({
     user: publicUser(user),
+    vmOnboardAvailable: !!vmOnboardScript(),
+    vmOnboardJob: getVmOnboardJob(user.id),
     agentPresets: AGENT_PRESETS,
     owned: apps.filter((a) => a.ownerUserId === user.id).map((a) => ({ id: a.id, name: a.name, projectDir: a.projectDir })),
     suggestions: apps
-      .filter((a) => a.ownerUserId !== user.id)
+      // Another member's copy is theirs (their checkout), not a suggestion.
+      .filter((a) => a.ownerUserId !== user.id && !(a.ownerUserId && memberIds.has(a.ownerUserId)))
       .map((a) => ({ id: a.id, name: a.name, description: a.description, projectDir: a.projectDir })),
   });
 });
@@ -236,6 +243,30 @@ userRoutes.post('/users/:id/onboard', async (c) => {
     }
     throw err;
   }
+});
+
+// Runs the root onboarding script, so server operator only (not org admins).
+userRoutes.post('/users/:id/onboard-vm', async (c) => {
+  const denied = await requireGlobalAdmin(c);
+  if (denied) return denied;
+  if (!vmOnboardScript()) return c.json({ error: 'VM onboarding is not enabled on this server (PROPANES_VM_ONBOARD_SCRIPT)' }, 400);
+  const user = db.select().from(schema.users).where(eq(schema.users.id, c.req.param('id'))).get();
+  if (!user) return c.json({ error: 'User not found' }, 404);
+  if (user.role !== 'member') return c.json({ error: 'Only members get a machine account' }, 400);
+  // The same rule the script applies; it becomes part of a Linux account name.
+  if (!/^[a-z][a-z0-9-]{0,24}$/.test(user.username)) {
+    return c.json({ error: `Username "${user.username}" cannot be a Linux account name (lowercase letters, digits and - only)` }, 400);
+  }
+  const body = await c.req.json().catch(() => ({}));
+  const appIds: unknown[] = Array.isArray(body.apps) ? body.apps : [];
+  if (!appIds.length) return c.json({ error: 'Pick at least one app, or there is nothing for them to work in' }, 400);
+  const known = new Set(db.select({ id: schema.applications.id }).from(schema.applications).all().map((a) => a.id));
+  const unknown = appIds.find((id) => typeof id !== 'string' || !known.has(id));
+  if (unknown !== undefined) return c.json({ error: `Unknown app: ${String(unknown)}` }, 400);
+  if (isVmOnboarding(user.id)) return c.json({ error: 'Onboarding is already running for this user' }, 409);
+  const adminToken = c.req.header('Authorization')!.replace('Bearer ', '');
+  const job = startVmOnboarding({ userId: user.id, username: user.username, appIds: appIds as string[], adminToken });
+  return c.json({ job }, 202);
 });
 
 userRoutes.post('/users/:id/reset-onboarding', async (c) => {

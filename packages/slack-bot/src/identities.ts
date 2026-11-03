@@ -17,6 +17,8 @@ export interface SlackIdentity {
   operatorAccess?: boolean;
   /** The launcher their sessions are pinned to; null = not onboarded onto their own machine account. */
   launcherId?: string | null;
+  /** The server is setting up their workspace right now. */
+  onboarding?: boolean;
 }
 
 export interface IdentityDirectoryOptions {
