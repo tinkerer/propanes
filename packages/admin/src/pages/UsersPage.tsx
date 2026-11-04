@@ -370,7 +370,7 @@ export function UsersPage() {
                   <div style="font-size:11px;color:var(--pw-text-muted);margin-top:2px">Setting up their workspace… the bot DMs them the setup guide when it's ready.</div>
                 )}
                 {vmJobs[u.id]?.status === 'failed' && (
-                  <div style="font-size:11px;color:var(--pw-danger, #ef4444);margin-top:2px;white-space:pre-wrap">Workspace setup failed: {vmJobs[u.id].log.trim().split('\n').slice(-3).join('\n')}</div>
+                  <div style="font-size:11px;color:var(--pw-danger, #ef4444);margin-top:2px;white-space:pre-wrap">Workspace setup failed: {vmJobs[u.id].log.replace(/\x1b\[[0-9;]*m/g, '').trim().split('\n').slice(-3).join('\n')}</div>
                 )}
                 {u.role === 'member' && u.slackUserId && !u.launcherId && vmJobs[u.id]?.status !== 'running' && (
                   <div style="font-size:11px;color:var(--pw-warning, #f59e0b);margin-top:2px">
