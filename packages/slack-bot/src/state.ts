@@ -76,6 +76,23 @@ export interface ThreadRecord {
   updatedAt: string;
 }
 
+/** One alert that started an investigation (see alert-investigations.ts). */
+export interface AlertInvestigationRecord {
+  /** The investigation's thread, rooted on the alert. */
+  key: string;
+  ts: string;
+  signature: string;
+  sessionId: string;
+  feedbackId: string;
+  startedAt: number;
+}
+
+export interface AlertWatchState {
+  /** Slack timestamp of the newest message already handled. */
+  cursor: string;
+  investigations: AlertInvestigationRecord[];
+}
+
 export interface BotState {
   version: 1;
   threads: Record<string, ThreadRecord>;
@@ -92,6 +109,8 @@ export interface BotState {
   delegatedThreads?: Record<string, string>;
   /** When this user was sent their setup guide (linked users' state only). */
   welcomedAt?: string;
+  /** Alert channels this listener turns into investigations, by channel id. */
+  alertWatches?: Record<string, AlertWatchState>;
 }
 
 export function emptyState(): BotState {
@@ -216,6 +235,12 @@ export class StateRepo {
     this.store.save(this.state);
   }
   /** The newest thread record, for messages that have no Slack conversation of their own. */
+  getAlertWatch(channel: string): AlertWatchState | undefined { return this.state.alertWatches?.[channel]; }
+  putAlertWatch(channel: string, watch: AlertWatchState): void {
+    this.state.alertWatches = { ...this.state.alertWatches, [channel]: watch };
+    this.store.save(this.state);
+  }
+
   latestThread(): ThreadRecord | undefined {
     return this.threads().reduce<ThreadRecord | undefined>((best, t) => (!best || t.updatedAt > best.updatedAt ? t : best), undefined);
   }
