@@ -430,8 +430,11 @@ exactly as it would from the UI:
 It is a JSON array with one entry per channel; unset means off:
 
 ```json
-[{"channel":"C0CCR5GMLKV","match":"^Workbench recovery backup (check failed|alert):","app":"Workbench","task":"Follow deployment/cross-region-backup/ALERT-INVESTIGATION.md from origin/main.","cooldownHours":24,"maxPerDay":6}]
+[{"channel":"C0CCR5GMLKV","match":"^Workbench recovery backup (check failed|alert):","app":"01KNR6J2J3ABH03JBFEYM6KMVJ","task":"Follow deployment/cross-region-backup/ALERT-INVESTIGATION.md from origin/main.","cooldownHours":24,"maxPerDay":6}]
 ```
+
+Name `app` by id when members have their own copies of an application with the
+same name. Without `app`, the default application is used.
 
 The listener reads each channel's history every `AMIROBOT_ALERT_POLL_MS`
 (60 s), because Bolt drops the bot's own events. The persisted cursor means an
