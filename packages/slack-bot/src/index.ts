@@ -13,6 +13,7 @@ import { BOT_NAME } from './name';
 import { FileStateStore, StateRepo } from './state';
 import { IdentityDirectory, type SlackIdentity } from './identities';
 import { SlackRouter } from './router';
+import { AlertInvestigator, parseAlertWatches, type AlertMessage } from './alert-investigations';
 
 const PROPANES_URL = process.env.PROPANES_URL ?? 'http://localhost:3001';
 // Public-facing URL used in Slack messages. Defaults to PROPANES_URL but can
@@ -46,6 +47,10 @@ const USER_STATE_DIR = join(dirname(STATE_FILE), 'users');
 // Unlinked Slack members act as the operator unless this is set; then they are refused.
 const REQUIRE_LINK = /^(1|true|yes)$/i.test(process.env.SLACK_REQUIRE_LINK ?? '');
 const IDENTITY_REFRESH_MS = 60_000;
+// Channels whose monitoring alerts start an investigation; see README, "Alert investigations".
+const ALERT_WATCHES = process.env.AMIROBOT_ALERT_WATCHES;
+const ALERT_POLL_MS = parseInt(process.env.AMIROBOT_ALERT_POLL_MS ?? '60000', 10) || 60_000;
+const ALERT_HISTORY_MAX_PAGES = 10;
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN!,
@@ -118,6 +123,20 @@ function userBridge(identity: SlackIdentity): SlackBridge {
 }
 
 let router: SlackRouter | undefined;
+let alerts: AlertInvestigator | undefined;
+
+/** Top-level messages newer than `oldest`, following Slack's pagination. */
+async function channelHistory(channel: string, oldest: string): Promise<AlertMessage[]> {
+  const messages: AlertMessage[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < ALERT_HISTORY_MAX_PAGES; page++) {
+    const result = await app.client.conversations.history({ channel, oldest, limit: 200, cursor });
+    messages.push(...((result.messages ?? []) as AlertMessage[]));
+    cursor = result.response_metadata?.next_cursor || undefined;
+    if (!cursor) break;
+  }
+  return messages;
+}
 
 // Handlers hand the event to the bridge and return at once, so Socket Mode
 // acknowledgements never wait on dispatch, polling or Slack posting.
@@ -217,6 +236,24 @@ app.message(async ({ message, body }) => {
   welcome();
   setInterval(() => { directory.refresh().then(welcome, () => undefined); }, IDENTITY_REFRESH_MS).unref();
   pollHandoffs();
+  const watches = parseAlertWatches(ALERT_WATCHES, log);
+  if (watches.length && typeof auth.bot_id === 'string' && teamId) {
+    alerts = new AlertInvestigator({
+      watches,
+      history: channelHistory,
+      bridge,
+      propanes,
+      state,
+      post: (args) => slack.postMessage(args),
+      permalink: (channel, ts) => slack.permalink(channel, ts),
+      sessionUrl: (id) => bridge.sessionUrl(id),
+      botId: auth.bot_id,
+      teamId,
+      log,
+    });
+    alerts.start(ALERT_POLL_MS);
+    console.log(`[${BOT_NAME}] watching ${watches.length} alert channel${watches.length === 1 ? '' : 's'}: ${watches.map((w) => w.channel).join(', ')}`);
+  }
   console.log(`${BOT_NAME} connected via Socket Mode${rearmed ? ` (re-armed ${rearmed} thread watcher${rearmed === 1 ? '' : 's'})` : ''}`);
 })().catch((err) => {
   log(`startup failed: ${err instanceof Error ? err.message : 'error'}`);
@@ -241,6 +278,7 @@ function pollHandoffs(): void {
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
+    alerts?.stop();
     (router ?? bridge).stop();
     if (handoffTimer) clearTimeout(handoffTimer);
     app.stop().catch(() => undefined).finally(() => process.exit(0));

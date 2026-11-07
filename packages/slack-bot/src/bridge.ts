@@ -504,6 +504,35 @@ export class SlackBridge {
   }
 
   /** Button clicks use exact launcher IDs and the same per-thread lock as messages. */
+  /** Opens a ticket and session in the thread of a monitoring alert. Returns
+   * undefined when the thread was told why none could start. Starting twice
+   * returns the first session, so a retry never opens a second ticket. */
+  async startAlertInvestigation(alert: { teamId: string; channel: string; ts: string }, task: string, options: { app?: string; tags?: string[] } = {}): Promise<ThreadRecord | undefined> {
+    const key = threadKey(alert.teamId, alert.channel, alert.ts);
+    return this.withLock(key, async () => {
+      const existing = this.d.state.getThread(key);
+      if (existing) return existing;
+      this.d.state.engageThread(key);
+      const ev: IncomingSlackMessage = { teamId: alert.teamId, channel: alert.channel, channelType: 'channel', ts: alert.ts, threadTs: alert.ts, text: task, mentionsBot: false };
+      const reply = (text: string) => this.d.slack.postMessage({ channel: alert.channel, thread_ts: alert.ts, text });
+      await this.react(ev);
+      await this.startSession(ev, key, alert.ts, { command: 'prompt', text: task, ...(options.app ? { app: options.app } : {}) }, reply, { images: [], files: [] }, options.tags);
+      return this.d.state.getThread(key);
+    });
+  }
+
+  /** Hands a later alert to the investigation running in a thread. */
+  async forwardAlert(key: string, text: string): Promise<boolean> {
+    return this.withLock(key, async () => {
+      const record = this.d.state.getThread(key);
+      if (!record?.threadTs) return false;
+      const ev: IncomingSlackMessage = { teamId: record.teamId, channel: record.channel, channelType: 'channel', ts: record.threadTs, threadTs: record.threadTs, text, mentionsBot: false };
+      const reply = (t: string) => this.d.slack.postMessage({ channel: record.channel, thread_ts: record.threadTs ?? undefined, text: t });
+      await this.continueThread(ev, record, { command: 'prompt', text }, reply, { images: [], files: [] });
+      return true;
+    });
+  }
+
   async handleInfraTerminalAction(action: InfraTerminalAction): Promise<void> {
     if (!this.d.state.markEvent(action.eventId)) return;
     const key = threadKey(action.teamId, action.channel, action.threadTs);
@@ -698,7 +727,7 @@ export class SlackBridge {
 
   // ---------------------------------------------------------------- commands
 
-  private async startSession(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>, staged: StagedAttachments): Promise<void> {
+  private async startSession(ev: IncomingSlackMessage, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>, staged: StagedAttachments, tags: string[] = []): Promise<void> {
     if (!cmd.text) {
       await reply(`Tell me what to do, e.g. \`@${BOT_NAME} review PR 2013\`. Send \`[help]\` for options.`);
       return;
@@ -728,7 +757,7 @@ export class SlackBridge {
       title: feedbackTitle(cmd.text),
       description: cmd.text,
       appId,
-      tags: ['slack', BOT_NAME],
+      tags: ['slack', BOT_NAME, ...tags],
       screenshots: staged.images,
     });
     const forwarded = await this.stageForSession(undefined, { images: [], files: staged.files }, reply);

@@ -177,7 +177,7 @@ export class FakeSlack implements SlackPoster {
   texts(): string[] { return this.posts.map((p) => p.text); }
 }
 
-export interface Fixture { world: World; slack: FakeSlack; store: StateStore; bridge: SlackBridge; steps: Array<() => void>; clock: { now: number }; }
+export interface Fixture { world: World; slack: FakeSlack; store: StateStore; state: StateRepo; bridge: SlackBridge; steps: Array<() => void>; clock: { now: number }; }
 
 export function fixture(opts: { store?: StateStore; config?: Partial<BridgeConfig>; noDownloader?: boolean } = {}): Fixture {
   const world = new World();
@@ -185,12 +185,13 @@ export function fixture(opts: { store?: StateStore; config?: Partial<BridgeConfi
   const store = opts.store ?? new MemoryStateStore();
   const steps: Array<() => void> = [];
   const clock = { now: 1_000_000 };
+  const state = new StateRepo(store);
   const bridge = new SlackBridge({
     propanes: world.propanes,
     models: { list: async () => ({ models: opts.config?.models ?? TEST_MODELS, warnings: [] }), providerForRuntime: (runtime) => runtime === 'claude' ? 'Anthropic' : 'OpenAI' },
     slack,
     files: opts.noDownloader ? undefined : world.downloader,
-    state: new StateRepo(store),
+    state,
     config: { appId: APP, publicUrl: PUBLIC, botUserId: 'UBOT', pollMs: 1, idlePollMs: 1, idleStopMs: 60_000, transcriptTail: 2000, ...opts.config },
     log: () => undefined,
     // Each watcher sleep runs the next scripted world change; a script that
@@ -203,7 +204,7 @@ export function fixture(opts: { store?: StateStore; config?: Partial<BridgeConfi
     },
     now: () => clock.now,
   });
-  return { world, slack, store, bridge, steps, clock };
+  return { world, slack, store, state, bridge, steps, clock };
 }
 
 export function mention(text: string, over: Partial<IncomingSlackMessage> = {}): IncomingSlackMessage {
