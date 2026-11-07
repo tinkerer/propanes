@@ -424,6 +424,37 @@ exactly as it would from the UI:
 - Slack requests never bypass ProPanes access control: every call carries the
   listener's bearer token, so the bot sees and drives exactly what that user may.
 
+### Alert investigations
+
+`AMIROBOT_ALERT_WATCHES` turns monitoring alerts into ProPanes investigations.
+It is a JSON array with one entry per channel; unset means off:
+
+```json
+[{"channel":"C0CCR5GMLKV","match":"^Workbench recovery backup (check failed|alert):","app":"Workbench","task":"Follow deployment/cross-region-backup/ALERT-INVESTIGATION.md from origin/main.","cooldownHours":24,"maxPerDay":6}]
+```
+
+The listener reads each channel's history every `AMIROBOT_ALERT_POLL_MS`
+(60 s), because Bolt drops the bot's own events. The persisted cursor means an
+alert posted during a restart still counts; alerts from before the first run do
+not. Only a top-level post by this bot, without a display-name override, whose
+text matches the `^`-anchored `match` is an alert. `[TEST]` drill messages do
+not match the pattern above, so drills start nothing.
+
+Each investigation is a ticket (a feedback item tagged `slack`, the bot name and
+`backup-alert`) and a dispatched session in the configured application, with the
+alert as the thread root. The agent reports in that thread, and replies there
+reach it like any other thread. Another alert then has one of these outcomes:
+
+| When it arrives | What happens |
+|---|---|
+| An investigation in this channel is still running | The alert goes to that session and the alert's thread links to it. One runs at a time, because failures come in bursts and repairs must not race |
+| The same failure started an investigation within `cooldownHours` (24) | A note links to it; no new session |
+| `maxPerDay` (6) investigations started in the last 24 hours | A note says a person is needed |
+| Otherwise | A new ticket and session |
+
+An alert that cannot be handled is retried on the next two polls. Then the
+thread says it needs a person and the listener moves on.
+
 ## Several users, one bot
 
 The operator links Slack members to ProPanes users (Users page → ⋯ → **Link
@@ -465,7 +496,7 @@ the id fallback), and `PROPANES_TOKEN` (an authorized ProPanes bearer token;
 track its expiry). Optional: `SLACK_BOT_NAME` (the handle used in help text,
 hints, feedback tags and logs; default `amirobot`), `AGENT_ENDPOINT_ID`, `POLL_MS`, `IDLE_POLL_MS`,
 `IDLE_STOP_MS`, `AMIROBOT_STATE_FILE`, `AMIROBOT_HANDOFF_CHANNEL`,
-`AMIROBOT_HANDOFF_POLL_MS`, `SLACK_REQUIRE_LINK`. The bot token also downloads Slack
+`AMIROBOT_HANDOFF_POLL_MS`, `SLACK_REQUIRE_LINK`, `AMIROBOT_ALERT_WATCHES`, `AMIROBOT_ALERT_POLL_MS`. The bot token also downloads Slack
 attachments. The listener verifies API authentication
 and lists which runtimes resolve before opening its socket.
 
