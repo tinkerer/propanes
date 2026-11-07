@@ -178,7 +178,7 @@ test('slack link: validated, unique, listed and token-minted for the global admi
   const list = (token: string) => userRoutes.request('/slack-identities', { headers: { Authorization: `Bearer ${token}` } });
   assert.equal((await list(orgAdmin)).status, 403);
   const ids = await (await list(admin)).json() as any;
-  assert.deepEqual(ids.identities, [{ userId: 'u1', username: 'alice', role: 'member', slackUserId: 'U0ALICE1', persona: 'alicebot', operatorAccess: false, launcherId: null }]);
+  assert.deepEqual(ids.identities, [{ userId: 'u1', username: 'alice', role: 'member', slackUserId: 'U0ALICE1', persona: 'alicebot', operatorAccess: false, launcherId: null, onboarding: false }]);
   await patch({ slackOperatorAccess: true });
   assert.equal(((await (await list(admin)).json()) as any).identities[0].operatorAccess, true);
 

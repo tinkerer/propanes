@@ -26,7 +26,7 @@ import { freshCheckpoint, threadKey, type StateRepo, type ThreadRecord } from '.
 
 export type { SlackFileInfo } from './attachments';
 import { TranscriptFollower } from './transcript';
-import { setupGuideText } from './setup';
+import { notOnboardedText, onboardingPendingText, setupGuideText } from './setup';
 
 export interface IncomingSlackMessage {
   /** Slack's event_id when available; retries re-deliver the same id. */
@@ -85,6 +85,8 @@ export interface BridgeConfig {
   teamId?: string;
   /** Working directory for `[setup]` terminals (`~` on a member's own launcher); unset = the server default. */
   setupCwd?: string;
+  /** A linked member with no launcher of their own: terminals (`[setup]`, `[terminal]`) would open on the server's account, so they are refused. */
+  onboardingPending?: boolean;
   /** The setup guide mentions `[operator]` (a linked user allowed to act as the operator). */
   operatorAccess?: boolean;
 }
@@ -249,6 +251,8 @@ export class SlackBridge {
       }
       if (cmd.command === 'help') { await reply(helpText(await this.defaultAppName())); return; }
       if (cmd.command === 'setup') {
+        // The guide's terminal would open on the server's own account.
+        if (this.d.config.onboardingPending) { await reply(notOnboardedText('launcher', this.d.config.operatorAccess)); return; }
         try { await reply(await this.setupGuide(false)); } catch (err) {
           await reply(`⚠️ Could not open a setup terminal: ${escapeMrkdwn(safeMessage(err))}`);
         }
@@ -569,6 +573,13 @@ export class SlackBridge {
     this.d.config.operatorAccess = allowed;
   }
 
+  /** Follow the user's launcher pin: it can appear after their bridge exists,
+   * since a member can write to the bot before they are onboarded. */
+  setOnboarding(state: { pinned: boolean; pending: boolean }): void {
+    this.d.config.setupCwd = state.pinned ? '~' : undefined;
+    this.d.config.onboardingPending = state.pending;
+  }
+
   /** Which linked user started this operator thread with `[operator]`, if any. */
   delegateOf(key: string): string | undefined { return this.d.state.delegateOf(key); }
   delegate(key: string, userId: string): void { this.d.state.delegate(key, userId); }
@@ -581,6 +592,15 @@ export class SlackBridge {
     const text = await this.setupGuide(true);
     await this.d.slack.postMessage({ channel: slackUserId, text });
     this.d.state.markWelcomed(new Date(this.now()).toISOString());
+    return true;
+  }
+
+  /** Tell a linked member, once, that their onboarding is unfinished. No
+   * terminal: without a launcher it would open on the server's own account. */
+  async noticeOnboardingPending(slackUserId: string): Promise<boolean> {
+    if (this.d.state.onboardingNoticeAt()) return false;
+    await this.d.slack.postMessage({ channel: slackUserId, text: onboardingPendingText(this.d.config.operatorAccess) });
+    this.d.state.markOnboardingNotice(new Date(this.now()).toISOString());
     return true;
   }
 
@@ -795,6 +815,11 @@ export class SlackBridge {
 
   private async resolveTargets(cmd: ParsedCommand, reply: (t: string) => Promise<unknown>): Promise<{ app: AppInfo; infra?: InfraTarget } | undefined> {
     const apps = await this.d.propanes.listApplications();
+    // A linked user's bridge has no configured fallback app: their first app is the default.
+    if (!apps.length && !this.d.config.appId) {
+      await reply(notOnboardedText('apps', this.d.config.operatorAccess));
+      return;
+    }
     let app: AppInfo;
     if (cmd.app !== undefined) {
       const match = resolveApp(apps, cmd.app);
@@ -817,6 +842,7 @@ export class SlackBridge {
   }
 
   private async startTerminal(ev: Pick<IncomingSlackMessage, 'teamId' | 'channel' | 'user'>, key: string, threadTs: string | null, cmd: ParsedCommand, reply: (t: string) => Promise<unknown>, resolvedTarget?: { app: AppInfo; infra?: InfraTarget }): Promise<void> {
+    if (this.d.config.onboardingPending) { await reply(notOnboardedText('launcher', this.d.config.operatorAccess)); return; }
     const target = resolvedTarget ?? await this.resolveTargets(cmd, reply);
     if (!target) return;
     const { app, infra } = target;

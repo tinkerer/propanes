@@ -110,8 +110,6 @@ function userBridge(identity: SlackIdentity): SlackBridge {
       appId: '',
       // Their "Continue in Slack" requests open in their DM with the bot.
       handoffChannel: identity.slackUserId,
-      // `[setup]` terminals open in their home on their own launcher.
-      setupCwd: identity.launcherId ? '~' : undefined,
       teamId,
       publicUrl: PROPANES_PUBLIC_URL,
       botUserId,

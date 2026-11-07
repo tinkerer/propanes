@@ -109,6 +109,8 @@ export interface BotState {
   delegatedThreads?: Record<string, string>;
   /** When this user was sent their setup guide (linked users' state only). */
   welcomedAt?: string;
+  /** When this user was told their onboarding is unfinished (linked users' state only). */
+  onboardingNoticeAt?: string;
   /** Alert channels this listener turns into investigations, by channel id. */
   alertWatches?: Record<string, AlertWatchState>;
 }
@@ -195,6 +197,12 @@ export class StateRepo {
   welcomedAt(): string | undefined { return this.state.welcomedAt; }
   markWelcomed(at: string): void {
     this.state.welcomedAt = at;
+    this.store.save(this.state);
+  }
+
+  onboardingNoticeAt(): string | undefined { return this.state.onboardingNoticeAt; }
+  markOnboardingNotice(at: string): void {
+    this.state.onboardingNoticeAt = at;
     this.store.save(this.state);
   }
 

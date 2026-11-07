@@ -14,7 +14,9 @@ type UserRow = {
 };
 
 type MenuConfirm = 'delete' | 'reset' | 'deprovision';
-type SlackDraft = { slackUserId: string; slackPersona: string; operatorAccess: boolean; error?: string };
+type VmSetup = { apps: Array<{ id: string; name: string }>; selected: string[] };
+type SlackDraft = { slackUserId: string; slackPersona: string; operatorAccess: boolean; error?: string; vmSetup?: VmSetup };
+type VmJob = { status: 'running' | 'succeeded' | 'failed'; log: string };
 type MenuState = { userId: string; top?: number; bottom?: number; right: number; confirm?: MenuConfirm; ownedApps?: string[]; slack?: SlackDraft };
 
 export function UsersPage() {
@@ -29,6 +31,7 @@ export function UsersPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [vmJobs, setVmJobs] = useState<Record<string, VmJob>>({});
   const menuRef = useRef<HTMLDivElement>(null);
 
   // One menu for the whole page; click-away and Escape (capture phase, so
@@ -41,7 +44,11 @@ export function UsersPage() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopPropagation(); setMenu(null); }
     };
-    const onScroll = () => setMenu(null);
+    // The link form's app list scrolls inside the menu; that must not close it.
+    const onScroll = (e: Event) => {
+      if (e.target instanceof Node && menuRef.current?.contains(e.target)) return;
+      setMenu(null);
+    };
     document.addEventListener('mousedown', onDown, true);
     document.addEventListener('keydown', onKey, true);
     window.addEventListener('resize', onScroll);
@@ -152,10 +159,49 @@ export function UsersPage() {
     }
   }
 
+  // Follow workspace setups for linked members who have no launcher yet.
+  const unfinished = users.filter((u) => u.role === 'member' && u.slackUserId && !u.launcherId).map((u) => u.id).join(',');
+  const running = Object.keys(vmJobs).filter((id) => vmJobs[id].status === 'running').join(',');
+  useEffect(() => {
+    const ids = new Set([...unfinished.split(','), ...running.split(',')].filter(Boolean));
+    if (!ids.size) return;
+    const check = () => ids.forEach(async (id) => {
+      try {
+        const { vmOnboardJob } = await api.getUserOnboarding(id);
+        if (!vmOnboardJob) return;
+        setVmJobs((prev) => {
+          if (prev[id]?.status === 'running' && vmOnboardJob.status !== 'running') void load();
+          return { ...prev, [id]: vmOnboardJob };
+        });
+      } catch { /* the next tick retries */ }
+    });
+    check();
+    if (!running) return;
+    const timer = setInterval(check, 5000);
+    return () => clearInterval(timer);
+  }, [unfinished, running]);
+
+  // Opens the link form, then offers workspace setup if this server can do it.
+  async function openSlackLink(m: MenuState, u: UserRow) {
+    setMenu({ ...m, slack: { slackUserId: u.slackUserId || '', slackPersona: u.slackPersona || '', operatorAccess: !!u.slackOperatorAccess } });
+    if (u.role !== 'member' || u.launcherId) return;
+    try {
+      const r = await api.getUserOnboarding(u.id);
+      if (!r.vmOnboardAvailable || r.vmOnboardJob?.status === 'running') return;
+      const apps = r.suggestions.map((a: any) => ({ id: a.id, name: a.name }));
+      setMenu((cur) => (cur && cur.userId === u.id && cur.slack ? { ...cur, slack: { ...cur.slack, vmSetup: { apps, selected: [] } } } : cur));
+    } catch { /* the link form still works without it */ }
+  }
+
   // Errors stay inside the menu so a duplicate link can be fixed in place.
   async function saveSlackLink(id: string, draft: SlackDraft) {
     try {
+      // Setup first: the listing then says it is running, so the bot does not
+      // tell them onboarding is unfinished the moment the link lands.
+      const setupApps = draft.slackUserId.trim() ? draft.vmSetup?.selected ?? [] : [];
+      if (setupApps.length) await api.startVmOnboarding(id, setupApps);
       await api.updateUser(id, { slackUserId: draft.slackUserId.trim(), slackPersona: draft.slackPersona.trim(), slackOperatorAccess: draft.operatorAccess });
+      if (setupApps.length) setVmJobs((j) => ({ ...j, [id]: { status: 'running', log: '' } }));
       setMenu(null);
       await load();
     } catch (err: any) {
@@ -320,6 +366,17 @@ export function UsersPage() {
                   {u.slackUserId && <> · Slack {u.slackUserId}{u.slackPersona ? ` as ${u.slackPersona}` : ''}{u.slackOperatorAccess ? ' · may act as operator' : ''}</>}
                 </div>
                 {u.role === 'member' && <div style="margin-top:2px">{podBadge(u.id)}</div>}
+                {vmJobs[u.id]?.status === 'running' && (
+                  <div style="font-size:11px;color:var(--pw-text-muted);margin-top:2px">Setting up their workspace… the bot DMs them the setup guide when it's ready.</div>
+                )}
+                {vmJobs[u.id]?.status === 'failed' && (
+                  <div style="font-size:11px;color:var(--pw-danger, #ef4444);margin-top:2px;white-space:pre-wrap">Workspace setup failed: {vmJobs[u.id].log.replace(/\x1b\[[0-9;]*m/g, '').trim().split('\n').slice(-3).join('\n')}</div>
+                )}
+                {u.role === 'member' && u.slackUserId && !u.launcherId && vmJobs[u.id]?.status !== 'running' && (
+                  <div style="font-size:11px;color:var(--pw-warning, #f59e0b);margin-top:2px">
+                    Slack is linked, but onboarding is unfinished: no launcher, so the bot can't start work for them. Use ⋯ → Edit Slack link… to set up their workspace, Provision pod, or run <code>sudo -E scripts/onboard-user.sh --user {u.username} --app &lt;APP_ID&gt;</code>.
+                  </div>
+                )}
               </div>
               <select value={u.role} onChange={(e) => patchUser(u.id, { role: (e.currentTarget as HTMLSelectElement).value })}>
                 <option value="member">member</option>
@@ -391,6 +448,23 @@ export function UsersPage() {
               onChange={(e) => set({ operatorAccess: (e.currentTarget as HTMLInputElement).checked })} />
             <span>May also run requests as you with <code>[operator]</code>: your apps, machines and agent subscriptions</span>
           </label>
+          {d.vmSetup && (
+            <div class="users-slack-setup">
+              <div>Set up their workspace on this machine, with their own copy of:</div>
+              {d.vmSetup.apps.map((a) => (
+                <label class="users-slack-check" key={a.id}>
+                  <input type="checkbox" checked={d.vmSetup!.selected.includes(a.id)}
+                    onChange={(e) => {
+                      const on = (e.currentTarget as HTMLInputElement).checked;
+                      const selected = on ? [...d.vmSetup!.selected, a.id] : d.vmSetup!.selected.filter((id) => id !== a.id);
+                      set({ vmSetup: { ...d.vmSetup!, selected } });
+                    }} />
+                  <span>{a.name}</span>
+                </label>
+              ))}
+              <div class="users-slack-setup-note">Creates a Linux account and a launcher for {u.username}; the bot then DMs them the setup guide. Without an app they can't start work.</div>
+            </div>
+          )}
           {d.error && <div class="users-row-menu-confirm users-row-menu-error">{d.error}</div>}
           <button role="menuitem" onClick={() => saveSlackLink(u.id, d)}>Save</button>
           {u.slackUserId && <button role="menuitem" class="danger" onClick={() => saveSlackLink(u.id, { slackUserId: '', slackPersona: '', operatorAccess: false })}>Unlink Slack</button>}
@@ -423,7 +497,7 @@ export function UsersPage() {
             ? <button role="menuitem" disabled={busy} onClick={() => askConfirm('deprovision')}>Tear down pod</button>
             : <button role="menuitem" disabled={busy || pod?.available === false} title={pod?.available === false ? 'Kubernetes provisioning is not available on this server' : undefined} onClick={() => provisionPod(u.id)}>Provision pod</button>
         )}
-        <button role="menuitem" onClick={() => setMenu({ ...m, slack: { slackUserId: u.slackUserId || '', slackPersona: u.slackPersona || '', operatorAccess: !!u.slackOperatorAccess } })}>
+        <button role="menuitem" onClick={() => void openSlackLink(m, u)}>
           {u.slackUserId ? 'Edit Slack link…' : 'Link Slack…'}
         </button>
         {u.slackUserId && (
