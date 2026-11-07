@@ -19,7 +19,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@hono/node-server": "^1.19.17",
+    "@hono/node-server": "^2.1.6",
     "@propanes/shared": "workspace:*",
     "better-sqlite3": "^11.7.0",
     "drizzle-orm": "^0.45.0",
