@@ -19,7 +19,7 @@
 
 # ---- Stage 1: build the whole workspace -------------------------------------
 FROM node:22-bookworm AS build
-RUN corepack enable && corepack prepare pnpm@12.11.2 --activate
+RUN corepack enable && corepack prepare pnpm@12.18.0 --activate
 WORKDIR /app
 
 # Workspace config first for layer caching
@@ -43,7 +43,7 @@ FROM node:22-bookworm-slim
 # non-ASCII glyph in the agent TUIs as "_", so Claude Code's arrows/ellipses
 # show up as "--" in the browser terminal. C.UTF-8 is built into glibc.
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
-RUN corepack enable && corepack prepare pnpm@12.11.2 --activate
+RUN corepack enable && corepack prepare pnpm@12.18.0 --activate
 RUN groupadd --gid 10001 propanes \
  && useradd --uid 10001 --gid 10001 --home-dir /data/agent-home --shell /bin/bash propanes
 WORKDIR /app
@@ -92,35 +92,28 @@ RUN apt-get update \
 # npm self-update first: node:22-bookworm-slim's bundled npm vendors its own
 # old copies of picomatch, brace-expansion, sigstore, pacote, and ip-address
 # (all real CVEs per `npm audit`, living under npm's own node_modules, not
-# ours). npm's own maintainers don't actually ship clean nested copies of all
-# of those together, though: npm@12.2.0 (latest) still vendors
-# brace-expansion@5.0.9, ip-address@10.5.0, postcss-selector-parser@7.1.4 and
-# undici@6.28.0, each one or more CVE-fix releases behind (5.0.12 / 10.7.1 /
-# 7.1.6 / 6.28.1; 6.29.0 confirmed clean for undici) — swap just those nested
-# copies for clean ones the same way linear-cli's vendored deps get
-# force-patched below.
+# ours). npm's own maintainers don't ship clean nested copies of all of
+# those together: npm@12.2.2 (latest, 2026-11-08) still vendors
+# ip-address@10.7.1, undici@6.29.0, glob@13.0.6 and minimatch@10.2.5, each
+# behind a CVE fix (10.7.4 / 6.29.1 / 14.0.2 / 11.0.1) — swap just those
+# nested copies (plus the earlier brace-expansion / postcss-selector-parser
+# pins) for clean ones, and linear-cli's vendored glob/minimatch below.
 RUN npm install -g npm@latest \
- && ( cd "$(npm root -g)/npm" \
-      && npm pack brace-expansion@5.0.12 --pack-destination /tmp >/dev/null \
-      && rm -rf node_modules/brace-expansion \
-      && tar xzf /tmp/brace-expansion-5.0.12.tgz -C /tmp \
-      && mv /tmp/package node_modules/brace-expansion \
-      && rm -f /tmp/brace-expansion-5.0.12.tgz \
-      && npm pack ip-address@10.7.1 --pack-destination /tmp >/dev/null \
-      && rm -rf node_modules/ip-address \
-      && tar xzf /tmp/ip-address-10.7.1.tgz -C /tmp \
-      && mv /tmp/package node_modules/ip-address \
-      && rm -f /tmp/ip-address-10.7.1.tgz \
-      && npm pack postcss-selector-parser@7.1.6 --pack-destination /tmp >/dev/null \
-      && rm -rf node_modules/postcss-selector-parser \
-      && tar xzf /tmp/postcss-selector-parser-7.1.6.tgz -C /tmp \
-      && mv /tmp/package node_modules/postcss-selector-parser \
-      && rm -f /tmp/postcss-selector-parser-7.1.6.tgz \
-      && npm pack undici@6.29.0 --pack-destination /tmp >/dev/null \
-      && rm -rf node_modules/undici \
-      && tar xzf /tmp/undici-6.29.0.tgz -C /tmp \
-      && mv /tmp/package node_modules/undici \
-      && rm -f /tmp/undici-6.29.0.tgz ) \
+ # Each replacement is staged with its own dependencies nested under it (npm
+ # still works while staging), then moved over npm's vendored copy. glob 14 and
+ # minimatch 11 are majors for npm (GHSA-3g3m-2fjr-6pw4 / GHSA-g3hv-75wg-m249
+ # have no fix on glob 13 or minimatch 10); `npm install`, `npm pack` and
+ # `npm ls -g` were checked against them on 2026-11-08.
+ && for spec in brace-expansion@5.0.12 ip-address@10.7.4 postcss-selector-parser@7.1.6 \
+                undici@6.29.1 glob@14.0.4 minimatch@11.0.5; do \
+      d=/tmp/stage/${spec%@*}; mkdir -p "$d"; \
+      ( cd "$d" && npm install --no-save --no-package-lock --no-audit --no-fund \
+          --install-strategy=nested --ignore-scripts "$spec" ) || exit 1; \
+    done \
+ && for name in brace-expansion ip-address postcss-selector-parser undici glob minimatch; do \
+      rm -rf "$(npm root -g)/npm/node_modules/$name" \
+      && cp -a "/tmp/stage/$name/node_modules/$name" "$(npm root -g)/npm/node_modules/$name" || exit 1; \
+    done \
  && npm i -g \
       @anthropic-ai/claude-code@2.1.232 \
       @openai/codex@0.142.5 \
@@ -136,7 +129,12 @@ RUN npm install -g npm@latest \
  # unaffected by these patch/minor bumps.
  && ( cd "$(npm root -g)/@schpet/linear-cli" \
       && npm install --no-save --no-package-lock \
-           axios@^1.20.0 form-data@^4.0.6 minimatch@^10.2.3 ) \
+           axios@^1.20.0 form-data@^4.0.6 ) \
+ && for name in glob minimatch; do \
+      rm -rf "$(npm root -g)/@schpet/linear-cli/node_modules/$name" \
+      && cp -a "/tmp/stage/$name/node_modules/$name" "$(npm root -g)/@schpet/linear-cli/node_modules/$name" || exit 1; \
+    done \
+ && rm -rf /tmp/stage \
  && npx --yes playwright install --with-deps chromium \
  && ln -s "$(npm root -g)" /root/node_modules \
  && mkdir -p /root/.claude /root/.codex \
