@@ -9311,6 +9311,32 @@ body.pw-isolate {
   white-space: nowrap;
 }
 
+/* Editable address. The global text-input rule is a long :not() chain that
+   out-ranks any class selector, hence !important on what it sets — this has
+   to stay as compact as the label it replaced. */
+.iframe-companion-url-input {
+  min-width: 0;
+  padding: 1px 4px !important;
+  border: 1px solid transparent !important;
+  border-radius: 3px !important;
+  font-size: 11px !important;
+  line-height: 1.4;
+  background: transparent !important;
+  color: var(--pw-text-muted) !important;
+  box-shadow: none !important;
+}
+
+.iframe-companion-url-input:hover {
+  border-color: var(--pw-border) !important;
+}
+
+.iframe-companion-url-input:focus {
+  border-color: var(--pw-primary) !important;
+  background: var(--pw-bg-surface) !important;
+  color: var(--pw-text-primary) !important;
+  text-overflow: clip;
+}
+
 .iframe-companion-reload,
 .iframe-companion-open {
   background: none;
@@ -9335,6 +9361,18 @@ body.pw-isolate {
   border: none;
   width: 100%;
   min-height: 0;
+}
+
+/* Rendered markdown is taller than the pane: it has to be the scroll
+   container itself, since every ancestor clips. Same dark surface as
+   .file-companion — .fv-markdown's text colors assume one. */
+.iframe-companion-markdown {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-color: #64748b #1e293b;
+  background: #1e293b;
 }
 
 /* ── Request Panel ── */

@@ -5,6 +5,7 @@ import { StructuredView } from '../terminal/StructuredView.js';
 import { SessionSummaryView } from '../sessions/SessionSummaryView.js';
 import { FeedbackCompanionView } from '../feedback/FeedbackCompanionView.js';
 import { IframeCompanion } from '../files/IframeCompanion.js';
+import { retargetUrlCompanion } from '../../lib/companion-state.js';
 import { getIsolateEntry } from '../../lib/isolate.js';
 import { TerminalCompanionView } from '../files/TerminalCompanionView.js';
 import { FileCompanionView } from '../files/FileCompanionView.js';
@@ -192,7 +193,7 @@ export function renderTabContent(
       ) : isFile ? (
         <FileCompanionView filePath={realSid} />
       ) : isUrl ? (
-        <IframeCompanion url={realSid} />
+        <IframeCompanion url={realSid} onNavigate={(next) => retargetUrlCompanion(realSid, next)} />
       ) : isIsolate ? (
         (() => {
           const entry = getIsolateEntry(realSid);
