@@ -91,7 +91,7 @@ export function spawnInTmux(params: {
   }
 
   const shellCmd = [command, ...args].map(a => {
-    if (a.includes("'") || a.includes(' ') || a.includes('"') || a.includes('\\') || a.includes('$') || a.includes('\n') || a.includes('(') || a.includes(')') || a.includes('*')) {
+    if (a.includes("'") || a.includes(' ') || a.includes('"') || a.includes('\\') || a.includes('$') || a.includes('\n') || a.includes('(') || a.includes(')') || a.includes('*') || a.includes('?') || a.includes('[') || a.includes(']')) {
       return `'${a.replace(/'/g, "'\\''")}'`;
     }
     return a;
