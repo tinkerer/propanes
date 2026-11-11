@@ -115,7 +115,7 @@ RUN npm install -g npm@latest \
       && cp -a "/tmp/stage/$name/node_modules/$name" "$(npm root -g)/npm/node_modules/$name" || exit 1; \
     done \
  && npm i -g \
-      @anthropic-ai/claude-code@2.1.232 \
+      @anthropic-ai/claude-code@2.1.322 \
       @openai/codex@0.142.5 \
       @schpet/linear-cli@2.2.0 \
       @playwright/mcp@latest \
@@ -147,6 +147,11 @@ COPY docker-claude-shim.sh /usr/local/bin/docker-claude-shim.sh
 RUN rm /usr/local/bin/claude \
  && cp /usr/local/bin/docker-claude-shim.sh /usr/local/bin/claude \
  && chmod +x /usr/local/bin/claude /usr/local/bin/docker-claude-shim.sh
+# npm 12 does not run install scripts for global installs, which leaves the
+# package's bin/claude.exe as a stub that exits with "claude native binary not
+# installed". Run the package's installer and check the baked copy starts.
+RUN node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs" \
+ && HOME=/root /usr/local/bin/claude --version | grep -q '^2\.1\.322 '
 
 # Dev/agent tooling for in-container terminal sessions: enough to fetch and
 # run installers for the rest (az via aka.ms/InstallAzureCLIDeb, aws via the
