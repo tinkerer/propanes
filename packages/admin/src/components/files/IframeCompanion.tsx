@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect, useCallback } from 'preact/hooks';
 import { marked } from 'marked';
 import { MARKDOWN_EXTS } from '../../lib/file-utils.js';
+import { normalizeCompanionUrl } from '../../lib/companion-url.js';
 
 /** Extension of a URL's path, ignoring query string and hash. */
 function urlExt(url: string): string {
@@ -40,10 +41,45 @@ function renderMarkdown(source: string, baseUrl: string): string {
   return holder.innerHTML;
 }
 
-export function IframeCompanion({ url, label }: { url: string; label?: string }) {
+export function IframeCompanion({ url: initialUrl, label, onNavigate }: {
+  url: string;
+  label?: string;
+  /** Called when the user edits the address. Return true if the owner re-keyed
+   *  the tab (the `url` prop will change); otherwise we navigate locally. */
+  onNavigate?: (url: string) => boolean | void;
+}) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const displayLabel = label || url;
+  // The address is editable, so the loaded URL can drift from the prop until
+  // (unless) the owner re-keys the tab.
+  const [url, setUrl] = useState(initialUrl);
+  const [draft, setDraft] = useState(initialUrl);
+  useEffect(() => { setUrl(initialUrl); setDraft(initialUrl); }, [initialUrl]);
   const isMarkdown = MARKDOWN_EXTS.has(urlExt(url));
+
+  // Escape abandons the edit. Global shortcut handlers take Escape in the
+  // capture phase and stop it before it reaches the input, so listen above
+  // them; blurring restores the loaded URL via onBlur.
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !inputRef.current || e.target !== inputRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+      inputRef.current.blur();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, []);
+
+  const navigate = useCallback((input: string) => {
+    const next = normalizeCompanionUrl(input, window.location.origin);
+    if (!next) { setDraft(url); return; }
+    setDraft(next);
+    if (next === url) return;
+    setRaw(false);
+    if (onNavigate?.(next) === true) return;
+    setUrl(next);
+  }, [url, onNavigate]);
 
   // Markdown URLs render in-pane instead of in the iframe (the server serves
   // .md as text/plain, so an iframe just shows the raw source). `raw` flips
@@ -85,7 +121,31 @@ export function IframeCompanion({ url, label }: { url: string; label?: string })
   return (
     <div class="iframe-companion">
       <div class="iframe-companion-toolbar">
-        <span class="iframe-companion-url" title={displayLabel}>{displayLabel}</span>
+        {label ? (
+          <span class="iframe-companion-url" title={label}>{label}</span>
+        ) : (
+          <input
+            class="iframe-companion-url iframe-companion-url-input"
+            type="text"
+            spellcheck={false}
+            autocomplete="off"
+            ref={inputRef}
+            aria-label="URL"
+            title="Edit the URL and press Enter to load it"
+            value={draft}
+            onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
+            onFocus={(e) => (e.target as HTMLInputElement).select()}
+            onBlur={() => setDraft(url)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                navigate((e.target as HTMLInputElement).value);
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+          />
+        )}
         {isMarkdown && !mdError && (
           <button
             class="iframe-companion-reload"

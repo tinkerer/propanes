@@ -1,5 +1,6 @@
 import { signal } from '@preact/signals';
 import { api } from './api.js';
+import { normalizeCompanionUrl } from './companion-url.js';
 import {
   openTabs,
   activeTabId,
@@ -18,6 +19,7 @@ import {
   findCompanionSibling,
   addTabToLeaf,
   removeTabFromLeaf,
+  replaceTabInLeaf,
   splitLeaf,
   splitLeafAtPosition,
   focusedLeafId,
@@ -272,10 +274,7 @@ export function openIsolateCompanion(componentName: string, position?: PanePosit
 }
 
 export function openUrlCompanion(url: string, position?: PanePosition) {
-  let normalized = url.trim();
-  if (normalized && !/^https?:\/\//i.test(normalized)) {
-    normalized = `http://${normalized}`;
-  }
+  const normalized = normalizeCompanionUrl(url, window.location.origin);
   const tabId = `url:${normalized}`;
   if (!openTabs.value.includes(tabId)) {
     openTabs.value = [...openTabs.value, tabId];
@@ -294,6 +293,33 @@ export function openUrlCompanion(url: string, position?: PanePosition) {
       showSessionsLeaf();
     });
   }
+}
+
+/**
+ * Point an open `url:` tab at a different URL, in place. The tab id *is* the
+ * URL, so this re-keys it everywhere it is tracked and the new address
+ * survives a reload. Returns false when the tab can't be re-keyed (it lives in
+ * a popout panel, or a tab for the new URL already exists) — the caller then
+ * just navigates its own iframe.
+ */
+export function retargetUrlCompanion(oldUrl: string, newUrl: string): boolean {
+  const oldTab = `url:${oldUrl}`;
+  const newTab = `url:${newUrl}`;
+  if (oldTab === newTab) return true;
+  if (openTabs.value.includes(newTab) || findLeafWithTab(newTab)) return false;
+  const leaf = findLeafWithTab(oldTab);
+  if (!leaf) return false;
+  const rename = (id: string) => (id === oldTab ? newTab : id);
+  openTabs.value = openTabs.value.map(rename);
+  if (activeTabId.value === oldTab) activeTabId.value = newTab;
+  if (rightPaneTabs.value.includes(oldTab)) {
+    rightPaneTabs.value = rightPaneTabs.value.map(rename);
+    if (rightPaneActiveId.value === oldTab) rightPaneActiveId.value = newTab;
+    persistSplitState();
+  }
+  persistTabs();
+  replaceTabInLeaf(leaf.id, oldTab, newTab);
+  return true;
 }
 
 export function openArtifactCompanion(artifactId: string, position?: PanePosition) {
