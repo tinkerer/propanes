@@ -18,8 +18,9 @@ test('Claude discovery reads every picker entry, aliases and versions without su
         {value:'default',displayName:'Default',resolvedModel:'claude-opus-future'},
         {value:'opus',displayName:'Opus future',resolvedModel:'claude-opus-future'},
         {value:'fable',displayName:'Fable 5.1',resolvedModel:'claude-fable-5-1'},
+        {value:'claude-fable-5-1[1m]',displayName:'Fable',resolvedModel:'claude-fable-5-1'},
         {value:'claude-fable-5',displayName:'Fable 5'}]}}}));});`));
-    assert.deepEqual(models.map((m) => m.id), ['default', 'opus', 'fable', 'claude-fable-5']);
+    assert.deepEqual(models.map((m) => m.id), ['default', 'opus', 'fable', 'claude-fable-5-1[1m]', 'claude-fable-5']);
     assert.deepEqual(models.find((m) => m.id === 'fable')?.aliases, ['claude-fable-5-1']);
     assert.deepEqual(models.find((m) => m.id === 'opus')?.aliases, ['claude-opus-future']);
     const requests = readFileSync(log, 'utf8').trim().split('\n').map((s) => JSON.parse(s));
@@ -46,6 +47,7 @@ test('CLI errors, invalid metadata, repeated cursors and timeouts fail without l
   await assert.rejects(discoverClaudeModels(fake('setInterval(()=>{},1000)', 50)), /timed out/);
   await assert.rejects(discoverClaudeModels(fake(readLines + `console.log(JSON.stringify({type:'control_response',response:{subtype:'error',request_id:m.request_id,error:'secret-token'}}));});`)), /invalid response/);
   await assert.rejects(discoverClaudeModels(fake(readLines + `console.log(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:m.request_id,response:{models:[{value:'--flag',displayName:'Bad'}]}}}));});`)), /invalid model metadata/);
+  await assert.rejects(discoverClaudeModels(fake(readLines + `console.log(JSON.stringify({type:'control_response',response:{subtype:'success',request_id:m.request_id,response:{models:[{value:'x[$(id)]',displayName:'Bad'}]}}}));});`)), /invalid model metadata/);
   await assert.rejects(discoverCodexModels(fake(readLines + `console.log(JSON.stringify({id:m.id,result:m.method==='initialize'?{}:{data:[{model:'valid',displayName:'Valid'}],nextCursor:'repeat'}}));});`)), /repeated a cursor/);
   await assert.rejects(discoverCodexModels(fake(readLines + `console.log(JSON.stringify({id:m.id,error:{message:'secret-token'}}));});`)), /initialization failed/);
 });

@@ -8,6 +8,7 @@ import { hostname as osHostname } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { db, schema } from '../db/index.js';
+import { MODEL_ID_PATTERN } from '@propanes/shared';
 import { killSession } from '../agent-sessions.js';
 import { forkAgentSession, resumeAgentSession, dispatchTerminalSession, transferSession, getTransfer } from '../dispatch.js';
 import {
@@ -749,7 +750,7 @@ agentSessionRoutes.post('/:id/resume', async (c) => {
   const permissionProfile = body.permissionProfile || undefined;
   const runtime = body.runtime || undefined;
   const additionalPrompt = typeof body.additionalPrompt === 'string' ? body.additionalPrompt : undefined;
-  if (body.model !== undefined && (typeof body.model !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/.test(body.model))) {
+  if (body.model !== undefined && (typeof body.model !== 'string' || !MODEL_ID_PATTERN.test(body.model))) {
     return c.json({ error: 'Invalid model identifier' }, 400);
   }
   try {

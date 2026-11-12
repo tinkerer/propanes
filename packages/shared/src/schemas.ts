@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FEEDBACK_TYPES, FEEDBACK_STATUSES, DISPATCH_MODES, AGENT_RUNTIMES, PERMISSION_PROFILES, ISOLATION_MODES } from './constants.js';
+import { FEEDBACK_TYPES, FEEDBACK_STATUSES, DISPATCH_MODES, AGENT_RUNTIMES, PERMISSION_PROFILES, ISOLATION_MODES, MODEL_ID_PATTERN } from './constants.js';
 
 const nullishToUndefined = (value: unknown) => value == null ? undefined : value;
 const emptyStringToUndefined = (value: unknown) => value === '' ? undefined : nullishToUndefined(value);
@@ -242,7 +242,7 @@ export const agentEndpointSchema = z.object({
 });
 
 export const dispatchSchema = z.object({
-  model: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/).optional(),
+  model: z.string().regex(MODEL_ID_PATTERN).optional(),
   feedbackId: z.string(),
   agentEndpointId: z.string(),
   instructions: z.string().max(100000).optional(),

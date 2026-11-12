@@ -15,7 +15,7 @@ export function modelCatalog(json?: string): ModelOption[] {
   if (!Array.isArray(value) || !value.length || value.some((m) => !m ||
     typeof m.provider !== 'string' || !m.provider.trim() ||
     !['claude', 'codex'].includes(m.runtime) ||
-    typeof m.id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/.test(m.id) ||
+    typeof m.id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}(?:\[[a-zA-Z0-9._-]{1,32}\])?$/.test(m.id) ||
     typeof m.label !== 'string' || !m.label.trim() ||
     (m.aliases !== undefined && (!Array.isArray(m.aliases) || m.aliases.some((a: unknown) => typeof a !== 'string' || !a.trim()))))) {
     throw new Error('AMIROBOT_MODELS_JSON must be a non-empty array of provider, runtime, id, label and optional aliases.');

@@ -89,3 +89,11 @@ export const AGENT_SESSION_STATUSES = [
 ] as const;
 
 export const API_VERSION = 'v1';
+
+/**
+ * A model identifier as the CLIs accept it for `--model`. Claude Code tags
+ * context variants with a bracketed suffix (`claude-fable-5-1[1m]`), so one
+ * trailing `[...]` group is allowed. Command builders must still shell-quote
+ * it: `[` and `]` are glob characters.
+ */
+export const MODEL_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}(?:\[[a-zA-Z0-9._-]{1,32}\])?$/;

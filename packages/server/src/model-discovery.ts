@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline';
 import { homedir, tmpdir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { MODEL_ID_PATTERN } from '@propanes/shared';
 export type Runtime = 'claude' | 'codex';
 export interface ModelOption { provider: string; runtime: Runtime; id: string; label: string; aliases?: string[]; }
 
@@ -87,7 +88,7 @@ function cliCommand(runtime: Runtime): string {
 }
 
 const text = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
-const modelId = (value: unknown): value is string => text(value) && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,199}$/.test(value);
+const modelId = (value: unknown): value is string => text(value) && MODEL_ID_PATTERN.test(value);
 
 export async function discoverClaudeModels(options: CliOptions = {}): Promise<ModelOption[]> {
   return withCli(options.command ?? cliCommand('claude'), options.args ?? [
