@@ -12125,6 +12125,35 @@ div.md-code-block > pre {
   padding-right: 64px;
 }
 
+/* Copy / CSV toolbar on markdown tables (see lib/md-code-copy.ts). */
+.md-table-block {
+  position: relative;
+}
+.md-table-scroll {
+  overflow-x: auto;
+}
+.md-table-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-bottom: 2px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.md-table-block:hover > .md-table-actions,
+.md-table-block:focus-within > .md-table-actions {
+  opacity: 1;
+}
+@media (hover: none) {
+  .md-table-actions { opacity: 1; }
+}
+.md-table-actions .sm-copy-btn {
+  padding: 2px 6px;
+  min-height: 22px;
+  font-size: 10px;
+  line-height: 1;
+}
+
 .sm-expandable {
   position: relative;
 }
