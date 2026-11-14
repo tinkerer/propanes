@@ -42,6 +42,65 @@ export function codeTextForButton(btn: Element): string {
   return (code.textContent ?? '').replace(/\n$/, '');
 }
 
+export const TABLE_BLOCK_CLASS = 'md-table-block';
+export const TABLE_COPY_CLASS = 'md-table-copy';
+export const TABLE_DOWNLOAD_CLASS = 'md-table-download';
+
+const DOWNLOAD_ICON =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>';
+
+export const TABLE_ACTIONS_HTML =
+  `<div class="md-table-actions">` +
+  `<button type="button" class="sm-copy-btn ${TABLE_COPY_CLASS}" title="Copy table (tab-separated, pastes into spreadsheets)" aria-label="Copy table">${COPY_ICON}<span class="sm-copy-btn-label">Copy</span></button>` +
+  `<button type="button" class="sm-copy-btn ${TABLE_DOWNLOAD_CLASS}" title="Download table as CSV" aria-label="Download table as CSV">${DOWNLOAD_ICON}<span class="sm-copy-btn-label">CSV</span></button>` +
+  `</div>`;
+
+/** Wrap a rendered `<table>…</table>` with the copy/download toolbar. */
+export function wrapTableBlock(tableHtml: string): string {
+  return `<div class="${TABLE_BLOCK_CLASS}">${TABLE_ACTIONS_HTML}<div class="md-table-scroll">${tableHtml.replace(/\n$/, '')}</div></div>\n`;
+}
+
+/** Rows of cell text for the table behind a toolbar button. */
+export function tableRowsForButton(btn: Element): string[][] {
+  const table = btn.closest(`.${TABLE_BLOCK_CLASS}`)?.querySelector('table');
+  if (!table) return [];
+  return Array.from(table.querySelectorAll('tr')).map((tr) =>
+    Array.from(tr.children).map((c) => (c.textContent ?? '').trim()),
+  );
+}
+
+export function rowsToTsv(rows: string[][]): string {
+  return rows.map((r) => r.map((c) => c.replace(/[\t\r\n]+/g, ' ')).join('\t')).join('\n');
+}
+
+export function rowsToCsv(rows: string[][]): string {
+  const q = (c: string) => (/[",\r\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c);
+  return rows.map((r) => r.map(q).join(',')).join('\r\n');
+}
+
+function flashButton(btn: Element, done: string, idle: string): void {
+  const label = btn.querySelector('.sm-copy-btn-label');
+  btn.classList.add('copied');
+  if (label) label.textContent = done;
+  setTimeout(() => {
+    btn.classList.remove('copied');
+    if (label) label.textContent = idle;
+  }, COPIED_RESET_MS);
+}
+
+function downloadCsv(csv: string): void {
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `table-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 let installed = false;
 
 /**
@@ -58,6 +117,9 @@ export function installMarkdownCodeCopy(): void {
       code(token) {
         return wrapCodeBlock(base.code.call(this, token));
       },
+      table(token) {
+        return wrapTableBlock(base.table.call(this, token));
+      },
     },
   });
 
@@ -66,6 +128,20 @@ export function installMarkdownCodeCopy(): void {
     'click',
     (e) => {
       const target = e.target as Element | null;
+      const tblBtn = target?.closest?.(`.${TABLE_COPY_CLASS}, .${TABLE_DOWNLOAD_CLASS}`);
+      if (tblBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const rows = tableRowsForButton(tblBtn);
+        if (tblBtn.classList.contains(TABLE_COPY_CLASS)) {
+          copyText(rowsToTsv(rows));
+          flashButton(tblBtn, 'Copied', 'Copy');
+        } else {
+          downloadCsv(rowsToCsv(rows));
+          flashButton(tblBtn, 'Saved', 'CSV');
+        }
+        return;
+      }
       const btn = target?.closest?.(`.${COPY_BUTTON_CLASS}`);
       if (!btn) return;
       e.preventDefault();
