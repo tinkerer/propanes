@@ -61,6 +61,18 @@ seed_agent_home() {
   [ ! -f "$AGENT_HOME/.codex/auth.json" ] || chmod 600 "$AGENT_HOME/.codex/auth.json"
   [ ! -f "$AGENT_HOME/.codex/config.toml" ] || chmod 600 "$AGENT_HOME/.codex/config.toml"
 
+  # Codex's app-server daemon refuses to start unless the directory holding its
+  # control socket is owned by the invoking user or by root ("socket parent
+  # must be owned by the user or root"). Terminal sessions run codex as root
+  # through the /root/.codex symlink below, so the blanket chown above hands
+  # that directory to $AGENT_USER and breaks plain `codex` for root after every
+  # container start — it surfaces the next time the daemon has to be restarted,
+  # typically right after `codex update`. Root ownership satisfies the check;
+  # launcher-spawned sessions pass --no-daemon and never touch it.
+  mkdir -p "$AGENT_HOME/.codex/app-server-control"
+  chown root:root "$AGENT_HOME/.codex/app-server-control"
+  chmod 700 "$AGENT_HOME/.codex/app-server-control"
+
   rm -rf /root/.claude /root/.codex
   ln -s "$AGENT_HOME/.claude" /root/.claude
   ln -s "$AGENT_HOME/.codex" /root/.codex
