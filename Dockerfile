@@ -115,8 +115,8 @@ RUN npm install -g npm@latest \
       && cp -a "/tmp/stage/$name/node_modules/$name" "$(npm root -g)/npm/node_modules/$name" || exit 1; \
     done \
  && npm i -g \
-      @anthropic-ai/claude-code@2.1.322 \
-      @openai/codex@0.142.5 \
+      @anthropic-ai/claude-code@2.1.326 \
+      @openai/codex@0.169.0 \
       @schpet/linear-cli@2.2.0 \
       @playwright/mcp@latest \
       playwright@latest \
@@ -151,7 +151,8 @@ RUN rm /usr/local/bin/claude \
 # package's bin/claude.exe as a stub that exits with "claude native binary not
 # installed". Run the package's installer and check the baked copy starts.
 RUN node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs" \
- && HOME=/root /usr/local/bin/claude --version | grep -q '^2\.1\.322 '
+ && HOME=/root /usr/local/bin/claude --version | grep -q '^2\.1\.326 ' \
+ && HOME=/root /usr/local/bin/codex --version | grep -q '^codex-cli 0\.169\.0$'
 
 # Dev/agent tooling for in-container terminal sessions: enough to fetch and
 # run installers for the rest (az via aka.ms/InstallAzureCLIDeb, aws via the
