@@ -2,7 +2,8 @@
 // every picker surfaces the same set of run profiles for each runtime (Claude
 // / Codex). Profile names follow `<mode>-<perms>` (see
 // packages/shared/src/constants.ts).
-import { RUNTIME_INFO } from './agent-constants.js';
+// Kept free of imports so the picker logic stays unit-testable outside a
+// browser (agent-constants pulls in localStorage/window-bound modules).
 
 export interface ProfileDescriptor {
   label: string;          // short label used in chips / dropdowns
@@ -77,20 +78,6 @@ export function profileDescriptor(profile?: string | null): ProfileDescriptor {
   return PROFILE_MATRIX[profile || 'interactive-require'] || PROFILE_MATRIX['interactive-require'];
 }
 
-// Structured label used across all agent pickers so users see a consistent set
-// of choices regardless of the raw endpoint name configured in the DB.
-export function formatAgentOption(agent: {
-  runtime?: string | null;
-  permissionProfile?: string | null;
-  isDefault?: boolean;
-}): string {
-  const runtime = agent.runtime || 'claude';
-  const pd = profileDescriptor(agent.permissionProfile);
-  const rt = RUNTIME_INFO[runtime] || RUNTIME_INFO.claude;
-  const defaultMarker = agent.isDefault ? ' *' : '';
-  return `${rt.icon} ${rt.label} — ${pd.icon} ${pd.label}${defaultMarker}`;
-}
-
 // Compare function that orders agents by (runtime, profile order) so grouped
 // pickers show Claude first, then Codex, each grouped by the matrix order
 // above.
@@ -142,4 +129,72 @@ export function pickYoloAgent<T extends {
     if (hit) return hit;
   }
   return undefined;
+}
+
+// The dispatch pickers deliberately offer just four choices — Claude YOLO,
+// Codex YOLO, Claude Interactive, Codex Interactive — no matter how many
+// endpoints are configured. Listing every endpoint row repeated the same
+// label once per application (each app carries its own copies), which read as
+// a wall of identical "Claude — YOLO" entries.
+const RUNTIME_LABELS: Record<string, string> = { claude: 'Claude', codex: 'Codex' };
+export const PICKER_PROFILES = ['interactive-yolo', 'interactive-require'] as const;
+
+export interface PickerAgentShape {
+  id: string;
+  appId?: string | null;
+  isDefault?: boolean;
+  mode?: string | null;
+  name?: string;
+  permissionProfile?: string | null;
+  runtime?: string | null;
+  url?: string | null;
+}
+
+const pickerKey = (a: { runtime?: string | null; permissionProfile?: string | null }) =>
+  `${a.runtime || 'claude'}|${a.permissionProfile || 'interactive-require'}`;
+
+/**
+ * One endpoint per (runtime, profile), ordered YOLO-first then by runtime.
+ * Within a slot the endpoint scoped to `appId` wins, then a global one, then
+ * (only reachable from the app-less "+" composer) another app's; defaults
+ * break ties. Falls back to every profile when none of the four exist, so a
+ * headless-only setup still has something to pick.
+ */
+export function pickerAgents<T extends PickerAgentShape>(agents: T[], appId?: string | null): T[] {
+  const scope = (a: T) => (appId && a.appId === appId ? 0 : !a.appId ? 1 : 2);
+  const ranked = agents.filter(isDispatchableAgent).sort((a, b) =>
+    scope(a) - scope(b)
+    || Number(!!b.isDefault) - Number(!!a.isDefault)
+    || (a.name || '').localeCompare(b.name || ''));
+  const slots = new Map<string, T>();
+  for (const a of ranked) {
+    if (!slots.has(pickerKey(a))) slots.set(pickerKey(a), a);
+  }
+  const all = Array.from(slots.values());
+  const simple = all.filter(a => (PICKER_PROFILES as readonly string[]).includes(a.permissionProfile || 'interactive-require'));
+  const profileIndex = (a: T) => {
+    const p = a.permissionProfile || 'interactive-require';
+    const idx = (PICKER_PROFILES as readonly string[]).indexOf(p);
+    return idx !== -1 ? idx : PICKER_PROFILES.length + (DISPATCHABLE_PROFILES as readonly string[]).indexOf(p);
+  };
+  return (simple.length > 0 ? simple : all).sort((a, b) => profileIndex(a) - profileIndex(b) || agentSortCmp(a, b));
+}
+
+/**
+ * Map an endpoint id (a saved selection, a computed default) onto the picker
+ * option covering the same runtime + profile. Returns '' when nothing matches.
+ */
+export function resolvePickerAgentId<T extends PickerAgentShape>(options: T[], agents: T[], id?: string | null): string {
+  if (!id) return '';
+  if (options.some(o => o.id === id)) return id;
+  const agent = agents.find(a => a.id === id);
+  if (!agent) return '';
+  return options.find(o => pickerKey(o) === pickerKey(agent))?.id || '';
+}
+
+/** "⚡ Claude YOLO" / "👁 Codex Interactive". */
+export function formatPickerOption(agent: { runtime?: string | null; permissionProfile?: string | null }): string {
+  const pd = profileDescriptor(agent.permissionProfile);
+  const runtime = agent.runtime || 'claude';
+  return `${pd.icon} ${RUNTIME_LABELS[runtime] || runtime} ${pd.label}`;
 }
