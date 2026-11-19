@@ -40,3 +40,12 @@ test('codeTextForButton copies the code, not the button label', () => {
   const orphan = { closest: () => null };
   assert.equal(codeTextForButton(orphan as unknown as Element), '');
 });
+
+import { rowsToCsv, rowsToTsv, wrapTableBlock } from '../src/lib/md-code-copy.js';
+
+test('table helpers: csv quoting, tsv flattening, wrapper', () => {
+  const rows = [['a', 'b,c'], ['say "hi"', 'x\ty']];
+  assert.equal(rowsToCsv(rows), 'a,"b,c"\r\n"say ""hi""",x\ty');
+  assert.equal(rowsToTsv(rows), 'a\tb,c\nsay "hi"\tx y');
+  assert.match(wrapTableBlock('<table></table>'), /md-table-block[\s\S]*md-table-download/);
+});
