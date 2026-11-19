@@ -50,7 +50,7 @@ import { api } from '../../lib/api.js';
 import { setFocusedLeaf } from '../../lib/pane-tree.js';
 import { ctrlShiftHeld } from '../../lib/shortcuts.js';
 import { autoJumpWaiting, autoJumpInterrupt, autoJumpDelay, autoJumpShowPopup, autoJumpLogs, autoCloseWaitingPanel, autoJumpHandleBounce, alphaFeaturesEnabled } from '../../lib/settings.js';
-import { selectedAppId, applications, navigate, loadChannels, channelsByApp, activeChannelSlug, COS_WORKSPACE_ID } from '../../lib/state.js';
+import { selectedAppId, applications, navigate, loadChannels, channelsByApp, activeChannelSlug, COS_WORKSPACE_ID, appLabel } from '../../lib/state.js';
 import { PopupMenu } from '../pickers/PopupMenu.js';
 import { QuickDispatchPopup, type DispatchType } from '../dispatch/QuickDispatchPopup.js';
 import { loadCosDispatches, cosGroupForSession } from '../../lib/cos-dispatches.js';
@@ -520,7 +520,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
                         checked={!sessionAppExcludes.value.has(app.id)}
                         onChange={() => toggleAppExclude(app.id)}
                       />
-                      <span>{app.name}</span>
+                      <span>{appLabel(app)}</span>
                       {count > 0 && <span class="sidebar-filter-count">{count}</span>}
                     </label>
                   );
@@ -586,7 +586,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
           };
           const resolveAppName = (id: string | null | undefined) => {
             if (!id || id === '__unlinked__') return 'Unlinked';
-            return applications.value.find((a: any) => a.id === id)?.name || id.slice(-8);
+            return appLabel(applications.value.find((a: any) => a.id === id)) || id.slice(-8);
           };
 
           for (const s of restAgents) {
@@ -896,7 +896,8 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
             const appList = applications.value;
             const appName = (id: string) => {
               if (id === '__unlinked__') return 'Unlinked';
-              return appList.find((a: any) => a.id === id)?.name || id.slice(-8);
+              const app = appList.find((a: any) => a.id === id);
+              return app ? appLabel(app) : id.slice(-8);
             };
             const sortedKeys = [...new Set([...appMap.keys(), ...appSwarmMap.keys()])].sort((a, b) => {
               if (a === '__unlinked__') return 1;
@@ -1002,7 +1003,7 @@ export function SessionsListView({ machineId = null, machineName = null, appId =
               {quickDispatchAppKey.value === ungroupedKey && quickDispatchOwner.value === qdpInstanceId && (
                 <QuickDispatchPopup
                   appKey={selectedAppId.value || '__unlinked__'}
-                  appName={selectedAppId.value ? (applications.value.find((a: any) => a.id === selectedAppId.value)?.name || selectedAppId.value.slice(-8)) : undefined}
+                  appName={selectedAppId.value ? ((() => { const app = applications.value.find((a: any) => a.id === selectedAppId.value); return app ? appLabel(app) : selectedAppId.value.slice(-8); })()) : undefined}
                   anchor={quickDispatchAnchor.value}
                   initialDispatchType={quickDispatchInitialType.value || undefined}
                   onClose={() => { quickDispatchAppKey.value = null; quickDispatchInitialType.value = null; }}

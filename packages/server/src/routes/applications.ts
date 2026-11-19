@@ -34,10 +34,23 @@ function parseAppJson(app: typeof schema.applications.$inferSelect) {
 applicationRoutes.get('/', async (c) => {
   // Members only see their own workspaces (owned or in their org); admins all.
   const scope = memberAppScope(getAdminUser(c));
+  const user = getAdminUser(c);
   const apps = scope
     ? db.select().from(schema.applications).where(scope).all()
     : db.select().from(schema.applications).all();
-  return c.json(apps.map(parseAppJson));
+  // A global admin also sees members' onboarded copies, which share names with
+  // the operator's own apps. Tag rows owned by another user with that user's
+  // name so the UI can tell the operator's "My App" from a member's "My App".
+  const owners = new Map(
+    db.select({ id: schema.users.id, username: schema.users.username }).from(schema.users).all()
+      .map((u) => [u.id, u.username]),
+  );
+  return c.json(apps.map((app) => {
+    const otherOwner = app.ownerUserId && app.ownerUserId !== 'env-admin' && app.ownerUserId !== user.id
+      ? owners.get(app.ownerUserId) ?? null
+      : null;
+    return { ...parseAppJson(app), ownerName: otherOwner };
+  }));
 });
 
 applicationRoutes.post('/scaffold', async (c) => {
