@@ -6,6 +6,7 @@ import { startPicker, type SelectedElementInfo } from '@propanes/widget/element-
 import { VoiceRecorder, type VoiceRecordingResult } from '@propanes/widget/voice-recorder';
 import { snapshotConsole, type ConsoleEntry } from '../../lib/console-buffer.js';
 import { useComposerCore, type ComposerImage, type ComposerFile, type ComposerFileUploadResult } from '../../lib/use-composer-core.js';
+import { draftImageStore, type DraftImage } from '../../lib/draft-images.js';
 import { api } from '../../lib/api.js';
 import { copyWithTooltip } from '../../lib/clipboard.js';
 
@@ -81,7 +82,8 @@ type ComposerDraftAttachments = {
 };
 
 // Only fully-uploaded files are persistable — they carry a stable /tmp path +
-// id, unlike image blobs (binary, not serialized into the draft).
+// id. Image blobs are binary, so they are not serialized into the draft JSON;
+// they persist separately through draftImageStore (see lib/draft-images.ts).
 function persistableFiles(files: ComposerFile[]): ComposerFile[] {
   return files.filter((f) => f.status === 'done' && !!f.path);
 }
@@ -90,6 +92,14 @@ function serializeDraftAttachments(elements: SelectedElementInfo[], files: Compo
   const doneFiles = persistableFiles(files);
   if (elements.length === 0 && doneFiles.length === 0) return undefined;
   return JSON.stringify({ elements, files: doneFiles });
+}
+
+function persistableImages(images: ComposerImage[]): DraftImage[] {
+  const out: DraftImage[] = [];
+  for (const img of images) {
+    if (img.kind === 'blob') out.push({ id: img.id, name: img.name, blob: img.blob });
+  }
+  return out;
 }
 
 function parseDraftAttachments(raw: string | null | undefined): ComposerDraftAttachments {
@@ -297,7 +307,10 @@ export function UnifiedComposer({
     setDraftHydratedKey(null);
     let cancelled = false;
     void (async () => {
-      const draft = await loadDraft(draftKey);
+      const [draft, draftImages] = await Promise.all([
+        loadDraft(draftKey),
+        draftImageStore.load(draftKey),
+      ]);
       if (cancelled) return;
       if (draft && draft.text && !core.text) core.setText(draft.text);
       const attachments = parseDraftAttachments(draft?.attachmentsJson);
@@ -306,6 +319,18 @@ export function UnifiedComposer({
       }
       if (attachments.files?.length && core.files.length === 0) {
         core.setFiles(attachments.files);
+      }
+      if (draftImages.length > 0) {
+        // Only restore into an empty tray: an image pasted before the load
+        // resolved wins, same as text. Preview URLs are per-mount (the core
+        // hook revokes them on unmount), so mint fresh ones for the blobs.
+        core.setImages((prev) => (prev.length > 0 ? prev : draftImages.map((img) => ({
+          id: img.id,
+          kind: 'blob' as const,
+          blob: img.blob,
+          name: img.name,
+          previewUrl: URL.createObjectURL(img.blob),
+        }))));
       }
       setDraftHydratedKey(draftKey);
     })();
@@ -485,6 +510,15 @@ export function UnifiedComposer({
     core.setElements((prev) => prev.filter((_, i) => i !== idx));
   }
 
+  // Image attachments are saved as soon as they change (no debounce: the
+  // store is synchronous in memory, so closing the composer right after a
+  // paste can't lose the image).
+  useEffect(() => {
+    if (!draftKey) return;
+    if (draftHydratedKey !== draftKey) return;
+    draftImageStore.save(draftKey, persistableImages(core.images));
+  }, [draftKey, draftHydratedKey, core.images]);
+
   // hasContent includes voice result which the core hook doesn't know about
   const hasContent = core.hasContent || !!voiceResult;
 
@@ -534,6 +568,9 @@ export function UnifiedComposer({
           clearTimeout(draftSaveTimerRef.current);
           draftSaveTimerRef.current = null;
         }
+        // Explicit: the caller may unmount us on success, in which case the
+        // autosave effect never sees the cleared image list.
+        draftImageStore.clear(draftKey);
         if (draftStorage === 'local') {
           clearLocalDraft(draftKey);
         } else {
