@@ -66,6 +66,13 @@ const initialAppId = embedAppId
   || localStorage.getItem('pw-selected-app-id');
 export const selectedAppId = signal<string | null>(initialAppId);
 export const applications = signal<any[]>([]);
+
+// Display name that keeps a member's copy of an app (ownerName is set by the
+// server only for rows another user owns) distinct from the operator's own.
+export function appLabel(app: { name?: string; ownerName?: string | null } | null | undefined): string {
+  if (!app?.name) return '';
+  return app.ownerName ? `${app.name} (${app.ownerName})` : app.name;
+}
 export const unlinkedCount = signal(0);
 export const appFeedbackCounts = signal<Record<string, { total: number; new: number; running: number }>>({});
 export const addAppModalOpen = signal(false);
