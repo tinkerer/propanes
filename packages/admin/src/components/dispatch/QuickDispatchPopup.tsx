@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { createPortal } from 'preact/compat';
 import { api } from '../../lib/api.js';
-import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../../lib/agent-constants.js';
-import { formatAgentOption, agentSortCmp, isDispatchableAgent, pickYoloAgent } from '../../lib/agent-matrix.js';
+import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE } from '../../lib/agent-constants.js';
+import { agentSortCmp, isDispatchableAgent, pickYoloAgent, pickerAgents, resolvePickerAgentId, formatPickerOption } from '../../lib/agent-matrix.js';
 import { openSession, loadAllSessions, ensureAgentsLoaded } from '../../lib/sessions.js';
 import { UnifiedComposer, type UnifiedComposerData } from '../feedback/UnifiedComposer.js';
 import {
@@ -14,17 +14,6 @@ import {
 } from '../../lib/qdp-resize.js';
 
 export type DispatchType = 'agent' | 'yolo' | 'wiggum' | 'fafo' | 'structured' | 'powwow';
-
-function groupAgentsByRuntime(agents: any[]): Array<[string, any[]]> {
-  const sorted = [...agents].sort(agentSortCmp);
-  const groups = new Map<string, any[]>();
-  for (const a of sorted) {
-    const key = a.runtime || 'claude';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(a);
-  }
-  return Array.from(groups.entries());
-}
 
 // Store dispatch settings per app in localStorage. A `__lastUsed__` bucket
 // mirrors the most recent dispatch type + agent across all apps so the
@@ -155,6 +144,7 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
   const panelRef = useRef<HTMLDivElement>(null);
 
   const appId = appKey === '__unlinked__' ? '' : appKey;
+  const agentOptions = useMemo(() => pickerAgents(agents, appId), [agents, appId]);
 
   useEffect(() => {
     (async () => {
@@ -163,7 +153,13 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
           ? await api.getAgents(appId)
           : await ensureAgentsLoaded();
         setAgents(list);
-        if (!selectedAgentId || !list.some((a: any) => a.id === selectedAgentId)) {
+        // The picker shows one endpoint per runtime + profile, so a saved
+        // selection pointing at a sibling endpoint snaps to its option.
+        const options = pickerAgents(list as any[], appId);
+        const kept = resolvePickerAgentId(options, list as any[], selectedAgentId);
+        if (kept) {
+          if (kept !== selectedAgentId) setSelectedAgentId(kept);
+        } else {
           const usable = (list as any[]).filter(isDispatchableAgent);
           // Runtime preference (e.g. Review PR defaults to the opposite runtime
           // of the reviewed session): pick a yolo agent of that runtime first.
@@ -174,7 +170,8 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
           const appDefault = appId ? usable.find((a: any) => a.isDefault && a.appId === appId) : null;
           const globalDefault = usable.find((a: any) => a.isDefault && !a.appId);
           const def = preferred || appDefault || globalDefault || usable[0];
-          if (def) setSelectedAgentId(def.id);
+          const defId = resolvePickerAgentId(options, list as any[], def?.id) || options[0]?.id;
+          if (defId) setSelectedAgentId(defId);
         }
       } catch { /* ignore */ }
     })();
@@ -430,22 +427,16 @@ export function QuickDispatchPopup({ appKey, appName, onClose, onSubmitClose, in
             <option value="structured">{'\u{1F4CB}'} Structured</option>
             <option value="powwow">{'\u{1FAD6}'} Powwow</option>
           </select>
-          {agents.length > 1 && (
+          {agentOptions.length > 1 && (
             <select
               class="qdp-agent-select"
               value={selectedAgentId}
               onChange={(e) => setSelectedAgentId((e.target as HTMLSelectElement).value)}
-              title={dispatchType === 'yolo' ? 'Pick a specific endpoint, or Auto for Claude-first YOLO' : 'Pick agent (runtime + permission profile)'}
+              title={dispatchType === 'yolo' ? 'Pick an agent, or Auto for Claude-first YOLO' : 'Pick agent (runtime + permission mode)'}
             >
               {dispatchType === 'yolo' && <option value="">Auto</option>}
-              {groupAgentsByRuntime(agents).map(([runtime, group]) => (
-                <optgroup key={runtime} label={`${(RUNTIME_INFO[runtime] || RUNTIME_INFO.claude).label}`}>
-                  {group.map((a: any) => (
-                    <option key={a.id} value={a.id}>
-                      {formatAgentOption(a)}
-                    </option>
-                  ))}
-                </optgroup>
+              {agentOptions.map((a: any) => (
+                <option key={a.id} value={a.id}>{formatPickerOption(a)}</option>
               ))}
             </select>
           )}

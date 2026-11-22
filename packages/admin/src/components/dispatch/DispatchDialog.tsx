@@ -3,8 +3,8 @@ import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
 import { api } from '../../lib/api.js';
 import { openSession, loadAllSessions } from '../../lib/sessions.js';
 import { cachedTargets, ensureTargetsLoaded, localTargetLabel, targetKey, parseTargetKey } from './DispatchTargetSelect.js';
-import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE, RUNTIME_INFO } from '../../lib/agent-constants.js';
-import { formatAgentOption, agentSortCmp, isDispatchableAgent, pickYoloAgent } from '../../lib/agent-matrix.js';
+import { META_WIGGUM_TEMPLATE, FAFO_ASSISTANT_TEMPLATE, STRUCTURED_MODE_TEMPLATE } from '../../lib/agent-constants.js';
+import { isDispatchableAgent, pickYoloAgent, pickerAgents, formatPickerOption } from '../../lib/agent-matrix.js';
 import { openSetupAssistant } from './SetupAssistantDialog.js';
 
 export interface DispatchDialogRequest {
@@ -75,18 +75,6 @@ function defaultAgent(agents: Agent[], appId?: string | null): Agent | undefined
     || usable[0];
 }
 
-function groupAgentsByRuntime(agents: Agent[]): Array<[string, Agent[]]> {
-  const sorted = [...agents].filter(isDispatchableAgent).sort(agentSortCmp);
-  const groups = new Map<string, Agent[]>();
-  for (const a of sorted) {
-    const key = a.runtime || 'claude';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(a);
-  }
-  return Array.from(groups.entries());
-}
-
-
 function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onClose: () => void }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [target, setTarget] = useState('');
@@ -128,6 +116,7 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
   const isBatch = req.feedbackIds.length > 1;
   const interactiveAgent = useMemo(() => pickAgent(agents, 'interactive-require', req.appId), [agents, req.appId]);
   const yoloAgent = useMemo(() => pickYoloAgent(agents, req.appId), [agents, req.appId]);
+  const agentOptions = useMemo(() => pickerAgents(agents, req.appId), [agents, req.appId]);
   const fallbackAgent = useMemo(() => defaultAgent(agents, req.appId), [agents, req.appId]);
   const structuredAgent = useMemo(
     () => pickAgent(agents, 'headless-yolo', req.appId, ['codex', 'claude']) || interactiveAgent || fallbackAgent,
@@ -285,14 +274,8 @@ function DispatchDialogInner({ req, onClose }: { req: DispatchDialogRequest; onC
                 onChange={(e) => setOverrideAgentId((e.target as HTMLSelectElement).value)}
               >
                 <option value="">Auto</option>
-                {groupAgentsByRuntime(agents).map(([runtime, group]) => (
-                  <optgroup key={runtime} label={(RUNTIME_INFO[runtime] || RUNTIME_INFO.claude).label}>
-                    {group.map((a) => (
-                      <option key={a.id} value={a.id}>
-                        {formatAgentOption(a)}{a.appId ? ' (app)' : ''}
-                      </option>
-                    ))}
-                  </optgroup>
+                {agentOptions.map((a) => (
+                  <option key={a.id} value={a.id}>{formatPickerOption(a)}</option>
                 ))}
               </select>
             </div>
