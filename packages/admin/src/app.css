@@ -5472,6 +5472,15 @@ select:focus, textarea:focus {
   font-family: 'SF Mono', Monaco, monospace;
 }
 
+.sm-history-skipped {
+  color: var(--pw-text-secondary);
+  text-align: center;
+  padding: 6px 12px;
+  font-size: 11px;
+  font-family: 'SF Mono', Monaco, monospace;
+  border-bottom: 1px dashed var(--pw-border, rgba(148, 163, 184, 0.3));
+}
+
 .sm-empty-loading {
   display: flex;
   align-items: center;

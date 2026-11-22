@@ -620,7 +620,7 @@ export const api = {
   getJsonlDelta: async (
     id: string,
     opts: { fileFilter?: string; tail?: number; cursor?: string | null } = {},
-  ): Promise<{ cursor: string; reset: boolean; order: string[]; files: Array<{ key: string; lines: string }>; pending?: boolean }> => {
+  ): Promise<{ cursor: string; reset: boolean; order: string[]; files: Array<{ key: string; lines: string }>; pending?: boolean; more?: boolean; skippedBytes?: number }> => {
     // POST, not GET: the cursor carries a byte offset per physical transcript
     // file, so a session with hundreds of subagent JSONLs produces a cursor
     // tens of kilobytes long. In a query string that overruns Node's header

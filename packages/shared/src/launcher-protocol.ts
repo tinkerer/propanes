@@ -117,6 +117,10 @@ export interface ReadSessionJsonlResult {
   reset?: boolean;
   order?: string[];
   files?: Array<{ key: string; lines: string }>;
+  /** The read budget ran out with bytes still unread — poll again now. */
+  more?: boolean;
+  /** Bytes of old history a snapshot left out of an oversized transcript. */
+  skippedBytes?: number;
   error?: string;
 }
 

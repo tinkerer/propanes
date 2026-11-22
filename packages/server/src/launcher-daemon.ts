@@ -46,8 +46,7 @@ import {
   resolveSessionJsonlPath,
   listJsonlFiles,
   collectJsonlUnits,
-  jsonlCursorNeedsReset,
-  readJsonlFileDelta,
+  readJsonlUnitsDelta,
   filterJsonlLines,
   type JsonlUnit,
 } from './jsonl-utils.js';
@@ -637,26 +636,21 @@ function handleReadSessionJsonl(msg: ReadSessionJsonl): void {
       units = collectJsonlUnits(jsonlPath, isCodex);
     }
 
-    const offsets = decodeJsonlCursor(msg.cursor);
-    let reset = jsonlCursorNeedsReset(offsets, units);
-    const readUnits = () => {
-      const newOffsets: Record<string, number> = {};
-      const chunks: Array<{ key: string; subagentId?: string; lines: string[] }> = [];
-      for (const unit of units) {
-        const from = !reset && offsets && typeof offsets[unit.key] === 'number' ? offsets[unit.key] : 0;
-        const delta = readJsonlFileDelta(unit.path, from, !isLive);
-        if (delta.shrunk) return { newOffsets, chunks, shrunk: true };
-        newOffsets[unit.key] = delta.newOffset;
-        if (delta.text) chunks.push({ key: unit.key, subagentId: unit.subagentId, lines: splitLines(delta.text) });
-      }
-      return { newOffsets, chunks, shrunk: false };
+    // Bounded read — see readJsonlUnitsDelta. A tail request trims the
+    // snapshot below, so it needs the whole (already capped) snapshot at once.
+    const delta = readJsonlUnitsDelta(units, decodeJsonlCursor(msg.cursor), {
+      consumePartial: !isLive,
+      unpagedSnapshot: !!msg.tail && msg.tail > 0,
+    });
+    const reset = delta.reset;
+    const result = {
+      newOffsets: delta.newOffsets,
+      chunks: delta.chunks.map((chunk) => ({
+        key: chunk.unit.key,
+        subagentId: chunk.unit.subagentId,
+        lines: splitLines(chunk.text),
+      })),
     };
-
-    let result = readUnits();
-    if (result.shrunk) {
-      reset = true;
-      result = readUnits();
-    }
     if (reset && msg.tail && msg.tail > 0) {
       let remaining = msg.tail;
       for (let i = result.chunks.length - 1; i >= 0; i--) {
@@ -682,6 +676,8 @@ function handleReadSessionJsonl(msg: ReadSessionJsonl): void {
           key: chunk.key,
           lines: chunk.lines.map((line) => injectSubagentId(line, chunk.subagentId)).join('\n'),
         })),
+      ...(delta.more ? { more: true } : {}),
+      ...(delta.skippedBytes > 0 ? { skippedBytes: delta.skippedBytes } : {}),
     };
     sendToServer(response);
   } catch (err: any) {

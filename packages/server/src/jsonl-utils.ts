@@ -409,31 +409,212 @@ export function collectJsonlUnits(
 // so a held-back final line would otherwise never be delivered. `shrunk`
 // means the file got smaller than the cursor (truncation/rotation); the
 // caller should fall back to a full snapshot.
+//
+// `maxBytes` bounds how much is read in one call: the read stops at the last
+// complete line inside the window and `more` reports that the file has bytes
+// past it. A single line longer than the window is still returned whole (the
+// read extends to that line's end) so a reader always makes progress — unless
+// `extendOversizedLine` is false, where it is left unread (`more`) for a later
+// call with a fresh window.
 export function readJsonlFileDelta(
   path: string,
   fromOffset: number,
   consumePartial: boolean,
-): { text: string; newOffset: number; shrunk: boolean } {
+  maxBytes: number = Infinity,
+  extendOversizedLine: boolean = true,
+): { text: string; newOffset: number; shrunk: boolean; more: boolean } {
   let size = 0;
   try {
     size = statSync(path).size;
   } catch {
-    return { text: '', newOffset: 0, shrunk: fromOffset > 0 };
+    return { text: '', newOffset: 0, shrunk: fromOffset > 0, more: false };
   }
-  if (size < fromOffset) return { text: '', newOffset: 0, shrunk: true };
-  if (size === fromOffset) return { text: '', newOffset: fromOffset, shrunk: false };
+  if (size < fromOffset) return { text: '', newOffset: 0, shrunk: true, more: false };
+  if (size === fromOffset) return { text: '', newOffset: fromOffset, shrunk: false, more: false };
   const fd = openSync(path, 'r');
   try {
-    const buf = Buffer.alloc(size - fromOffset);
-    const read = readSync(fd, buf, 0, buf.length, fromOffset);
-    const chunk = buf.subarray(0, read);
+    const window = Math.max(1, Math.min(size - fromOffset, maxBytes));
+    const first = Buffer.alloc(window);
+    let read = readSync(fd, first, 0, first.length, fromOffset);
+    let chunk = first.subarray(0, read);
+    let atEof = read < window || fromOffset + read >= size;
+    if (!atEof && chunk.lastIndexOf(0x0a) === -1) {
+      if (!extendOversizedLine) return { text: '', newOffset: fromOffset, shrunk: false, more: true };
+      // One line longer than the window: extend to the end of that line.
+      const parts = [chunk];
+      const block = Buffer.alloc(OVERSIZED_LINE_BLOCK_BYTES);
+      while (!atEof) {
+        const n = readSync(fd, block, 0, block.length, fromOffset + read);
+        if (n <= 0) { atEof = true; break; }
+        const nl = block.subarray(0, n).indexOf(0x0a);
+        const take = nl === -1 ? n : nl + 1;
+        parts.push(Buffer.from(block.subarray(0, take)));
+        read += take;
+        if (nl !== -1) break;
+        if (fromOffset + read >= size) atEof = true;
+      }
+      chunk = Buffer.concat(parts);
+    }
+    const more = !atEof && fromOffset + read < size;
     const lastNl = chunk.lastIndexOf(0x0a);
-    if (lastNl === -1 && !consumePartial) return { text: '', newOffset: fromOffset, shrunk: false };
-    const end = consumePartial && lastNl < read - 1 ? read : lastNl + 1;
-    return { text: chunk.subarray(0, end).toString('utf-8'), newOffset: fromOffset + end, shrunk: false };
+    // Only the true end of file may be consumed as a partial line.
+    const takePartial = consumePartial && !more;
+    if (lastNl === -1 && !takePartial) return { text: '', newOffset: fromOffset, shrunk: false, more };
+    const end = takePartial && lastNl < read - 1 ? read : lastNl + 1;
+    return { text: chunk.subarray(0, end).toString('utf-8'), newOffset: fromOffset + end, shrunk: false, more };
   } finally {
     closeSync(fd);
   }
+}
+
+const OVERSIZED_LINE_BLOCK_BYTES = 1024 * 1024;
+
+/** Bounds on one transcript read. A long-running session can accumulate
+ *  hundreds of megabytes of subagent transcripts; reading all of it for one
+ *  response blocks the event loop for seconds and overflows V8's maximum
+ *  string length when the response is serialized. */
+export interface JsonlReadLimits {
+  /** File bytes read per response. Past it the response carries `more` and
+   *  the caller polls again straight away with the returned cursor. */
+  responseBytes: number;
+  /** Snapshot: bytes kept across main + continuation files, newest first. */
+  snapshotMainBytes: number;
+  /** Snapshot: bytes kept across all subagent files, newest first. */
+  snapshotSubagentBytes: number;
+  /** Snapshot: bytes kept from any one subagent file. */
+  snapshotSubagentFileBytes: number;
+}
+
+export const DEFAULT_JSONL_READ_LIMITS: JsonlReadLimits = {
+  responseBytes: 8 * 1024 * 1024,
+  snapshotMainBytes: 32 * 1024 * 1024,
+  snapshotSubagentBytes: 16 * 1024 * 1024,
+  snapshotSubagentFileBytes: 2 * 1024 * 1024,
+};
+
+// First line start at or after `offset` — a snapshot that skips the head of a
+// file must not begin in the middle of a JSON line.
+function alignJsonlOffsetToLineStart(path: string, offset: number, size: number): number {
+  if (offset <= 0) return 0;
+  if (offset >= size) return size;
+  let fd: number;
+  try {
+    fd = openSync(path, 'r');
+  } catch {
+    return offset;
+  }
+  try {
+    const block = Buffer.alloc(64 * 1024);
+    // Start one byte early: a newline right before `offset` means it already
+    // sits on a line start.
+    let pos = offset - 1;
+    while (pos < size) {
+      const n = readSync(fd, block, 0, Math.min(block.length, size - pos), pos);
+      if (n <= 0) break;
+      const nl = block.subarray(0, n).indexOf(0x0a);
+      if (nl !== -1) return pos + nl + 1;
+      pos += n;
+    }
+    return size;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Where a fresh snapshot starts reading each file. Files that fit the limits
+ *  start at 0; oversized history is skipped from the front (oldest first),
+ *  keeping the newest lines. Main/continuation files and subagent files draw
+ *  on separate budgets so chatty subagents can't crowd out the conversation. */
+export function planJsonlSnapshotOffsets(
+  units: JsonlUnit[],
+  limits: JsonlReadLimits = DEFAULT_JSONL_READ_LIMITS,
+): { offsets: Record<string, number>; skippedBytes: number } {
+  const offsets: Record<string, number> = {};
+  let skippedBytes = 0;
+  let mainLeft = limits.snapshotMainBytes;
+  let subLeft = limits.snapshotSubagentBytes;
+  for (let i = units.length - 1; i >= 0; i--) {
+    const u = units[i];
+    let size = 0;
+    try { size = statSync(u.path).size; } catch { /* vanished → nothing to read */ }
+    let keep: number;
+    if (u.subagentId) {
+      keep = Math.min(size, limits.snapshotSubagentFileBytes, subLeft);
+      subLeft -= keep;
+    } else {
+      keep = Math.min(size, mainLeft);
+      mainLeft -= keep;
+    }
+    const start = keep >= size ? 0 : alignJsonlOffsetToLineStart(u.path, size - keep, size);
+    offsets[u.key] = start;
+    skippedBytes += start;
+  }
+  return { offsets, skippedBytes };
+}
+
+export interface JsonlUnitsDelta {
+  /** Per-file byte offsets to resume from; covers every unit. */
+  newOffsets: Record<string, number>;
+  chunks: Array<{ unit: JsonlUnit; text: string }>;
+  /** Previous client buffers are stale — this is a fresh snapshot. */
+  reset: boolean;
+  /** The response budget ran out with bytes still unread; poll again now. */
+  more: boolean;
+  /** Bytes of old history a snapshot left out (0 for plain deltas). */
+  skippedBytes: number;
+}
+
+/** One differential read across a session's transcript files: everything past
+ *  the cursor's per-file offsets, bounded by `limits`. A null cursor, a cursor
+ *  for a different file set, or a file that shrank under it yields a snapshot
+ *  (`reset`). `unpagedSnapshot` lifts the per-response budget for a snapshot
+ *  (the snapshot limits still apply) for callers that trim it themselves. */
+export function readJsonlUnitsDelta(
+  units: JsonlUnit[],
+  cursorOffsets: Record<string, number> | null,
+  opts: { consumePartial: boolean; unpagedSnapshot?: boolean; limits?: JsonlReadLimits },
+): JsonlUnitsDelta {
+  const limits = opts.limits ?? DEFAULT_JSONL_READ_LIMITS;
+  let reset = jsonlCursorNeedsReset(cursorOffsets, units);
+
+  const attempt = (): JsonlUnitsDelta | null => {
+    const plan = reset ? planJsonlSnapshotOffsets(units, limits) : null;
+    const starts = plan ? plan.offsets : cursorOffsets!;
+    const fullBudget = reset && opts.unpagedSnapshot ? Infinity : limits.responseBytes;
+    let budget = fullBudget;
+    let more = false;
+    const newOffsets: Record<string, number> = {};
+    const chunks: JsonlUnitsDelta['chunks'] = [];
+    for (const u of units) {
+      const from = typeof starts[u.key] === 'number' ? starts[u.key] : 0;
+      if (budget <= 0) {
+        // Out of budget: carry the offset forward untouched for the next poll.
+        let size = from;
+        try { size = statSync(u.path).size; } catch { /* treat as unchanged */ }
+        if (size < from) return null;
+        if (size > from) more = true;
+        newOffsets[u.key] = from;
+        continue;
+      }
+      // Only a read with the whole budget may overshoot it for an oversized
+      // line; a leftover sliver of budget defers that line to the next poll.
+      const d = readJsonlFileDelta(u.path, from, opts.consumePartial, budget, budget === fullBudget);
+      if (d.shrunk) return null;
+      newOffsets[u.key] = d.newOffset;
+      budget -= d.newOffset - from;
+      if (d.more) more = true;
+      if (d.text) chunks.push({ unit: u, text: d.text });
+    }
+    return { newOffsets, chunks, reset, more, skippedBytes: plan ? plan.skippedBytes : 0 };
+  };
+
+  let result = attempt();
+  if (!result) {
+    // A file got truncated/rotated under the cursor — resend a snapshot.
+    reset = true;
+    result = attempt();
+  }
+  return result ?? { newOffsets: {}, chunks: [], reset: true, more: false, skippedBytes: 0 };
 }
 
 export interface JsonlFileInfo {
