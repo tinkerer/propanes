@@ -111,6 +111,13 @@ function detectChoicePrompt(content: string): DetectedChoicePrompt | null {
   return { title, prompt: promptLine, choices };
 }
 
+function formatSkippedBytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  if (mb >= 1) return `${Math.round(mb)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
 export function StructuredView({ sessionId, chat }: Props) {
   const [choicePrompt, setChoicePrompt] = useState<DetectedChoicePrompt | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -121,7 +128,7 @@ export function StructuredView({ sessionId, chat }: Props) {
   const isWaiting = inputState === 'waiting';
   const fileDrop = useSessionFileDrop(sessionId);
 
-  const { messages, loading, error, isSessionDone, isRunning, noTranscript } = useTranscriptStream(sessionId);
+  const { messages, loading, error, isSessionDone, isRunning, noTranscript, skippedBytes } = useTranscriptStream(sessionId);
 
   const { setRef: setScrollRef, showScrollDown, scrollToBottom } = useScrollAnchor({
     resetKey: sessionId,
@@ -299,6 +306,11 @@ export function StructuredView({ sessionId, chat }: Props) {
       onPasteCapture={fileDrop.onPaste}
     >
     <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} ref={setContainerRef}>
+      {skippedBytes > 0 && (
+        <div class="sm-history-skipped" title="This transcript is too large to load whole, so only its most recent part is shown.">
+          Earlier history not loaded ({formatSkippedBytes(skippedBytes)} of older transcript skipped)
+        </div>
+      )}
       {messages.length === 0 && (
         <div class="sm-empty">No messages yet</div>
       )}

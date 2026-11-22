@@ -48,13 +48,6 @@ const DEFAULT_TOOL_FILTERS: Record<string, boolean> = Object.fromEntries(
   [...TOOL_CHIPS.map(c => c.id), 'other'].map(id => [id, true])
 );
 
-function formatSkippedBytes(bytes: number): string {
-  const mb = bytes / (1024 * 1024);
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
-  if (mb >= 1) return `${Math.round(mb)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
-
 export function JsonlView({ sessionId, hideInterruptBar, compact }: Props) {
   const [roleFilters, setRoleFilters] = useState<typeof DEFAULT_FILTERS>(DEFAULT_FILTERS);
   const [toolFilters, setToolFilters] = useState<Record<string, boolean>>(DEFAULT_TOOL_FILTERS);
@@ -69,7 +62,7 @@ export function JsonlView({ sessionId, hideInterruptBar, compact }: Props) {
   // Access the signal to trigger re-renders
   const _sel = jsonlSelectedFile.value;
 
-  const { messages, loading, error, isSessionDone, isRunning, noTranscript, skippedBytes } = useTranscriptStream(
+  const { messages, loading, error, isSessionDone, isRunning, noTranscript } = useTranscriptStream(
     sessionId,
     { fileFilter: selectedFile }
   );
@@ -308,11 +301,6 @@ export function JsonlView({ sessionId, hideInterruptBar, compact }: Props) {
         )}
         <div class="structured-view-wrap" style={{ flex: 1, minHeight: 0 }}>
         <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} style={{ flex: 1, minHeight: 0 }} ref={setCombinedRef}>
-          {skippedBytes > 0 && (
-            <div class="sm-history-skipped" title="This transcript is too large to load whole, so only its most recent part is shown.">
-              Earlier history not loaded ({formatSkippedBytes(skippedBytes)} of older transcript skipped)
-            </div>
-          )}
           {messages.length === 0 && (
             <div class="sm-empty">No messages in JSONL file</div>
           )}
