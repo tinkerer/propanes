@@ -5,6 +5,8 @@ import { api } from './api.js';
 import { allSessions, exitedSessions } from './sessions.js';
 import { isMobile } from './viewport.js';
 
+const MAX_PAGES_PER_FETCH = 64;
+
 const TERMINAL_STATUSES = new Set(['completed', 'exited', 'failed', 'deleted', 'archived', 'killed']);
 
 // Statuses that mean "the request itself was too big", i.e. the cursor is at
@@ -52,6 +54,9 @@ export interface TranscriptStreamState {
   /** Session will never produce a transcript (plain shell with no agent
    *  session attached) — render a definitive empty state, not a spinner. */
   noTranscript: boolean;
+  /** Bytes of the oldest history the server left out because the transcript
+   *  is too large to load whole (0 when everything is shown). */
+  skippedBytes: number;
 }
 
 /** Subscribe to a session's JSONL transcript and keep parsing it as new lines
@@ -79,6 +84,7 @@ export function useTranscriptStream(
   const [messages, setMessages] = useState<ParsedMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [skippedBytes, setSkippedBytes] = useState(0);
   // Differential-update state: one incremental parser per physical file plus
   // the opaque byte cursor. This avoids reparsing an ever-growing transcript
   // after every small poll.
@@ -112,6 +118,7 @@ export function useTranscriptStream(
     setMessages([]);
     setLoading(true);
     setError(null);
+    setSkippedBytes(0);
 
     // No session yet (empty id while a view mounts before its session
     // resolves) — polling would hit /agent-sessions//jsonl and 404.
@@ -132,46 +139,53 @@ export function useTranscriptStream(
       if (inFlight) return;
       inFlight = true;
       try {
-        let delta;
-        try {
-          delta = await api.getJsonlDelta(sessionId, {
-            fileFilter: fileFilter || undefined,
-            tail: tailLines,
-            cursor: cursor.current,
-          });
-        } catch (err: any) {
-          // A cursor the server won't accept (too large for an intermediate
-          // proxy, stale encoding after a deploy) must not strand the view on
-          // an error wall — drop it and ask for a fresh full snapshot once.
-          if (!cursor.current || !isCursorRejection(err?.status)) throw err;
-          cursor.current = null;
-          accumulator.current = new TranscriptAccumulator();
-          delta = await api.getJsonlDelta(sessionId, {
-            fileFilter: fileFilter || undefined,
-            tail: tailLines,
-            cursor: null,
-          });
-        }
-        if (cancelled) return;
-        if (delta.pending) {
-          // Transcript not on disk (yet) — the server answers 200 + pending
-          // instead of a 404 so routine polls don't spam the console. Same
-          // semantics as the 404 path below: loading state while the session
-          // runs, empty view once it's done. Buffers/cursor stay untouched in
-          // case the file reappears.
-          setError(null);
-          setLoading(!isSessionDone && !accumulator.current.hasMessages);
-          return;
-        }
-        cursor.current = delta.cursor;
-        if (!delta.reset && delta.files.length === 0) {
-          // Nothing appended since the last poll — keep the current parse.
+        // The server bounds how much transcript one response carries. A large
+        // backlog arrives as consecutive pages flagged `more`; drain them now
+        // rather than at one page per poll interval. (The page cap only stops
+        // a misbehaving server from pinning this loop — polling picks up the
+        // rest.)
+        for (let page = 0; page < MAX_PAGES_PER_FETCH && !cancelled; page++) {
+          let delta;
+          try {
+            delta = await api.getJsonlDelta(sessionId, {
+              fileFilter: fileFilter || undefined,
+              tail: tailLines,
+              cursor: cursor.current,
+            });
+          } catch (err: any) {
+            // A cursor the server won't accept (too large for an intermediate
+            // proxy, stale encoding after a deploy) must not strand the view on
+            // an error wall — drop it and ask for a fresh full snapshot once.
+            if (!cursor.current || !isCursorRejection(err?.status)) throw err;
+            cursor.current = null;
+            accumulator.current = new TranscriptAccumulator();
+            delta = await api.getJsonlDelta(sessionId, {
+              fileFilter: fileFilter || undefined,
+              tail: tailLines,
+              cursor: null,
+            });
+          }
+          if (cancelled) return;
+          if (delta.pending) {
+            // Transcript not on disk (yet) — the server answers 200 + pending
+            // instead of a 404 so routine polls don't spam the console. Same
+            // semantics as the 404 path below: loading state while the session
+            // runs, empty view once it's done. Buffers/cursor stay untouched in
+            // case the file reappears.
+            setError(null);
+            setLoading(!isSessionDone && !accumulator.current.hasMessages);
+            return;
+          }
+          cursor.current = delta.cursor;
+          if (delta.reset) setSkippedBytes(delta.skippedBytes || 0);
+          if (delta.reset || delta.files.length > 0) {
+            setMessages(accumulator.current.apply(runtime, delta.order, delta.files, delta.reset));
+            setError(null);
+          }
+          // else: nothing appended since the last poll — keep the current parse.
           setLoading(false);
-          return;
+          if (!delta.more) return;
         }
-        setMessages(accumulator.current.apply(runtime, delta.order, delta.files, delta.reset));
-        setError(null);
-        setLoading(false);
       } catch (err: any) {
         if (cancelled) return;
         const status = err?.status;
@@ -204,5 +218,5 @@ export function useTranscriptStream(
     return () => { cancelled = true; clearInterval(interval); };
   }, [sessionId, fileFilter, tailLines, pollMs, isSessionDone, runtime, noTranscript]);
 
-  return { messages, loading, error, isSessionDone, isRunning, noTranscript };
+  return { messages, loading, error, isSessionDone, isRunning, noTranscript, skippedBytes };
 }

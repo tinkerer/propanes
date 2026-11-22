@@ -38,8 +38,7 @@ import {
   exportSessionFiles,
   listJsonlFiles,
   collectJsonlUnits,
-  jsonlCursorNeedsReset,
-  readJsonlFileDelta,
+  readJsonlUnitsDelta,
   type JsonlUnit,
 } from '../jsonl-utils.js';
 import { findContinuationJsonlsCached } from '../jsonl-continuations.js';
@@ -1244,6 +1243,8 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
         reset: !!result.reset,
         order: result.order || [],
         files,
+        ...(result.more ? { more: true } : {}),
+        ...(result.skippedBytes > 0 ? { skippedBytes: result.skippedBytes } : {}),
       });
     } catch (err: any) {
       return c.json({ error: err?.message || 'Remote launcher unavailable' }, 502);
@@ -1299,34 +1300,28 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
     // For terminal-status sessions consume a trailing partial line too —
     // nothing will ever complete it.
     const consumePartial = !isLive;
-    const offsets = decodeJsonlCursor(cursorParam);
-    // A disappeared key means the main transcript rotated (not merely that a
-    // subagent/continuation was added). Reset so mobile tailing applies and the
-    // browser drops buffers belonging to the pre-clear transcript.
-    let reset = jsonlCursorNeedsReset(offsets, units);
-
-    const readUnits = () => {
-      const newOffsets: Record<string, number> = {};
-      const chunks: Array<{ unit: JsonlUnit; lines: string[] }> = [];
-      for (const u of units) {
-        const from = !reset && offsets && typeof offsets[u.key] === 'number' ? offsets[u.key] : 0;
-        const d = readJsonlFileDelta(u.path, from, consumePartial);
-        if (d.shrunk) return { newOffsets, chunks, shrunk: true };
-        newOffsets[u.key] = d.newOffset;
-        if (d.text) {
-          const lines = splitLines(d.text);
-          if (lines.length) chunks.push({ unit: u, lines });
-        }
-      }
-      return { newOffsets, chunks, shrunk: false };
+    // A cursor naming a file that no longer exists means the main transcript
+    // rotated (not merely that a subagent/continuation was added); that, a
+    // shrunken file, or no cursor at all yields a snapshot (`reset`), so
+    // mobile tailing applies and the browser drops pre-clear buffers.
+    //
+    // The read is bounded: at most a response budget of file bytes per call
+    // (`more` tells the client to poll again immediately), and a snapshot
+    // skips the oldest history of oversized files. Unbounded, a session with
+    // hundreds of MB of subagent transcripts blocked the event loop for
+    // seconds per poll and then failed to serialize ("Invalid string length").
+    const delta = readJsonlUnitsDelta(units, decodeJsonlCursor(cursorParam), {
+      consumePartial,
+      // The tail trim below needs the whole snapshot in one response.
+      unpagedSnapshot: tailN > 0,
+    });
+    const reset = delta.reset;
+    const result = {
+      newOffsets: delta.newOffsets,
+      chunks: delta.chunks
+        .map(ch => ({ unit: ch.unit, lines: splitLines(ch.text) }))
+        .filter(ch => ch.lines.length > 0),
     };
-
-    let result = readUnits();
-    if (result.shrunk) {
-      // A file got truncated/rotated under the cursor — resend everything.
-      reset = true;
-      result = readUnits();
-    }
 
     // Tail applies only to the snapshot (reset) response; subsequent deltas
     // are naturally small. Trim from the front across units in merge order.
@@ -1357,7 +1352,14 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
       }));
 
     const cursor = Buffer.from(JSON.stringify({ v: 1, o: result.newOffsets })).toString('base64url');
-    return c.json({ cursor, reset, order: units.map(u => u.key), files });
+    return c.json({
+      cursor,
+      reset,
+      order: units.map(u => u.key),
+      files,
+      ...(delta.more ? { more: true } : {}),
+      ...(delta.skippedBytes > 0 ? { skippedBytes: delta.skippedBytes } : {}),
+    });
   }
 
   // Legacy full-text mode (one-shot consumers like the session summary view).
@@ -1367,15 +1369,12 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
     c.header('ETag', etag);
     return c.body(null, 304);
   }
+  // Same snapshot bounds as the differential path, so an oversized session
+  // answers with its newest history instead of failing to build the body.
+  const snapshot = readJsonlUnitsDelta(units, null, { consumePartial: true, unpagedSnapshot: true });
   const allLines: string[] = [];
-  for (const u of units) {
-    let raw: string;
-    try {
-      raw = readFileSync(u.path, 'utf-8');
-    } catch {
-      continue; // vanished between collect and read
-    }
-    for (const line of splitLines(raw)) allLines.push(injectSubagentId(line, u.subagentId));
+  for (const ch of snapshot.chunks) {
+    for (const line of splitLines(ch.text)) allLines.push(injectSubagentId(line, ch.unit.subagentId));
   }
   const out = tailN > 0 ? allLines.slice(-tailN) : allLines;
   c.header('ETag', etag);
