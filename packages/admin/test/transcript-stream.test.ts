@@ -43,3 +43,20 @@ test('merged files keep unique stable message ids across incremental updates', (
   assert.equal(updated[0].id, initial[0].id);
   assert.equal(updated.at(-1)?.id, initial.at(-1)?.id);
 });
+
+test('prepended history pages render above the loaded tail with unique ids', () => {
+  const stream = new TranscriptAccumulator();
+  const text = (t: string) => line({ type: 'assistant', message: { content: [{ type: 'text', text: t }] } });
+  stream.apply('claude', ['main.jsonl'], [{ key: 'main.jsonl', lines: text('latest') }], true);
+  stream.prepend('claude', ['main.jsonl'], [{ key: 'main.jsonl', lines: text('older') }]);
+  const merged = stream.prepend('claude', ['main.jsonl'], [{ key: 'main.jsonl', lines: text('oldest') }]);
+  assert.deepEqual(merged.map((m) => m.content), ['oldest', 'older', 'latest']);
+  assert.equal(new Set(merged.map((m) => m.id)).size, merged.length);
+
+  // Appends keep history in place; a reset drops it.
+  const appended = stream.apply('claude', ['main.jsonl'], [{ key: 'main.jsonl', lines: text('newest') }], false);
+  assert.deepEqual(appended.map((m) => m.content), ['oldest', 'older', 'latest', 'newest']);
+  assert.deepEqual(appended.slice(0, 3).map((m) => m.id), merged.map((m) => m.id));
+  const reset = stream.apply('claude', ['main.jsonl'], [{ key: 'main.jsonl', lines: text('fresh') }], true);
+  assert.deepEqual(reset.map((m) => m.content), ['fresh']);
+});

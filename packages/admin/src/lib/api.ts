@@ -620,7 +620,7 @@ export const api = {
   getJsonlDelta: async (
     id: string,
     opts: { fileFilter?: string; tail?: number; cursor?: string | null } = {},
-  ): Promise<{ cursor: string; reset: boolean; order: string[]; files: Array<{ key: string; lines: string }>; pending?: boolean; more?: boolean; skippedBytes?: number }> => {
+  ): Promise<{ cursor: string; reset: boolean; order: string[]; files: Array<{ key: string; lines: string }>; pending?: boolean; more?: boolean; skippedBytes?: number; historyCursor?: string; earlierBytes?: number }> => {
     // POST, not GET: the cursor carries a byte offset per physical transcript
     // file, so a session with hundreds of subagent JSONLs produces a cursor
     // tens of kilobytes long. In a query string that overruns Node's header
@@ -665,6 +665,24 @@ export const api = {
     }
     return res.json();
   },
+
+  // One page of the history below a snapshot that skipped the oldest part of
+  // an oversized transcript: pass the snapshot's `historyCursor` (then each
+  // page's). `files` hold the lines just below what's loaded, per file; prepend
+  // them. `earlierBytes` is what's still unread; no `historyCursor` = all done.
+  getJsonlHistory: async (
+    id: string,
+    opts: { history: string; fileFilter?: string; tail?: number; historyBytes?: number },
+  ): Promise<{ order: string[]; files: Array<{ key: string; lines: string }>; earlierBytes?: number; historyCursor?: string }> =>
+    request(`/admin/agent-sessions/${id}/jsonl`, {
+      method: 'POST',
+      body: JSON.stringify({
+        history: opts.history,
+        ...(opts.fileFilter ? { file: opts.fileFilter } : {}),
+        ...(opts.tail && opts.tail > 0 ? { tail: opts.tail } : {}),
+        ...(opts.historyBytes ? { historyBytes: opts.historyBytes } : {}),
+      }),
+    }),
 
   getJsonl: async (id: string, fileFilter?: string, tail?: number): Promise<string> => {
     const params: string[] = [];

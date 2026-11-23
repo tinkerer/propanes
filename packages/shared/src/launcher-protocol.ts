@@ -121,6 +121,13 @@ export interface ReadSessionJsonlResult {
   more?: boolean;
   /** Bytes of old history a snapshot left out of an oversized transcript. */
   skippedBytes?: number;
+  /** Cursor for loading the history below this snapshot / history page. */
+  historyCursor?: string;
+  /** Conversation bytes still loadable through `historyCursor`. */
+  earlierBytes?: number;
+  /** Set when answering a `history` request (older launchers ignore that
+   *  field and answer with a plain delta). */
+  historyPage?: boolean;
   error?: string;
 }
 
@@ -374,6 +381,11 @@ export interface ReadSessionJsonl {
   fileFilter?: string;
   tail?: number;
   cursor: string;
+  /** Load earlier history instead of a delta: the `historyCursor` from a
+   *  snapshot (or the previous history page). `cursor` is ignored. */
+  history?: string;
+  /** Byte budget for one history page. */
+  historyBytes?: number;
 }
 
 export interface SyncCodebase {

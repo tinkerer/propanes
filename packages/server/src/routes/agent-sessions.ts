@@ -40,6 +40,11 @@ import {
   collectJsonlUnits,
   readJsonlUnitsDelta,
   type JsonlUnit,
+  trimJsonlDeltaTail,
+  readJsonlHistoryChunk,
+  jsonlHistoryState,
+  decodeJsonlHistoryCursor,
+  DEFAULT_JSONL_HISTORY_CHUNK_BYTES,
 } from '../jsonl-utils.js';
 import { findContinuationJsonlsCached } from '../jsonl-continuations.js';
 
@@ -1162,7 +1167,15 @@ interface JsonlRequestParams {
    *  previous response. Switches the response to JSON with only the bytes
    *  appended since the cursor, instead of the entire merged transcript. */
   cursor?: string;
+  /** Load earlier history: a `historyCursor` from a snapshot or a previous
+   *  history page. Answers one bounded page of the lines just below it. */
+  history?: string;
+  /** Byte budget for one history page (clamped server-side). */
+  historyBytes?: string;
 }
+
+const MIN_HISTORY_PAGE_BYTES = 64 * 1024;
+const MAX_HISTORY_PAGE_BYTES = 8 * 1024 * 1024;
 
 const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
   const id = c.req.param('id');
@@ -1175,7 +1188,10 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
   // Treat any tail request as a mobile client for redaction purposes.
   const dropImageData = tailN > 0;
   const cursorParam = params.cursor;
-  const isDifferential = cursorParam !== undefined && cursorParam !== '';
+  const historyParam = params.history || undefined;
+  const isDifferential = (cursorParam !== undefined && cursorParam !== '') || !!historyParam;
+  const historyBytes = Math.min(MAX_HISTORY_PAGE_BYTES, Math.max(MIN_HISTORY_PAGE_BYTES,
+    parseInt(params.historyBytes || '', 10) || DEFAULT_JSONL_HISTORY_CHUNK_BYTES));
   // Expected-missing transcript: the agent is still spinning up, the session
   // has no resolvable JSONL path (plain terminal), or a filtered file vanished.
   // Differential pollers hit this every few seconds and Chrome logs every
@@ -1231,9 +1247,13 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
         fileFilter,
         tail: tailN,
         cursor: cursorParam || 'init',
+        ...(historyParam ? { history: historyParam, historyBytes } : {}),
       }, 'read_session_jsonl_result', 10_000) as any;
       if (!result.ok) return c.json({ error: result.error || 'Remote transcript read failed' }, 502);
       if (result.pending) return pendingDelta();
+      if (historyParam && !result.historyPage) {
+        return c.json({ error: 'This launcher is too old to page transcript history' }, 501);
+      }
       const files = (result.files || []).map((file: { key: string; lines: string }) => ({
         key: file.key,
         lines: redactLines(file.lines.split('\n'), dropImageData, id).join('\n'),
@@ -1245,6 +1265,7 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
         files,
         ...(result.more ? { more: true } : {}),
         ...(result.skippedBytes > 0 ? { skippedBytes: result.skippedBytes } : {}),
+        ...(result.historyCursor ? { historyCursor: result.historyCursor, earlierBytes: result.earlierBytes || 0 } : {}),
       });
     } catch (err: any) {
       return c.json({ error: err?.message || 'Remote launcher unavailable' }, 502);
@@ -1292,6 +1313,32 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
     units = collectJsonlUnits(jsonlPath, isCodex, findContinuationJsonlsCached);
   }
 
+  // History page: one bounded chunk of the lines just below the history
+  // cursor, for a viewer that scrolled to the top of a snapshot that skipped
+  // old history. The client prepends these per file.
+  if (historyParam) {
+    const floor = decodeJsonlHistoryCursor(historyParam);
+    if (!floor) return c.json({ error: 'Malformed history cursor' }, 400);
+    const page = readJsonlHistoryChunk(units, floor, historyBytes);
+    const files = page.chunks
+      .map(ch => ({
+        key: ch.unit.key,
+        lines: redactLines(
+          splitLines(ch.text).map(l => injectSubagentId(l, ch.unit.subagentId)),
+          dropImageData,
+          id,
+        ).join('\n'),
+      }))
+      .filter(f => f.lines.length > 0);
+    return c.json({
+      history: true,
+      order: units.map(u => u.key),
+      files,
+      earlierBytes: page.remainingBytes,
+      ...(page.cursor ? { historyCursor: page.cursor } : {}),
+    });
+  }
+
   // Differential mode: ship only bytes appended past the cursor's per-file
   // offsets. The merged stream is NOT append-only (subagent lines interleave
   // after each file's lines), so the cursor tracks byte offsets per physical
@@ -1315,6 +1362,9 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
       // The tail trim below needs the whole snapshot in one response.
       unpagedSnapshot: tailN > 0,
     });
+    // Tail applies only to the snapshot (reset) response; subsequent deltas
+    // are naturally small. The trimmed lines stay loadable as history.
+    trimJsonlDeltaTail(delta, tailN, isCodex);
     const reset = delta.reset;
     const result = {
       newOffsets: delta.newOffsets,
@@ -1322,23 +1372,6 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
         .map(ch => ({ unit: ch.unit, lines: splitLines(ch.text) }))
         .filter(ch => ch.lines.length > 0),
     };
-
-    // Tail applies only to the snapshot (reset) response; subsequent deltas
-    // are naturally small. Trim from the front across units in merge order.
-    if (reset && tailN > 0) {
-      let remaining = tailN;
-      for (let i = result.chunks.length - 1; i >= 0; i--) {
-        const arr = result.chunks[i].lines;
-        if (remaining <= 0) {
-          result.chunks[i].lines = [];
-        } else if (arr.length > remaining) {
-          result.chunks[i].lines = arr.slice(-remaining);
-          remaining = 0;
-        } else {
-          remaining -= arr.length;
-        }
-      }
-    }
 
     const files = result.chunks
       .filter(ch => ch.lines.length > 0)
@@ -1352,6 +1385,7 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
       }));
 
     const cursor = Buffer.from(JSON.stringify({ v: 1, o: result.newOffsets })).toString('base64url');
+    const history = reset ? jsonlHistoryState(units, delta.floorOffsets) : null;
     return c.json({
       cursor,
       reset,
@@ -1359,6 +1393,7 @@ const handleJsonlRequest = async (c: Context, params: JsonlRequestParams) => {
       files,
       ...(delta.more ? { more: true } : {}),
       ...(delta.skippedBytes > 0 ? { skippedBytes: delta.skippedBytes } : {}),
+      ...(history?.cursor ? { historyCursor: history.cursor, earlierBytes: history.remainingBytes } : {}),
     });
   }
 
@@ -1396,11 +1431,13 @@ agentSessionRoutes.get('/:id/jsonl', (c) =>
 // cursor keeps long sessions pollable regardless of how many files they span.
 agentSessionRoutes.post('/:id/jsonl', async (c) => {
   const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
-  const { file, tail, cursor } = body as Record<string, unknown>;
+  const { file, tail, cursor, history, historyBytes } = body as Record<string, unknown>;
   return handleJsonlRequest(c, {
     fileFilter: typeof file === 'string' && file ? file : undefined,
     tail: typeof tail === 'number' || typeof tail === 'string' ? String(tail) : undefined,
     cursor: typeof cursor === 'string' ? cursor : undefined,
+    history: typeof history === 'string' && history ? history : undefined,
+    historyBytes: typeof historyBytes === 'number' || typeof historyBytes === 'string' ? String(historyBytes) : undefined,
   });
 });
 

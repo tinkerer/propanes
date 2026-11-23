@@ -555,13 +555,17 @@ export function planJsonlSnapshotOffsets(
 export interface JsonlUnitsDelta {
   /** Per-file byte offsets to resume from; covers every unit. */
   newOffsets: Record<string, number>;
-  chunks: Array<{ unit: JsonlUnit; text: string }>;
+  /** `from` is the byte offset in the file where `text` starts. */
+  chunks: Array<{ unit: JsonlUnit; text: string; from: number }>;
   /** Previous client buffers are stale — this is a fresh snapshot. */
   reset: boolean;
   /** The response budget ran out with bytes still unread; poll again now. */
   more: boolean;
   /** Bytes of old history a snapshot left out (0 for plain deltas). */
   skippedBytes: number;
+  /** Snapshot only: per-file offsets where the delivered history starts —
+   *  everything before them is still unread (see readJsonlHistoryChunk). */
+  floorOffsets?: Record<string, number>;
 }
 
 /** One differential read across a session's transcript files: everything past
@@ -603,9 +607,13 @@ export function readJsonlUnitsDelta(
       newOffsets[u.key] = d.newOffset;
       budget -= d.newOffset - from;
       if (d.more) more = true;
-      if (d.text) chunks.push({ unit: u, text: d.text });
+      if (d.text) chunks.push({ unit: u, text: d.text, from });
     }
-    return { newOffsets, chunks, reset, more, skippedBytes: plan ? plan.skippedBytes : 0 };
+    return {
+      newOffsets, chunks, reset, more,
+      skippedBytes: plan ? plan.skippedBytes : 0,
+      ...(plan ? { floorOffsets: plan.offsets } : {}),
+    };
   };
 
   let result = attempt();
@@ -615,6 +623,175 @@ export function readJsonlUnitsDelta(
     result = attempt();
   }
   return result ?? { newOffsets: {}, chunks: [], reset: true, more: false, skippedBytes: 0 };
+}
+
+/** Whether a raw transcript line survives the line filter the routes apply
+ *  before serving (`filterJsonlLines` for claude, non-blank for codex). */
+export function jsonlLineIsServed(line: string, isCodex: boolean): boolean {
+  if (!line.trim()) return false;
+  if (isCodex) return true;
+  try {
+    const obj = JSON.parse(line);
+    return obj.type !== 'progress' && obj.type !== 'file-history-snapshot';
+  } catch {
+    return true;
+  }
+}
+
+/** Keep only the last `tailN` served lines of a snapshot (merge order,
+ *  trimming from the front), cutting the raw chunk text at a line start and
+ *  moving `floorOffsets` up to match so the dropped lines remain loadable as
+ *  earlier history. `skippedBytes` grows by the bytes dropped. */
+export function trimJsonlDeltaTail(delta: JsonlUnitsDelta, tailN: number, isCodex: boolean): void {
+  if (!delta.reset || tailN <= 0) return;
+  const floor = { ...(delta.floorOffsets || {}) };
+  let remaining = tailN;
+  for (let i = delta.chunks.length - 1; i >= 0; i--) {
+    const ch = delta.chunks[i];
+    if (remaining <= 0) {
+      const end = delta.newOffsets[ch.unit.key] ?? ch.from + Buffer.byteLength(ch.text);
+      delta.skippedBytes += end - ch.from;
+      floor[ch.unit.key] = end;
+      ch.text = '';
+      continue;
+    }
+    // Walk lines newest-first; `pos` is the end (exclusive) of the line.
+    let cut = -1;
+    let pos = ch.text.endsWith('\n') ? ch.text.length - 1 : ch.text.length;
+    while (pos >= 0) {
+      const nl = pos > 0 ? ch.text.lastIndexOf('\n', pos - 1) : -1;
+      const start = nl + 1;
+      if (jsonlLineIsServed(ch.text.slice(start, pos), isCodex)) {
+        remaining--;
+        if (remaining === 0) { cut = start; break; }
+      }
+      if (nl < 0) break;
+      pos = nl;
+    }
+    if (cut > 0) {
+      const cutBytes = Buffer.byteLength(ch.text.slice(0, cut));
+      delta.skippedBytes += cutBytes;
+      floor[ch.unit.key] = ch.from + cutBytes;
+      ch.from += cutBytes;
+      ch.text = ch.text.slice(cut);
+    }
+  }
+  delta.chunks = delta.chunks.filter((ch) => ch.text.length > 0);
+  delta.floorOffsets = floor;
+}
+
+/** Where loading earlier history resumes: an opaque cursor holding the
+ *  per-file offsets below which nothing has been delivered yet, and how many
+ *  bytes that leaves. Only conversation files (main + continuations) page —
+ *  subagent transcripts render inline at their Task call, not at the top of
+ *  the view, and can hold most of a session's bytes (hundreds of MB), so
+ *  scrolling up must not drag them in. `cursor` is null when nothing is left. */
+export function jsonlHistoryState(
+  units: JsonlUnit[],
+  floor: Record<string, number> | undefined,
+): { cursor: string | null; remainingBytes: number } {
+  const f: Record<string, number> = {};
+  let remainingBytes = 0;
+  for (const u of units) {
+    const v = floor?.[u.key];
+    if (u.subagentId || !v || v <= 0) continue;
+    f[u.key] = v;
+    remainingBytes += v;
+  }
+  if (remainingBytes === 0) return { cursor: null, remainingBytes: 0 };
+  return { cursor: Buffer.from(JSON.stringify({ v: 1, f })).toString('base64url'), remainingBytes };
+}
+
+export function decodeJsonlHistoryCursor(cursor: string): Record<string, number> | null {
+  try {
+    const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf-8'));
+    if (decoded?.v !== 1 || !decoded.f || typeof decoded.f !== 'object') return null;
+    const floor: Record<string, number> = {};
+    for (const [k, v] of Object.entries(decoded.f)) {
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) floor[k] = Math.floor(v);
+    }
+    return floor;
+  } catch {
+    return null;
+  }
+}
+
+// Start of the line that ends right before `end` (a line start), scanning
+// backward — used when a single line is bigger than the history budget.
+function previousJsonlLineStart(path: string, end: number): number {
+  if (end <= 1) return 0;
+  const fd = openSync(path, 'r');
+  try {
+    const block = Buffer.alloc(64 * 1024);
+    // Skip the newline terminating the previous line (at end - 1).
+    let hi = end - 1;
+    while (hi > 0) {
+      const lo = Math.max(0, hi - block.length);
+      const n = readSync(fd, block, 0, hi - lo, lo);
+      const nl = block.subarray(0, n).lastIndexOf(0x0a);
+      if (nl !== -1) return lo + nl + 1;
+      hi = lo;
+    }
+    return 0;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export interface JsonlHistoryChunk {
+  chunks: Array<{ unit: JsonlUnit; text: string }>;
+  /** Cursor for the next (older) chunk; null once the start is reached. */
+  cursor: string | null;
+  /** Bytes still unread below the new floor. */
+  remainingBytes: number;
+}
+
+export const DEFAULT_JSONL_HISTORY_CHUNK_BYTES = 2 * 1024 * 1024;
+
+/** Read one bounded chunk of history just below `floor` — the newest unread
+ *  lines first, so a viewer scrolling up gets a contiguous backward extension.
+ *  The conversation files (main + continuations) are walked newest file first
+ *  (see jsonlHistoryState for why subagent files don't page). A single line bigger than `budgetBytes` is still
+ *  returned whole when it is the first thing read, so paging always makes
+ *  progress. Files missing from `units` (rotated away) are dropped. */
+export function readJsonlHistoryChunk(
+  units: JsonlUnit[],
+  floor: Record<string, number>,
+  budgetBytes: number = DEFAULT_JSONL_HISTORY_CHUNK_BYTES,
+): JsonlHistoryChunk {
+  const next: Record<string, number> = {};
+  for (const u of units) {
+    const f = floor[u.key];
+    if (!f || u.subagentId) continue;
+    let size = 0;
+    try { size = statSync(u.path).size; } catch { continue; }
+    next[u.key] = Math.min(f, size);
+    }
+  const ordered = units.filter((u) => !u.subagentId).reverse();
+  const chunks: JsonlHistoryChunk['chunks'] = [];
+  let budget = budgetBytes;
+  for (const u of ordered) {
+    const f = next[u.key];
+    if (!f) continue;
+    if (budget <= 0) break;
+    let start = alignJsonlOffsetToLineStart(u.path, Math.max(0, f - budget), f);
+    if (start >= f) {
+      // Not even one whole line fits in what's left of the budget.
+      if (budget < budgetBytes) break;
+      start = previousJsonlLineStart(u.path, f);
+    }
+    const buf = Buffer.alloc(f - start);
+    const fd = openSync(u.path, 'r');
+    try {
+      readSync(fd, buf, 0, buf.length, start);
+    } finally {
+      closeSync(fd);
+    }
+    chunks.push({ unit: u, text: buf.toString('utf-8') });
+    next[u.key] = start;
+    budget -= f - start;
+  }
+  return { chunks, ...jsonlHistoryState(units, next) };
 }
 
 export interface JsonlFileInfo {
