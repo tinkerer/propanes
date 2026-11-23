@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { type ParsedMessage } from './output-parser.js';
 import { TranscriptAccumulator } from './transcript-accumulator.js';
 import { api } from './api.js';
@@ -6,6 +6,12 @@ import { allSessions, exitedSessions } from './sessions.js';
 import { isMobile } from './viewport.js';
 
 const MAX_PAGES_PER_FETCH = 64;
+
+// Bytes of raw transcript per "load earlier" page. Small enough that parsing
+// a page never stalls the main thread noticeably (especially on phones), big
+// enough that scrolling up through a long session isn't a page per screen.
+const HISTORY_PAGE_BYTES_DESKTOP = 2 * 1024 * 1024;
+const HISTORY_PAGE_BYTES_MOBILE = 512 * 1024;
 
 const TERMINAL_STATUSES = new Set(['completed', 'exited', 'failed', 'deleted', 'archived', 'killed']);
 
@@ -57,6 +63,17 @@ export interface TranscriptStreamState {
   /** Bytes of the oldest history the server left out because the transcript
    *  is too large to load whole (0 when everything is shown). */
   skippedBytes: number;
+  /** The server can page in earlier history (call `loadEarlier`). */
+  hasEarlier: boolean;
+  /** Conversation bytes still loadable through `loadEarlier`. */
+  earlierBytes: number;
+  /** A `loadEarlier` page is in flight. */
+  loadingEarlier: boolean;
+  /** The last `loadEarlier` failed (cleared by the next attempt). */
+  earlierError: string | null;
+  /** Fetch and prepend one bounded page of the history just above what's
+   *  loaded. No-op while a page is in flight or nothing is left. */
+  loadEarlier: () => void;
 }
 
 /** Subscribe to a session's JSONL transcript and keep parsing it as new lines
@@ -85,6 +102,14 @@ export function useTranscriptStream(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [skippedBytes, setSkippedBytes] = useState(0);
+  const [historyCursor, setHistoryCursor] = useState<string | null>(null);
+  const [earlierBytes, setEarlierBytes] = useState(0);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const [earlierError, setEarlierError] = useState<string | null>(null);
+  // Bumped on every snapshot (reset) and identity change: a history page
+  // fetched against an older snapshot must not be prepended to a newer one.
+  const generation = useRef(0);
+  const historyInFlight = useRef(false);
   // Differential-update state: one incremental parser per physical file plus
   // the opaque byte cursor. This avoids reparsing an ever-growing transcript
   // after every small poll.
@@ -119,6 +144,12 @@ export function useTranscriptStream(
     setLoading(true);
     setError(null);
     setSkippedBytes(0);
+    setHistoryCursor(null);
+    setEarlierBytes(0);
+    setLoadingEarlier(false);
+    setEarlierError(null);
+    generation.current++;
+    historyInFlight.current = false;
 
     // No session yet (empty id while a view mounts before its session
     // resolves) — polling would hit /agent-sessions//jsonl and 404.
@@ -177,7 +208,15 @@ export function useTranscriptStream(
             return;
           }
           cursor.current = delta.cursor;
-          if (delta.reset) setSkippedBytes(delta.skippedBytes || 0);
+          if (delta.reset) {
+            generation.current++;
+            historyInFlight.current = false;
+            setLoadingEarlier(false);
+            setEarlierError(null);
+            setSkippedBytes(delta.skippedBytes || 0);
+            setHistoryCursor(delta.historyCursor || null);
+            setEarlierBytes(delta.historyCursor ? delta.earlierBytes || 0 : 0);
+          }
           if (delta.reset || delta.files.length > 0) {
             setMessages(accumulator.current.apply(runtime, delta.order, delta.files, delta.reset));
             setError(null);
@@ -218,5 +257,34 @@ export function useTranscriptStream(
     return () => { cancelled = true; clearInterval(interval); };
   }, [sessionId, fileFilter, tailLines, pollMs, isSessionDone, runtime, noTranscript]);
 
-  return { messages, loading, error, isSessionDone, isRunning, noTranscript, skippedBytes };
+  const loadEarlier = useCallback(() => {
+    if (!historyCursor || historyInFlight.current) return;
+    historyInFlight.current = true;
+    const gen = generation.current;
+    setLoadingEarlier(true);
+    setEarlierError(null);
+    api.getJsonlHistory(sessionId, {
+      history: historyCursor,
+      fileFilter: fileFilter || undefined,
+      tail: tailLines,
+      historyBytes: isMobile.value ? HISTORY_PAGE_BYTES_MOBILE : HISTORY_PAGE_BYTES_DESKTOP,
+    }).then((page) => {
+      if (gen !== generation.current) return;
+      if (page.files.length > 0) setMessages(accumulator.current.prepend(runtime, page.order, page.files));
+      setEarlierBytes(page.historyCursor ? page.earlierBytes || 0 : 0);
+      setHistoryCursor(page.historyCursor || null);
+    }).catch((err: any) => {
+      if (gen !== generation.current) return;
+      setEarlierError(err?.message || String(err));
+    }).finally(() => {
+      if (gen !== generation.current) return;
+      historyInFlight.current = false;
+      setLoadingEarlier(false);
+    });
+  }, [sessionId, historyCursor, fileFilter, tailLines, runtime]);
+
+  return {
+    messages, loading, error, isSessionDone, isRunning, noTranscript, skippedBytes,
+    hasEarlier: !!historyCursor, earlierBytes, loadingEarlier, earlierError, loadEarlier,
+  };
 }

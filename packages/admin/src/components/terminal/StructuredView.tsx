@@ -128,7 +128,10 @@ export function StructuredView({ sessionId, chat }: Props) {
   const isWaiting = inputState === 'waiting';
   const fileDrop = useSessionFileDrop(sessionId);
 
-  const { messages, loading, error, isSessionDone, isRunning, noTranscript, skippedBytes } = useTranscriptStream(sessionId);
+  const {
+    messages, loading, error, isSessionDone, isRunning, noTranscript, skippedBytes,
+    hasEarlier, earlierBytes, loadingEarlier: loadingHistory, earlierError, loadEarlier,
+  } = useTranscriptStream(sessionId);
 
   const { setRef: setScrollRef, showScrollDown, scrollToBottom } = useScrollAnchor({
     resetKey: sessionId,
@@ -219,25 +222,6 @@ export function StructuredView({ sessionId, chat }: Props) {
     scrollAnchorRef.current = null;
   }, [shownCount]);
 
-  // IntersectionObserver: fire load-more when the sentinel near the top of
-  // the scroll container enters view. rootMargin lets us start loading a bit
-  // before the user actually hits the top, smoothing the experience.
-  useEffect(() => {
-    const sentinel = loadMoreSentinelRef.current;
-    const root = messageScrollRef.current;
-    if (!sentinel || !root) return;
-    if (loadingEarlier) return;
-    if (shownCount >= messages.filter((m) => !m.subagentId).length) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting) && !loadingEarlier) loadMoreEarlier();
-      },
-      { root, rootMargin: '200px 0px 0px 0px' },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [shownCount, messages, loadingEarlier]);
-
   // Partition out subagent messages so they can be rendered inline at the
   // Task call that spawned them — without this, Claude dumps every subagent
   // message after the main agent's stream and the main flow is buried.
@@ -245,6 +229,48 @@ export function StructuredView({ sessionId, chat }: Props) {
   const mainMessages = partitioned.main;
 
   const hiddenMsgCount = Math.max(0, mainMessages.length - shownCount);
+  // Earlier history still on the server (an oversized transcript's snapshot
+  // skipped its oldest part). Paged in one bounded chunk at a time once
+  // everything already in memory is on screen.
+  const canFetchHistory = hasEarlier && !loadingHistory && !earlierError;
+
+  // Fetching a history page can grow the rendered window at the top (when
+  // the window still had room). Keep what the operator is looking at in place:
+  // remember the scroll height before the fetch and shift by the growth once
+  // the first rendered message changes.
+  const historyAnchorRef = useRef<{ height: number; firstId: string | undefined } | null>(null);
+  function requestEarlierHistory() {
+    const el = messageScrollRef.current;
+    historyAnchorRef.current = el
+      ? { height: el.scrollHeight, firstId: windowedMessages[0]?.id }
+      : null;
+    loadEarlier();
+  }
+
+  // IntersectionObserver: fire load-more when the sentinel near the top of
+  // the scroll container enters view. rootMargin lets us start loading a bit
+  // before the user actually hits the top, smoothing the experience. Messages
+  // already in memory are revealed first; past them, the next history page is
+  // fetched from the server.
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    const root = messageScrollRef.current;
+    if (!sentinel || !root) return;
+    if (loadingEarlier) return;
+    const canExpand = hiddenMsgCount > 0;
+    if (!canExpand && !canFetchHistory) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        observer.disconnect();
+        if (canExpand) loadMoreEarlier();
+        else requestEarlierHistory();
+      },
+      { root, rootMargin: '200px 0px 0px 0px' },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [shownCount, messages, loadingEarlier, hiddenMsgCount, canFetchHistory]);
 
   // Build the windowed message list for ConversationView: the visible slice
   // of main messages plus all subagent messages (ConversationView partitions
@@ -255,6 +281,22 @@ export function StructuredView({ sessionId, chat }: Props) {
     if (subMsgs.length === 0) return windowed;
     return [...windowed, ...subMsgs];
   }, [messages, mainMessages, shownCount, hiddenMsgCount]);
+
+  useLayoutEffect(() => {
+    const anchor = historyAnchorRef.current;
+    const el = messageScrollRef.current;
+    if (!anchor || !el) return;
+    if (windowedMessages[0]?.id === anchor.firstId) return;
+    const delta = el.scrollHeight - anchor.height;
+    if (delta > 0) el.scrollTop += delta;
+    historyAnchorRef.current = null;
+  }, [windowedMessages]);
+
+  // A page that only added messages outside the rendered window leaves the
+  // anchor unused; drop it so a later window expansion isn't shifted twice.
+  useEffect(() => {
+    if (!loadingHistory) historyAnchorRef.current = null;
+  }, [loadingHistory]);
 
   if (noTranscript) {
     return (
@@ -306,7 +348,7 @@ export function StructuredView({ sessionId, chat }: Props) {
       onPasteCapture={fileDrop.onPaste}
     >
     <div class={`structured-view${narrow ? ' structured-view-narrow' : ''}`} ref={setContainerRef}>
-      {skippedBytes > 0 && (
+      {skippedBytes > 0 && !hasEarlier && (
         <div class="sm-history-skipped" title="This transcript is too large to load whole, so only its most recent part is shown.">
           Earlier history not loaded ({formatSkippedBytes(skippedBytes)} of older transcript skipped)
         </div>
@@ -322,15 +364,15 @@ export function StructuredView({ sessionId, chat }: Props) {
         isWaiting={isWaiting}
         isRunning={isRunning}
         scrollBodyRef={setMessageScrollRef}
-        scrollBodyTop={hiddenMsgCount > 0 && (
+        scrollBodyTop={(hiddenMsgCount > 0 || hasEarlier) && (
           <div class="sm-load-more" ref={loadMoreSentinelRef}>
-            {loadingEarlier ? (
+            {loadingEarlier || (hiddenMsgCount === 0 && loadingHistory) ? (
               <div class="sm-load-spinner" role="status" aria-label="Loading earlier messages">
                 <span class="sm-load-spinner-dot" />
                 <span class="sm-load-spinner-dot" />
                 <span class="sm-load-spinner-dot" />
               </div>
-            ) : (
+            ) : hiddenMsgCount > 0 ? (
               <button
                 type="button"
                 class="sm-show-earlier"
@@ -338,6 +380,19 @@ export function StructuredView({ sessionId, chat }: Props) {
                 title="Or scroll up to auto-load"
               >
                 Pull / scroll for {Math.min(hiddenMsgCount, initialWindow)} more ({hiddenMsgCount} earlier)
+              </button>
+            ) : (
+              <button
+                type="button"
+                class="sm-show-earlier"
+                onClick={requestEarlierHistory}
+                title={earlierError
+                  ? `Loading earlier history failed: ${earlierError}`
+                  : 'This transcript is too large to load whole; older history loads in chunks as you scroll up.'}
+              >
+                {earlierError
+                  ? 'Retry loading earlier history'
+                  : `Scroll for earlier history (${formatSkippedBytes(earlierBytes)} not loaded)`}
               </button>
             )}
           </div>

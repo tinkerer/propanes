@@ -49,6 +49,11 @@ import {
   readJsonlUnitsDelta,
   filterJsonlLines,
   type JsonlUnit,
+  trimJsonlDeltaTail,
+  readJsonlHistoryChunk,
+  jsonlHistoryState,
+  decodeJsonlHistoryCursor,
+  DEFAULT_JSONL_HISTORY_CHUNK_BYTES,
 } from './jsonl-utils.js';
 import { newTranscriptCursor, scanTranscriptForPrUrls, type TranscriptScanCursor } from './pr-transcript-scan.js';
 import { buildCodexArgs, resolveCodexCommand } from './codex-bin.js';
@@ -636,12 +641,37 @@ function handleReadSessionJsonl(msg: ReadSessionJsonl): void {
       units = collectJsonlUnits(jsonlPath, isCodex);
     }
 
+    if (msg.history) {
+      const floor = decodeJsonlHistoryCursor(msg.history);
+      if (!floor) throw new Error('Malformed history cursor');
+      const page = readJsonlHistoryChunk(units, floor, msg.historyBytes || DEFAULT_JSONL_HISTORY_CHUNK_BYTES);
+      sendToServer({
+        type: 'read_session_jsonl_result',
+        sessionId: msg.sessionId,
+        ok: true,
+        historyPage: true,
+        order: units.map((unit) => unit.key),
+        files: page.chunks
+          .map((chunk) => ({
+            key: chunk.unit.key,
+            lines: splitLines(chunk.text).map((line) => injectSubagentId(line, chunk.unit.subagentId)).join('\n'),
+          }))
+          .filter((file) => file.lines.length > 0),
+        earlierBytes: page.remainingBytes,
+        ...(page.cursor ? { historyCursor: page.cursor } : {}),
+      });
+      return;
+    }
+
     // Bounded read — see readJsonlUnitsDelta. A tail request trims the
     // snapshot below, so it needs the whole (already capped) snapshot at once.
     const delta = readJsonlUnitsDelta(units, decodeJsonlCursor(msg.cursor), {
       consumePartial: !isLive,
       unpagedSnapshot: !!msg.tail && msg.tail > 0,
     });
+    // A tail request keeps only the newest lines of the snapshot; the rest
+    // stays loadable as history.
+    trimJsonlDeltaTail(delta, msg.tail || 0, isCodex);
     const reset = delta.reset;
     const result = {
       newOffsets: delta.newOffsets,
@@ -651,17 +681,7 @@ function handleReadSessionJsonl(msg: ReadSessionJsonl): void {
         lines: splitLines(chunk.text),
       })),
     };
-    if (reset && msg.tail && msg.tail > 0) {
-      let remaining = msg.tail;
-      for (let i = result.chunks.length - 1; i >= 0; i--) {
-        const lines = result.chunks[i].lines;
-        if (remaining <= 0) result.chunks[i].lines = [];
-        else if (lines.length > remaining) {
-          result.chunks[i].lines = lines.slice(-remaining);
-          remaining = 0;
-        } else remaining -= lines.length;
-      }
-    }
+    const history = reset ? jsonlHistoryState(units, delta.floorOffsets) : null;
 
     const response: ReadSessionJsonlResult = {
       type: 'read_session_jsonl_result',
@@ -678,6 +698,7 @@ function handleReadSessionJsonl(msg: ReadSessionJsonl): void {
         })),
       ...(delta.more ? { more: true } : {}),
       ...(delta.skippedBytes > 0 ? { skippedBytes: delta.skippedBytes } : {}),
+      ...(history?.cursor ? { historyCursor: history.cursor, earlierBytes: history.remainingBytes } : {}),
     };
     sendToServer(response);
   } catch (err: any) {
